@@ -17,6 +17,7 @@ import plistlib
 import re
 import shlex
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -1250,9 +1251,11 @@ def _build_launchctl_domain_target() -> str:
         launchctl domain target。
 
     Raises:
-        无。
+        RuntimeError: 在不支持 launchctl 的平台上调用时抛出。
     """
 
+    if sys.platform == "win32":
+        raise RuntimeError("launchctl 仅在 macOS 上可用")
     return f"gui/{os.getuid()}"
 
 

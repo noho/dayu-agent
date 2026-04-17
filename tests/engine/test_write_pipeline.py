@@ -4640,8 +4640,8 @@ def test_manifest_file_lock_uses_msvcrt_when_fcntl_unavailable(
             self.calls.append((mode, size))
 
     fake_msvcrt = _FakeMsvcrt()
-    monkeypatch.setattr(artifact_store_module.file_lock_module, "fcntl", None)
-    monkeypatch.setattr(artifact_store_module.file_lock_module, "msvcrt", fake_msvcrt)
+    monkeypatch.setattr(artifact_store_module.file_lock_module, "_FCNTL", None)
+    monkeypatch.setattr(artifact_store_module.file_lock_module, "_MSVCRT", fake_msvcrt)
 
     output_dir = tmp_path / "out"
     with artifact_store_module._manifest_file_lock(output_dir):
@@ -4689,8 +4689,8 @@ def test_manifest_file_lock_retries_until_windows_lock_is_available(
 
     fake_msvcrt = _RetryingMsvcrt()
     sleep_calls: list[float] = []
-    monkeypatch.setattr(artifact_store_module.file_lock_module, "fcntl", None)
-    monkeypatch.setattr(artifact_store_module.file_lock_module, "msvcrt", fake_msvcrt)
+    monkeypatch.setattr(artifact_store_module.file_lock_module, "_FCNTL", None)
+    monkeypatch.setattr(artifact_store_module.file_lock_module, "_MSVCRT", fake_msvcrt)
     monkeypatch.setattr(artifact_store_module.file_lock_module.time, "sleep", sleep_calls.append)
 
     with artifact_store_module._manifest_file_lock(tmp_path / "out"):
@@ -4715,8 +4715,8 @@ def test_manifest_file_lock_raises_when_no_platform_lock_backend(
 ) -> None:
     """验证没有任何平台锁实现时会显式失败，而不是静默放过。"""
 
-    monkeypatch.setattr(artifact_store_module.file_lock_module, "fcntl", None)
-    monkeypatch.setattr(artifact_store_module.file_lock_module, "msvcrt", None)
+    monkeypatch.setattr(artifact_store_module.file_lock_module, "_FCNTL", None)
+    monkeypatch.setattr(artifact_store_module.file_lock_module, "_MSVCRT", None)
 
     with pytest.raises(OSError, match="当前平台不支持 manifest 文件锁"):
         with artifact_store_module._manifest_file_lock(tmp_path / "out"):

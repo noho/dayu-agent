@@ -611,8 +611,8 @@ def test_fins_batch_lock_uses_msvcrt_when_fcntl_unavailable(
 
     core = build_fs_storage_test_context(tmp_path).core
     fake_msvcrt = _FakeMsvcrt()
-    monkeypatch.setattr(fs_storage_infra_module.file_lock_module, "fcntl", None)
-    monkeypatch.setattr(fs_storage_infra_module.file_lock_module, "msvcrt", fake_msvcrt)
+    monkeypatch.setattr(fs_storage_infra_module.file_lock_module, "_FCNTL", None)
+    monkeypatch.setattr(fs_storage_infra_module.file_lock_module, "_MSVCRT", fake_msvcrt)
     fake_msvcrt.calls.clear()
     stream = core._open_and_lock_stream(tmp_path / ".dayu" / "batch_locks" / "AAPL.lock", blocking=False)
     try:
@@ -656,8 +656,8 @@ def test_recovery_lock_retries_until_windows_lock_is_available(
     core = build_fs_storage_test_context(tmp_path).core
     fake_msvcrt = _RetryingMsvcrt()
     sleep_calls: list[float] = []
-    monkeypatch.setattr(fs_storage_infra_module.file_lock_module, "fcntl", None)
-    monkeypatch.setattr(fs_storage_infra_module.file_lock_module, "msvcrt", fake_msvcrt)
+    monkeypatch.setattr(fs_storage_infra_module.file_lock_module, "_FCNTL", None)
+    monkeypatch.setattr(fs_storage_infra_module.file_lock_module, "_MSVCRT", fake_msvcrt)
     monkeypatch.setattr(fs_storage_infra_module.file_lock_module.time, "sleep", sleep_calls.append)
 
     stream = core._acquire_recovery_lock()

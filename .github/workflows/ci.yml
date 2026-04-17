@@ -42,6 +42,10 @@ jobs:
           pip install -e ".[test,dev,browser]"
 
       - name: Run pyright
+        # pyright 的跨平台类型分析依赖 sys.platform narrowing，对 Windows 侧测试文件
+        # （如 tests/application/test_wechat_service_manager.py）仍会报 POSIX 符号缺失；
+        # WeChat service 本身也只支持 macOS/Linux。Windows 端类型覆盖收益有限，只在 Ubuntu 跑。
+        if: runner.os == 'Linux'
         run: pyright
 
       - name: Run pytest

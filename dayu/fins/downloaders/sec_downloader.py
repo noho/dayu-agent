@@ -25,6 +25,7 @@ import json
 import os
 import posixpath
 import re
+import sys
 import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -37,10 +38,8 @@ from xml.etree import ElementTree as ET
 import httpx
 from dayu.workspace_paths import build_sec_throttle_dir
 
-try:
+if sys.platform != "win32":
     import fcntl
-except ImportError:  # pragma: no cover - 当前运行环境为 Unix，此分支仅作兼容兜底
-    fcntl = None
 
 from dayu.log import Log
 from dayu.fins.domain.document_models import FileObjectMeta
@@ -601,12 +600,12 @@ def _sec_throttle_lock(lock_path: Path) -> Any:
 
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+", encoding="utf-8") as stream:
-        if fcntl is not None:
+        if sys.platform != "win32":
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
         try:
             yield stream
         finally:
-            if fcntl is not None:
+            if sys.platform != "win32":
                 fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 

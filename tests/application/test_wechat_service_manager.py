@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import plistlib
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
 from dayu.wechat import service_manager
+
+# WeChat service 仅支持 macOS (launchd) 与 Linux (systemd)；Windows 上 service_manager
+# 依赖 os.getuid() 等 POSIX 专属 API，不参与运行或测试。
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="WeChat service 不支持 Windows")
 
 
 @pytest.mark.unit

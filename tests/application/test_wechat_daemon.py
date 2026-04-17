@@ -1130,8 +1130,8 @@ def test_single_instance_lock_uses_msvcrt_when_fcntl_unavailable(
             self.calls.append((mode, size))
 
     fake_msvcrt = _FakeMsvcrt()
-    monkeypatch.setattr(state_dir_lock_module.file_lock_module, "fcntl", None)
-    monkeypatch.setattr(state_dir_lock_module.file_lock_module, "msvcrt", fake_msvcrt)
+    monkeypatch.setattr(state_dir_lock_module.file_lock_module, "_FCNTL", None)
+    monkeypatch.setattr(state_dir_lock_module.file_lock_module, "_MSVCRT", fake_msvcrt)
 
     lock_path = tmp_path / ".wechat" / ".daemon.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)

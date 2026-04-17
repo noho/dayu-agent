@@ -2,24 +2,19 @@
 
 统一封装 POSIX `fcntl.flock()` 与 Windows `msvcrt.locking()`，
 供需要跨进程互斥的模块复用。
+
+模块级 `_FCNTL` / `_MSVCRT` 作为平台后端的唯一入口，允许测试在非宿主平台
+通过 `monkeypatch.setattr` 注入 fake 后端以验证跨平台分支行为；生产运行时
+这两个变量由 `sys.platform` narrowing 初始化，保持 pyright 类型分析的精确性。
 """
 
 from __future__ import annotations
 
 import errno
 import os
+import sys
 import time
 from typing import Protocol, TextIO, cast
-
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - Windows 不提供 fcntl
-    fcntl = None
-
-try:
-    import msvcrt
-except ImportError:  # pragma: no cover - POSIX 不提供 msvcrt
-    msvcrt = None
 
 _WINDOWS_LOCK_RETRY_INTERVAL_SEC = 0.1
 
@@ -36,6 +31,31 @@ class _MsvcrtLockingModule(Protocol):
         ...
 
 
+class _FcntlLockingModule(Protocol):
+    """POSIX `fcntl` 锁接口的最小协议。"""
+
+    LOCK_EX: int
+    LOCK_NB: int
+    LOCK_UN: int
+
+    def flock(self, fd: int, operation: int) -> None:
+        """对文件描述符执行 flock 操作。"""
+
+        ...
+
+
+if sys.platform == "win32":
+    import msvcrt as _msvcrt_native
+
+    _FCNTL: _FcntlLockingModule | None = None
+    _MSVCRT: _MsvcrtLockingModule | None = cast(_MsvcrtLockingModule, _msvcrt_native)
+else:
+    import fcntl as _fcntl_native
+
+    _FCNTL: _FcntlLockingModule | None = cast(_FcntlLockingModule, _fcntl_native)
+    _MSVCRT: _MsvcrtLockingModule | None = None
+
+
 def ensure_lock_region(stream: TextIO, *, region_bytes: int) -> None:
     """确保锁文件存在可锁定的固定字节区间。
 
@@ -48,6 +68,7 @@ def ensure_lock_region(stream: TextIO, *, region_bytes: int) -> None:
 
     Raises:
         OSError: 当写入或同步失败时抛出。
+        ValueError: `region_bytes` 非正数时抛出。
     """
 
     if region_bytes <= 0:
@@ -101,19 +122,20 @@ def acquire_text_file_lock(
         ValueError: `region_bytes` 非法时抛出。
     """
 
-    if fcntl is not None:
-        lock_flags = fcntl.LOCK_EX
+    fcntl_backend = _FCNTL
+    if fcntl_backend is not None:
+        lock_flags = fcntl_backend.LOCK_EX
         if not blocking:
-            lock_flags |= fcntl.LOCK_NB
-        fcntl.flock(stream.fileno(), lock_flags)
+            lock_flags |= fcntl_backend.LOCK_NB
+        fcntl_backend.flock(stream.fileno(), lock_flags)
         return
-    if msvcrt is not None:
-        msvcrt_module = cast(_MsvcrtLockingModule, msvcrt)
+    msvcrt_backend = _MSVCRT
+    if msvcrt_backend is not None:
         ensure_lock_region(stream, region_bytes=region_bytes)
         while True:
             stream.seek(0)
             try:
-                msvcrt_module.locking(stream.fileno(), msvcrt_module.LK_NBLCK, region_bytes)
+                msvcrt_backend.locking(stream.fileno(), msvcrt_backend.LK_NBLCK, region_bytes)
                 return
             except OSError as exc:
                 if not blocking or not is_lock_contention_error(exc):
@@ -121,7 +143,6 @@ def acquire_text_file_lock(
                 # Windows 的 LK_LOCK 最多重试 10 次，不符合 blocking=True 的语义；
                 # 这里改为显式轮询 LK_NBLCK，直到真正拿到锁。
                 time.sleep(_WINDOWS_LOCK_RETRY_INTERVAL_SEC)
-        return
     raise OSError(f"当前平台不支持 {lock_name}")
 
 
@@ -146,12 +167,13 @@ def release_text_file_lock(
         ValueError: `region_bytes` 非法时抛出。
     """
 
-    if fcntl is not None:
-        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    fcntl_backend = _FCNTL
+    if fcntl_backend is not None:
+        fcntl_backend.flock(stream.fileno(), fcntl_backend.LOCK_UN)
         return
-    if msvcrt is not None:
-        msvcrt_module = cast(_MsvcrtLockingModule, msvcrt)
+    msvcrt_backend = _MSVCRT
+    if msvcrt_backend is not None:
         stream.seek(0)
-        msvcrt_module.locking(stream.fileno(), msvcrt_module.LK_UNLCK, region_bytes)
+        msvcrt_backend.locking(stream.fileno(), msvcrt_backend.LK_UNLCK, region_bytes)
         return
     raise OSError(f"当前平台不支持 {lock_name}")
