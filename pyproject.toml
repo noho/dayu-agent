@@ -81,7 +81,8 @@ Repository = "https://github.com/noho/dayu-agent"
 Issues = "https://github.com/noho/dayu-agent/issues"
 
 [project.scripts]
-dayu = "dayu.cli.main:main"
+dayu-cli = "dayu.cli.main:main"
+dayu-wechat = "dayu.wechat.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
