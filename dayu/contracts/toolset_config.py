@@ -163,7 +163,7 @@ def serialize_toolset_config_payload_value(value: ToolsetConfigValue) -> Toolset
     if value is None or isinstance(value, str | int | float | bool):
         return value
     if isinstance(value, Path):
-        return str(value)
+        return value.as_posix()
     if isinstance(value, list):
         return [serialize_toolset_config_payload_value(item) for item in value]
     if isinstance(value, tuple):
