@@ -1632,9 +1632,7 @@ def _build_upload_filings_from_regenerate_command(
     """
 
     parts = [
-        "python",
-        "-m",
-        "dayu.cli",
+        "dayu-cli",
         "upload_filings_from",
         "--ticker",
         str(getattr(args, "original_ticker", args.ticker)),
@@ -1707,9 +1705,7 @@ def _build_upload_material_command(
     """
 
     parts = [
-        "python",
-        "-m",
-        "dayu.cli",
+        "dayu-cli",
         "upload_material",
         "--base",
         str(base_dir),
@@ -1776,9 +1772,7 @@ def _build_upload_filing_command(
     """
 
     parts = [
-        "python",
-        "-m",
-        "dayu.cli",
+        "dayu-cli",
         "upload_filing",
         "--base",
         str(base_dir),

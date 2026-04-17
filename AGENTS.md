@@ -50,7 +50,7 @@
 - 若修改范围触及已有 pyright 报错，必须一并修复，至少不能让错误继续扩散。
 - 测试必须跟着实现边界迁移，不得为了保住旧测试而在生产代码里堆兼容逻辑。
 - 单文件测试覆盖率目标为 `>= 80%`。
-- `render/` 和 `utils/` 下的脚本默认无需测试、无覆盖率要求。
+- `dayu/render/` 和 `utils/` 下的脚本默认无需测试、无覆盖率要求。
 
 ## 文档与 README 同步
 
@@ -73,7 +73,7 @@
   - `dayu/fins/` 修改 -> 更新 `dayu/fins/README.md`
   - `dayu/config/` 修改 -> 更新 `dayu/config/README.md`
   - `tests/` 修改 -> 更新 `tests/README.md`
-  - `dayu/cli/`、`render/`、`utils/analyze_tool_trace.py`、项目级使用方式或配置入口变化 -> 更新根目录 `README.md`
+  - `dayu/cli/`、`dayu/render/`、`utils/analyze_tool_trace.py`、项目级使用方式或配置入口变化 -> 更新根目录 `README.md`
   - 涉及分层关系、装配方式、`UI / Service / Host / Agent` 边界变化 -> 更新 `dayu/README.md`
 - 文档写作约束：
   - 优先写“当前怎么用 / 当前怎么工作”，不要写“未来可能会怎样”。

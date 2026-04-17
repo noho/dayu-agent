@@ -8,7 +8,7 @@ from pathlib import Path
 
 def _load_render_module():
     """按文件路径加载 render.py 模块。"""
-    module_path = Path(__file__).resolve().parents[2] / "render" / "render.py"
+    module_path = Path(__file__).resolve().parents[2] / "dayu" / "render" / "render.py"
     spec = importlib.util.spec_from_file_location("render_script", module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"无法加载模块: {module_path}")

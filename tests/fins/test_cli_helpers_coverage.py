@@ -513,10 +513,10 @@ def test_filename_infer_and_script_helpers(monkeypatch: pytest.MonkeyPatch, tmp_
         overwrite=True,
     )
     assert "--amended" in command and "--overwrite" in command
-    assert command.startswith("python -m dayu.cli upload_filing --base ")
+    assert command.startswith("dayu-cli upload_filing --base ")
 
     parser = module._create_parser()
-    parsed = parser.parse_args(shlex.split(command)[3:])
+    parsed = parser.parse_args(shlex.split(command)[1:])
     assert parsed.command == "upload_filing"
 
     material_command = module._build_upload_material_command(
@@ -532,17 +532,17 @@ def test_filename_infer_and_script_helpers(monkeypatch: pytest.MonkeyPatch, tmp_
         company_name=None,
         overwrite=False,
     )
-    assert material_command.startswith("python -m dayu.cli upload_material --base ")
+    assert material_command.startswith("dayu-cli upload_material --base ")
 
     script_path = tmp_path / "script.sh"
     module._write_upload_script(
         output_script=script_path,
         commands=[],
-        regenerate_command="python -m dayu.cli upload_filings_from --ticker AAPL",
+        regenerate_command="dayu-cli upload_filings_from --ticker AAPL",
         script_platform="linux",
     )
     assert "没有识别到可上传的文件" in script_path.read_text(encoding="utf-8")
-    assert "# python -m dayu.cli upload_filings_from --ticker AAPL" in script_path.read_text(encoding="utf-8")
+    assert "# dayu-cli upload_filings_from --ticker AAPL" in script_path.read_text(encoding="utf-8")
 
 
 @pytest.mark.unit
@@ -552,14 +552,14 @@ def test_windows_script_helpers(tmp_path: Path) -> None:
     script_path = tmp_path / "script.cmd"
     module._write_upload_script(
         output_script=script_path,
-        commands=["python -m dayu.cli upload_filing --ticker AAPL"],
-        regenerate_command='python -m dayu.cli upload_filings_from --ticker AAPL --from "C:\\tmp"',
+        commands=["dayu-cli upload_filing --ticker AAPL"],
+        regenerate_command='dayu-cli upload_filings_from --ticker AAPL --from "C:\\tmp"',
         script_platform="windows",
     )
     text = script_path.read_text(encoding="utf-8")
 
     assert text.startswith("@echo off")
-    assert "REM python -m dayu.cli upload_filings_from --ticker AAPL" in text
+    assert "REM dayu-cli upload_filings_from --ticker AAPL" in text
     assert "upload_filing --ticker AAPL" in text
 
 

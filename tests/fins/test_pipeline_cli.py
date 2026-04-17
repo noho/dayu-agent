@@ -1725,14 +1725,14 @@ def test_dispatch_upload_filings_from_generates_script(
     assert result["skipped_count"] == 1
     assert output_script.exists()
     script_text = output_script.read_text(encoding="utf-8")
-    command_lines = [line for line in script_text.splitlines() if line.startswith("python -m dayu.cli upload_")]
+    command_lines = [line for line in script_text.splitlines() if line.startswith("dayu-cli upload_")]
     assert "--fiscal-year 2025 --fiscal-period Q1" in script_text
     assert "--fiscal-year 2023 --fiscal-period FY" in script_text
     assert "--fiscal-year 2025 --fiscal-period H1" in script_text
     assert "--action create" in script_text
     assert "\n".join(command_lines).count("--company-id 000333") == 1
     assert "\n".join(command_lines).count("--company-name") == 1
-    assert "# python -m dayu.cli upload_filings_from" in script_text
+    assert "# dayu-cli upload_filings_from" in script_text
 
 
 def test_dispatch_upload_filings_from_output_directory_writes_default_script_name(
@@ -1783,7 +1783,7 @@ def test_dispatch_upload_filings_from_output_directory_writes_default_script_nam
     assert result["script_path"] == str(expected_script.resolve())
     assert expected_script.exists()
     script_text = expected_script.read_text(encoding="utf-8")
-    command_lines = [line for line in script_text.splitlines() if line.startswith("python -m dayu.cli upload_")]
+    command_lines = [line for line in script_text.splitlines() if line.startswith("dayu-cli upload_")]
     assert "--ticker 0300" in script_text
     assert "\n".join(command_lines).count("--company-id 0300") == 1
     assert "\n".join(command_lines).count("--company-name") == 1
@@ -1865,7 +1865,7 @@ def test_dispatch_upload_filings_from_windows_output_directory_writes_cmd_script
     assert expected_script.exists()
     script_text = expected_script.read_text(encoding="utf-8")
     assert script_text.startswith("@echo off")
-    assert "REM python -m dayu.cli upload_filings_from" in script_text
+    assert "REM dayu-cli upload_filings_from" in script_text
 
 
 def test_dispatch_upload_filings_from_requires_company_meta(tmp_path: Path) -> None:
@@ -1949,7 +1949,7 @@ def test_dispatch_upload_filings_from_infer_bakes_result_into_generated_commands
     assert infer_calls == ["BABA"]
     assert result["generated_ticker_csv"] == "BABA,9988,9988.HK,89988.HK"
     script_text = output_script.read_text(encoding="utf-8")
-    assert "# python -m dayu.cli upload_filings_from --ticker BABA,9988" in script_text
+    assert "# dayu-cli upload_filings_from --ticker BABA,9988" in script_text
     assert "--infer" in script_text
     assert "upload_filing" in script_text
     assert "--ticker BABA,9988,9988.HK,89988.HK" in script_text

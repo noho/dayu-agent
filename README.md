@@ -39,12 +39,20 @@
 
 ## 1. 五分钟快速开始
 
-### 1.1 安装依赖
+### 1.1 安装
 
 需要 Python 3.11+。
 
 ```bash
-pip install -r requirements.txt
+pip install https://github.com/noho/dayu-agent/releases/download/v0.1.0/dayu_agent-0.1.0-py3-none-any.whl
+```
+
+安装后即可在终端使用 `dayu-cli` 和 `dayu-wechat` 命令。
+
+以后升级到新版本时，替换为新版 wheel 地址即可：
+
+```bash
+pip install --upgrade https://github.com/noho/dayu-agent/releases/download/v0.2.0/dayu_agent-0.2.0-py3-none-any.whl
 ```
 
 如需 PDF 渲染，还需要：
@@ -113,20 +121,20 @@ workspace/
 推荐先跑一条单次 prompt：
 
 ```bash
-python -m dayu.cli prompt "总结苹果最新财报的主要风险"
+dayu-cli prompt "总结苹果最新财报的主要风险"
 ```
 
 如果你已经通过 `download`、`upload_filing` 或 `upload_filings_from` 导入过 AAPL 的财报，命令会自动检测本地财报并挂载财报工具后返回结果。
 如果你希望明确指定研究对象，也可以这样写：
 
 ```bash
-python -m dayu.cli prompt "总结最新财报的主要风险" --ticker AAPL
+dayu-cli prompt "总结最新财报的主要风险" --ticker AAPL
 ```
 
 如果还没有财报数据，可执行下载：
 
 ```bash
-python -m dayu.cli download --ticker AAPL
+dayu-cli download --ticker AAPL
 ```
 
 > 也可在微信对话或`interactive`里发送"下载苹果财报"进行下载。
@@ -139,10 +147,10 @@ python -m dayu.cli download --ticker AAPL
 统一入口：
 
 ```bash
-python -m dayu.cli <subcommand> [参数]
+dayu-cli <subcommand> [参数]
 ```
 
-直接执行 `python -m dayu.cli` 会打印总帮助和全部子命令简介；需要查看某个子命令的完整参数时，继续使用 `python -m dayu.cli <subcommand> --help`。
+直接执行 `dayu-cli` 会打印总帮助和全部子命令简介；需要查看某个子命令的完整参数时，继续使用 `dayu-cli <subcommand> --help`。
 
 当前支持的主命令：
 
@@ -186,8 +194,8 @@ python -m dayu.cli <subcommand> [参数]
 
 说明：
 - `--log-level`、`--debug`、`--verbose`、`--info`、`--quiet` 是同一组日志参数，使用其一即可。
-- `prompt`、`interactive`、`write` 还支持更多 Agent 运行参数，例如 `--tool-timeout-seconds`、`--max-iterations`、`--doc-limits-json`、`--fins-limits-json`；需要时可用 `python -m dayu.cli <subcommand> --help` 查看完整列表。
-- 宿主管理命令同样支持 `--base` / `--config` / 日志参数；例如 `python -m dayu.cli host --base ./workspace status`、`python -m dayu.cli sessions --base ./workspace`。
+- `prompt`、`interactive`、`write` 还支持更多 Agent 运行参数，例如 `--tool-timeout-seconds`、`--max-iterations`、`--doc-limits-json`、`--fins-limits-json`；需要时可用 `dayu-cli <subcommand> --help` 查看完整列表。
+- 宿主管理命令同样支持 `--base` / `--config` / 日志参数；例如 `dayu-cli host --base ./workspace status`、`dayu-cli sessions --base ./workspace`。
 - `interactive` 默认会续接本地绑定的同一个多轮会话；如果上一次回答还没完整回显到终端，重启 CLI 会先把那次回答补完，再进入新的输入循环。
 
 ### 2.2 WeChat 入口
@@ -195,10 +203,10 @@ python -m dayu.cli <subcommand> [参数]
 统一入口：
 
 ```bash
-python -m dayu.wechat <command> [参数]
+dayu-wechat <command> [参数]
 ```
 
-直接执行 `python -m dayu.wechat` 会打印总帮助和全部命令简介；需要查看某个命令的完整参数时，继续使用 `python -m dayu.wechat <command> --help`。
+直接执行 `dayu-wechat` 会打印总帮助和全部命令简介；需要查看某个命令的完整参数时，继续使用 `dayu-wechat <command> --help`。
 
 当前支持的命令：
 
@@ -267,16 +275,16 @@ python -m dayu.wechat <command> [参数]
 命令示例：
 
 ```bash
-python -m dayu.cli download --ticker AAPL
+dayu-cli download --ticker AAPL
 ```
 
 常见命令示例：
 
 ```bash
-python -m dayu.cli download --ticker AAPL --forms 10K 10Q --start 2024 --end 2025
-python -m dayu.cli download --ticker AAPL --forms 10K
-python -m dayu.cli download --ticker AAPL --rebuild
-python -m dayu.cli download --ticker BABA,9988,9988.HK --infer
+dayu-cli download --ticker AAPL --forms 10K 10Q --start 2024 --end 2025
+dayu-cli download --ticker AAPL --forms 10K
+dayu-cli download --ticker AAPL --rebuild
+dayu-cli download --ticker BABA,9988,9988.HK --infer
 ```
 
 命令说明：
@@ -306,7 +314,7 @@ python -m dayu.cli download --ticker BABA,9988,9988.HK --infer
 命令示例：
 
 ```bash
-python -m dayu.cli upload_filing \
+dayu-cli upload_filing \
   --ticker 0300 \
   --action create \
   --files ./tmp/美的2025Q1.pdf \
@@ -319,11 +327,11 @@ python -m dayu.cli upload_filing \
 常见命令示例：
 
 ```bash
-python -m dayu.cli upload_filings_from \
+dayu-cli upload_filings_from \
   --ticker 0300 \
   --from ./workspace/source
 
-python -m dayu.cli upload_filing \
+dayu-cli upload_filing \
   --ticker BABA,9988 \
   --action create \
   --files ./tmp/alibaba_2025_q1.pdf \
@@ -332,7 +340,7 @@ python -m dayu.cli upload_filing \
   --company-id 1577552 \
   --infer
 
-python -m dayu.cli upload_material \
+dayu-cli upload_material \
   --ticker AAPL \
   --action create \
   --forms EARNINGS_CALL \
@@ -347,7 +355,7 @@ python -m dayu.cli upload_material \
 - `upload_filings_from` 未传 `--output` 时，默认把脚本写到 `--base` 指向的 workspace 根目录，文件名为 `upload_filings_{ticker}.sh` / `.cmd`。
 - `upload_filings_from --infer` 只会在脚本生成阶段调用一次 FMP，并把“显式 CSV alias + infer alias”的合并结果，以及最终公司名直接 bake 到脚本正文；脚本头部的重生成命令仍会保留原始 `--ticker` 输入和 `--infer`。
 - 使用 `--infer` 功能需要申请FMP_API_KEY。
-- 生成脚本头部会附带一条注释形式的 `python -m dayu.cli upload_filings_from ...` 重跑命令，后续有新文件时可直接复制粘贴再次生成。
+- 生成脚本头部会附带一条注释形式的 `dayu-cli upload_filings_from ...` 重跑命令，后续有新文件时可直接复制粘贴再次生成。
 - `upload_filing` 和 `upload_material` 在首次实际写入时会自动创建 `workspace/portfolio/{ticker}` 下的源文档目录；`upload_filings_from` 只生成批量上传脚本，不直接写入源文档。
 
 ### 3.3 单次问答：`prompt`
@@ -369,16 +377,16 @@ python -m dayu.cli upload_material \
 命令示例：
 
 ```bash
-python -m dayu.cli prompt "总结苹果最新财报中的主要风险"
+dayu-cli prompt "总结苹果最新财报中的主要风险"
 ```
 
 常见命令示例：
 
 ```bash
-python -m dayu.cli prompt "总结最新财报中的主要风险" --ticker AAPL
-python -m dayu.cli prompt "总结苹果最新财报中的主要风险" --thinking
-python -m dayu.cli prompt "总结苹果最新财报中的主要风险" --model-name mimo-v2-flash
-python -m dayu.cli prompt "总结苹果最新财报中的主要风险" --debug
+dayu-cli prompt "总结最新财报中的主要风险" --ticker AAPL
+dayu-cli prompt "总结苹果最新财报中的主要风险" --thinking
+dayu-cli prompt "总结苹果最新财报中的主要风险" --model-name mimo-v2-flash
+dayu-cli prompt "总结苹果最新财报中的主要风险" --debug
 ```
 
 命令说明：
@@ -404,17 +412,17 @@ python -m dayu.cli prompt "总结苹果最新财报中的主要风险" --debug
 命令示例：
 
 ```bash
-python -m dayu.cli interactive
+dayu-cli interactive
 ```
 
 常见命令示例：
 
 ```bash
-python -m dayu.cli interactive --model-name mimo-v2-flash
-python -m dayu.cli interactive --temperature 0.2
-python -m dayu.cli interactive --thinking
-python -m dayu.cli interactive --new-session
-python -m dayu.cli interactive --verbose
+dayu-cli interactive --model-name mimo-v2-flash
+dayu-cli interactive --temperature 0.2
+dayu-cli interactive --thinking
+dayu-cli interactive --new-session
+dayu-cli interactive --verbose
 ```
 
 命令说明：
@@ -453,55 +461,55 @@ python -m dayu.cli interactive --verbose
 
 ```bash
 # 实例 A：扫码主体 A 登录，安装并启动 service
-python -m dayu.wechat login --label a
-python -m dayu.wechat service install --label a --model-name mimo-v2-flash-thinking
-python -m dayu.wechat service start --label a
+dayu-wechat login --label a
+dayu-wechat service install --label a --model-name mimo-v2-flash-thinking
+dayu-wechat service start --label a
 
 # 实例 B：扫码主体 B 登录，安装并启动 service
-python -m dayu.wechat login --label b
-python -m dayu.wechat service install --label b --model-name deepseek-thinking
-python -m dayu.wechat service start --label b
+dayu-wechat login --label b
+dayu-wechat service install --label b --model-name deepseek-thinking
+dayu-wechat service start --label b
 
 # 列出当前 workspace 下已安装的实例
-python -m dayu.wechat service list
+dayu-wechat service list
 ```
 
-- 多开后，`start` / `restart` / `stop` / `status` / `uninstall` 都要继续带对应实例的同一个 `--label`，这样命中的才是同一个后台 service；忘记有哪些实例时可直接执行 `python -m dayu.wechat service list`。
+- 多开后，`start` / `restart` / `stop` / `status` / `uninstall` 都要继续带对应实例的同一个 `--label`，这样命中的才是同一个后台 service；忘记有哪些实例时可直接执行 `dayu-wechat service list`。
 
 命令示例：
 
 ```bash
-python -m dayu.wechat login
-python -m dayu.wechat run
+dayu-wechat login
+dayu-wechat run
 ```
 
 常见命令示例：
 
 ```bash
-python -m dayu.wechat login --relogin
-python -m dayu.wechat run --model-name mimo-v2-flash-thinking --temperature 0.4
-python -m dayu.wechat run --enable-tool-trace
-python -m dayu.wechat service install
-python -m dayu.wechat service start
-python -m dayu.wechat service restart
-python -m dayu.wechat service stop
-python -m dayu.wechat service status
-python -m dayu.wechat service list
-python -m dayu.wechat service uninstall
+dayu-wechat login --relogin
+dayu-wechat run --model-name mimo-v2-flash-thinking --temperature 0.4
+dayu-wechat run --enable-tool-trace
+dayu-wechat service install
+dayu-wechat service start
+dayu-wechat service restart
+dayu-wechat service stop
+dayu-wechat service status
+dayu-wechat service list
+dayu-wechat service uninstall
 ```
 
 命令说明：
 - 同一微信会话里的连续追问会自动延续上下文，适合做多轮分析。
 - 当前版本主要支持文本问答；更适合问财报、公司、行业和研究相关问题。
-- 首次使用时先执行 `python -m dayu.wechat login`；命令会打印并尝试打开登录二维码链接，用手机微信扫码确认即可。若你在管理多实例，统一用 `--label` 指定实例标签。
-- `python -m dayu.wechat run` 依赖本地已有登录态；若登录态失效，重新执行同一个 `--label` 的 `login` 即可。
+- 首次使用时先执行 `dayu-wechat login`；命令会打印并尝试打开登录二维码链接，用手机微信扫码确认即可。若你在管理多实例，统一用 `--label` 指定实例标签。
+- `dayu-wechat run` 依赖本地已有登录态；若登录态失效，重新执行同一个 `--label` 的 `login` 即可。
 - 同一个 `--label` 的前台 `run` 和后台 service 不能并发运行；新的 daemon 若发现该 `state_dir` 已被占用，会直接拒绝启动。
-- macOS / Linux：如果你希望它长期后台运行，先执行 `python -m dayu.wechat service install`，再执行 `python -m dayu.wechat service start`。后续可用 `service restart`、`service stop`、`service status`、`service list`、`service uninstall` 管理。
-- `service install` 会把当前 shell 里已设置的关键环境变量快照进后台 service 定义，包括配置文件里 `{{ENV_VAR}}` 占位符引用到的变量，以及少量代码直读变量（如 `SEC_USER_AGENT`、联网检索/FMP API key）。如果你后来改了 API key，需要重新执行一次 `python -m dayu.wechat service install`；若后台 service 已在运行，再执行 `python -m dayu.wechat service restart` 让新配置生效。
-- `python -m dayu.wechat service status --label <name>` 会直接打印日志定位信息：macOS 打印 stdout/stderr 文件路径；Linux 打印 `journalctl --user -u <label>.service -f` 查看命令。
-- `python -m dayu.wechat service list` 只列出当前 workspace 下已安装的实例，并回显实例标签、状态目录、系统 service label、运行状态和是否已有登录态。
+- macOS / Linux：如果你希望它长期后台运行，先执行 `dayu-wechat service install`，再执行 `dayu-wechat service start`。后续可用 `service restart`、`service stop`、`service status`、`service list`、`service uninstall` 管理。
+- `service install` 会把当前 shell 里已设置的关键环境变量快照进后台 service 定义，包括配置文件里 `{{ENV_VAR}}` 占位符引用到的变量，以及少量代码直读变量（如 `SEC_USER_AGENT`、联网检索/FMP API key）。如果你后来改了 API key，需要重新执行一次 `dayu-wechat service install`；若后台 service 已在运行，再执行 `dayu-wechat service restart` 让新配置生效。
+- `dayu-wechat service status --label <name>` 会直接打印日志定位信息：macOS 打印 stdout/stderr 文件路径；Linux 打印 `journalctl --user -u <label>.service -f` 查看命令。
+- `dayu-wechat service list` 只列出当前 workspace 下已安装的实例，并回显实例标签、状态目录、系统 service label、运行状态和是否已有登录态。
 - macOS 下默认日志分流语义是：stdout 文件保留全量运行日志，stderr 文件额外记录真正错误与异常堆栈；因此 ERROR 会同时出现在两边。
-- Windows：目前没有后台托管命令，使用方式是先执行 `python -m dayu.wechat login`，再执行 `python -m dayu.wechat run`，需要持续运行时请保持终端窗口开启。
+- Windows：目前没有后台托管命令，使用方式是先执行 `dayu-wechat login`，再执行 `dayu-wechat run`，需要持续运行时请保持终端窗口开启。
 - 若需要重新扫码登录，可重启命令并加上 `--relogin`。
 
 ### 3.6 自动写作：`write`
@@ -529,17 +537,17 @@ python -m dayu.wechat service uninstall
 命令示例：
 
 ```bash
-python -m dayu.cli write --ticker AAPL
+dayu-cli write --ticker AAPL
 ```
 
 常见命令示例：
 
 ```bash
-python -m dayu.cli write --ticker AAPL --chapter "公司做的是什么生意"
-python -m dayu.cli write --ticker AAPL --chapter "经营表现与核心驱动" --fast
-python -m dayu.cli write --ticker AAPL --infer
-python -m dayu.cli write --ticker AAPL --summary
-python -m dayu.cli write --ticker AAPL \
+dayu-cli write --ticker AAPL --chapter "公司做的是什么生意"
+dayu-cli write --ticker AAPL --chapter "经营表现与核心驱动" --fast
+dayu-cli write --ticker AAPL --infer
+dayu-cli write --ticker AAPL --summary
+dayu-cli write --ticker AAPL \
   --template ./定性分析模板.md \
   --output ./workspace/draft/AAPL \
   --enable-tool-trace
@@ -550,7 +558,7 @@ python -m dayu.cli write --ticker AAPL \
 - 默认会复用 manifest 中已有的“公司级 facets”，不会每次重跑。
 - 显式传 `--infer` 时，只会强制重跑一次“公司级 facets”并写回 manifest，随后立即退出，不进入章节写作。
 - 按场景使用参数：
-  - 第一次完整写报告：直接运行 `python -m dayu.cli write --ticker AAPL`。
+  - 第一次完整写报告：直接运行 `dayu-cli write --ticker AAPL`。
   - 上次写到一半中断，想从已有结果继续：直接重新运行同一条命令即可；默认就是 `--resume`。
   - 只想快速出初稿，不想等待审查和修复：加 `--fast`。
   - 上一次是用 `--fast` 跑的，想继续沿用这套“只写正文”的方式：继续加 `--fast` 再运行。
@@ -558,8 +566,8 @@ python -m dayu.cli write --ticker AAPL \
   - 前面章节还没完全通过检查，但你仍然想先生成第 0 章或第 10 章看结果：加 `--force`。
   - 只想刷新公司级归因，不进入正式写作：用 `--infer`。
 - 章节不满意时，推荐这样处理：
-  - 正常模式 `write` 写完后，发现第 8 章不满意：先运行 `python -m dayu.cli write --ticker AAPL --chapter "第8章的章节名"` 重写这一章；再运行 `python -m dayu.cli write --ticker AAPL`，把新章节应用到整份报告。
-  - `write --fast` 写完后，发现第 8 章不满意，且你还想继续保持“快速草稿”模式：先运行 `python -m dayu.cli write --ticker AAPL --chapter "第8章的章节名" --fast` 重写这一章；再运行 `python -m dayu.cli write --ticker AAPL --fast`，把新章节应用到整份草稿报告。
+  - 正常模式 `write` 写完后，发现第 8 章不满意：先运行 `dayu-cli write --ticker AAPL --chapter "第8章的章节名"` 重写这一章；再运行 `dayu-cli write --ticker AAPL`，把新章节应用到整份报告。
+  - `write --fast` 写完后，发现第 8 章不满意，且你还想继续保持“快速草稿”模式：先运行 `dayu-cli write --ticker AAPL --chapter "第8章的章节名" --fast` 重写这一章；再运行 `dayu-cli write --ticker AAPL --fast`，把新章节应用到整份草稿报告。
   - 单独重写某一章时，不会自动重建第 0 章和第 10 章。
   - 重写某一章后，再跑一次全文 `write` 时，系统会重新生成整份报告文件；但默认 `--resume` 会跳过当前模式下已经完成的章节，所以第 0 章和第 10 章如果已完成，通常不会自动重写。
   - 如果你改动了中间章节后，希望第 0 章和第 10 章也反映新的内容，建议依次重跑该中间章节、第 10 章、第 0 章，最后再运行一次全文 `write`。
@@ -583,15 +591,15 @@ python -m dayu.cli write --ticker AAPL \
 命令示例：
 
 ```bash
-python -m dayu.cli process --ticker AAPL --overwrite
+dayu-cli process --ticker AAPL --overwrite
 ```
 
 常见命令示例：
 
 ```bash
-python -m dayu.cli process --ticker AAPL
-python -m dayu.cli process --ticker AAPL --ci
-python -m dayu.cli process --ticker AAPL --ci --document-id fil_001 --document-id fil_002
+dayu-cli process --ticker AAPL
+dayu-cli process --ticker AAPL --ci
+dayu-cli process --ticker AAPL --ci --document-id fil_001 --document-id fil_002
 ```
 
 命令说明：
@@ -795,7 +803,7 @@ python -m dayu.cli process --ticker AAPL --ci --document-id fil_001 --document-i
 如果你只关心结果，优先看：
 
 - 每章最终的 `.md`
-- `python -m dayu.cli write --summary --ticker AAPL` 的摘要输出
+- `dayu-cli write --summary --ticker AAPL` 的摘要输出
 - 需要排查问题时，再看对应的 `*_audit.json`
 
 ## 5. tool trace 分析
@@ -803,7 +811,7 @@ python -m dayu.cli process --ticker AAPL --ci --document-id fil_001 --document-i
 如果你在 `prompt` / `interactive` / `write` 时开启了 trace：
 
 ```bash
-python -m dayu.cli prompt \
+dayu-cli prompt \
   "总结最新财报风险" \
   --ticker AAPL \
   --enable-tool-trace
@@ -959,15 +967,15 @@ https://www.reuters.com/markets/companies/AAPL.OQ/
 Markdown 报告渲染入口：
 
 ```bash
-python render/render.py <输入文件.md> [输出文件]
+dayu-render <输入文件.md> [输出文件]
 ```
 
 常见示例：
 
 ```bash
-python render/render.py workspace/draft/AAPL/AAPL_qual_report.md
-python render/render.py workspace/draft/AAPL/AAPL_qual_report.md report.pdf
-python render/render.py workspace/draft/AAPL/AAPL_qual_report.md report.html
+dayu-render workspace/draft/AAPL/AAPL_qual_report.md
+dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.pdf
+dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.html
 ```
 
 支持格式：

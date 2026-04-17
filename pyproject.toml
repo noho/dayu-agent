@@ -83,6 +83,7 @@ Issues = "https://github.com/noho/dayu-agent/issues"
 [project.scripts]
 dayu-cli = "dayu.cli.main:main"
 dayu-wechat = "dayu.wechat.main:main"
+dayu-render = "dayu.render.render:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -90,7 +91,6 @@ include = ["dayu*"]
 exclude = [
     "tests*",
     "utils*",
-    "render*",
     "docs*",
     "workspace*",
     "ref*",
@@ -103,6 +103,14 @@ exclude = [
     "*.json",
     "prompts/**/*.md",
     "prompts/**/*.json",
+]
+"dayu.render" = [
+    "*.css",
+    "*.html",
+    "*.lua",
+    "*.docx",
+    "*.xlsx",
+    "*.mmd",
 ]
 
 [tool.pytest.ini_options]
