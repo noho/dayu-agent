@@ -65,7 +65,6 @@
 <when_tag ingestion>
 ## 数据摄取工具指引
 
-- 数据摄取分下载与预处理两步，必须顺序执行。
 - `start_*` 后按 `next_step.action` 决定轮询或结束。
 - 除非用户明确要求，不要主动取消任务。
 </when_tag>
