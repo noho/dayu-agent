@@ -1,7 +1,7 @@
 # 大愚 Agent — 用户手册
 
 `大愚 Agent` 是一个面向买方财报分析场景的 Agent 系统。它把 LLM、结构化财报工具、财报下载与预处理管线、报告写作流程组合成一套统一系统。  
-`大愚 Agent` 还具备完整的“宿主强约束下的 LLM in the loop的能力”，aka ，是一个Claw ，基础架构能力上已经对齐OpenClaw，后续会加上现在OpenClaw能做的事情。
+`大愚 Agent` 还具备完整的“宿主强约束下的 LLM in the loop的能力”，基础架构能力上已经对齐OpenClaw，后续会加上现在OpenClaw能做的事情。
 
 当前你可以用它完成四类工作：
 - 财报数据管线：下载、上传、预处理 SEC / A 股 / 港股财报。
@@ -34,7 +34,7 @@
   - 优化 Fins 里的港股/A股/美股财报信息提取。
   - Anthropic 原生 API 支持。
   - Durable memory / Retrieval layer（ Memory只实现了working memory 和 episode summary ）。
-  - FMP 工具（调研工作已做，见 [docs/research/fmp_integration_research.md](docs/research/fmp_integration_research.md) ）尚未实现。
+  - FMP 工具（调研工作已做，见 [docs/fmp_integration_research.md](docs/fmp_integration_research.md) ）尚未实现。
   - 更多LLM 工具。
 
 ## 1. 五分钟快速开始
@@ -76,7 +76,6 @@ export FMP_API_KEY="xxxxxxxx"
 说明：
 - 默认模型使用 mimo-v2-pro（token plan，很好用且划算，不需要买别的贵的模型）。
 - 修改默认模型请参考 [8. 模型配置](#model-config)。
-- `python -m dayu.cli write` 会在实际进入某个写作 scene 前校验该 scene 当前模型所需环境变量；未走到的 scene 不会被提前拦截，缺失配置会在对应 scene 创建阶段直接失败。
 - 联网搜索默认可走 `auto`，若配置了 Tavily / Serper，会优先使用对应 provider。
 - MIMO_PLAN_API_KEY 和 MIMO_API_KEY 在 https://platform.xiaomimimo.com/#/console/api-keys 申请。
 - DEEPSEEK_API_KEY 在 https://platform.deepseek.com/api_keys 申请。

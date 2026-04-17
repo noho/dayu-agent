@@ -36,7 +36,7 @@
   - 优化 Fins 里的港股/A股/美股财报信息提取。
   - Anthropic 原生 API 支持。
   - Durable memory / Retrieval layer（ Memory只实现了working memory 和 episode summary ）。
-  - FMP 工具（调研工作已做，见 [../docs/research/fmp_integration_research.md](../docs/research/fmp_integration_research.md) ）尚未实现。
+  - FMP 工具（调研工作已做，见 [../docs/fmp_integration_research.md](../docs/fmp_integration_research.md) ）尚未实现。
   - 更多LLM 工具。
 
 ## 1. 设计目标
