@@ -81,8 +81,8 @@ from dayu.engine.processors.perf_utils import PROFILE_ENV_NAME
 from dayu.engine.tools.web_search_providers import SERPER_API_KEY_ENV, TAVILY_API_KEY_ENV
 from dayu.engine.tools.web_tools import SEC_USER_AGENT_ENV
 from dayu.fins.resolver.fmp_company_alias_resolver import FMP_API_KEY_ENV
-from dayu.wechat.state_store import FileWeChatStateStore
-from dayu.workspace_paths import DEFAULT_WECHAT_INSTANCE_LABEL, build_wechat_state_dir
+from dayu.wechat.state_store import FileWeChatStateStore, load_tracked_session_ids
+from dayu.workspace_paths import DEFAULT_WECHAT_INSTANCE_LABEL, build_host_store_default_path, build_wechat_state_dir
 
 MODULE = "APP.WECHAT.MAIN"
 DEFAULT_TYPING_INTERVAL_SEC = 8.0
@@ -1649,8 +1649,49 @@ def _run_service_status_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _purge_tracked_session_data(*, workspace_root: Path, state_dir: Path) -> None:
+    """清理 Host DB 中与 state_dir 关联的 pending turns 和 reply outbox。
+
+    从 state_dir 下的 tracked_sessions.json 读取 session_id 列表，
+    委托 Host 层按 session_id 删除对应的 pending turns 和 reply outbox 记录。
+
+    Args:
+        workspace_root: 工作区根目录，用于定位 Host DB。
+        state_dir: 当前实例的状态目录。
+
+    Returns:
+        无。
+
+    Raises:
+        无。失败时仅记录日志，不中断 uninstall 流程。
+    """
+
+    session_ids = load_tracked_session_ids(state_dir)
+    if not session_ids:
+        return
+    host_db_path = build_host_store_default_path(workspace_root)
+    if not host_db_path.exists():
+        return
+
+    from dayu.host.host_cleanup import purge_sessions_from_host_db
+
+    total_pending, total_outbox = purge_sessions_from_host_db(
+        host_db_path=host_db_path,
+        session_ids=session_ids,
+    )
+    if total_pending or total_outbox:
+        Log.info(
+            f"已清理 Host DB 数据: pending_turns={total_pending}, reply_outbox={total_outbox}",
+            module=MODULE,
+        )
+
+
 def _run_service_uninstall_command(args: argparse.Namespace) -> int:
     """执行 `service uninstall` 子命令。
+
+    仅当系统服务定义成功卸载后，才清理 Host DB 中关联的
+    pending turns / reply outbox 并删除 state_dir。
+    若服务尚未安装，不执行任何清理。
 
     Args:
         args: argparse 解析结果。
@@ -1670,8 +1711,21 @@ def _run_service_uninstall_command(args: argparse.Namespace) -> int:
     )
     if removed:
         print(f"已卸载 {_get_service_backend_display_name(identity.backend)} 服务实例: {identity.instance_label}")
+
+        # 清理 Host DB 中该实例关联的 pending turns 和 reply outbox
+        _purge_tracked_session_data(
+            workspace_root=_resolve_workspace_root(args.base),
+            state_dir=identity.state_dir,
+        )
+
+        # 删除 state_dir
+        if identity.state_dir.exists():
+            import shutil
+            shutil.rmtree(identity.state_dir, ignore_errors=True)
+            Log.info(f"已删除状态目录: {identity.state_dir}", module=MODULE)
     else:
         print(f"{_get_service_backend_display_name(identity.backend)} 服务实例尚未安装: {identity.instance_label}")
+
     return 0
 
 

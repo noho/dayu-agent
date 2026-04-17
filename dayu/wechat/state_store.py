@@ -312,9 +312,61 @@ class FileWeChatStateStore:
         return target
 
 
+_TRACKED_SESSIONS_FILENAME = "tracked_sessions.json"
+
+
+def record_tracked_session_id(state_dir: Path, session_id: str) -> None:
+    """将 session_id 追加到 state_dir 下的追踪列表（去重）。
+
+    Args:
+        state_dir: 当前 daemon 使用的状态目录。
+        session_id: 需要追踪的 session_id。
+
+    Returns:
+        无。
+
+    Raises:
+        OSError: 文件写入失败时抛出。
+    """
+
+    existing = load_tracked_session_ids(state_dir)
+    if session_id in existing:
+        return
+    existing.append(session_id)
+    target = state_dir / _TRACKED_SESSIONS_FILENAME
+    _write_text_atomic(target, json.dumps(existing, ensure_ascii=False))
+
+
+def load_tracked_session_ids(state_dir: Path) -> list[str]:
+    """读取 state_dir 下已追踪的 session_id 列表。
+
+    Args:
+        state_dir: 当前 daemon 使用的状态目录。
+
+    Returns:
+        session_id 列表；文件不存在时返回空列表。
+
+    Raises:
+        无。
+    """
+
+    target = state_dir / _TRACKED_SESSIONS_FILENAME
+    if not target.exists():
+        return []
+    try:
+        raw = json.loads(target.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [str(item) for item in raw if isinstance(item, str) and item.strip()]
+
+
 __all__ = [
     "FileWeChatStateStore",
     "WeChatDaemonState",
     "build_wechat_runtime_identity",
     "build_wechat_session_id",
+    "load_tracked_session_ids",
+    "record_tracked_session_id",
 ]

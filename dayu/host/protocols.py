@@ -311,6 +311,17 @@ class PendingConversationTurnStoreProtocol(Protocol):
         """删除指定 pending turn。"""
         ...
 
+    def delete_by_session_id(self, session_id: str) -> int:
+        """删除指定 session 的所有 pending turn。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            被删除的记录数。
+        """
+        ...
+
 
 @runtime_checkable
 class ReplyOutboxStoreProtocol(Protocol):
@@ -357,6 +368,17 @@ class ReplyOutboxStoreProtocol(Protocol):
         error_message: str,
     ) -> ReplyOutboxRecord:
         """标记记录交付失败。"""
+        ...
+
+    def delete_by_session_id(self, session_id: str) -> int:
+        """删除指定 session 的所有交付记录。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            被删除的记录数。
+        """
         ...
 
 

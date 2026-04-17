@@ -371,6 +371,28 @@ class InMemoryReplyOutboxStore:
         self._records[updated.delivery_id] = updated
         return updated
 
+    def delete_by_session_id(self, session_id: str) -> int:
+        """删除指定 session 的所有交付记录。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            被删除的记录数。
+
+        Raises:
+            无。
+        """
+
+        normalized = _normalize_text(session_id, field_name="session_id")
+        to_delete = [
+            did for did, record in self._records.items()
+            if record.session_id == normalized
+        ]
+        for did in to_delete:
+            del self._records[did]
+        return len(to_delete)
+
 
 class SQLiteReplyOutboxStore:
     """SQLite 版 reply outbox 仓储。"""
@@ -689,6 +711,28 @@ class SQLiteReplyOutboxStore:
         if updated is None:
             raise RuntimeError(f"reply delivery 更新后读取失败: {existing.delivery_id}")
         return updated
+
+    def delete_by_session_id(self, session_id: str) -> int:
+        """删除指定 session 的所有交付记录。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            被删除的记录数。
+
+        Raises:
+            无。
+        """
+
+        normalized = _normalize_text(session_id, field_name="session_id")
+        conn = self._host_store.get_connection()
+        cursor = conn.execute(
+            "DELETE FROM reply_outbox WHERE session_id = ?",
+            (normalized,),
+        )
+        conn.commit()
+        return cursor.rowcount
 
 
 def _row_to_reply_outbox_record(row: sqlite3.Row) -> ReplyOutboxRecord:

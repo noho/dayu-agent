@@ -59,7 +59,7 @@ from dayu.startup.dependencies import (
     prepare_workspace_resources,
 )
 from dayu.startup.workspace import WorkspaceResources
-from dayu.workspace_paths import build_interactive_state_dir
+from dayu.workspace_paths import build_host_store_default_path, build_interactive_state_dir
 
 
 
@@ -303,8 +303,56 @@ def _build_interactive_state_store(workspace_dir: Path) -> FileInteractiveStateS
     return FileInteractiveStateStore(build_interactive_state_dir(workspace_dir))
 
 
+def _purge_old_interactive_session(
+    store: FileInteractiveStateStore,
+    workspace_dir: Path,
+) -> None:
+    """清理旧 interactive 会话在 Host DB 中的残留数据。
+
+    读取当前 interactive 状态，若存在旧 session_id，则从 Host DB
+    中删除对应的 pending turns 和 reply outbox 记录。
+
+    Args:
+        store: interactive 状态仓储。
+        workspace_dir: 工作区根目录，用于定位 Host DB。
+
+    Returns:
+        无。
+
+    Raises:
+        无。清理失败仅记录日志。
+    """
+
+    old_state: InteractiveSessionState | None = None
+    try:
+        old_state = store.load()
+    except (ValueError, OSError):
+        # 状态文件损坏，无法定位旧 session_id，跳过清理
+        pass
+    if old_state is None:
+        return
+    old_session_id = build_interactive_session_id(old_state.interactive_key)
+    host_db_path = build_host_store_default_path(workspace_dir)
+
+    from dayu.host.host_cleanup import purge_sessions_from_host_db
+
+    total_pending, total_outbox = purge_sessions_from_host_db(
+        host_db_path=host_db_path,
+        session_ids=[old_session_id],
+    )
+    if total_pending or total_outbox:
+        Log.info(
+            f"已清理旧 interactive 会话数据: pending_turns={total_pending}, reply_outbox={total_outbox}",
+            module=MODULE,
+        )
+    Log.info("开启新会话，清理旧会话绑定", module=MODULE)
+
+
 def _resolve_interactive_session_id(workspace_dir: Path, *, new_session: bool) -> str:
     """解析 interactive 启动时应绑定的 session_id。
+
+    当 ``new_session=True`` 时，先清理旧会话在 Host DB 中残留的
+    pending turns 和 reply outbox，再重建会话绑定。
 
     Args:
         workspace_dir: 工作区根目录。
@@ -319,7 +367,7 @@ def _resolve_interactive_session_id(workspace_dir: Path, *, new_session: bool) -
 
     store = _build_interactive_state_store(workspace_dir)
     if new_session:
-        Log.info("开启新会话，清理旧会话绑定", module=MODULE)
+        _purge_old_interactive_session(store, workspace_dir)
         store.clear()
     state = store.load()
     if state is None:

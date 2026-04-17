@@ -36,6 +36,7 @@ from dayu.wechat.ilink_client import IlinkApiClient, IlinkApiError, QRCodeLoginS
 from dayu.wechat.state_store import (
     build_wechat_runtime_identity,
     build_wechat_session_id,
+    record_tracked_session_id,
     FileWeChatStateStore,
     WeChatDaemonState,
 )
@@ -1040,6 +1041,7 @@ class WeChatDaemon:
             Log.warning("跳过缺少 to_user_id/context_token 的微信消息", module=MODULE)
             return False
         session_id = build_wechat_session_id(chat_key)
+        record_tracked_session_id(self.state_store.state_dir, session_id)
         group_id = str(message.get("group_id") or "").strip() or None
         try:
             await self._resume_pending_turns(session_id=session_id, fail_fast=True)

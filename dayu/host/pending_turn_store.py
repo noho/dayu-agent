@@ -384,6 +384,28 @@ class InMemoryPendingConversationTurnStore:
         normalized_pending_turn_id = _normalize_text(pending_turn_id, field_name="pending_turn_id")
         self._records.pop(normalized_pending_turn_id, None)
 
+    def delete_by_session_id(self, session_id: str) -> int:
+        """删除指定 session 的所有 pending turn。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            被删除的记录数。
+
+        Raises:
+            无。
+        """
+
+        normalized = _normalize_text(session_id, field_name="session_id")
+        to_delete = [
+            tid for tid, record in self._records.items()
+            if record.session_id == normalized
+        ]
+        for tid in to_delete:
+            del self._records[tid]
+        return len(to_delete)
+
 
 class SQLitePendingConversationTurnStore:
     """基于 SQLite 的 pending turn 仓储。"""
@@ -682,6 +704,28 @@ class SQLitePendingConversationTurnStore:
             (normalized_pending_turn_id,),
         )
         conn.commit()
+
+    def delete_by_session_id(self, session_id: str) -> int:
+        """删除指定 session 的所有 pending turn。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            被删除的记录数。
+
+        Raises:
+            无。
+        """
+
+        normalized = _normalize_text(session_id, field_name="session_id")
+        conn = self._host_store.get_connection()
+        cursor = conn.execute(
+            "DELETE FROM pending_conversation_turns WHERE session_id = ?",
+            (normalized,),
+        )
+        conn.commit()
+        return cursor.rowcount
 
 
 def _row_to_pending_turn(row: dict[str, Any]) -> PendingConversationTurn:
