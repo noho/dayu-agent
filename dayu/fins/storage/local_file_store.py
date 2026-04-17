@@ -183,7 +183,7 @@ class LocalFileStore(FileStore):
         for path in root.rglob("*"):
             if not path.is_file():
                 continue
-            key = str(path.relative_to(self._root))
+            key = path.relative_to(self._root).as_posix()
             items.append(self.stat_object(key))
         return items
 

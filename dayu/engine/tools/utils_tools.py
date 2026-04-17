@@ -79,7 +79,7 @@ def create_get_current_time_tool(registry=None) -> Tuple[str, Any, Any]:
         }
         
         return {
-            "time": now.strftime("%Y年%m月%d日 %H:%M:%S"),
+            "time": f"{now:%Y}年{now:%m}月{now:%d}日 {now:%H:%M:%S}",
             "timezone": timezone,
             "weekday": weekday_names[now.weekday()],
             "iso": now.isoformat()

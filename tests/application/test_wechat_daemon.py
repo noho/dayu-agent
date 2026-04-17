@@ -1166,7 +1166,10 @@ def test_process_once_sends_typing_best_effort(tmp_path: Path) -> None:
         scripted_turns=[
             _ScriptedTurn(
                 events=(AppEvent(type=AppEventType.FINAL_ANSWER, payload={"content": "答复"}, meta={}),),
-                delay_sec=0.02,
+                # Windows ProactorEventLoop 的 timer 粒度约 15ms；
+                # 这里把 scripted turn 的 delay 拉高到 0.2s，保证 typing task 有机会至少跑一次，
+                # 不再依赖 macOS/Linux 上更细的 scheduling 粒度。
+                delay_sec=0.2,
             )
         ]
     )

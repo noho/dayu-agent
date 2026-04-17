@@ -581,7 +581,7 @@ def _normalize_snapshot_value(value: object) -> ExecutionContractSnapshotValue:
     if value is None or isinstance(value, str | int | float | bool):
         return value
     if isinstance(value, Path):
-        return str(value)
+        return value.as_posix()
     if isinstance(value, dict):
         return {
             str(key): _normalize_snapshot_value(item)

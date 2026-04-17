@@ -189,6 +189,50 @@ def _manifest_file_lock(output_dir: Path) -> Iterator[TextIO]:
             _release_manifest_stream_lock(stream)
 
 
+# 章节 write 阶段产物文件名形如 `{idx}_{slug}.{stage}_write.md`；
+# 这里给每个 stage 指定单调递增的优先级，后面补上阶段重试序号作为次序键，
+# 保证排序语义只依赖文件名本身，不被跨平台 mtime 粒度（Windows NTFS 可能 ~15ms）干扰。
+_CHAPTER_WRITE_STAGE_ORDER: dict[str, int] = {
+    "initial": 0,
+    "initial_fix_placeholders": 1,
+    "repair": 2,
+    "regenerate": 3,
+}
+_CHAPTER_WRITE_STAGE_PATTERN = re.compile(
+    r"^(?P<stage>initial_fix_placeholders|initial|repair|regenerate)(?:_(?P<retry>\d+))?_write$"
+)
+
+
+def _chapter_write_artifact_sort_key(path: Path) -> tuple[int, int, int, str]:
+    """按轮次 → 阶段优先级为 write 中间稿排序。
+
+    轮次（retry）是时间主轴，阶段（stage）仅在同一轮次内决定先后。
+    这样跨轮次切换策略（如先 regenerate 再 repair）时，较新轮次的产物
+    始终排在较旧轮次之后，避免回退到更旧中间稿。
+
+    Args:
+        path: 形如 ``{idx}_{slug}.{stage}[_{retry}]_write.md`` 的 write 产物路径。
+
+    Returns:
+        `(retry, stage_order, 0, full_stem)` 四元组；未知格式退化到
+        `(-1, -1, 0, stem)` 排到最前。
+
+    Raises:
+        无。
+    """
+
+    stem_parts = path.stem.split(".", 1)
+    if len(stem_parts) != 2:
+        return (-1, -1, 0, path.stem)
+    stage_token = stem_parts[1]
+    match = _CHAPTER_WRITE_STAGE_PATTERN.match(stage_token)
+    if match is None:
+        return (-1, -1, 0, path.stem)
+    stage = match.group("stage")
+    retry = int(match.group("retry") or 0)
+    return (retry, _CHAPTER_WRITE_STAGE_ORDER[stage], 0, path.stem)
+
+
 def _slugify_title(title: str) -> str:
     """将章节标题转为文件名 slug。
 
@@ -683,7 +727,7 @@ class ArtifactStore:
         slug = _slugify_title(task.title)
         candidates = sorted(
             chapter_dir.glob(f"{display_index:02d}_{slug}.*_write.md"),
-            key=lambda path: path.stat().st_mtime,
+            key=_chapter_write_artifact_sort_key,
             reverse=True,
         )
         for candidate in candidates:

@@ -53,7 +53,7 @@ def build_base_user_contribution(*, now: datetime | None = None) -> str:
     return "\n".join(
         [
             "# 用户与运行时上下文",
-            f"当前时间：{current.strftime('%Y年%m月%d日')}。",
+            f"当前时间：{current:%Y}年{current:%m}月{current:%d}日。",
         ]
     )
 
