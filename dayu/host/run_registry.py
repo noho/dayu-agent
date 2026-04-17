@@ -15,6 +15,7 @@ from dayu.host.host_store import HostStore
 from dayu.host.protocols import RunRegistryProtocol
 from dayu.contracts.run import ACTIVE_STATES, RunCancelReason, RunRecord, RunState, is_valid_transition
 from dayu.log import Log
+from dayu.process_liveness import is_pid_alive
 
 MODULE = "HOST.RUN_REGISTRY"
 
@@ -71,26 +72,6 @@ def _row_to_record(row: dict[str, Any]) -> RunRecord:
         owner_pid=row["owner_pid"],
         metadata=metadata,
     )
-
-
-def _is_pid_alive(pid: int) -> bool:
-    """检查 PID 对应的进程是否存活。
-
-    Args:
-        pid: 目标进程 ID。
-
-    Returns:
-        True 如果进程存活。
-    """
-
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # 进程存在但无权限发信号
-        return True
-    return True
 
 
 class SQLiteRunRegistry(RunRegistryProtocol):
@@ -300,7 +281,7 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         active_runs = self.list_active_runs()
         orphan_ids: list[str] = []
         for run in active_runs:
-            if not _is_pid_alive(run.owner_pid):
+            if not is_pid_alive(run.owner_pid):
                 orphan_ids.append(run.run_id)
 
         if orphan_ids:

@@ -13,6 +13,7 @@ from typing import Any
 
 from dayu.host.host_store import HostStore
 from dayu.host.protocols import ConcurrencyGovernorProtocol, ConcurrencyPermit, LaneStatus
+from dayu.process_liveness import is_pid_alive
 
 # 默认 lane 配置
 DEFAULT_LANE_CONFIG: dict[str, int] = {
@@ -28,25 +29,6 @@ def _now_utc() -> datetime:
     """返回当前 UTC 时间。"""
 
     return datetime.now(timezone.utc)
-
-
-def _is_pid_alive(pid: int) -> bool:
-    """检查 PID 对应的进程是否存活。
-
-    Args:
-        pid: 目标进程 ID。
-
-    Returns:
-        True 如果进程存活。
-    """
-
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 class SQLiteConcurrencyGovernor(ConcurrencyGovernorProtocol):
@@ -170,7 +152,7 @@ class SQLiteConcurrencyGovernor(ConcurrencyGovernorProtocol):
 
         stale_ids: list[str] = []
         for row in rows:
-            if not _is_pid_alive(row["owner_pid"]):
+            if not is_pid_alive(row["owner_pid"]):
                 stale_ids.append(row["permit_id"])
 
         if stale_ids:
