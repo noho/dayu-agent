@@ -77,9 +77,6 @@ def register_ingestion_tools(
         _create_start_download_job_tool,
         _create_get_download_job_status_tool,
         _create_cancel_download_job_tool,
-        _create_start_process_job_tool,
-        _create_get_process_job_status_tool,
-        _create_cancel_process_job_tool,
     ]
     for factory in tool_factories:
         name, func, schema = factory(registry=registry, manager=manager)
