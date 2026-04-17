@@ -17,11 +17,7 @@ concurrency:
 jobs:
   test:
     name: test (py${{ matrix.python-version }})
-    # 使用 macos-latest 的原因：
-    #   docling 上游在 install_requires 里硬依赖仅支持 macOS 的 ocrmac（封装 Apple Vision 框架），
-    #   Linux 上 `pip install docling` 会失败。详见 internel/ci_docling_workaround.md。
-    #   待 docling 上游将 ocrmac 挪到 optional extras 后，切回 ubuntu-latest 以节省 runner 资源。
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -38,10 +34,11 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        # 只装运行 + 测试 + 静态检查工具，不装 browser 组（playwright + chromium 下载很慢，且 CI 不跑浏览器端到端测试）。
+        # 装 browser extra 只是为了让 pyright 能 resolve playwright / playwright-stealth 的可选 import；
+        # 不执行 `playwright install chromium`，CI 不跑浏览器端到端测试。
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[test,dev]"
+          pip install -e ".[test,dev,browser]"
 
       - name: Run pyright
         run: pyright
