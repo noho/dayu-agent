@@ -160,12 +160,9 @@ def test_ingestion_tool_schema_hides_internal_switches(monkeypatch: pytest.Monke
     registry = _register_tools(monkeypatch=monkeypatch, manager=manager)
 
     download_schema = registry.schemas["start_financial_filing_download_job"]["function"]["parameters"]["properties"]
-    process_schema = registry.schemas["start_financial_document_preprocess_job"]["function"]["parameters"]["properties"]
 
     assert "rebuild" not in download_schema
-    assert "ci" not in process_schema
-    assert "document_id" not in process_schema
-    assert "document_ids" not in process_schema
+    assert "start_financial_document_preprocess_job" not in registry.schemas
 
 
 @pytest.mark.unit
@@ -268,10 +265,10 @@ def test_start_download_job_tool_returns_not_implemented_for_non_us_ticker(
 
 
 @pytest.mark.unit
-def test_cancel_and_process_status_tools_return_machine_actionable_fields(
+def test_cancel_and_download_status_tools_return_machine_actionable_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """验证取消与预处理状态返回机器可判别字段。"""
+    """验证取消与下载状态返回机器可判别字段。"""
 
     manager = _FakeJobManager()
     registry = _register_tools(monkeypatch=monkeypatch, manager=manager)
@@ -286,11 +283,6 @@ def test_cancel_and_process_status_tools_return_machine_actionable_fields(
         "get_financial_filing_download_job_status",
         {"job_id": "job_download_1"},
     )
-    process_status_response = _execute_tool(
-        registry,
-        "get_financial_document_preprocess_job_status",
-        {"job_id": "job_process_done"},
-    )
 
     assert cancel_response["cancellation_outcome"] == "already_terminal"
     assert cancel_response["failure"]["code"] == "execution_error"
@@ -300,10 +292,6 @@ def test_cancel_and_process_status_tools_return_machine_actionable_fields(
     assert download_status_response["recent_issues"][0]["reason_code"] == "not_modified"
     assert download_status_response["next_step"]["action"] == "poll_status"
     assert download_status_response["next_step"]["tool_name"] == "get_financial_filing_download_job_status"
-    assert process_status_response["job"]["job_type"] == "document_preprocess"
-    assert process_status_response["progress"]["unit"] == "document"
-    assert process_status_response["recent_issues"] == []
-    assert process_status_response["next_step"]["action"] == "stop"
 
 
 @pytest.mark.unit
@@ -314,15 +302,12 @@ def test_status_tools_register_polling_dup_call_spec(monkeypatch: pytest.MonkeyP
     registry = _register_tools(monkeypatch=monkeypatch, manager=manager)
 
     download_spec = registry.get_dup_call_spec("get_financial_filing_download_job_status")
-    process_spec = registry.get_dup_call_spec("get_financial_document_preprocess_job_status")
     start_spec = registry.get_dup_call_spec("start_financial_filing_download_job")
 
     assert download_spec is not None
     assert download_spec.mode == "poll_until_terminal"
     assert download_spec.status_path == "job.status"
     assert download_spec.terminal_values == ["succeeded", "failed", "cancelled"]
-    assert process_spec is not None
-    assert process_spec.mode == "poll_until_terminal"
     assert start_spec is None
 
 

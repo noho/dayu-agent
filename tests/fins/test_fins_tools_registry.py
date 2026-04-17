@@ -366,10 +366,10 @@ def test_register_fins_ingestion_tools_registers_all_job_tool_names() -> None:
         "start_financial_filing_download_job",
         "get_financial_filing_download_job_status",
         "cancel_financial_filing_download_job",
-        "start_financial_document_preprocess_job",
-        "get_financial_document_preprocess_job_status",
-        "cancel_financial_document_preprocess_job",
     }.issubset(names)
+    assert "start_financial_document_preprocess_job" not in names
+    assert "get_financial_document_preprocess_job_status" not in names
+    assert "cancel_financial_document_preprocess_job" not in names
 
 
 @pytest.mark.unit
