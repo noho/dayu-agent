@@ -4,7 +4,7 @@
 `大愚 Agent` 还具备完整的“宿主强约束下的 LLM in the loop的能力”，基础架构能力上已经对齐OpenClaw，后续会加上现在OpenClaw能做的事情。
 
 当前你可以用它完成四类工作：
-- 财报数据管线：下载、上传、预处理 SEC / A 股 / 港股财报。
+- 财报数据管线：美股财报下载、美股 / A 股 / 港股财报上传。
 - 投研问答：下载、上传财报后，执行 `prompt` 单次提问、`interactive` 多轮提问、或通过微信向`大愚 Agent` 提问。
 - 买方分析报告写作：下载、上传财报后，执行 `write` 写作。
 - 结果渲染：把 Markdown 报告渲染为 HTML / PDF / Word。
@@ -25,8 +25,9 @@
   - 同一行业里，不同公司写出公司自己的特殊结构变量。
 - 位于 Engine 的 web tools 现在的对抗challenge能力很弱，很多网站无法访问。
 - 位于 Fins 的港股、A股财报下载功能尚未实现。
-- GUI 尚未实现；Web UI 目前仍只有 FastAPI 骨架。
-- WeChat UI 仅支持文本消息首版，还可添加更多好玩的功能。
+- **GUI 尚未实现**；
+- **Web UI 目前仍只有 FastAPI 骨架**。
+- **WeChat UI 仅支持文本消息首版，还可添加更多好玩的功能**。
 - 财报电话会议记录音频转录文字后信息提取（起码要区分信息来自提问还是回答）尚未实现。
 - 财报presentation信息提取尚未实现。
 - 欢迎围绕以下方向提交 issue 或 PR：
@@ -63,45 +64,42 @@ brew install pandoc
 
 并安装 Google Chrome。
 
-### 1.2 配置 API Key
+### 1.2 初始化工作区与配置
 
-最少需要配置 `MIMO_PLAN_API_KEY`：
-
-```bash
-export MIMO_PLAN_API_KEY="sk-xxxxxxxx"
-```
-
-可选：
+安装后运行一次 `init`，交互式完成配置复制、模型供应商选择和 API Key 设置：
 
 ```bash
-export MIMO_API_KEY="sk-xxxxxxxx"
-export DEEPSEEK_API_KEY="sk-xxxxxxxx"
-export TAVILY_API_KEY="tvly-xxxxxxxx"
-export SERPER_API_KEY="sp-xxxxxxxx"
-export FMP_API_KEY="xxxxxxxx"
+dayu-cli init
 ```
+
+`init` 会依次执行：
+
+1. 复制包内默认配置到 `./workspace/config/`
+2. 让你选择模型供应商（Mimo / DeepSeek / OpenAI / Anthropic / Gemini / 通义千问）
+3. 输入对应 API Key 并永久写入环境变量（macOS/Linux 写 shell profile，Windows 用 setx）
+4. 自动更新 manifest 中的默认模型为你选择的供应商模型
+5. 可选配置联网检索 API Key（TAVILY / SERPER / FMP）
+
+可选参数：
+
+```bash
+dayu-cli init --base ./my_workspace    # 指定工作区目录（默认 ./workspace）
+dayu-cli init --overwrite              # 覆盖已有配置
+```
+
+API Key 申请地址：
+- MIMO_PLAN_API_KEY / MIMO_API_KEY：https://platform.xiaomimimo.com/#/console/api-keys
+- DEEPSEEK_API_KEY：https://platform.deepseek.com/api_keys
+- FMP_API_KEY：https://site.financialmodelingprep.com/developer/docs/dashboard
+- TAVILY_API_KEY：https://app.tavily.com/home
+- SERPER_API_KEY：https://serper.dev/
 
 说明：
-- 默认模型使用 mimo-v2-pro（token plan，很好用且划算，不需要买别的贵的模型）。
-- 修改默认模型请参考 [8. 模型配置](#model-config)。
+- 默认推荐 Mimo Token Plan（mimo-v2-pro-plan），性价比最优。
 - 联网搜索默认可走 `auto`，若配置了 Tavily / Serper，会优先使用对应 provider。
-- MIMO_PLAN_API_KEY 和 MIMO_API_KEY 在 https://platform.xiaomimimo.com/#/console/api-keys 申请。
-- DEEPSEEK_API_KEY 在 https://platform.deepseek.com/api_keys 申请。
-- FMP_API_KEY 在 https://site.financialmodelingprep.com/developer/docs/dashboard 申请。
-- TAVILY_API_KEY 在 https://app.tavily.com/home 申请。
-- SERPER_API_KEY 在 https://serper.dev/ 申请。
 - 若运行环境需要访问 `localhost`、私网 IP 或内网域名，可在 `workspace/config/run.json` 的 `web_tools_config.allow_private_network_url` 中显式打开内网访问开关。
-
-### 1.3 初始化工作区
-
-首次运行前，把默认配置复制到工作区：
-
-```bash
-mkdir -p workspace/config
-cp -r dayu/config/* workspace/config/
-```
-
-说明：`workspace/config/llm_models.json` 当前只允许 `openai_compatible` 模型配置；CLI runner 已禁用，不再允许配置 `runner_type=cli`。
+- `workspace/config/llm_models.json` 当前只允许 `openai_compatible` 模型配置；CLI runner 已禁用。
+- 修改默认模型请参考 [8. 模型配置](#model-config)。
 
 工作区最重要的目录：
 

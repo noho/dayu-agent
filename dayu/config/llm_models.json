@@ -416,9 +416,9 @@
       }
     }
   },
-  "mimo-v2-plan": {
+  "mimo-v2-pro-plan": {
     "runner_type": "openai_compatible",
-    "name": "mimo-v2-plan",
+    "name": "mimo-v2-pro-plan",
     "endpoint_url": "https://token-plan-cn.xiaomimimo.com/v1/chat/completions",
     "model": "mimo-v2-pro",
     "headers": {
@@ -454,9 +454,9 @@
       }
     }
   },
-  "mimo-v2-plan-thinking": {
+  "mimo-v2-pro-thinking-plan": {
     "runner_type": "openai_compatible",
-    "name": "mimo-v2-plan-thinking",
+    "name": "mimo-v2-pro-thinking-plan",
     "endpoint_url": "https://token-plan-cn.xiaomimimo.com/v1/chat/completions",
     "model": "mimo-v2-pro",
     "headers": {

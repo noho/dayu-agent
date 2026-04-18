@@ -1,0 +1,578 @@
+"""``dayu-cli init`` 子命令实现。
+
+模块职责：
+- 复制包内配置到工作区
+- 交互式选择模型供应商 → 配置 API Key → 更新 manifest 默认模型
+- 可选配置联网检索 API Key
+- 跨平台环境变量持久化（macOS/Linux shell profile，Windows setx）
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+from argparse import Namespace
+from pathlib import Path
+from dayu.startup.config_file_resolver import _resolve_package_config_path
+
+MODULE = "CLI.INIT"
+
+# --------------------------------------------------------------------------- #
+#  供应商定义
+# --------------------------------------------------------------------------- #
+
+_PROVIDER_DISPLAY_NAMES: dict[str, str] = {
+    "MIMO_PLAN_API_KEY": "Mimo Token Plan",
+    "MIMO_API_KEY": "Mimo",
+    "DEEPSEEK_API_KEY": "DeepSeek",
+    "OPENAI_API_KEY": "OpenAI",
+    "ANTHROPIC_API_KEY": "Anthropic",
+    "GEMINI_API_KEY": "Google Gemini",
+    "QWEN_API_KEY": "阿里通义千问",
+}
+
+_PROVIDER_MODEL_MAP: dict[str, tuple[str, str]] = {
+    "MIMO_PLAN_API_KEY": ("mimo-v2-pro-plan", "mimo-v2-pro-thinking-plan"),
+    "MIMO_API_KEY": ("mimo-v2-pro", "mimo-v2-pro-thinking"),
+    "DEEPSEEK_API_KEY": ("deepseek-chat", "deepseek-thinking"),
+    "OPENAI_API_KEY": ("gpt-5.4", "gpt-5.4"),
+    "ANTHROPIC_API_KEY": ("claude-sonnet-4-6", "claude-sonnet-4-6"),
+    "GEMINI_API_KEY": ("gemini-2.5-flash", "gemini-2.5-flash"),
+    "QWEN_API_KEY": ("qwen3", "qwen3-thinking"),
+}
+
+# 从 _PROVIDER_MODEL_MAP 推导：所有可能出现在 manifest default_name 中的 non-thinking 模型名集合
+_ALL_NON_THINKING_MODELS: frozenset[str] = frozenset(m[0] for m in _PROVIDER_MODEL_MAP.values())
+
+# 所有可能出现的 thinking 模型名集合
+_ALL_THINKING_MODELS: frozenset[str] = frozenset(m[1] for m in _PROVIDER_MODEL_MAP.values())
+
+# 仅出现在 non-thinking 集合而不在 thinking 集合中的模型名
+_ONLY_NON_THINKING: frozenset[str] = _ALL_NON_THINKING_MODELS - _ALL_THINKING_MODELS
+
+# 仅出现在 thinking 集合而不在 non-thinking 集合中的模型名
+_ONLY_THINKING: frozenset[str] = _ALL_THINKING_MODELS - _ALL_NON_THINKING_MODELS
+
+# init 在 manifest 中写入的角色标记 key
+_INIT_ROLE_KEY = "_init_model_role"
+
+_ROLE_NON_THINKING = "non_thinking"
+_ROLE_THINKING = "thinking"
+
+_OPTIONAL_SEARCH_KEYS: list[str] = [
+    "TAVILY_API_KEY",
+    "SERPER_API_KEY",
+    "FMP_API_KEY",
+]
+
+# --------------------------------------------------------------------------- #
+#  环境变量持久化
+# --------------------------------------------------------------------------- #
+
+
+def _detect_shell_profile() -> tuple[Path, bool]:
+    """检测当前用户的 shell profile 路径。
+
+    Returns:
+        ``(profile_path, is_export_compatible)`` 元组。
+        ``is_export_compatible`` 为 ``True`` 表示该 shell 使用 ``export KEY=value`` 语法（bash/zsh）。
+        为 ``False`` 表示该 shell（如 fish）不兼容 ``export`` 语法，
+        仍返回 ``~/.profile`` 但调用方需要警告用户手动配置。
+
+    Raises:
+        无。
+    """
+
+    shell = os.environ.get("SHELL", "")
+    home = Path.home()
+    if "zsh" in shell:
+        return home / ".zshrc", True
+    if "bash" in shell:
+        bashrc = home / ".bashrc"
+        bash_profile = home / ".bash_profile"
+        return (bash_profile if bash_profile.exists() else bashrc), True
+    # fish、nu 等 shell 不兼容 export 语法
+    return home / ".profile", False
+
+
+def _write_env_to_shell_profile(key: str, value: str, profile: Path) -> bool:
+    """将 ``export KEY=value`` 追加到 shell profile。
+
+    如果 profile 中已存在同名 export 行，则替换。
+
+    Args:
+        key: 环境变量名。
+        value: 环境变量值。
+        profile: shell profile 路径。
+
+    Returns:
+        是否实际写入（``True`` 表示写入成功，``False`` 表示已存在相同值）。
+
+    Raises:
+        无。
+    """
+
+    export_line = f'export {key}="{value}"'
+    pattern = re.compile(rf"^export\s+{re.escape(key)}=.*$", re.MULTILINE)
+
+    if profile.exists():
+        content = profile.read_text(encoding="utf-8")
+        if pattern.search(content):
+            old_match = pattern.search(content)
+            if old_match and old_match.group(0) == export_line:
+                return False
+            new_content = pattern.sub(export_line, content)
+            profile.write_text(new_content, encoding="utf-8")
+            return True
+    else:
+        content = ""
+
+    with profile.open("a", encoding="utf-8") as f:
+        if content and not content.endswith("\n"):
+            f.write("\n")
+        f.write(f"\n# dayu-cli init 自动写入\n{export_line}\n")
+    return True
+
+
+def _write_env_windows(key: str, value: str) -> bool:
+    """在 Windows 上通过 setx 持久化环境变量。
+
+    Args:
+        key: 环境变量名。
+        value: 环境变量值。
+
+    Returns:
+        是否执行成功。
+
+    Raises:
+        无。
+    """
+
+    result = subprocess.run(
+        ["setx", key, value],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _persist_env_var(key: str, value: str) -> tuple[str, bool]:
+    """跨平台持久化环境变量。
+
+    同时设置当前进程的环境变量。
+
+    Args:
+        key: 环境变量名。
+        value: 环境变量值。
+
+    Returns:
+        ``(target_description, success)`` 元组。
+        ``target_description`` 为写入目标描述文本（如 ``~/.zshrc``、``setx``）。
+        ``success`` 为 ``False`` 表示持久化失败或 shell 不兼容，需要用户手动配置。
+
+    Raises:
+        无。
+    """
+
+    os.environ[key] = value
+
+    if platform.system() == "Windows":
+        ok = _write_env_windows(key, value)
+        if not ok:
+            return "setx", False
+        return "setx（重开终端生效）", True
+
+    profile, is_compatible = _detect_shell_profile()
+    if not is_compatible:
+        return str(profile), False
+
+    _write_env_to_shell_profile(key, value, profile)
+    return str(profile), True
+
+
+# --------------------------------------------------------------------------- #
+#  配置复制
+# --------------------------------------------------------------------------- #
+
+
+def _copy_config(base_dir: Path, *, overwrite: bool) -> Path:
+    """复制包内配置到工作区。
+
+    Args:
+        base_dir: 工作区根目录。
+        overwrite: 是否覆盖已有文件。
+
+    Returns:
+        目标配置目录路径。
+
+    Raises:
+        无。
+    """
+
+    src = _resolve_package_config_path()
+    dst = (base_dir / "config").resolve()
+
+    if dst.exists() and not overwrite:
+        print(f"配置目录已存在: {dst}（使用 --overwrite 覆盖）")
+        return dst
+
+    if dst.exists() and overwrite:
+        shutil.rmtree(dst)
+
+    shutil.copytree(src, dst)
+    return dst
+
+
+# --------------------------------------------------------------------------- #
+#  Manifest 默认模型替换
+# --------------------------------------------------------------------------- #
+
+
+def _classify_model_role(current_name: str, stored_role: str) -> str | None:
+    """判断 manifest 中当前模型属于 non-thinking 还是 thinking 角色。
+
+    优先使用 ``_init_model_role`` 标记；标记不存在时根据模型名推断。
+    对同时出现在两个集合中的歧义模型名（如 ``gpt-5.4``），无标记时无法判断，返回 ``None``。
+
+    Args:
+        current_name: 当前 ``model.default_name``。
+        stored_role: manifest 中已记录的 ``_init_model_role``，空字符串表示无记录。
+
+    Returns:
+        ``"non_thinking"``、``"thinking"`` 或 ``None``（无法判断）。
+
+    Raises:
+        无。
+    """
+
+    if stored_role in (_ROLE_NON_THINKING, _ROLE_THINKING):
+        return stored_role
+
+    # 无标记时靠模型名推断——但歧义名无法判断
+    if current_name in _ONLY_NON_THINKING:
+        return _ROLE_NON_THINKING
+    if current_name in _ONLY_THINKING:
+        return _ROLE_THINKING
+    # 歧义模型或完全未知模型
+    return None
+
+
+def _resolve_role_from_package_manifest(manifest_filename: str) -> str | None:
+    """从包内原始 manifest 推断 scene 的模型角色。
+
+    包内原始 manifest 使用无歧义的默认模型名（``mimo-v2-pro-plan`` / ``mimo-v2-pro-thinking-plan``），
+    可作为 fallback 判断角色。
+
+    Args:
+        manifest_filename: manifest 文件名（如 ``write.json``）。
+
+    Returns:
+        ``"non_thinking"``、``"thinking"`` 或 ``None``（原始 manifest 不存在或无法判断）。
+
+    Raises:
+        无。
+    """
+
+    pkg_manifests = _resolve_package_config_path() / "prompts" / "manifests"
+    pkg_file = pkg_manifests / manifest_filename
+    if not pkg_file.exists():
+        return None
+
+    try:
+        pkg_data = json.loads(pkg_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    pkg_model = pkg_data.get("model", {})
+    if not isinstance(pkg_model, dict):
+        return None
+
+    pkg_name = pkg_model.get("default_name", "")
+    # 包内原始模型名一定是无歧义的，直接用 _classify_model_role（无标记）
+    return _classify_model_role(pkg_name, "")
+
+
+def _update_manifest_default_models(
+    config_dir: Path,
+    non_thinking_model: str,
+    thinking_model: str,
+) -> int:
+    """更新 manifest 文件中的 ``model.default_name``。
+
+    识别当前 ``default_name`` 的角色（non-thinking / thinking），
+    替换为目标供应商对应角色的模型名，并写入 ``_init_model_role`` 标记
+    以便后续 init 能正确识别角色。
+
+    当工作区 manifest 中的模型名歧义且无角色标记时，回退到包内原始 manifest
+    推断该 scene 的角色。
+
+    Args:
+        config_dir: 工作区配置目录。
+        non_thinking_model: 替换后的非 thinking 模型名。
+        thinking_model: 替换后的 thinking 模型名。
+
+    Returns:
+        被修改的 manifest 文件数量。
+
+    Raises:
+        无。
+    """
+
+    manifests_dir = config_dir / "prompts" / "manifests"
+    if not manifests_dir.exists():
+        return 0
+
+    role_to_model = {
+        _ROLE_NON_THINKING: non_thinking_model,
+        _ROLE_THINKING: thinking_model,
+    }
+
+    updated = 0
+    for manifest_file in sorted(manifests_dir.glob("*.json")):
+        text = manifest_file.read_text(encoding="utf-8")
+        data = json.loads(text)
+
+        model_section = data.get("model")
+        if not isinstance(model_section, dict):
+            continue
+
+        current = model_section.get("default_name", "")
+        stored_role = model_section.get(_INIT_ROLE_KEY, "")
+        if not isinstance(stored_role, str):
+            stored_role = ""
+
+        role = _classify_model_role(current, stored_role)
+        if role is None:
+            # 歧义模型名且无标记——回退到包内原始 manifest 推断角色
+            role = _resolve_role_from_package_manifest(manifest_file.name)
+        if role is None:
+            continue
+
+        new_name = role_to_model[role]
+        changed = new_name != current or stored_role != role
+
+        if changed:
+            model_section["default_name"] = new_name
+            model_section[_INIT_ROLE_KEY] = role
+            manifest_file.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            updated += 1
+
+    return updated
+
+
+# --------------------------------------------------------------------------- #
+#  交互式供应商选择
+# --------------------------------------------------------------------------- #
+
+
+def _prompt_provider_selection() -> str:
+    """交互式让用户选择模型供应商。
+
+    已在环境变量中设置了 API Key 的供应商会标注「✓ 已配置」。
+
+    Returns:
+        选中的 API Key 名称。
+
+    Raises:
+        SystemExit: 用户输入无效或 EOF 时退出。
+    """
+
+    keys = list(_PROVIDER_DISPLAY_NAMES.keys())
+
+    # 找第一个已配置的供应商作为默认推荐
+    first_configured_idx = 0
+    for i, key in enumerate(keys):
+        if os.environ.get(key):
+            first_configured_idx = i
+            break
+
+    print("\n请选择你要使用的模型供应商（输入编号）：\n")
+    for i, key in enumerate(keys, 1):
+        display = _PROVIDER_DISPLAY_NAMES[key]
+        configured = "  ✓ 已配置" if os.environ.get(key) else ""
+        default_marker = "（默认）" if (i - 1) == first_configured_idx else ""
+        print(f"  {i}. {display}  — {key}{configured}{default_marker}")
+
+    print()
+    default_num = first_configured_idx + 1
+    try:
+        raw = input(f"选择 [{default_num}]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        sys.exit(1)
+
+    if raw == "":
+        return keys[first_configured_idx]
+
+    try:
+        idx = int(raw)
+    except ValueError:
+        print(f"无效输入: {raw}")
+        sys.exit(1)
+
+    if idx < 1 or idx > len(keys):
+        print(f"编号超出范围: {idx}")
+        sys.exit(1)
+
+    return keys[idx - 1]
+
+
+def _prompt_api_key(api_key_name: str) -> str:
+    """交互式获取 API Key 值。
+
+    Args:
+        api_key_name: API Key 环境变量名。
+
+    Returns:
+        用户输入的 API Key 值。
+
+    Raises:
+        SystemExit: 用户未输入或 EOF 时退出。
+    """
+
+    try:
+        value = input(f"\n请输入 {api_key_name}: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        sys.exit(1)
+
+    if not value:
+        print(f"错误: {api_key_name} 不能为空")
+        sys.exit(1)
+
+    return value
+
+
+def _prompt_optional_search_keys() -> list[tuple[str, str]]:
+    """交互式配置可选的联网检索 API Key。
+
+    已在环境变量中存在的 key 自动跳过。
+
+    Returns:
+        ``(key_name, key_value)`` 列表，仅包含用户实际输入了值的项。
+
+    Raises:
+        无。
+    """
+
+    missing_keys = [k for k in _OPTIONAL_SEARCH_KEYS if not os.environ.get(k)]
+    already_set = [k for k in _OPTIONAL_SEARCH_KEYS if os.environ.get(k)]
+
+    if already_set:
+        print(f"\n联网检索 API Key（已配置: {', '.join(already_set)}）")
+
+    if not missing_keys:
+        print("  所有联网检索 API Key 均已配置，跳过。")
+        return []
+
+    print("是否配置以下联网检索 API Key？（可选，直接回车跳过）")
+    results: list[tuple[str, str]] = []
+
+    for key in missing_keys:
+        try:
+            value = input(f"  {key}: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if value:
+            results.append((key, value))
+
+    return results
+
+
+# --------------------------------------------------------------------------- #
+#  主入口
+# --------------------------------------------------------------------------- #
+
+
+def run_init(args: Namespace) -> int:
+    """执行 ``dayu-cli init`` 子命令。
+
+    Args:
+        args: 解析后的命令行参数，包含 ``base``（工作区目录）和 ``overwrite``（是否覆盖）。
+
+    Returns:
+        退出码，0 表示成功。
+
+    Raises:
+        无。
+    """
+
+    base_dir = Path(args.base).resolve()
+    overwrite: bool = getattr(args, "overwrite", False)
+
+    # 1. 复制配置
+    config_dir = _copy_config(base_dir, overwrite=overwrite)
+    print(f"✓ 配置已复制到: {config_dir}")
+
+    # 2. 选择供应商 + 输入 API Key（已有则跳过）
+    chosen_key = _prompt_provider_selection()
+    env_vars_written = False
+    main_key_persist_failed = False
+
+    existing_value = os.environ.get(chosen_key)
+    if existing_value:
+        masked = existing_value[:4] + "***" + existing_value[-4:] if len(existing_value) > 8 else "***"
+        print(f"\n✓ {chosen_key} 已在环境变量中配置（{masked}），跳过写入。")
+    else:
+        api_key_value = _prompt_api_key(chosen_key)
+        _target, ok = _persist_env_var(chosen_key, api_key_value)
+        env_vars_written = True
+        if not ok:
+            main_key_persist_failed = True
+            print(f"\n❌ {chosen_key} 无法持久化到系统环境变量。")
+            print(f"   已为当前进程设置，但重开终端后会丢失。")
+            print(f"   为避免切换模型后下次启动找不到 API Key，跳过 manifest 更新。")
+            print(f"   请手动配置环境变量后重新运行 dayu-cli init。")
+
+    # 3. 更新 manifest 默认模型（仅在主 key 持久化成功或已存在时执行）
+    non_thinking, thinking = _PROVIDER_MODEL_MAP[chosen_key]
+    if main_key_persist_failed:
+        print(f"\n⚠️  跳过 manifest 更新（{chosen_key} 未持久化）")
+    else:
+        updated_count = _update_manifest_default_models(config_dir, non_thinking, thinking)
+        print(f"✓ 默认模型已设置为: {non_thinking} / {thinking}（更新了 {updated_count} 个 manifest）")
+
+    # 4. 可选联网检索 Key
+    search_persist_failed = False
+    search_keys = _prompt_optional_search_keys()
+    for key, value in search_keys:
+        _search_target, search_ok = _persist_env_var(key, value)
+        env_vars_written = True
+        if not search_ok:
+            search_persist_failed = True
+        print(f"✓ {key} 已配置")
+
+    # 5. 完成提示
+    print(f"\n✓ 工作区已初始化: {base_dir}")
+
+    if env_vars_written:
+        if main_key_persist_failed or search_persist_failed:
+            shell_name = os.environ.get("SHELL", "").rsplit("/", 1)[-1] or "unknown"
+            print(f"\n⚠️  当前环境（shell={shell_name}）不支持自动写入环境变量。")
+            print(f"   已为当前进程设置环境变量，但重开终端后会丢失。")
+            print(f"   请手动将 API Key 添加到你的 shell 配置文件中。\n")
+        elif platform.system() != "Windows":
+            profile, _ = _detect_shell_profile()
+            print(f"\n⚠️  环境变量已写入 {profile}，但当前终端尚未生效。")
+            print(f"   请立即执行以下命令，或重新打开终端：\n")
+            print(f"   source {profile}\n")
+        else:
+            print(f"\n⚠️  环境变量已通过 setx 写入，但当前终端尚未生效。")
+            print(f"   请关闭并重新打开终端。\n")
+
+        print("环境变量生效后，可以开始使用：")
+    else:
+        print("\n可以开始使用：")
+    print(f"  dayu-cli download --ticker AAPL")
+    print(f'  dayu-cli prompt "总结苹果最新财报的主要风险"')
+
+    return 1 if main_key_persist_failed else 0

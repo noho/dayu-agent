@@ -160,11 +160,11 @@ def test_manifest_tool_selection_is_loaded_from_shared_parser() -> None:
 
     manifest = load_scene_definition(FilePromptAssetStore(ConfigFileResolver()), "audit")
 
-    assert manifest.model.default_name == "mimo-v2-plan-thinking"
+    assert manifest.model.default_name == "mimo-v2-pro-thinking-plan"
     assert manifest.model.allowed_names == (
         "mimo-v2-flash-thinking",
         "mimo-v2-pro-thinking",
-      "mimo-v2-plan-thinking",
+      "mimo-v2-pro-thinking-plan",
         "deepseek-thinking",
         "qwen3-thinking",
         "qwen3:30b-thinking",
@@ -185,7 +185,7 @@ def test_conversation_compaction_manifest_is_tool_free() -> None:
 
     manifest = load_scene_definition(FilePromptAssetStore(ConfigFileResolver()), "conversation_compaction")
 
-    assert manifest.model.default_name == "mimo-v2-plan-thinking"
+    assert manifest.model.default_name == "mimo-v2-pro-thinking-plan"
     assert manifest.model.temperature_profile == "conversation_compaction"
     assert manifest.tool_selection_policy.mode.value == "none"
 
@@ -213,7 +213,7 @@ def test_interactive_manifest_excludes_doc_tools_by_default() -> None:
 
     manifest = load_scene_definition(FilePromptAssetStore(ConfigFileResolver()), "interactive")
 
-    assert manifest.model.default_name == "mimo-v2-plan-thinking"
+    assert manifest.model.default_name == "mimo-v2-pro-thinking-plan"
     assert manifest.model.temperature_profile == "interactive"
     assert manifest.conversation.enabled is True
     assert manifest.tool_selection_policy.mode.value == "select"

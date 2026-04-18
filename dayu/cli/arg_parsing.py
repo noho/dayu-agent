@@ -686,6 +686,16 @@ def _create_parser() -> argparse.ArgumentParser:
     process_material_parser = subparsers.add_parser("process_material", help="处理单个 material")
     _add_fins_process_single_args(process_material_parser)
 
+    # 初始化子命令
+    init_parser = subparsers.add_parser("init", help="初始化工作区并配置模型供应商")
+    init_parser.add_argument(
+        "--base", "-b",
+        type=str,
+        default="./workspace",
+        help="工作区根目录（默认 ./workspace）",
+    )
+    _add_overwrite_arg(init_parser, help_text="覆盖已有配置文件")
+
     # 宿主管理子命令
     register_host_subcommands(subparsers, add_global_args=_add_global_args)
 

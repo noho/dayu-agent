@@ -38,6 +38,7 @@ from dayu.cli.dependency_setup import (
 )
 from dayu.cli.fins_commands import _FINS_COMMANDS, _run_fins_command
 from dayu.cli.host_commands import run_host_command
+from dayu.cli.init_command import run_init
 from dayu.cli.interactive_ui import interactive, prompt as prompt_command
 from dayu.contracts.cancellation import CancelledError
 from dayu.log import Log
@@ -61,6 +62,11 @@ def main() -> int:
     """
 
     args = parse_arguments()
+
+    # init 子命令不需要 setup_loglevel 等重量级初始化
+    if args.command == "init":
+        return run_init(args)
+
     setup_loglevel(args)
     if args.command in _FINS_COMMANDS:
         return _run_fins_command(args)

@@ -137,11 +137,11 @@ def test_infer_scene_manifest_uses_fins_only() -> None:
     assert manifest["scene"] == "infer"
     assert definition.tool_selection_policy.mode.value == "select"
     assert definition.tool_selection_policy.tool_tags_any == ("fins",)
-    assert definition.model.default_name == "mimo-v2-plan-thinking"
+    assert definition.model.default_name == "mimo-v2-pro-thinking-plan"
     assert list(definition.model.allowed_names) == [
         "mimo-v2-flash-thinking",
         "mimo-v2-pro-thinking",
-        "mimo-v2-plan-thinking",
+        "mimo-v2-pro-thinking-plan",
         "deepseek-thinking",
         "qwen3-thinking",
         "qwen3:30b-thinking",
@@ -266,7 +266,7 @@ def test_prompt_scene_manifest_is_independent_from_interactive() -> None:
     content = store.load_fragment_template("scenes/prompt.md")
 
     assert manifest["scene"] == "prompt"
-    assert manifest["model"]["default_name"] == "mimo-v2-plan-thinking"
+    assert manifest["model"]["default_name"] == "mimo-v2-pro-thinking-plan"
     assert manifest["model"]["temperature_profile"] == "prompt"
     assert _require_tool_selection(manifest)["mode"] == "select"
     assert set(_require_tool_tags_any(manifest)) == {"web", "fins", "ingestion"}
@@ -575,11 +575,11 @@ def test_load_scene_manifest_reads_interactive_manifest() -> None:
     manifest = store.load_scene_manifest("interactive")
 
     assert manifest["scene"] == "interactive"
-    assert manifest["model"]["default_name"] == "mimo-v2-plan-thinking"
+    assert manifest["model"]["default_name"] == "mimo-v2-pro-thinking-plan"
     assert manifest["model"]["allowed_names"] == [
         "mimo-v2-flash-thinking",
         "mimo-v2-pro-thinking",
-        "mimo-v2-plan-thinking",
+        "mimo-v2-pro-thinking-plan",
         "deepseek-thinking",
         "qwen3-thinking",
         "qwen3:30b-thinking",
@@ -602,7 +602,7 @@ def test_wechat_scene_manifest_is_separate_and_requires_markdown_output() -> Non
     content = store.load_fragment_template("scenes/wechat.md")
 
     assert manifest["scene"] == "wechat"
-    assert manifest["model"]["default_name"] == "mimo-v2-plan-thinking"
+    assert manifest["model"]["default_name"] == "mimo-v2-pro-thinking-plan"
     assert manifest["model"]["temperature_profile"] == "interactive"
     assert _require_conversation(manifest)["enabled"] is True
     assert set(_require_tool_tags_any(manifest)) == {"fins", "web", "ingestion"}
@@ -618,12 +618,12 @@ def test_load_scene_manifest_reads_conversation_compaction_manifest() -> None:
     manifest = store.load_scene_manifest("conversation_compaction")
 
     assert manifest["scene"] == "conversation_compaction"
-    assert manifest["model"]["default_name"] == "mimo-v2-plan-thinking"
+    assert manifest["model"]["default_name"] == "mimo-v2-pro-thinking-plan"
     assert manifest["model"]["allowed_names"] == [
         "deepseek-thinking",
         "mimo-v2-flash-thinking",
         "mimo-v2-pro-thinking",
-        "mimo-v2-plan-thinking",
+        "mimo-v2-pro-thinking-plan",
         "qwen3-thinking",
         "qwen3:30b-thinking",
         "gpt-5.4",
@@ -643,11 +643,11 @@ def test_load_scene_manifest_reads_repair_manifest() -> None:
     manifest = store.load_scene_manifest("repair")
 
     assert manifest["scene"] == "repair"
-    assert manifest["model"]["default_name"] == "mimo-v2-plan"
+    assert manifest["model"]["default_name"] == "mimo-v2-pro-plan"
     assert manifest["model"]["allowed_names"] == [
         "mimo-v2-flash",
         "mimo-v2-pro",
-        "mimo-v2-plan",
+        "mimo-v2-pro-plan",
         "deepseek-chat",
         "qwen3",
         "gpt-5.4",
@@ -669,11 +669,11 @@ def test_load_scene_manifest_reads_decision_manifest() -> None:
     manifest = store.load_scene_manifest("decision")
 
     assert manifest["scene"] == "decision"
-    assert manifest["model"]["default_name"] == "mimo-v2-plan-thinking"
+    assert manifest["model"]["default_name"] == "mimo-v2-pro-thinking-plan"
     assert manifest["model"]["allowed_names"] == [
         "mimo-v2-flash-thinking",
         "mimo-v2-pro-thinking",
-        "mimo-v2-plan-thinking",
+        "mimo-v2-pro-thinking-plan",
         "deepseek-thinking",
         "qwen3-thinking",
         "qwen3:30b-thinking",
@@ -729,11 +729,11 @@ def test_load_scene_manifest_reads_audit_manifest_with_shared_base_fragments() -
 
     fragment_ids = {fragment["id"] for fragment in manifest["fragments"]}
     assert manifest["scene"] == "audit"
-    assert manifest["model"]["default_name"] == "mimo-v2-plan-thinking"
+    assert manifest["model"]["default_name"] == "mimo-v2-pro-thinking-plan"
     assert manifest["model"]["allowed_names"] == [
         "mimo-v2-flash-thinking",
         "mimo-v2-pro-thinking",
-        "mimo-v2-plan-thinking",
+        "mimo-v2-pro-thinking-plan",
         "deepseek-thinking",
         "qwen3-thinking",
         "qwen3:30b-thinking",
@@ -771,11 +771,11 @@ def test_load_scene_manifest_reads_confirm_manifest_with_shared_base_fragments()
 
     fragment_ids = {fragment["id"] for fragment in manifest["fragments"]}
     assert manifest["scene"] == "confirm"
-    assert manifest["model"]["default_name"] == "mimo-v2-plan-thinking"
+    assert manifest["model"]["default_name"] == "mimo-v2-pro-thinking-plan"
     assert manifest["model"]["allowed_names"] == [
         "mimo-v2-flash-thinking",
         "mimo-v2-pro-thinking",
-        "mimo-v2-plan-thinking",
+        "mimo-v2-pro-thinking-plan",
         "deepseek-thinking",
         "qwen3-thinking",
         "qwen3:30b-thinking",
@@ -800,11 +800,11 @@ def test_write_scene_manifest_loads_fact_rules_fragment() -> None:
     manifest = store.load_scene_manifest("write")
 
     fragment_ids = {fragment["id"] for fragment in manifest["fragments"]}
-    assert manifest["model"]["default_name"] == "mimo-v2-plan"
+    assert manifest["model"]["default_name"] == "mimo-v2-pro-plan"
     assert manifest["model"]["allowed_names"] == [
         "mimo-v2-flash",
         "mimo-v2-pro",
-        "mimo-v2-plan",
+        "mimo-v2-pro-plan",
         "deepseek-chat",
         "qwen3",
         "gpt-5.4",
@@ -843,11 +843,11 @@ def test_regenerate_scene_manifest_registers_its_own_contract() -> None:
     content = store.load_fragment_template("scenes/regenerate.md")
 
     assert manifest["scene"] == "regenerate"
-    assert manifest["model"]["default_name"] == "mimo-v2-plan"
+    assert manifest["model"]["default_name"] == "mimo-v2-pro-plan"
     assert manifest["model"]["allowed_names"] == [
         "mimo-v2-flash",
         "mimo-v2-pro",
-        "mimo-v2-plan",
+        "mimo-v2-pro-plan",
         "deepseek-chat",
         "qwen3",
         "gpt-5.4",
@@ -876,11 +876,11 @@ def test_fix_scene_manifest_registers_its_own_tools_and_contract() -> None:
     content = store.load_fragment_template("scenes/fix.md")
 
     assert manifest["scene"] == "fix"
-    assert manifest["model"]["default_name"] == "mimo-v2-plan"
+    assert manifest["model"]["default_name"] == "mimo-v2-pro-plan"
     assert manifest["model"]["allowed_names"] == [
         "mimo-v2-flash",
         "mimo-v2-pro",
-        "mimo-v2-plan",
+        "mimo-v2-pro-plan",
         "deepseek-chat",
         "qwen3",
         "gpt-5.4",

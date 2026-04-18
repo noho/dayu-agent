@@ -106,7 +106,7 @@ def test_main_non_interactive_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_pa
     llm_models_path.write_text(
         json.dumps(
             {
-                "mimo-v2-plan-thinking": {
+                "mimo-v2-pro-thinking-plan": {
                     "runner_type": "openai_compatible",
                     "temperature": 0.8,
                     "runtime_hints": {

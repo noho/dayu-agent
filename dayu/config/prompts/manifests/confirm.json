@@ -1,11 +1,11 @@
 {
   "scene": "confirm",
   "model": {
-    "default_name": "mimo-v2-plan-thinking",
+    "default_name": "mimo-v2-pro-thinking-plan",
     "allowed_names": [
       "mimo-v2-flash-thinking",
       "mimo-v2-pro-thinking",
-      "mimo-v2-plan-thinking",
+      "mimo-v2-pro-thinking-plan",
       "deepseek-thinking",
       "qwen3-thinking",
       "qwen3:30b-thinking",

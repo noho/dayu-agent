@@ -1,11 +1,11 @@
 {
   "scene": "write",
   "model": {
-    "default_name": "mimo-v2-plan",
+    "default_name": "mimo-v2-pro-plan",
     "allowed_names": [
       "mimo-v2-flash",
       "mimo-v2-pro",
-      "mimo-v2-plan",
+      "mimo-v2-pro-plan",
       "deepseek-chat",
       "qwen3",
       "gpt-5.4",
