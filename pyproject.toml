@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dayu-agent"
-version = "0.1.0"
+version = "0.1.1"
 description = "大愚 Agent：LLM + 结构化财报工具 + 财报下载/预处理管线 + 报告写作的统一系统"
 readme = "README.md"
 requires-python = ">=3.11"
