@@ -18,6 +18,8 @@ import subprocess
 import sys
 from argparse import Namespace
 from pathlib import Path
+import urllib.request
+import urllib.error
 from dayu.startup.config_file_resolver import _resolve_package_config_path
 
 MODULE = "CLI.INIT"
@@ -69,6 +71,11 @@ _OPTIONAL_SEARCH_KEYS: list[str] = [
     "SERPER_API_KEY",
     "FMP_API_KEY",
 ]
+
+_HF_MIRROR_URL = "https://hf-mirror.com"
+
+_HF_PROBE_URL = "https://huggingface.co"
+_HF_PROBE_TIMEOUT_SECONDS = 5
 
 # --------------------------------------------------------------------------- #
 #  环境变量持久化
@@ -489,6 +496,91 @@ def _prompt_optional_search_keys() -> list[tuple[str, str]]:
 
 
 # --------------------------------------------------------------------------- #
+#  HuggingFace 镜像与 Token
+# --------------------------------------------------------------------------- #
+
+
+def _is_hf_hub_reachable() -> bool:
+    """探测 HuggingFace 官方 Hub 是否可达。
+
+    使用 HEAD 请求探测，超时时间较短，仅用于决定镜像配置的默认值。
+
+    Returns:
+        ``True`` 表示官方 Hub 可达，``False`` 表示不可达。
+
+    Raises:
+        无。
+    """
+
+    req = urllib.request.Request(_HF_PROBE_URL, method="HEAD")
+    try:
+        urllib.request.urlopen(req, timeout=_HF_PROBE_TIMEOUT_SECONDS)  # noqa: S310
+        return True
+    except (urllib.error.URLError, OSError, TimeoutError):
+        return False
+
+
+def _prompt_huggingface_config() -> list[tuple[str, str]]:
+    """交互式配置 HuggingFace 镜像加速和认证 Token。
+
+    先探测官方 Hub 是否可达：可达则默认不启用镜像（n），不可达则默认启用（Y）。
+    已在环境变量中存在的项自动跳过。
+
+    Returns:
+        ``(key_name, key_value)`` 列表，仅包含需要写入的项。
+
+    Raises:
+        无。
+    """
+
+    results: list[tuple[str, str]] = []
+
+    print("\n— HuggingFace 模型下载配置 —")
+
+    # HF_ENDPOINT（镜像）
+    if os.environ.get("HF_ENDPOINT"):
+        print(f"  HF_ENDPOINT 已配置: {os.environ['HF_ENDPOINT']}，跳过。")
+    else:
+        print("  正在检测 HuggingFace Hub 连通性…", end="", flush=True)
+        hub_ok = _is_hf_hub_reachable()
+        if hub_ok:
+            print(" 可达。")
+            default_mirror = "n"
+            prompt_text = f"  是否使用 HuggingFace 镜像加速（{_HF_MIRROR_URL}）？(y/N): "
+        else:
+            print(" 不可达，建议启用镜像。")
+            default_mirror = "y"
+            prompt_text = f"  是否使用 HuggingFace 镜像加速（{_HF_MIRROR_URL}）？(Y/n): "
+
+        try:
+            answer = input(prompt_text).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return results
+
+        if answer == "":
+            answer = default_mirror
+        if answer in ("y", "yes"):
+            results.append(("HF_ENDPOINT", _HF_MIRROR_URL))
+
+    # HF_TOKEN（可选认证）
+    if os.environ.get("HF_TOKEN"):
+        existing = os.environ["HF_TOKEN"]
+        masked = existing[:4] + "***" if len(existing) > 4 else "***"
+        print(f"  HF_TOKEN 已配置（{masked}），跳过。")
+    else:
+        try:
+            token = input("  HF_TOKEN（可选，直接回车跳过）: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return results
+        if token:
+            results.append(("HF_TOKEN", token))
+
+    return results
+
+
+# --------------------------------------------------------------------------- #
 #  主入口
 # --------------------------------------------------------------------------- #
 
@@ -551,7 +643,17 @@ def run_init(args: Namespace) -> int:
             search_persist_failed = True
         print(f"✓ {key} 已配置")
 
-    # 5. 完成提示
+    # 5. HuggingFace 镜像与 Token
+    hf_keys = _prompt_huggingface_config()
+    for key, value in hf_keys:
+        _hf_target, hf_ok = _persist_env_var(key, value)
+        env_vars_written = True
+        if not hf_ok:
+            search_persist_failed = True
+        display = value if key == "HF_ENDPOINT" else f"{value[:4]}***"
+        print(f"✓ {key} 已配置: {display}")
+
+    # 6. 完成提示
     print(f"\n✓ 工作区已初始化: {base_dir}")
 
     if env_vars_written:
