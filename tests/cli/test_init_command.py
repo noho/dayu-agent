@@ -9,12 +9,15 @@ from pathlib import Path
 import pytest
 
 from dayu.cli.init_command import (
+    _HF_MIRROR_URL,
     _INIT_ROLE_KEY,
     _ROLE_NON_THINKING,
     _ROLE_THINKING,
     _classify_model_role,
     _copy_config,
     _detect_shell_profile,
+    _is_hf_hub_reachable,
+    _prompt_huggingface_config,
     _update_manifest_default_models,
     _write_env_to_shell_profile,
     run_init,
@@ -251,8 +254,14 @@ class TestRunInit:
         for k in ("DEEPSEEK_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "FMP_API_KEY"):
             monkeypatch.delenv(k, raising=False)
 
-        # Mock 交互输入: 选择 3 (DeepSeek)，输入 key，跳过可选 key
-        inputs = iter(["3", "sk-test-key-123", "", "", ""])
+        # 清除 HF 环境变量
+        monkeypatch.delenv("HF_ENDPOINT", raising=False)
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        # Mock HF Hub 不可达 → 默认 Y
+        monkeypatch.setattr("dayu.cli.init_command._is_hf_hub_reachable", lambda: False)
+
+        # Mock 交互输入: 选择 3 (DeepSeek)，输入 key，跳过可选 key x3，HF 镜像回车(默认Y)，HF_TOKEN 跳过
+        inputs = iter(["3", "sk-test-key-123", "", "", "", "", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
 
         # Mock 环境变量持久化
@@ -296,6 +305,10 @@ class TestRunInit:
         monkeypatch.setenv("TAVILY_API_KEY", "tvly-xxx")
         monkeypatch.setenv("SERPER_API_KEY", "sp-xxx")
         monkeypatch.setenv("FMP_API_KEY", "fmp-xxx")
+
+        # 预设 HF 环境变量
+        monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com")
+        monkeypatch.setenv("HF_TOKEN", "hf-test-xxx")
 
         # 只需要选供应商（选 3 = DeepSeek），不需要输入 key
         inputs = iter(["3"])
@@ -480,3 +493,69 @@ class TestClassifyModelRole:
     def test_unknown_model_returns_none(self) -> None:
         """完全未知的模型名返回 None。"""
         assert _classify_model_role("my-custom-model", "") is None
+
+
+# --------------------------------------------------------------------------- #
+#  _prompt_huggingface_config
+# --------------------------------------------------------------------------- #
+
+
+class TestPromptHuggingfaceConfig:
+    """HuggingFace 镜像与 Token 配置测试。"""
+
+    def test_both_already_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """HF_ENDPOINT 和 HF_TOKEN 均已设置时返回空列表。"""
+        monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com")
+        monkeypatch.setenv("HF_TOKEN", "hf-xxx")
+
+        result = _prompt_huggingface_config()
+        assert result == []
+
+    def test_accept_mirror_and_input_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Hub 不可达，用户按回车接受默认 Y 并输入 token 时返回两项。"""
+        monkeypatch.delenv("HF_ENDPOINT", raising=False)
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.setattr("dayu.cli.init_command._is_hf_hub_reachable", lambda: False)
+
+        inputs = iter(["", "hf_test_token_123"])
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+        result = _prompt_huggingface_config()
+        assert ("HF_ENDPOINT", _HF_MIRROR_URL) in result
+        assert ("HF_TOKEN", "hf_test_token_123") in result
+
+    def test_decline_mirror_and_skip_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """用户选 n 并跳过 token 时返回空列表。"""
+        monkeypatch.delenv("HF_ENDPOINT", raising=False)
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.setattr("dayu.cli.init_command._is_hf_hub_reachable", lambda: False)
+
+        inputs = iter(["n", ""])
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+        result = _prompt_huggingface_config()
+        assert result == []
+
+    def test_hub_reachable_default_no_mirror(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Hub 可达时，回车默认不启用镜像。"""
+        monkeypatch.delenv("HF_ENDPOINT", raising=False)
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.setattr("dayu.cli.init_command._is_hf_hub_reachable", lambda: True)
+
+        inputs = iter(["", ""])
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+        result = _prompt_huggingface_config()
+        assert ("HF_ENDPOINT", _HF_MIRROR_URL) not in result
+
+    def test_hub_reachable_explicit_yes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Hub 可达但用户显式输入 y 时仍启用镜像。"""
+        monkeypatch.delenv("HF_ENDPOINT", raising=False)
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.setattr("dayu.cli.init_command._is_hf_hub_reachable", lambda: True)
+
+        inputs = iter(["y", ""])
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+        result = _prompt_huggingface_config()
+        assert ("HF_ENDPOINT", _HF_MIRROR_URL) in result
