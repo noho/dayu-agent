@@ -45,7 +45,7 @@
 需要 Python 3.11+。
 
 ```bash
-pip install https://github.com/noho/dayu-agent/releases/download/v0.1.0/dayu_agent-0.1.1-py3-none-any.whl
+pip install https://github.com/noho/dayu-agent/releases/download/v0.1.1/dayu_agent-0.1.1-py3-none-any.whl
 ```
 
 安装后即可在终端使用 `dayu-cli` 和 `dayu-wechat` 命令。
