@@ -11,8 +11,6 @@ import argparse
 import sys
 from typing import NoReturn
 
-from dayu.cli.host_commands import register_host_subcommands
-
 
 
 class DayuCliArgumentParser(argparse.ArgumentParser):
@@ -40,7 +38,6 @@ class DayuCliArgumentParser(argparse.ArgumentParser):
             self.print_help(sys.stderr)
             self.exit(2, "\n错误: 缺少子命令。请先选择一个子命令，再用 `--help` 查看该命令的具体参数。\n")
         super().error(message)
-
 
 def _add_global_args(parser: argparse.ArgumentParser) -> None:
     """追加各子命令共享的全局参数。
@@ -697,9 +694,49 @@ def _create_parser() -> argparse.ArgumentParser:
     _add_overwrite_arg(init_parser, help_text="覆盖已有配置文件")
 
     # 宿主管理子命令
-    register_host_subcommands(subparsers, add_global_args=_add_global_args)
+    _register_host_subcommands(subparsers)
 
     return parser
+
+
+def _register_host_subcommands(subparsers: argparse._SubParsersAction[DayuCliArgumentParser]) -> None:
+    """注册宿主管理子命令的参数定义。
+
+    这里仅保留 argparse 结构，避免 ``--help``/``parse_args`` 阶段
+    提前导入宿主运行时实现模块。
+
+    Args:
+        subparsers: 顶层子命令注册器。
+
+    Returns:
+        无。
+
+    Raises:
+        无。
+    """
+
+    sessions_parser = subparsers.add_parser("sessions", help="管理会话")
+    _add_global_args(sessions_parser)
+    sessions_parser.add_argument("--all", action="store_true", dest="show_all", help="列出全部会话（含已关闭）")
+    sessions_subparsers = sessions_parser.add_subparsers(dest="sessions_action")
+    close_parser = sessions_subparsers.add_parser("close", help="关闭会话")
+    close_parser.add_argument("session_id", help="要关闭的 session ID")
+
+    runs_parser = subparsers.add_parser("runs", help="管理运行记录")
+    _add_global_args(runs_parser)
+    runs_parser.add_argument("--all", action="store_true", dest="show_all", help="列出全部 run（含已完成）")
+    runs_parser.add_argument("--session", dest="session_id", help="按 session 过滤")
+
+    cancel_parser = subparsers.add_parser("cancel", help="取消运行")
+    _add_global_args(cancel_parser)
+    cancel_parser.add_argument("run_id", nargs="?", help="要取消的 run ID")
+    cancel_parser.add_argument("--session", dest="session_id", help="取消 session 下所有活跃 run")
+
+    host_parser = subparsers.add_parser("host", help="宿主维护")
+    _add_global_args(host_parser)
+    host_subparsers = host_parser.add_subparsers(dest="host_action")
+    host_subparsers.add_parser("cleanup", help="清理孤儿 run 和过期 permit")
+    host_subparsers.add_parser("status", help="显示宿主状态")
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -716,4 +753,3 @@ def parse_arguments() -> argparse.Namespace:
     """
 
     return _create_parser().parse_args()
-

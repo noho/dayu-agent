@@ -102,7 +102,20 @@ def test_main_usage_message_when_missing_argument(capsys, monkeypatch):
     captured = capsys.readouterr()
 
     assert exit_code == 1
-    assert "Usage: python render.py <input_markdown> [output_docx]" in captured.err
+    assert "Usage: dayu-render <input_markdown> [output_path]" in captured.err
+
+
+def test_main_help_message(capsys, monkeypatch):
+    """传入帮助参数时应返回 0 并输出标准帮助。"""
+    render_mod = _load_render_module()
+
+    monkeypatch.setattr(render_mod.sys, "argv", ["render.py", "--help"])
+    exit_code = render_mod.main()
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Usage: dayu-render <input_markdown> [output_path]" in captured.out
+    assert "将 Markdown 渲染为 HTML / PDF / Word。" in captured.out
 
 
 def test_generate_word_uses_hard_line_break_reader(tmp_path, monkeypatch):

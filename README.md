@@ -1,8 +1,8 @@
 # 大愚 Agent — 用户手册
 
 `大愚 Agent` 是每个投资者的助理分析师。  
-`大愚 Agent` 是一个面向买方财报分析场景的 Agent 系统，但它不是简单的功能组合，`大愚 Agent` 让AI读财报的方式从丢给它整份财报“大海捞针”变成“按图索骥”，让数据有置信度，让投资结论、投资报告可审计、可追踪。  
-`大愚 Agent` 还具备完整的“宿主强约束下的 LLM in the loop 的能力”，基础架构能力上已经对齐 OpenClaw ，后续会加上现在 OpenClaw 能做的事情。
+- `大愚 Agent` 是一个面向买方财报分析场景的 Agent 系统，但它不是简单的功能组合，`大愚 Agent` 让AI读财报的方式从丢给它整份财报“大海捞针”变成“按图索骥”，让数据有置信度，让投资结论、投资报告可审计、可追踪。  
+- `大愚 Agent` 还具备完整的“宿主强约束下的 LLM in the loop 的能力”，基础架构能力上已经对齐 OpenClaw ，后续会加上现在 OpenClaw 能做的事情。
 
 当前你可以用它完成四类工作：
 - 财报数据管线：美股财报下载、美股 / A 股 / 港股财报上传。
@@ -70,9 +70,29 @@ cd .\dayu-agent-0.1.2-windows-x64-offline
 .\install.cmd
 ```
 
-安装完成后即可在终端使用 `dayu-cli`、`dayu-wechat` 和 `dayu-render` 命令。
+安装完成后，还需要执行一次：
 
-### 1.2 初始化工作区与配置
+```bash
+playwright install chromium
+```
+
+如需渲染 PDF，可选安装 `pandoc`：
+
+- macOS：`brew install pandoc`
+- Ubuntu / Debian：`sudo apt-get install pandoc`
+- Windows：`choco install pandoc` 或从 [pandoc 官网](https://pandoc.org/installing.html) 下载安装
+
+### 1.2 验证安装
+
+安装完成后，先确认命令入口可用：
+
+```bash
+dayu-cli --help
+dayu-wechat --help
+dayu-render --help
+```
+
+### 1.3 初始化工作区与配置
 
 安装后运行一次 `init`，交互式完成配置复制、模型供应商选择和 API Key 设置：
 
@@ -126,23 +146,24 @@ workspace/
 
 ### 1.4 跑通第一条命令
 
-推荐先跑一条单次 prompt：
+推荐先下载一份财报：
 
 ```bash
-dayu-cli prompt "总结苹果最新财报的主要风险"
+dayu-cli download --ticker AAPL
 ```
 
-如果你已经通过 `download`、`upload_filing` 或 `upload_filings_from` 导入过 AAPL 的财报，命令会自动检测本地财报并挂载财报工具后返回结果。
-如果你希望明确指定研究对象，也可以这样写：
+下载完成后，再跑一条单次 prompt：
 
 ```bash
 dayu-cli prompt "总结最新财报的主要风险" --ticker AAPL
 ```
 
-如果还没有财报数据，可执行下载：
+如果你已经通过 `download`、`upload_filing` 或 `upload_filings_from` 导入过 AAPL 的财报，也可以直接提问；命令会自动检测本地财报并挂载财报工具后返回结果。
+
+如果你希望先不指定 `ticker`，也可以这样写：
 
 ```bash
-dayu-cli download --ticker AAPL
+dayu-cli prompt "总结苹果最新财报的主要风险"
 ```
 
 > 也可在微信对话或`interactive`里发送"下载苹果财报"进行下载。

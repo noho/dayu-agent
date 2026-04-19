@@ -12,52 +12,10 @@ import signal
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, Protocol, TYPE_CHECKING
 
-from dayu.execution.options import (
-    ExecutionOptions,
-    ExecutionOptionsOverridePayload,
-    ResolvedExecutionOptions,
-    normalize_temperature,
-)
-from dayu.contracts.toolset_config import ToolsetConfigSnapshot, build_toolset_config_snapshot
-from dayu.fins.service_runtime import DefaultFinsRuntime
-from dayu.host import resolve_host_config
-from dayu.host.host import Host
 from dayu.log import Log, LogLevel
 from dayu.contracts.session import SessionSource
-from dayu.services import prepare_scene_execution_acceptance_preparer, recover_host_startup_state
-from dayu.services.chat_service import ChatService
-from dayu.services.host_admin_service import HostAdminService
-from dayu.services.contracts import (
-    ChatPendingTurnView,
-    ChatResumeRequest,
-    ChatTurnRequest,
-    ChatTurnSubmission,
-    ReplyDeliveryFailureRequest,
-    ReplyDeliverySubmitRequest,
-    ReplyDeliveryView,
-)
-from dayu.services.reply_delivery_service import ReplyDeliveryService
-from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
-from dayu.startup.config_loader import ConfigLoader
-from dayu.startup.config_file_resolver import ConfigFileResolver
-from dayu.startup.dependencies import (
-    prepare_config_file_resolver,
-    prepare_config_loader,
-    prepare_default_execution_options,
-    prepare_fins_runtime,
-    prepare_model_catalog,
-    prepare_prompt_asset_store,
-    prepare_startup_paths,
-    prepare_workspace_resources,
-)
-from dayu.startup.workspace import WorkspaceResources
-from dayu.wechat.daemon import (
-    DEFAULT_WECHAT_DELIVERY_MAX_ATTEMPTS,
-    WeChatDaemon,
-    WeChatDaemonConfig,
-)
 from dayu.wechat.service_manager import (
     InstalledServiceDefinition,
     ServiceBackend,
@@ -77,25 +35,479 @@ from dayu.wechat.service_manager import (
     stop_service,
     uninstall_service,
 )
-from dayu.engine.processors.perf_utils import PROFILE_ENV_NAME
-from dayu.engine.tools.web_search_providers import SERPER_API_KEY_ENV, TAVILY_API_KEY_ENV
-from dayu.engine.tools.web_tools import SEC_USER_AGENT_ENV
-from dayu.fins.resolver.fmp_company_alias_resolver import FMP_API_KEY_ENV
 from dayu.wechat.state_store import FileWeChatStateStore, load_tracked_session_ids
 from dayu.workspace_paths import DEFAULT_WECHAT_INSTANCE_LABEL, build_host_store_default_path, build_wechat_state_dir
 
+if TYPE_CHECKING:
+    from dayu.host import resolve_host_config
+    from dayu.services import prepare_scene_execution_acceptance_preparer, recover_host_startup_state
+    from dayu.services.contracts import (
+        ChatPendingTurnView,
+        ChatResumeRequest,
+        ChatTurnRequest,
+        ChatTurnSubmission,
+        ReplyDeliveryFailureRequest,
+        ReplyDeliverySubmitRequest,
+        ReplyDeliveryView,
+    )
+    from dayu.startup.config_file_resolver import ConfigFileResolver
+    from dayu.startup.config_loader import ConfigLoader
+    from dayu.startup.dependencies import (
+        prepare_config_file_resolver,
+        prepare_config_loader,
+        prepare_default_execution_options,
+        prepare_fins_runtime,
+        prepare_model_catalog,
+        prepare_prompt_asset_store,
+        prepare_startup_paths,
+        prepare_workspace_resources,
+    )
+    from dayu.contracts.toolset_config import ToolsetConfigSnapshot
+    from dayu.execution.options import ExecutionOptions, ExecutionOptionsOverridePayload, ResolvedExecutionOptions
+    from dayu.fins.service_runtime import DefaultFinsRuntime
+    from dayu.host.host import Host
+    from dayu.services.chat_service import ChatService
+    from dayu.services.host_admin_service import HostAdminService
+    from dayu.services.reply_delivery_service import ReplyDeliveryService
+    from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
+    from dayu.startup.workspace import WorkspaceResources
+    from dayu.wechat.daemon import WeChatDaemonConfig
+    from dayu.wechat.state_store import WeChatDaemonState
+else:
+
+    def ConfigFileResolver(config_root: Path | None) -> object:
+        """延迟导入并构建配置文件解析器。
+
+        Args:
+            config_root: 配置目录。
+
+        Returns:
+            配置文件解析器实例。
+
+        Raises:
+            无。
+        """
+
+        from dayu.startup.config_file_resolver import ConfigFileResolver as _RuntimeConfigFileResolver
+
+        return _RuntimeConfigFileResolver(config_root)
+
+
+    def ConfigLoader(resolver: object) -> object:
+        """延迟导入并构建配置加载器。
+
+        Args:
+            resolver: 配置文件解析器。
+
+        Returns:
+            配置加载器实例。
+
+        Raises:
+            无。
+        """
+
+        from dayu.startup.config_loader import ConfigLoader as _RuntimeConfigLoader
+
+        return _RuntimeConfigLoader(resolver)
+
+
+    def prepare_startup_paths(*, workspace_root: Path, config_root: Path | None) -> object:
+        """延迟导入并准备启动路径集合。
+
+        Args:
+            workspace_root: 工作区根目录。
+            config_root: 配置目录。
+
+        Returns:
+            启动路径集合对象。
+
+        Raises:
+            无。
+        """
+
+        from dayu.startup.dependencies import prepare_startup_paths as _runtime_prepare_startup_paths
+
+        return _runtime_prepare_startup_paths(workspace_root=workspace_root, config_root=config_root)
+
+
+    def prepare_config_file_resolver(*, config_root: Path | None) -> object:
+        """延迟导入并准备启动用配置解析器。
+
+        Args:
+            config_root: 配置目录。
+
+        Returns:
+            配置解析器实例。
+
+        Raises:
+            无。
+        """
+
+        from dayu.startup.dependencies import prepare_config_file_resolver as _runtime_prepare_config_file_resolver
+
+        return _runtime_prepare_config_file_resolver(config_root=config_root)
+
+
+    def prepare_config_loader(*, resolver: object) -> object:
+        """延迟导入并准备启动用配置加载器。
+
+        Args:
+            resolver: 配置解析器。
+
+        Returns:
+            配置加载器实例。
+
+        Raises:
+            无。
+        """
+
+        from dayu.startup.dependencies import prepare_config_loader as _runtime_prepare_config_loader
+
+        return _runtime_prepare_config_loader(resolver=resolver)
+
+
+    def prepare_prompt_asset_store(*, resolver: object) -> object:
+        """延迟导入并准备 prompt 资产仓。
+
+        Args:
+            resolver: 配置解析器。
+
+        Returns:
+            Prompt 资产仓实例。
+
+        Raises:
+            无。
+        """
+
+        from dayu.startup.dependencies import prepare_prompt_asset_store as _runtime_prepare_prompt_asset_store
+
+        return _runtime_prepare_prompt_asset_store(resolver=resolver)
+
+
+    def prepare_workspace_resources(*, paths: object, config_loader: object, prompt_asset_store: object) -> object:
+        """延迟导入并准备工作区资源。
+
+        Args:
+            paths: 启动路径集合。
+            config_loader: 配置加载器。
+            prompt_asset_store: Prompt 资产仓。
+
+        Returns:
+            工作区资源对象。
+
+        Raises:
+            无。
+        """
+
+        from dayu.startup.dependencies import prepare_workspace_resources as _runtime_prepare_workspace_resources
+
+        return _runtime_prepare_workspace_resources(
+            paths=paths,
+            config_loader=config_loader,
+            prompt_asset_store=prompt_asset_store,
+        )
+
+
+    def prepare_model_catalog(*, config_loader: object) -> object:
+        """延迟导入并准备模型目录。
+
+        Args:
+            config_loader: 配置加载器。
+
+        Returns:
+            模型目录对象。
+
+        Raises:
+            无。
+        """
+
+        from dayu.startup.dependencies import prepare_model_catalog as _runtime_prepare_model_catalog
+
+        return _runtime_prepare_model_catalog(config_loader=config_loader)
+
+
+    def prepare_default_execution_options(
+        *,
+        workspace_root: Path,
+        config_loader: object,
+        execution_options: ExecutionOptions,
+    ) -> object:
+        """延迟导入并准备默认执行选项。
+
+        Args:
+            workspace_root: 工作区根目录。
+            config_loader: 配置加载器。
+            execution_options: 请求级执行选项。
+
+        Returns:
+            解析后的默认执行选项。
+
+        Raises:
+            无。
+        """
+
+        from dayu.startup.dependencies import prepare_default_execution_options as _runtime_prepare_default_execution_options
+
+        return _runtime_prepare_default_execution_options(
+            workspace_root=workspace_root,
+            config_loader=config_loader,
+            execution_options=execution_options,
+        )
+
+
+    def prepare_scene_execution_acceptance_preparer(
+        *,
+        workspace_root: Path,
+        default_execution_options: ResolvedExecutionOptions,
+        model_catalog: object,
+        prompt_asset_store: object,
+    ) -> object:
+        """延迟导入并准备 scene 执行接受预处理器。
+
+        Args:
+            workspace_root: 工作区根目录。
+            default_execution_options: 默认执行选项。
+            model_catalog: 模型目录。
+            prompt_asset_store: Prompt 资产仓。
+
+        Returns:
+            Scene 执行接受预处理器。
+
+        Raises:
+            无。
+        """
+
+        from dayu.services import prepare_scene_execution_acceptance_preparer as _runtime_prepare_scene_execution_acceptance_preparer
+
+        return _runtime_prepare_scene_execution_acceptance_preparer(
+            workspace_root=workspace_root,
+            default_execution_options=default_execution_options,
+            model_catalog=model_catalog,
+            prompt_asset_store=prompt_asset_store,
+        )
+
+
+    def prepare_fins_runtime(*, workspace_root: Path) -> object:
+        """延迟导入并准备财报运行时。
+
+        Args:
+            workspace_root: 工作区根目录。
+
+        Returns:
+            财报运行时对象。
+
+        Raises:
+            无。
+        """
+
+        from dayu.startup.dependencies import prepare_fins_runtime as _runtime_prepare_fins_runtime
+
+        return _runtime_prepare_fins_runtime(workspace_root=workspace_root)
+
+
+    def resolve_host_config(*, workspace_root: Path, run_config: object, explicit_lane_config: object | None) -> object:
+        """延迟导入并解析 Host 配置。
+
+        Args:
+            workspace_root: 工作区根目录。
+            run_config: 运行配置。
+            explicit_lane_config: 可选显式 lane 配置。
+
+        Returns:
+            Host 配置对象。
+
+        Raises:
+            无。
+        """
+
+        from dayu.host import resolve_host_config as _runtime_resolve_host_config
+
+        return _runtime_resolve_host_config(
+            workspace_root=workspace_root,
+            run_config=run_config,
+            explicit_lane_config=explicit_lane_config,
+        )
+
+
+    def Host(**kwargs: object) -> object:
+        """延迟导入并构建 Host。
+
+        Args:
+            **kwargs: Host 构造参数。
+
+        Returns:
+            Host 实例。
+
+        Raises:
+            无。
+        """
+
+        from dayu.host.host import Host as _RuntimeHost
+
+        return _RuntimeHost(**kwargs)
+
+
+    def HostAdminService(*, host: object) -> object:
+        """延迟导入并构建 Host 管理服务。
+
+        Args:
+            host: Host 实例。
+
+        Returns:
+            Host 管理服务实例。
+
+        Raises:
+            无。
+        """
+
+        from dayu.services.host_admin_service import HostAdminService as _RuntimeHostAdminService
+
+        return _RuntimeHostAdminService(host=host)
+
+
+    def recover_host_startup_state(host_admin_service: object, *, runtime_label: str, log_module: str) -> object:
+        """延迟导入并执行统一 startup recovery。
+
+        Args:
+            host_admin_service: Host 管理服务。
+            runtime_label: 运行时标签。
+            log_module: 日志模块名。
+
+        Returns:
+            Startup recovery 结果对象。
+
+        Raises:
+            无。
+        """
+
+        from dayu.services import recover_host_startup_state as _runtime_recover_host_startup_state
+
+        return _runtime_recover_host_startup_state(
+            host_admin_service,
+            runtime_label=runtime_label,
+            log_module=log_module,
+        )
+
+
+    def ChatService(**kwargs: object) -> object:
+        """延迟导入并构建聊天服务。
+
+        Args:
+            **kwargs: ChatService 构造参数。
+
+        Returns:
+            ChatService 实例。
+
+        Raises:
+            无。
+        """
+
+        from dayu.services.chat_service import ChatService as _RuntimeChatService
+
+        return _RuntimeChatService(**kwargs)
+
+
+    def ReplyDeliveryService(*, host: object) -> object:
+        """延迟导入并构建回复投递服务。
+
+        Args:
+            host: Host 实例。
+
+        Returns:
+            回复投递服务实例。
+
+        Raises:
+            无。
+        """
+
+        from dayu.services.reply_delivery_service import ReplyDeliveryService as _RuntimeReplyDeliveryService
+
+        return _RuntimeReplyDeliveryService(host=host)
+
 MODULE = "APP.WECHAT.MAIN"
 DEFAULT_TYPING_INTERVAL_SEC = 8.0
+DEFAULT_WECHAT_DELIVERY_MAX_ATTEMPTS = 3
 _WECHAT_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 # 由各 service/tool 模块作为真源声明，daemon 运行时需要显式捕获转发。
 # 如需新增/改名，必须在真源模块改，而不是在这里硬编码。
-_DIRECT_SERVICE_ENV_VAR_NAMES = (
-    FMP_API_KEY_ENV,
-    SEC_USER_AGENT_ENV,
-    SERPER_API_KEY_ENV,
-    TAVILY_API_KEY_ENV,
-    PROFILE_ENV_NAME,
-)
+
+
+def _direct_service_env_var_names() -> tuple[str, ...]:
+    """延迟导入后台 service 直接依赖的环境变量名集合。
+
+    Args:
+        无。
+
+    Returns:
+        后台 service 必须直传的环境变量名元组。
+
+    Raises:
+        无。
+    """
+
+    from dayu.engine.processors.perf_utils import PROFILE_ENV_NAME
+    from dayu.engine.tools.web_search_providers import SERPER_API_KEY_ENV, TAVILY_API_KEY_ENV
+    from dayu.engine.tools.web_tools import SEC_USER_AGENT_ENV
+    from dayu.fins.resolver.fmp_company_alias_resolver import FMP_API_KEY_ENV
+
+    return (
+        FMP_API_KEY_ENV,
+        SEC_USER_AGENT_ENV,
+        SERPER_API_KEY_ENV,
+        TAVILY_API_KEY_ENV,
+        PROFILE_ENV_NAME,
+    )
+
+
+class _WeChatDaemonLike(Protocol):
+    """WeChat daemon 的最小可调用协议。"""
+
+    async def ensure_authenticated(self, *, force_relogin: bool = False) -> WeChatDaemonState:
+        """确保 daemon 完成登录认证。"""
+
+        ...
+
+    async def aclose(self) -> None:
+        """关闭 daemon 持有的外部资源。"""
+
+        ...
+
+    async def run_forever(self, *, require_existing_auth: bool) -> None:
+        """以前台方式持续运行 daemon。"""
+
+        ...
+
+
+def WeChatDaemon(
+    *,
+    chat_service: ChatService | _NoOpChatService,
+    reply_delivery_service: ReplyDeliveryService | _NoOpReplyDeliveryService,
+    state_store: FileWeChatStateStore,
+    config: WeChatDaemonConfig,
+) -> _WeChatDaemonLike:
+    """延迟导入并构建 WeChat daemon。
+
+    Args:
+        chat_service: 聊天服务。
+        reply_delivery_service: 回复投递服务。
+        state_store: WeChat 状态仓储。
+        config: daemon 配置。
+
+    Returns:
+        WeChat daemon 实例。
+
+    Raises:
+        无。
+    """
+
+    from dayu.wechat.daemon import WeChatDaemon as _RuntimeWeChatDaemon
+
+    return _RuntimeWeChatDaemon(
+        chat_service=chat_service,
+        reply_delivery_service=reply_delivery_service,
+        state_store=state_store,
+        config=config,
+    )
 
 
 @dataclass(frozen=True)
@@ -545,6 +957,8 @@ def _parse_temperature_argument(raw_value: Any, *, field_name: str) -> float | N
         SystemExit: 当参数非法时退出。
     """
 
+    from dayu.execution.options import normalize_temperature
+
     try:
         return normalize_temperature(raw_value, field_name=field_name)
     except ValueError as exc:
@@ -564,6 +978,9 @@ def _build_execution_options(args: argparse.Namespace) -> ExecutionOptions:
     Raises:
         SystemExit: 当参数非法时退出。
     """
+
+    from dayu.contracts.toolset_config import build_toolset_config_snapshot
+    from dayu.execution.options import ExecutionOptions
 
     doc_limits = _parse_limits_override(getattr(args, "doc_limits_json", None), field_name="--doc-limits-json")
     fins_limits = _parse_limits_override(getattr(args, "fins_limits_json", None), field_name="--fins-limits-json")
@@ -818,7 +1235,9 @@ def _build_daemon_config(
         无。
     """
 
-    return WeChatDaemonConfig(
+    from dayu.wechat.daemon import WeChatDaemonConfig as _RuntimeWeChatDaemonConfig
+
+    return _RuntimeWeChatDaemonConfig(
         scene_name="wechat",
         allow_interactive_relogin=allow_interactive_relogin,
         execution_options=context.execution_options,
@@ -947,7 +1366,7 @@ def _collect_service_environment_variables(context: _ResolvedWechatContext) -> d
 
     config_loader = ConfigLoader(ConfigFileResolver(context.config_root))
     required_names = set(config_loader.collect_referenced_env_vars())
-    required_names.update(_DIRECT_SERVICE_ENV_VAR_NAMES)
+    required_names.update(_direct_service_env_var_names())
     captured_environment: dict[str, str] = {}
     for name in sorted(required_names):
         value = os.environ.get(name)
@@ -983,7 +1402,7 @@ def _append_optional_argument(cli_arguments: list[str], flag: str, value: Any) -
     cli_arguments.extend([flag, normalized])
 
 
-def _create_login_daemon(args: argparse.Namespace, context: _ResolvedWechatContext) -> WeChatDaemon:
+def _create_login_daemon(args: argparse.Namespace, context: _ResolvedWechatContext) -> _WeChatDaemonLike:
     """构建仅用于登录的 WeChat daemon。
 
     Args:
@@ -1081,7 +1500,7 @@ def _prepare_wechat_host_dependencies(
     )
 
 
-def _create_run_daemon(args: argparse.Namespace, context: _ResolvedWechatContext) -> WeChatDaemon:
+def _create_run_daemon(args: argparse.Namespace, context: _ResolvedWechatContext) -> _WeChatDaemonLike:
     """构建运行命令使用的 WeChat daemon。
 
     Args:
@@ -1213,7 +1632,7 @@ def _remove_daemon_signal_handlers(loop: asyncio.AbstractEventLoop, installed_si
 
 
 async def _run_daemon_with_graceful_shutdown(
-    daemon: WeChatDaemon,
+    daemon: _WeChatDaemonLike,
     *,
     require_existing_auth: bool,
 ) -> int:

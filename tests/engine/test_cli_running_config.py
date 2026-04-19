@@ -681,6 +681,20 @@ def test_main_dispatches_host_command(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert main() == 0
 
 
+@pytest.mark.unit
+def test_main_dispatches_init_without_runtime_setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`init` 子命令不应触发运行时装配路径。"""
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(sys, "argv", ["prog", "init", "--base", str(workspace)])
+    monkeypatch.setattr("dayu.cli.main.run_init", lambda args: 7)
+    monkeypatch.setattr("dayu.cli.main.setup_loglevel", lambda _args: pytest.fail("init 命令不应设置日志"))
+    monkeypatch.setattr("dayu.cli.main.setup_paths", lambda _args: pytest.fail("init 命令不应解析运行时路径"))
+
+    assert main() == 7
+
+
 def _build_args() -> Namespace:
     """构造 `load_running_config` 所需参数对象。
 
