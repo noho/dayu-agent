@@ -20,6 +20,23 @@ WORD_EXTENSIONS = {"docx", "doc"}
 MARKDOWN_INPUT_FORMAT = "gfm+hard_line_breaks"
 
 
+def _print_help() -> None:
+    """输出 `dayu-render` 的帮助信息。
+
+    参数:
+        无。
+
+    返回值:
+        无。
+
+    异常:
+        无。
+    """
+    print("Usage: dayu-render <input_markdown> [output_path]")
+    print()
+    print("将 Markdown 渲染为 HTML / PDF / Word。")
+
+
 def _ensure_dir(path: Path) -> None:
     """确保目录存在。
 
@@ -309,8 +326,12 @@ def main() -> int:
         subprocess.CalledProcessError: 外部命令执行失败时抛出。
         FileNotFoundError: 外部命令不存在时抛出。
     """
+    if len(sys.argv) >= 2 and sys.argv[1] in {"-h", "--help"}:
+        _print_help()
+        return 0
+
     if len(sys.argv) < 2:
-        print("Usage: python render.py <input_markdown> [output_docx]", file=sys.stderr)
+        print("Usage: dayu-render <input_markdown> [output_path]", file=sys.stderr)
         return 1
 
     assets_dir = Path(__file__).resolve().parent

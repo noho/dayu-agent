@@ -1,0 +1,9 @@
+# macOS arm64 受控环境锁定版本。
+-c lock-common-py311.txt
+
+ocrmac==1.0.1
+pyobjc-core==12.1
+pyobjc-framework-Cocoa==12.1
+pyobjc-framework-CoreML==12.1
+pyobjc-framework-Quartz==12.1
+pyobjc-framework-Vision==12.1

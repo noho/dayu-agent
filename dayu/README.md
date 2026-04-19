@@ -21,6 +21,40 @@
 - [fins/README.md](fins/README.md)
 - [config/README.md](config/README.md)
 
+## 0.1 开发环境安装
+
+开发环境以 Python 3.11 为基准。源码安装只面向开发者，不作为最终用户官方交付路径。建议直接使用受控 constraints 安装：
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[test,dev,browser]" -c constraints/lock-macos-arm64-py311.txt
+```
+
+说明：
+
+- macOS Intel 开发环境改用 `constraints/lock-macos-x64-py311.txt`
+- Linux 开发环境改用 `constraints/lock-linux-x64-py311.txt`
+- Windows 开发环境改用 `constraints/lock-windows-x64-py311.txt`
+
+
+如果为了专门验证最低支持边界，请使用：
+```bash
+pip install -e ".[test,dev,browser]" -c constraints/min-py311.txt
+```
+
+浏览器回退抓取是开发环境默认必备能力，因为它会直接影响 `web tools` 中 `fetch_web_page` 的表现；完成依赖安装后，还需要执行：
+
+```bash
+playwright install chromium
+```
+
+如需 PDF 渲染，还需要安装 `pandoc`。此外，渲染 HTML / PDF 仍建议安装 Google Chrome：
+
+- macOS：`brew install pandoc`
+- Ubuntu / Debian：`sudo apt-get install pandoc`
+- Windows：`choco install pandoc` 或从 [pandoc 官网](https://pandoc.org/installing.html) 下载安装
+
 ## 0. 如果你想参与项目
 - 定性分析模板 读起来机械感还很强，还没写出差异化：
   - 同一章节里，不同行业公司写出明显不同的判断路径。

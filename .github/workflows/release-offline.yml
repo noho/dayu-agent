@@ -1,43 +1,16 @@
-name: CI
+name: Release Offline Bundles
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
 
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: write
 
 jobs:
-  min-compat:
-    name: min-compat (ubuntu-latest, py3.11)
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install minimum supported dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[test,dev,browser]" -c constraints/min-py311.txt
-
-      - name: Run pyright
-        run: pyright
-
-      - name: Run pytest
-        run: pytest -q --timeout=60
-
-  lock-validation:
-    name: lock-validation (${{ matrix.platform_id }}, py3.11)
+  build-offline:
+    name: build-offline (${{ matrix.platform_id }}, py3.11)
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -69,18 +42,6 @@ jobs:
           CONSTRAINTS="constraints/lock-${{ matrix.platform_id }}-py311.txt"
           pip install -e ".[test,dev,browser]" -c "$CONSTRAINTS"
 
-      - name: Run pyright
-        shell: bash
-        run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            pyright --pythonplatform Linux
-          else
-            pyright
-          fi
-
-      - name: Run pytest
-        run: pytest -q --timeout=60
-
       - name: Build wheel
         run: python -m pip wheel --no-deps --wheel-dir dist .
 
@@ -105,3 +66,15 @@ jobs:
 
       - name: Smoke test offline bundle
         run: python utils/smoke_test_offline_bundle.py --archive "${{ env.BUNDLE_PATH }}"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-${{ matrix.platform_id }}
+          path: ${{ env.BUNDLE_PATH }}
+
+      - name: Upload release asset
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.BUNDLE_PATH }}

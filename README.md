@@ -43,25 +43,34 @@
 
 ### 1.1 安装
 
-需要 Python 3.11+。
+安装使用 `大愚 Agent` 前需安装Python 3.11。
+
+#### 1.1.1 下载离线安装包
+
+前往 GitHub Releases，下载与你平台匹配的离线安装包：
+
+- `dayu-agent-<version>-macos-arm64-offline.tar.gz`
+- `dayu-agent-<version>-macos-x64-offline.tar.gz`
+- `dayu-agent-<version>-linux-x64-offline.tar.gz`
+- `dayu-agent-<version>-windows-x64-offline.zip`
+
+macOS / Linux 示例：
 
 ```bash
-pip install https://github.com/noho/dayu-agent/releases/download/v0.1.2/dayu_agent-0.1.2-py3-none-any.whl
+tar -xzf dayu-agent-0.1.2-macos-arm64-offline.tar.gz
+cd dayu-agent-0.1.2-macos-arm64-offline
+./install.sh
 ```
 
-安装后即可在终端使用 `dayu-cli` 和 `dayu-wechat` 命令。
+Windows PowerShell 示例：
 
-以后升级到新版本时，替换为新版 wheel 地址即可，例如：
-
-```bash
-pip install --upgrade https://github.com/noho/dayu-agent/releases/download/v0.2.0/dayu_agent-0.2.0-py3-none-any.whl
+```powershell
+Expand-Archive .\dayu-agent-0.1.2-windows-x64-offline.zip -DestinationPath .
+cd .\dayu-agent-0.1.2-windows-x64-offline
+.\install.cmd
 ```
 
-如需 PDF 渲染，还需要安装 pandoc 和 Google Chrome：
-
-- **macOS**：`brew install pandoc`
-- **Ubuntu / Debian**：`sudo apt-get install pandoc`
-- **Windows**：`choco install pandoc` 或从 [pandoc 官网](https://pandoc.org/installing.html) 下载安装
+安装完成后即可在终端使用 `dayu-cli`、`dayu-wechat` 和 `dayu-render` 命令。
 
 ### 1.2 初始化工作区与配置
 

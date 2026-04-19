@@ -34,20 +34,24 @@ classifiers = [
 
 # 运行依赖：与 requirements.txt 的“生产依赖”段保持一致。
 dependencies = [
-    "requests>=2.31.0",
-    "httpx>=0.27.0",
-    "beautifulsoup4>=4.12.0",
+    "requests>=2.32.2",
+    "httpx>=0.28.0",
+    "beautifulsoup4>=4.12.3",
     "PyYAML>=6.0.2",
-    "aiohttp>=3.8.0",
+    # `trafilatura>=1.12.0` 已要求 `charset-normalizer>=3.2.0`；
+    # `aiohttp 3.8.x` 仍把其限制在 `<3.0`，该组合不存在可解最小环境。
+    "aiohttp>=3.9.0",
     "prompt_toolkit>=3.0.0",
     "fastapi>=0.115.0",
-    "edgartools>=3.0.0",
-    "docling>=2.15.0",
-    "docling-core>=2.15.0",
+    "edgartools>=5.30.0",
+    # 当前项目正式支持的 Docling 基线直接收敛到 2.90+，避免继续承诺
+    # 已不打算维护的更低版本区间。
+    "docling>=2.90.0,<3.0.0",
+    "docling-core>=2.74.0,<3.0.0",
     # pandas 下界需与 docling / docling-core 当前依赖树保持一致，
-    # 否则会把无法解析或未验证的版本区间错误声明为支持范围。
-    "pandas>=2.1.4",
-    "lxml>=4.9.0",
+    # 上界维持在当前 3.x 生态窗口内，避免把 4.x 误声明为支持范围。
+    "pandas>=2.1.4,<4.0.0",
+    "lxml>=5.2.2",
     "click>=8.1.0",
     "trafilatura>=1.12.0",
     "readability-lxml>=0.8.1",
@@ -59,7 +63,8 @@ dependencies = [
 # 浏览器回退抓取：安装后需额外执行 `playwright install chromium`。
 browser = [
     "playwright>=1.40.0",
-    "playwright-stealth>=1.0.6",
+    # 当前代码直接从包根导入 `Stealth`，该符号在 1.x 包根未稳定导出。
+    "playwright-stealth>=2.0.3",
 ]
 # 测试与静态检查工具链。
 test = [
