@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Protocol
 
 from dayu.host import resolve_host_config
 from dayu.host.host import Host
@@ -29,50 +29,13 @@ class HostCliRuntime:
     host_admin_service: HostAdminServiceProtocol
 
 
-def register_host_subcommands(
-    subparsers: Any,
-    *,
-    add_global_args: Callable[[argparse.ArgumentParser], None] | None = None,
-) -> None:
-    """注册宿主管理子命令到 CLI 解析器。
+class _HostCliRuntimeLike(Protocol):
+    """可解析宿主管理服务的最小运行时协议。"""
 
-    Args:
-        subparsers: argparse 的子命令注册器。
-        add_global_args: 可选全局参数注册函数。
-
-    Returns:
-        无。
-
-    Raises:
-        无。
-    """
-
-    sessions_parser = subparsers.add_parser("sessions", help="管理会话")
-    if add_global_args is not None:
-        add_global_args(sessions_parser)
-    sessions_parser.add_argument("--all", action="store_true", dest="show_all", help="列出全部会话（含已关闭）")
-    sessions_sub = sessions_parser.add_subparsers(dest="sessions_action")
-    close_parser = sessions_sub.add_parser("close", help="关闭会话")
-    close_parser.add_argument("session_id", help="要关闭的 session ID")
-
-    runs_parser = subparsers.add_parser("runs", help="管理运行记录")
-    if add_global_args is not None:
-        add_global_args(runs_parser)
-    runs_parser.add_argument("--all", action="store_true", dest="show_all", help="列出全部 run（含已完成）")
-    runs_parser.add_argument("--session", dest="session_id", help="按 session 过滤")
-
-    cancel_parser = subparsers.add_parser("cancel", help="取消运行")
-    if add_global_args is not None:
-        add_global_args(cancel_parser)
-    cancel_parser.add_argument("run_id", nargs="?", help="要取消的 run ID")
-    cancel_parser.add_argument("--session", dest="session_id", help="取消 session 下所有活跃 run")
-
-    host_parser = subparsers.add_parser("host", help="宿主维护")
-    if add_global_args is not None:
-        add_global_args(host_parser)
-    host_sub = host_parser.add_subparsers(dest="host_action")
-    host_sub.add_parser("cleanup", help="清理孤儿 run 和过期 permit")
-    host_sub.add_parser("status", help="显示宿主状态")
+    @property
+    def host_admin_service(self) -> HostAdminServiceProtocol:
+        """返回宿主管理服务。"""
+        ...
 
 
 def run_host_command(args: argparse.Namespace) -> int:
@@ -140,7 +103,7 @@ def _build_host_runtime(args: argparse.Namespace) -> HostCliRuntime:
     )
 
 
-def _resolve_host_admin_service(runtime: Any) -> HostAdminServiceProtocol:
+def _resolve_host_admin_service(runtime: _HostCliRuntimeLike) -> HostAdminServiceProtocol:
     """从运行时对象中解析宿主管理服务。
 
     Args:
@@ -373,4 +336,4 @@ def _format_duration_iso(started_at: str | None, finished_at: str | None) -> str
     return f"{minutes}m{seconds}s"
 
 
-__all__ = ["register_host_subcommands", "run_host_command"]
+__all__ = ["run_host_command"]

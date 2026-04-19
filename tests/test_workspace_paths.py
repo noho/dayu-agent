@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from dayu.workspace_paths import (
     build_conversation_store_dir,
     build_dayu_root_path,
@@ -15,6 +17,8 @@ from dayu.workspace_paths import (
     extract_wechat_instance_label,
     list_wechat_state_dirs,
 )
+
+pytestmark = pytest.mark.unit
 
 
 class TestBuildDayuRootPath:

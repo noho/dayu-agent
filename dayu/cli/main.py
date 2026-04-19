@@ -8,20 +8,8 @@
 
 from __future__ import annotations
 
+from dayu.cli.command_names import FINS_COMMANDS, HOST_COMMANDS
 from dayu.cli.arg_parsing import parse_arguments
-
-_FINS_COMMANDS = frozenset(
-    {
-        "download",
-        "upload_filing",
-        "upload_filings_from",
-        "upload_material",
-        "process",
-        "process_filing",
-        "process_material",
-    }
-)
-_HOST_COMMANDS = frozenset({"sessions", "runs", "cancel", "host"})
 
 
 def main() -> int:
@@ -39,28 +27,33 @@ def main() -> int:
 
     args = parse_arguments()
     if args.command == "init":
+        # `init` 必须保持冷启动轻量，只在命中该命令时再导入实现模块。
         from dayu.cli.commands.init import run_init_command
 
         return run_init_command(args)
-    if args.command in _FINS_COMMANDS:
+    if args.command in FINS_COMMANDS:
+        # 财报命令会装配 fins/runtime 依赖，避免在 `--help` 阶段抢先导入。
         from dayu.cli.commands.fins import run_fins_command
 
         return run_fins_command(args)
-    if args.command in _HOST_COMMANDS:
+    if args.command in HOST_COMMANDS:
+        # 宿主管理命令需要 Host 运行时，按需导入保持主入口轻量。
         from dayu.cli.commands.host import run_host_command
 
         return run_host_command(args)
     if args.command == "interactive":
+        # interactive 会拉起完整 CLI 运行时，延迟到命中命令时导入。
         from dayu.cli.commands.interactive import run_interactive_command
 
         return run_interactive_command(args)
     if args.command == "prompt":
+        # prompt 会构建 Service/Host 依赖，避免在帮助路径提前导入。
         from dayu.cli.commands.prompt import run_prompt_command
 
         return run_prompt_command(args)
     if args.command == "write":
+        # write 依赖写作 pipeline 与 Host 运行时，仅在需要时导入。
         from dayu.cli.commands.write import run_write_command
 
         return run_write_command(args)
     return 0
-

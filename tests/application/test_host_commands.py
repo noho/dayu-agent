@@ -10,14 +10,16 @@ from typing import Any, cast
 
 import pytest
 
+from dayu.cli.arg_parsing import DayuCliArgumentParser, _register_host_subcommands
 from dayu.cli.commands import host as host_commands_module
-from dayu.cli.commands.host import _build_host_runtime, register_host_subcommands
+from dayu.cli.commands.host import _build_host_runtime
 from dayu.host.executor import DefaultHostExecutor
 from dayu.host.host import Host
 from dayu.host.host_store import HostStore
 from dayu.host.session_registry import SQLiteSessionRegistry
 from dayu.services.contracts import RunAdminView, SessionAdminView
 from dayu.services.host_admin_service import HostAdminService
+from dayu.services.protocols import HostAdminServiceProtocol
 
 
 def _host_admin_service(runtime: Any) -> HostAdminService:
@@ -76,17 +78,10 @@ def _write_minimal_startup_config(config_root: Path, *, run_config_text: str) ->
 def test_register_host_subcommands_can_attach_global_args() -> None:
     """宿主管理子命令应保留全局参数字段。"""
 
-    parser = argparse.ArgumentParser()
+    parser = DayuCliArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    def _add_global_args(command_parser: argparse.ArgumentParser) -> None:
-        """为测试 parser 注册最小全局参数。"""
-
-        command_parser.add_argument("--base", default="./workspace")
-        command_parser.add_argument("--config", default=None)
-        command_parser.add_argument("--log-level", default=None)
-
-    register_host_subcommands(subparsers, add_global_args=_add_global_args)
+    _register_host_subcommands(subparsers)
 
     host_args = parser.parse_args(["host", "status"])
     sessions_args = parser.parse_args(["sessions"])
@@ -310,9 +305,11 @@ def test_run_host_command_dispatches_known_commands(monkeypatch: pytest.MonkeyPa
 def test_resolve_host_admin_service_prefers_runtime_service() -> None:
     """验证运行时已提供 host_admin_service 时直接复用。"""
 
-    service = SimpleNamespace(name="service")
+    service = cast(HostAdminServiceProtocol, SimpleNamespace(name="service"))
 
-    resolved = host_commands_module._resolve_host_admin_service(SimpleNamespace(host_admin_service=service))
+    resolved = host_commands_module._resolve_host_admin_service(
+        cast(host_commands_module._HostCliRuntimeLike, SimpleNamespace(host_admin_service=service))
+    )
 
     assert resolved is service
 
@@ -322,7 +319,9 @@ def test_resolve_host_admin_service_requires_service() -> None:
     """验证运行时缺少 host_admin_service 时抛出错误。"""
 
     with pytest.raises(AttributeError, match="host_admin_service"):
-        host_commands_module._resolve_host_admin_service(SimpleNamespace())
+        host_commands_module._resolve_host_admin_service(
+            cast(host_commands_module._HostCliRuntimeLike, SimpleNamespace())
+        )
 
 
 @pytest.mark.unit
@@ -330,7 +329,9 @@ def test_resolve_host_admin_service_does_not_fallback_to_host() -> None:
     """验证 CLI 宿主管理命令不会回退到直接消费 Host。"""
 
     with pytest.raises(AttributeError, match="host_admin_service"):
-        host_commands_module._resolve_host_admin_service(SimpleNamespace(host=SimpleNamespace()))
+        host_commands_module._resolve_host_admin_service(
+            cast(host_commands_module._HostCliRuntimeLike, SimpleNamespace(host=SimpleNamespace()))
+        )
 
 
 @pytest.mark.unit

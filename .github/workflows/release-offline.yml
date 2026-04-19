@@ -75,6 +75,7 @@ jobs:
 
       - name: Upload release asset
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
+        # v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           files: ${{ env.BUNDLE_PATH }}

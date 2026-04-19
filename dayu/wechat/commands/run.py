@@ -9,8 +9,8 @@ import signal
 from dataclasses import dataclass
 
 from dayu.log import Log
-from dayu.wechat.arg_parsing import _resolve_command_context
-from dayu.wechat.runtime import MODULE, WeChatDaemonLike, _create_run_daemon
+from dayu.wechat.arg_parsing import MODULE, _resolve_command_context
+from dayu.wechat.runtime import WeChatDaemonLike, _create_run_daemon
 from dayu.wechat.state_store import FileWeChatStateStore
 
 

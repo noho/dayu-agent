@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import sys
 
 from dayu.log import Log
-from dayu.wechat.arg_parsing import _resolve_command_context, _resolve_workspace_root
+from dayu.wechat.arg_parsing import MODULE, _resolve_command_context, _resolve_workspace_root
 from dayu.wechat.runtime import (
-    MODULE,
     _build_run_cli_arguments,
     _collect_service_environment_variables,
     _get_service_backend_display_name,
@@ -35,14 +35,24 @@ from dayu.wechat.state_store import FileWeChatStateStore
 
 
 def _run_service_install_command(args: argparse.Namespace) -> int:
-    """执行 `service install` 子命令。"""
+    """执行 `service install` 子命令。
+
+    Args:
+        args: 解析后的命令行参数。
+
+    Returns:
+        退出码，成功时返回 ``0``。
+
+    Raises:
+        RuntimeError: 当前平台不支持用户级 service，或安装 service 失败时抛出。
+    """
 
     context = _resolve_command_context(args)
     backend = detect_service_backend()
     spec = build_service_spec(
         state_dir=context.state_dir,
         working_directory=_resolve_repo_root(),
-        python_executable=__import__("sys").executable,
+        python_executable=sys.executable,
         run_arguments=_build_run_cli_arguments(args, context),
         environment_variables=_collect_service_environment_variables(context),
         backend=backend,

@@ -1111,13 +1111,29 @@ class TestInitPrewarm:
         base = tmp_path / "workspace"
         base.mkdir()
 
-        assert _should_run_init_prewarm(base_dir=base, overwrite=False, main_key_persist_failed=False) is True
+        assert _should_run_init_prewarm(
+            is_first_workspace_init=True,
+            overwrite=False,
+            main_key_persist_failed=False,
+        ) is True
 
         config_dir = base / "config"
         config_dir.mkdir()
-        assert _should_run_init_prewarm(base_dir=base, overwrite=False, main_key_persist_failed=False) is False
-        assert _should_run_init_prewarm(base_dir=base, overwrite=True, main_key_persist_failed=False) is False
-        assert _should_run_init_prewarm(base_dir=base, overwrite=False, main_key_persist_failed=True) is False
+        assert _should_run_init_prewarm(
+            is_first_workspace_init=False,
+            overwrite=False,
+            main_key_persist_failed=False,
+        ) is False
+        assert _should_run_init_prewarm(
+            is_first_workspace_init=False,
+            overwrite=True,
+            main_key_persist_failed=False,
+        ) is False
+        assert _should_run_init_prewarm(
+            is_first_workspace_init=False,
+            overwrite=False,
+            main_key_persist_failed=True,
+        ) is False
 
     def test_run_init_prewarm_only_imports_runtime_modules(
         self,
@@ -1229,6 +1245,31 @@ class TestInitPrewarm:
         assert "正在预热 CLI 运行时，请稍候" in captured.out
         assert "CLI 运行时预热失败: RuntimeError: prewarm failed" in captured.out
         assert "不影响当前工作区初始化成功" in captured.out
+
+    def test_run_init_skips_prewarm_when_main_key_persist_fails(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """主 API Key 持久化失败时不执行 prewarm。"""
+
+        base = self._prepare_run_init_environment(tmp_path, monkeypatch)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: "DEEPSEEK_API_KEY")
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_api_key", lambda _key: "sk-test")
+        monkeypatch.setattr("dayu.cli.commands.init._persist_env_var", lambda _k, _v: ("~/.zshrc", False))
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_optional_search_keys", lambda: [])
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_huggingface_config", lambda: [])
+
+        prewarm_calls: list[tuple[Path, Path]] = []
+
+        def _capture_prewarm(*, base_dir: Path, config_dir: Path) -> tuple[bool, str]:
+            prewarm_calls.append((base_dir, config_dir))
+            return True, ""
+
+        monkeypatch.setattr("dayu.cli.commands.init._run_init_prewarm", _capture_prewarm)
+
+        assert run_init_command(Namespace(base=str(base), overwrite=False)) == 1
+        assert prewarm_calls == []
 
     def test_windows_setx_message(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Windows 平台持久化成功时打印 setx 提示。"""

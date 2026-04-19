@@ -34,19 +34,8 @@ from dayu.log import Log
 from dayu.presenters import format_fins_cli_result
 from dayu.services.contracts import FinsSubmitRequest
 
+from dayu.cli.command_names import FINS_COMMANDS
 from dayu.cli.dependency_setup import MODULE, _build_fins_ops_service
-
-
-
-_FINS_COMMANDS = {
-    "download",
-    "upload_filing",
-    "upload_filings_from",
-    "upload_material",
-    "process",
-    "process_filing",
-    "process_material",
-}
 
 
 def _build_fins_command(args: argparse.Namespace) -> FinsCommand:
@@ -63,7 +52,7 @@ def _build_fins_command(args: argparse.Namespace) -> FinsCommand:
     """
 
     command_name = str(args.command)
-    if command_name not in _FINS_COMMANDS:
+    if command_name not in FINS_COMMANDS:
         raise ValueError(f"不是财报命令: {command_name}")
     prepare_cli_args(args)
     if command_name == FinsCommandName.DOWNLOAD:

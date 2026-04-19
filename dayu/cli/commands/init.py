@@ -274,14 +274,14 @@ def _copy_assets(base_dir: Path, *, overwrite: bool) -> Path:
 
 def _should_run_init_prewarm(
     *,
-    base_dir: Path,
+    is_first_workspace_init: bool,
     overwrite: bool,
     main_key_persist_failed: bool,
 ) -> bool:
     """判断当前 `init` 是否应执行首次安装 prewarm。
 
     Args:
-        base_dir: 工作区根目录。
+        is_first_workspace_init: 当前是否属于首次初始化。
         overwrite: 是否显式覆盖初始化。
         main_key_persist_failed: 主 API Key 是否持久化失败。
 
@@ -294,7 +294,7 @@ def _should_run_init_prewarm(
 
     if overwrite or main_key_persist_failed:
         return False
-    return not (base_dir / "config").exists()
+    return is_first_workspace_init
 
 
 def _run_init_prewarm(*, base_dir: Path, config_dir: Path) -> tuple[bool, str]:
@@ -689,12 +689,7 @@ def run_init_command(args: Namespace) -> int:
 
     base_dir = Path(args.base).resolve()
     overwrite: bool = getattr(args, "overwrite", False)
-    should_run_prewarm = _should_run_init_prewarm(
-        base_dir=base_dir,
-        overwrite=overwrite,
-        main_key_persist_failed=False,
-    )
-
+    is_first_workspace_init = not (base_dir / "config").exists()
     # 1. 复制配置
     config_dir = _copy_config(base_dir, overwrite=overwrite)
     print(f"✓ 配置已复制到: {config_dir}")
@@ -730,6 +725,12 @@ def run_init_command(args: Namespace) -> int:
     else:
         updated_count = _update_manifest_default_models(config_dir, non_thinking, thinking)
         print(f"✓ 默认模型已设置为: {non_thinking} / {thinking}（更新了 {updated_count} 个 manifest）")
+
+    should_run_prewarm = _should_run_init_prewarm(
+        is_first_workspace_init=is_first_workspace_init,
+        overwrite=overwrite,
+        main_key_persist_failed=main_key_persist_failed,
+    )
 
     # 4. 可选联网检索 Key
     search_persist_failed = False

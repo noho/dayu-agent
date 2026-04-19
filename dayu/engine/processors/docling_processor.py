@@ -911,13 +911,19 @@ def _render_markdown_table(
     table_df = _safe_table_dataframe(table_item, document)
     if table_df is not None and not table_df.empty:
         try:
+            from tabulate import tabulate as _tabulate
+
+            del _tabulate
             # NaN 在合并单元格中常见，转 markdown 前统一填为空字符串
             cleaned_df = table_df.fillna("")
             markdown = cleaned_df.to_markdown(index=False)
-            if isinstance(markdown, str):
+            if isinstance(markdown, str) and markdown.strip():
                 return markdown
-        except Exception:
-            pass
+            raise RuntimeError("Docling 表格 markdown 渲染结果为空")
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("缺少 tabulate 依赖，无法渲染 Docling 表格 markdown") from exc
+        except Exception as exc:
+            raise RuntimeError(f"Docling 表格 markdown 渲染失败: {exc}") from exc
 
     raw_dict = getattr(table_item, "data", None)
     return _normalize_whitespace(str(raw_dict or {}))

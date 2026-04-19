@@ -2297,8 +2297,8 @@ def test_render_helpers_and_text_snippets(monkeypatch: pytest.MonkeyPatch) -> No
     assert no_records is None
 
     monkeypatch.setattr(sec_table_extraction, "_safe_table_dataframe", lambda table_obj: _BadMarkdownDf())
-    markdown = sec_processor._render_markdown_table(type("T", (), {"to_dict": lambda self: {"a": 1}})(), "")
-    assert "a" in markdown
+    with pytest.raises(RuntimeError, match="SEC 表格 markdown 渲染失败"):
+        sec_processor._render_markdown_table(type("T", (), {"to_dict": lambda self: {"a": 1}})(), "")
 
     assert sec_table_extraction._normalize_optional_string("  a \n b  ") == "a b"
 

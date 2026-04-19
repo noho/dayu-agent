@@ -6,8 +6,8 @@ import argparse
 import asyncio
 
 from dayu.log import Log
-from dayu.wechat.arg_parsing import _resolve_command_context
-from dayu.wechat.runtime import MODULE, _create_login_daemon
+from dayu.wechat.arg_parsing import MODULE, _resolve_command_context
+from dayu.wechat.runtime import _create_login_daemon
 
 
 async def _run_login_command(args: argparse.Namespace) -> int:

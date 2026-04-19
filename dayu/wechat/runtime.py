@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Protocol
 
 from dayu.contracts.session import SessionSource
+from dayu.execution.options import ResolvedExecutionOptions
 from dayu.fins.service_runtime import DefaultFinsRuntime
 from dayu.host import resolve_host_config
 from dayu.host.host import Host
@@ -44,9 +45,10 @@ from dayu.startup.workspace import WorkspaceResources
 from dayu.wechat.arg_parsing import (
     DEFAULT_TYPING_INTERVAL_SEC,
     DEFAULT_WECHAT_DELIVERY_MAX_ATTEMPTS,
+    MODULE,
     ResolvedWechatContext,
     _parse_wechat_label_argument,
-    _resolve_command_context,
+    _resolve_instance_label,
     _resolve_state_dir,
     _resolve_workspace_root,
 )
@@ -66,12 +68,20 @@ from dayu.wechat.service_manager import (
 from dayu.wechat.state_store import FileWeChatStateStore, WeChatDaemonState, load_tracked_session_ids
 from dayu.workspace_paths import DEFAULT_WECHAT_INSTANCE_LABEL, build_host_store_default_path
 
-MODULE = "APP.WECHAT.MAIN"
-
-
 def _direct_service_env_var_names() -> tuple[str, ...]:
-    """返回后台 service 直接依赖的环境变量名集合。"""
+    """返回后台 service 直接依赖的环境变量名集合。
 
+    Args:
+        无。
+
+    Returns:
+        环境变量名元组。
+
+    Raises:
+        无。
+    """
+
+    # 这些 provider/runtime 依赖体积较大，仅在 service 安装阶段按需导入。
     from dayu.engine.processors.perf_utils import PROFILE_ENV_NAME
     from dayu.engine.tools.web_search_providers import SERPER_API_KEY_ENV, TAVILY_API_KEY_ENV
     from dayu.engine.tools.web_tools import SEC_USER_AGENT_ENV
@@ -90,15 +100,45 @@ class WeChatDaemonLike(Protocol):
     """WeChat daemon 的最小可调用协议。"""
 
     async def ensure_authenticated(self, *, force_relogin: bool = False) -> WeChatDaemonState:
-        """确保 daemon 完成登录认证。"""
+        """确保 daemon 完成登录认证。
+
+        Args:
+            force_relogin: 是否忽略现有登录态并强制重新扫码。
+
+        Returns:
+            最新的 WeChat 登录态快照。
+
+        Raises:
+            RuntimeError: 登录认证失败时抛出。
+        """
         ...
 
     async def aclose(self) -> None:
-        """关闭 daemon 持有的外部资源。"""
+        """关闭 daemon 持有的外部资源。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            RuntimeError: 资源关闭失败时抛出。
+        """
         ...
 
     async def run_forever(self, *, require_existing_auth: bool) -> None:
-        """以前台方式持续运行 daemon。"""
+        """以前台方式持续运行 daemon。
+
+        Args:
+            require_existing_auth: 是否要求启动前已存在登录态。
+
+        Returns:
+            无。
+
+        Raises:
+            RuntimeError: daemon 运行失败时抛出。
+        """
         ...
 
 
@@ -130,13 +170,33 @@ class NoOpChatService:
     """仅供 login 命令使用的占位 ChatService。"""
 
     async def submit_turn(self, request: ChatTurnRequest) -> ChatTurnSubmission:
-        """login 命令不应调用聊天逻辑。"""
+        """login 命令不应调用聊天逻辑。
+
+        Args:
+            request: 聊天请求。
+
+        Returns:
+            无。
+
+        Raises:
+            RuntimeError: 始终抛出，提示 login 路径不应消费聊天能力。
+        """
 
         del request
         raise RuntimeError("login 模式不应调用 ChatService")
 
     async def resume_pending_turn(self, request: ChatResumeRequest) -> ChatTurnSubmission:
-        """login 命令不应调用恢复逻辑。"""
+        """login 命令不应调用恢复逻辑。
+
+        Args:
+            request: 恢复请求。
+
+        Returns:
+            无。
+
+        Raises:
+            RuntimeError: 始终抛出，提示 login 路径不应消费恢复能力。
+        """
 
         del request
         raise RuntimeError("login 模式不应调用 ChatService")
@@ -147,7 +207,18 @@ class NoOpChatService:
         session_id: str | None = None,
         scene_name: str | None = None,
     ) -> list[ChatPendingTurnView]:
-        """login 命令不应调用恢复列表逻辑。"""
+        """login 命令不应调用恢复列表逻辑。
+
+        Args:
+            session_id: 会话过滤条件。
+            scene_name: scene 过滤条件。
+
+        Returns:
+            无。
+
+        Raises:
+            RuntimeError: 始终抛出，提示 login 路径不应消费恢复列表能力。
+        """
 
         del session_id
         del scene_name
@@ -158,13 +229,33 @@ class NoOpReplyDeliveryService:
     """仅供 login 命令使用的占位 ReplyDeliveryService。"""
 
     def submit_reply_for_delivery(self, request: ReplyDeliverySubmitRequest) -> ReplyDeliveryView:
-        """login 模式不应调用交付逻辑。"""
+        """login 模式不应调用交付逻辑。
+
+        Args:
+            request: reply delivery 提交请求。
+
+        Returns:
+            无。
+
+        Raises:
+            RuntimeError: 始终抛出，提示 login 路径不应消费交付能力。
+        """
 
         del request
         raise RuntimeError("login 模式不应调用 ReplyDeliveryService")
 
     def get_delivery(self, delivery_id: str) -> ReplyDeliveryView | None:
-        """login 模式不应调用交付逻辑。"""
+        """login 模式不应调用交付逻辑。
+
+        Args:
+            delivery_id: delivery 标识。
+
+        Returns:
+            无。
+
+        Raises:
+            RuntimeError: 始终抛出，提示 login 路径不应消费交付查询能力。
+        """
 
         del delivery_id
         raise RuntimeError("login 模式不应调用 ReplyDeliveryService")
@@ -176,7 +267,19 @@ class NoOpReplyDeliveryService:
         scene_name: str | None = None,
         state: str | None = None,
     ) -> list[ReplyDeliveryView]:
-        """login 模式不应调用交付逻辑。"""
+        """login 模式不应调用交付逻辑。
+
+        Args:
+            session_id: 会话过滤条件。
+            scene_name: scene 过滤条件。
+            state: 状态过滤条件。
+
+        Returns:
+            无。
+
+        Raises:
+            RuntimeError: 始终抛出，提示 login 路径不应消费交付列表能力。
+        """
 
         del session_id
         del scene_name
@@ -184,19 +287,49 @@ class NoOpReplyDeliveryService:
         raise RuntimeError("login 模式不应调用 ReplyDeliveryService")
 
     def claim_delivery(self, delivery_id: str) -> ReplyDeliveryView:
-        """login 模式不应调用交付逻辑。"""
+        """login 模式不应调用交付逻辑。
+
+        Args:
+            delivery_id: delivery 标识。
+
+        Returns:
+            无。
+
+        Raises:
+            RuntimeError: 始终抛出，提示 login 路径不应消费 claim 能力。
+        """
 
         del delivery_id
         raise RuntimeError("login 模式不应调用 ReplyDeliveryService")
 
     def mark_delivery_delivered(self, delivery_id: str) -> ReplyDeliveryView:
-        """login 模式不应调用交付逻辑。"""
+        """login 模式不应调用交付逻辑。
+
+        Args:
+            delivery_id: delivery 标识。
+
+        Returns:
+            无。
+
+        Raises:
+            RuntimeError: 始终抛出，提示 login 路径不应消费 delivered 标记能力。
+        """
 
         del delivery_id
         raise RuntimeError("login 模式不应调用 ReplyDeliveryService")
 
     def mark_delivery_failed(self, request: ReplyDeliveryFailureRequest) -> ReplyDeliveryView:
-        """login 模式不应调用交付逻辑。"""
+        """login 模式不应调用交付逻辑。
+
+        Args:
+            request: 失败标记请求。
+
+        Returns:
+            无。
+
+        Raises:
+            RuntimeError: 始终抛出，提示 login 路径不应消费 failed 标记能力。
+        """
 
         del request
         raise RuntimeError("login 模式不应调用 ReplyDeliveryService")
@@ -207,7 +340,19 @@ def _find_installed_service_definition_for_instance(
     instance_label: str,
     backend: ServiceBackend,
 ) -> InstalledServiceDefinition | None:
-    """按 workspace 与实例标签查找已安装的 WeChat service definition。"""
+    """按 workspace 与实例标签查找已安装的 WeChat service definition。
+
+    Args:
+        workspace_root: 当前工作区根目录。
+        instance_label: WeChat 实例标签。
+        backend: 当前平台 service backend。
+
+    Returns:
+        匹配的 service definition；不存在时返回 ``None``。
+
+    Raises:
+        无。
+    """
 
     resolved_workspace_root = workspace_root.resolve()
     for definition in list_installed_service_definitions(backend):
@@ -224,10 +369,20 @@ def _find_installed_service_definition_for_instance(
 
 
 def _resolve_service_identity(args: argparse.Namespace) -> ResolvedWechatServiceIdentity:
-    """解析 WeChat service 的稳定身份。"""
+    """解析 WeChat service 的稳定身份。
+
+    Args:
+        args: 命令行参数对象。
+
+    Returns:
+        归一化后的 WeChat service 身份。
+
+    Raises:
+        SystemExit: 当实例标签非法时抛出。
+    """
 
     workspace_root = _resolve_workspace_root(args.base)
-    instance_label = _resolve_command_context(args).instance_label
+    instance_label = _resolve_instance_label(getattr(args, "label", None))
     state_dir = _resolve_state_dir(workspace_root, instance_label)
     backend = detect_service_backend()
     installed_definition = _find_installed_service_definition_for_instance(workspace_root, instance_label, backend)
@@ -250,13 +405,33 @@ def _resolve_service_identity(args: argparse.Namespace) -> ResolvedWechatService
 
 
 def _get_service_backend_display_name(backend: ServiceBackend) -> str:
-    """返回当前 service backend 的展示名。"""
+    """返回当前 service backend 的展示名。
+
+    Args:
+        backend: service backend 枚举值。
+
+    Returns:
+        面向用户的 backend 展示名。
+
+    Raises:
+        无。
+    """
 
     return describe_service_backend(backend)
 
 
 def _resolve_repo_root() -> Path:
-    """解析仓库根目录。"""
+    """解析仓库根目录。
+
+    Args:
+        无。
+
+    Returns:
+        仓库根目录绝对路径。
+
+    Raises:
+        无。
+    """
 
     return Path(__file__).resolve().parents[2]
 
@@ -267,7 +442,19 @@ def _build_daemon_config(
     *,
     allow_interactive_relogin: bool,
 ) -> WeChatDaemonConfig:
-    """构建 WeChat daemon 配置。"""
+    """构建 WeChat daemon 配置。
+
+    Args:
+        args: 命令行参数对象。
+        context: 已解析的共享上下文。
+        allow_interactive_relogin: 是否允许 daemon 进入交互式重新登录。
+
+    Returns:
+        WeChat daemon 配置对象。
+
+    Raises:
+        无。
+    """
 
     return WeChatDaemonConfig(
         scene_name="wechat",
@@ -280,7 +467,18 @@ def _build_daemon_config(
 
 
 def _build_run_cli_arguments(args: argparse.Namespace, context: ResolvedWechatContext) -> list[str]:
-    """构建 service 运行时的命令行参数。"""
+    """构建 service 运行时的命令行参数。
+
+    Args:
+        args: 命令行参数对象。
+        context: 已解析的共享上下文。
+
+    Returns:
+        用于后台 service 的命令行参数列表。
+
+    Raises:
+        无。
+    """
 
     cli_arguments = [
         "run",
@@ -306,7 +504,18 @@ def _build_run_cli_arguments(args: argparse.Namespace, context: ResolvedWechatCo
 
 
 def _append_log_level_arguments(args: argparse.Namespace, cli_arguments: list[str]) -> None:
-    """把日志参数追加到命令行参数列表。"""
+    """把日志参数追加到命令行参数列表。
+
+    Args:
+        args: 命令行参数对象。
+        cli_arguments: 待追加的命令行参数列表。
+
+    Returns:
+        无。
+
+    Raises:
+        无。
+    """
 
     if getattr(args, "log_level", None):
         cli_arguments.extend(["--log-level", str(args.log_level)])
@@ -321,7 +530,18 @@ def _append_log_level_arguments(args: argparse.Namespace, cli_arguments: list[st
 
 
 def _append_agent_override_arguments(args: argparse.Namespace, cli_arguments: list[str]) -> None:
-    """把 Agent 覆盖参数追加到命令行参数列表。"""
+    """把 Agent 覆盖参数追加到命令行参数列表。
+
+    Args:
+        args: 命令行参数对象。
+        cli_arguments: 待追加的命令行参数列表。
+
+    Returns:
+        无。
+
+    Raises:
+        无。
+    """
 
     _append_optional_argument(cli_arguments, "--model-name", getattr(args, "model_name", None))
     _append_optional_argument(cli_arguments, "--temperature", getattr(args, "temperature", None))
@@ -341,7 +561,17 @@ def _append_agent_override_arguments(args: argparse.Namespace, cli_arguments: li
 
 
 def _collect_service_environment_variables(context: ResolvedWechatContext) -> dict[str, str]:
-    """收集后台 service 需要显式注入的环境变量。"""
+    """收集后台 service 需要显式注入的环境变量。
+
+    Args:
+        context: 已解析的共享上下文。
+
+    Returns:
+        需要透传给后台 service 的环境变量字典。
+
+    Raises:
+        无。
+    """
 
     config_loader = ConfigLoader(ConfigFileResolver(context.config_root))
     required_names = set(config_loader.collect_referenced_env_vars())
@@ -358,8 +588,24 @@ def _collect_service_environment_variables(context: ResolvedWechatContext) -> di
     return captured_environment
 
 
-def _append_optional_argument(cli_arguments: list[str], flag: str, value: object) -> None:
-    """把可选参数追加到命令行列表。"""
+def _append_optional_argument(
+    cli_arguments: list[str],
+    flag: str,
+    value: str | int | float | None,
+) -> None:
+    """把可选参数追加到命令行列表。
+
+    Args:
+        cli_arguments: 待追加的命令行参数列表。
+        flag: 参数名。
+        value: 参数值。
+
+    Returns:
+        无。
+
+    Raises:
+        无。
+    """
 
     if value is None:
         return
@@ -370,7 +616,18 @@ def _append_optional_argument(cli_arguments: list[str], flag: str, value: object
 
 
 def _create_login_daemon(args: argparse.Namespace, context: ResolvedWechatContext) -> WeChatDaemonLike:
-    """构建仅用于登录的 WeChat daemon。"""
+    """构建仅用于登录的 WeChat daemon。
+
+    Args:
+        args: 命令行参数对象。
+        context: 已解析的共享上下文。
+
+    Returns:
+        仅负责登录的 daemon 协议对象。
+
+    Raises:
+        无。
+    """
 
     return WeChatDaemon(
         chat_service=NoOpChatService(),
@@ -384,12 +641,22 @@ def _prepare_wechat_host_dependencies(
     context: ResolvedWechatContext,
 ) -> tuple[
     WorkspaceResources,
-    object,
+    ResolvedExecutionOptions,
     SceneExecutionAcceptancePreparer,
     Host,
     DefaultFinsRuntime,
 ]:
-    """准备 WeChat 的 Host 级稳定依赖。"""
+    """准备 WeChat 的 Host 级稳定依赖。
+
+    Args:
+        context: 已解析的共享上下文。
+
+    Returns:
+        ``workspace``、默认执行选项、scene preparation、Host 与 FinsRuntime。
+
+    Raises:
+        无。
+    """
 
     paths = prepare_startup_paths(
         workspace_root=context.workspace_root,
@@ -446,7 +713,18 @@ def _prepare_wechat_host_dependencies(
 
 
 def _create_run_daemon(args: argparse.Namespace, context: ResolvedWechatContext) -> WeChatDaemonLike:
-    """构建运行命令使用的 WeChat daemon。"""
+    """构建运行命令使用的 WeChat daemon。
+
+    Args:
+        args: 命令行参数对象。
+        context: 已解析的共享上下文。
+
+    Returns:
+        可直接运行的 WeChat daemon 协议对象。
+
+    Raises:
+        无。
+    """
 
     (
         _workspace,
@@ -477,7 +755,17 @@ def _create_run_daemon(args: argparse.Namespace, context: ResolvedWechatContext)
 
 
 def _query_installed_service_status(identity: ResolvedWechatServiceIdentity) -> ServiceStatus | None:
-    """查询 WeChat service 状态并校验已安装。"""
+    """查询 WeChat service 状态并校验已安装。
+
+    Args:
+        identity: 已解析的 service 身份。
+
+    Returns:
+        已安装时返回状态对象；未安装时返回 ``None``。
+
+    Raises:
+        无。
+    """
 
     status = query_service_status(
         label=identity.label,
@@ -494,13 +782,34 @@ def _query_installed_service_status(identity: ResolvedWechatServiceIdentity) -> 
 
 
 def _has_persisted_wechat_login(state_dir: Path) -> bool:
-    """检查状态目录中是否存在可复用的 WeChat 登录态。"""
+    """检查状态目录中是否存在可复用的 WeChat 登录态。
+
+    Args:
+        state_dir: WeChat 状态目录。
+
+    Returns:
+        是否存在可复用登录态。
+
+    Raises:
+        无。
+    """
 
     return bool(FileWeChatStateStore(state_dir).load().bot_token)
 
 
 def _extract_cli_option_value(arguments: tuple[str, ...], option_name: str) -> str | None:
-    """从命令行参数元组中提取一个选项值。"""
+    """从命令行参数元组中提取一个选项值。
+
+    Args:
+        arguments: 命令行参数元组。
+        option_name: 待提取的选项名。
+
+    Returns:
+        对应的选项值；不存在时返回 ``None``。
+
+    Raises:
+        无。
+    """
 
     for index, argument in enumerate(arguments):
         if argument == option_name:
@@ -516,7 +825,17 @@ def _extract_cli_option_value(arguments: tuple[str, ...], option_name: str) -> s
 def _parse_installed_service_runtime_identity(
     definition: InstalledServiceDefinition,
 ) -> tuple[Path, str] | None:
-    """从已安装 service definition 中解析 WeChat run 的 workspace 与实例标签。"""
+    """从已安装 service definition 中解析 WeChat run 的 workspace 与实例标签。
+
+    Args:
+        definition: 已安装的 service definition。
+
+    Returns:
+        ``(workspace_root, instance_label)``；不符合 WeChat run 约定时返回 ``None``。
+
+    Raises:
+        无。
+    """
 
     arguments = definition.program_arguments
     if len(arguments) < 4:
@@ -540,7 +859,17 @@ def _parse_installed_service_runtime_identity(
 
 
 def _list_installed_wechat_services(workspace_root: Path) -> tuple[InstalledWechatServiceView, ...]:
-    """列出当前工作区下已安装的 WeChat service 实例。"""
+    """列出当前工作区下已安装的 WeChat service 实例。
+
+    Args:
+        workspace_root: 当前工作区根目录。
+
+    Returns:
+        当前工作区下的已安装服务视图元组。
+
+    Raises:
+        无。
+    """
 
     backend = detect_service_backend()
     installed_services: list[InstalledWechatServiceView] = []
@@ -576,7 +905,18 @@ def _list_installed_wechat_services(workspace_root: Path) -> tuple[InstalledWech
 
 
 def _purge_tracked_session_data(*, workspace_root: Path, state_dir: Path) -> None:
-    """清理 Host DB 中与 state_dir 关联的 pending turns 和 reply outbox。"""
+    """清理 Host DB 中与 state_dir 关联的 pending turns 和 reply outbox。
+
+    Args:
+        workspace_root: 当前工作区根目录。
+        state_dir: WeChat 状态目录。
+
+    Returns:
+        无。
+
+    Raises:
+        无。
+    """
 
     session_ids = load_tracked_session_ids(state_dir)
     if not session_ids:
@@ -585,6 +925,7 @@ def _purge_tracked_session_data(*, workspace_root: Path, state_dir: Path) -> Non
     if not host_db_path.exists():
         return
 
+    # host cleanup 仅在卸载 service 时需要，延迟导入避免影响冷启动路径。
     from dayu.host.host_cleanup import purge_sessions_from_host_db
 
     total_pending, total_outbox = purge_sessions_from_host_db(
@@ -600,7 +941,6 @@ def _purge_tracked_session_data(*, workspace_root: Path, state_dir: Path) -> Non
 
 __all__ = [
     "InstalledWechatServiceView",
-    "MODULE",
     "NoOpChatService",
     "NoOpReplyDeliveryService",
     "ResolvedWechatServiceIdentity",

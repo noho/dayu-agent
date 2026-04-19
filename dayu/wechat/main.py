@@ -5,9 +5,7 @@ from __future__ import annotations
 import argparse
 
 from dayu.log import Log
-from dayu.wechat.arg_parsing import parse_arguments, setup_loglevel
-
-MODULE = "APP.WECHAT.MAIN"
+from dayu.wechat.arg_parsing import MODULE, parse_arguments, setup_loglevel
 
 
 def _dispatch_command(args: argparse.Namespace) -> int:
@@ -25,14 +23,17 @@ def _dispatch_command(args: argparse.Namespace) -> int:
 
     command = str(getattr(args, "command", "") or "").strip()
     if command == "login":
+        # 登录命令会导入 daemon/runtime，仅在命中该命令时按需加载。
         from dayu.wechat.commands.login import run_login_command
 
         return run_login_command(args)
     if command == "run":
+        # 运行命令会装配 Host/Fins/daemon 依赖，保持主入口冷启动轻量。
         from dayu.wechat.commands.run import run_run_command
 
         return run_run_command(args)
     if command == "service":
+        # service 命令只在用户显式操作托管服务时导入实现模块。
         from dayu.wechat.commands.service import run_service_command
 
         return run_service_command(args)
