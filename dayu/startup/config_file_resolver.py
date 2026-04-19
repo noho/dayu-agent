@@ -21,7 +21,7 @@ from dayu.log import Log
 MODULE = "CONFIG.FILE_RESOLVER"
 
 
-def _resolve_package_config_path() -> Path:
+def resolve_package_config_path() -> Path:
     """解析包内默认配置目录路径。
 
     Returns:
@@ -34,7 +34,7 @@ def _resolve_package_config_path() -> Path:
     return (Path(__file__).resolve().parent.parent / "config").resolve()
 
 
-def _resolve_package_assets_path() -> Path:
+def resolve_package_assets_path() -> Path:
     """解析包内默认 assets 目录路径。
 
     Returns:
@@ -63,7 +63,7 @@ class ConfigFileResolver:
             无。
         """
 
-        package_config_path = _resolve_package_config_path()
+        package_config_path = resolve_package_config_path()
         if config_dir is None:
             self.config_dirs: list[Path] = [package_config_path]
             Log.verbose(f"配置文件解析器初始化: config_dir={package_config_path}", module=MODULE)

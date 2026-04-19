@@ -10,8 +10,8 @@ from typing import Any, cast
 
 import pytest
 
-from dayu.cli import host_commands as host_commands_module
-from dayu.cli.host_commands import _build_host_runtime, register_host_subcommands
+from dayu.cli.commands import host as host_commands_module
+from dayu.cli.commands.host import _build_host_runtime, register_host_subcommands
 from dayu.host.executor import DefaultHostExecutor
 from dayu.host.host import Host
 from dayu.host.host_store import HostStore

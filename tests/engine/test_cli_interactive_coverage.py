@@ -149,7 +149,7 @@ def test_main_non_interactive_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_pa
     monkeypatch.setattr(Log, "info", lambda *args, **kwargs: None)
     monkeypatch.setattr(Log, "error", lambda *args, **kwargs: None)
     # 阻止进入真实的交互式循环。
-    monkeypatch.setattr("dayu.cli.main.interactive", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("dayu.cli.commands.interactive.interactive", lambda *_args, **_kwargs: None)
 
     result = app_cli.run_main()
 

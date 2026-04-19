@@ -18,14 +18,19 @@ from dayu.execution.options import ExecutionOptions
 from dayu.wechat.service_manager import InstalledServiceDefinition, ServiceSpec, ServiceStatus
 from dayu.wechat.state_store import WeChatDaemonState
 
+wechat_arg_module = importlib.import_module("dayu.wechat.arg_parsing")
 wechat_main_module = importlib.import_module("dayu.wechat.main")
+wechat_runtime_module = importlib.import_module("dayu.wechat.runtime")
+wechat_login_module = importlib.import_module("dayu.wechat.commands.login")
+wechat_run_module = importlib.import_module("dayu.wechat.commands.run")
+wechat_service_module = importlib.import_module("dayu.wechat.commands.service")
 
 
 @pytest.mark.unit
 def test_build_execution_options_supports_interactive_like_overrides() -> None:
     """验证入口会解析 interactive 相关执行覆盖项。"""
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     args = parser.parse_args(
         [
             "run",
@@ -47,7 +52,7 @@ def test_build_execution_options_supports_interactive_like_overrides() -> None:
         ]
     )
 
-    options = wechat_main_module._build_execution_options(args)
+    options = wechat_arg_module._build_execution_options(args)
 
     assert isinstance(options, ExecutionOptions)
     assert options.model_name == "mimo-v2-flash"
@@ -68,7 +73,7 @@ def test_build_execution_options_supports_interactive_like_overrides() -> None:
 def test_create_parser_uses_python_module_prog() -> None:
     """验证顶层 usage 使用 `python -m dayu.wechat`，不暴露 `__main__.py`。"""
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
 
     assert parser.prog == "python -m dayu.wechat"
     assert "__main__.py" not in parser.format_usage()
@@ -78,7 +83,7 @@ def test_create_parser_uses_python_module_prog() -> None:
 def test_create_parser_missing_command_prints_help_summary(capsys: pytest.CaptureFixture[str]) -> None:
     """验证缺少命令时会输出完整帮助和命令摘要。"""
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
 
     with pytest.raises(SystemExit) as exc_info:
         parser.parse_args([])
@@ -98,7 +103,7 @@ def test_create_parser_missing_command_prints_help_summary(capsys: pytest.Captur
 def test_resolve_state_dir_defaults_to_workspace_dayu_wechat_default(tmp_path: Path) -> None:
     """验证默认状态目录为 `<workspace>/.dayu/wechat-default`。"""
 
-    resolved = wechat_main_module._resolve_state_dir(tmp_path, "default")
+    resolved = wechat_arg_module._resolve_state_dir(tmp_path, "default")
 
     assert resolved == (tmp_path / ".dayu" / "wechat-default").resolve()
 
@@ -108,7 +113,7 @@ def test_resolve_instance_label_rejects_invalid_characters() -> None:
     """验证实例标签禁止包含路径穿越类非法字符。"""
 
     with pytest.raises(SystemExit, match="2"):
-        wechat_main_module._resolve_instance_label("bad/path")
+        wechat_arg_module._resolve_instance_label("bad/path")
 
 
 @pytest.mark.unit
@@ -118,7 +123,7 @@ def test_resolve_workspace_root_rejects_missing_dir(tmp_path: Path) -> None:
     missing_dir = tmp_path / "missing"
 
     with pytest.raises(SystemExit):
-        wechat_main_module._resolve_workspace_root(str(missing_dir))
+        wechat_arg_module._resolve_workspace_root(str(missing_dir))
 
 
 @pytest.mark.unit
@@ -126,7 +131,7 @@ def test_run_login_command_triggers_login(monkeypatch: pytest.MonkeyPatch, tmp_p
     """验证 `login` 命令只执行扫码登录，不创建应用服务。"""
 
     captured: dict[str, object] = {}
-    context = wechat_main_module._ResolvedWechatContext(
+    context = wechat_arg_module.ResolvedWechatContext(
         workspace_root=tmp_path,
         config_root=tmp_path / "config",
         state_dir=tmp_path / ".wechat",
@@ -140,12 +145,12 @@ def test_run_login_command_triggers_login(monkeypatch: pytest.MonkeyPatch, tmp_p
         async def aclose(self) -> None:
             captured["closed"] = True
 
-    monkeypatch.setattr(wechat_main_module, "_resolve_command_context", lambda _args: context)
-    monkeypatch.setattr(wechat_main_module, "_create_login_daemon", lambda _args, _context: _FakeDaemon())
+    monkeypatch.setattr(wechat_login_module, "_resolve_command_context", lambda _args: context)
+    monkeypatch.setattr(wechat_login_module, "_create_login_daemon", lambda _args, _context: _FakeDaemon())
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     args = parser.parse_args(["login", "--relogin"])
-    exit_code = asyncio.run(wechat_main_module._run_login_command(args))
+    exit_code = asyncio.run(wechat_login_module._run_login_command(args))
 
     assert exit_code == 0
     assert captured == {"force_relogin": True, "closed": True}
@@ -155,7 +160,7 @@ def test_run_login_command_triggers_login(monkeypatch: pytest.MonkeyPatch, tmp_p
 def test_run_command_requires_existing_login(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """验证 `run` 命令缺少登录态时会直接失败。"""
 
-    context = wechat_main_module._ResolvedWechatContext(
+    context = wechat_arg_module.ResolvedWechatContext(
         workspace_root=tmp_path,
         config_root=tmp_path / "config",
         state_dir=tmp_path / ".wechat",
@@ -169,17 +174,17 @@ def test_run_command_requires_existing_login(monkeypatch: pytest.MonkeyPatch, tm
         def load(self) -> WeChatDaemonState:
             return WeChatDaemonState(bot_token=None, base_url="https://ilink.example")
 
-    monkeypatch.setattr(wechat_main_module, "_resolve_command_context", lambda _args: context)
-    monkeypatch.setattr(wechat_main_module, "FileWeChatStateStore", _FakeStore)
+    monkeypatch.setattr(wechat_run_module, "_resolve_command_context", lambda _args: context)
+    monkeypatch.setattr(wechat_run_module, "FileWeChatStateStore", _FakeStore)
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_run_module,
         "_create_run_daemon",
         lambda _args, _context: (_ for _ in ()).throw(AssertionError("不应创建 daemon")),
     )
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     args = parser.parse_args(["run"])
-    exit_code = asyncio.run(wechat_main_module._run_run_command(args))
+    exit_code = asyncio.run(wechat_run_module._run_run_command(args))
 
     assert exit_code == 1
 
@@ -189,7 +194,7 @@ def test_run_command_uses_existing_login(monkeypatch: pytest.MonkeyPatch, tmp_pa
     """验证 `run` 命令会在已有登录态下进入长轮询。"""
 
     captured: dict[str, object] = {}
-    context = wechat_main_module._ResolvedWechatContext(
+    context = wechat_arg_module.ResolvedWechatContext(
         workspace_root=tmp_path,
         config_root=tmp_path / "config",
         state_dir=tmp_path / ".wechat",
@@ -210,18 +215,18 @@ def test_run_command_uses_existing_login(monkeypatch: pytest.MonkeyPatch, tmp_pa
         captured["require_existing_auth"] = require_existing_auth
         return 0
 
-    monkeypatch.setattr(wechat_main_module, "_resolve_command_context", lambda _args: context)
-    monkeypatch.setattr(wechat_main_module, "FileWeChatStateStore", _FakeStore)
-    monkeypatch.setattr(wechat_main_module, "_create_run_daemon", lambda _args, _context: fake_daemon)
+    monkeypatch.setattr(wechat_run_module, "_resolve_command_context", lambda _args: context)
+    monkeypatch.setattr(wechat_run_module, "FileWeChatStateStore", _FakeStore)
+    monkeypatch.setattr(wechat_run_module, "_create_run_daemon", lambda _args, _context: fake_daemon)
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_run_module,
         "_run_daemon_with_graceful_shutdown",
         _fake_run_daemon_with_graceful_shutdown,
     )
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     args = parser.parse_args(["run"])
-    exit_code = asyncio.run(wechat_main_module._run_run_command(args))
+    exit_code = asyncio.run(wechat_run_module._run_run_command(args))
 
     assert exit_code == 0
     assert captured == {"daemon": fake_daemon, "require_existing_auth": True}
@@ -251,7 +256,7 @@ def test_run_daemon_with_graceful_shutdown_maps_signal_to_exit_code(
 
     def _fake_install_signal_handlers(loop, run_task, shutdown_state):
         loop.call_soon(
-            lambda: wechat_main_module._request_daemon_shutdown(
+            lambda: wechat_run_module._request_daemon_shutdown(
                 run_task,
                 shutdown_state,
                 signal_name=signal_name,
@@ -260,11 +265,11 @@ def test_run_daemon_with_graceful_shutdown_maps_signal_to_exit_code(
         )
         return [signal.SIGTERM]
 
-    monkeypatch.setattr(wechat_main_module, "_install_daemon_signal_handlers", _fake_install_signal_handlers)
-    monkeypatch.setattr(wechat_main_module, "_remove_daemon_signal_handlers", lambda _loop, _signals: None)
+    monkeypatch.setattr(wechat_run_module, "_install_daemon_signal_handlers", _fake_install_signal_handlers)
+    monkeypatch.setattr(wechat_run_module, "_remove_daemon_signal_handlers", lambda _loop, _signals: None)
 
     actual_exit_code = asyncio.run(
-        wechat_main_module._run_daemon_with_graceful_shutdown(
+        wechat_run_module._run_daemon_with_graceful_shutdown(
             _FakeDaemon(),
             require_existing_auth=True,
         )
@@ -280,7 +285,7 @@ def test_install_daemon_signal_handlers_passes_positional_callback_args(monkeypa
 
     captured: dict[str, object] = {}
     loop = asyncio.new_event_loop()
-    shutdown_state = wechat_main_module._DaemonShutdownState()
+    shutdown_state = wechat_run_module.DaemonShutdownState()
 
     class _FakeTask:
         def cancel(self) -> None:
@@ -293,9 +298,9 @@ def test_install_daemon_signal_handlers_passes_positional_callback_args(monkeypa
         callback(*args)
 
     monkeypatch.setattr(loop, "add_signal_handler", _fake_add_signal_handler)
-    monkeypatch.setattr(wechat_main_module.Log, "info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(wechat_run_module.Log, "info", lambda *_args, **_kwargs: None)
 
-    installed = wechat_main_module._install_daemon_signal_handlers(loop, fake_task, shutdown_state)
+    installed = wechat_run_module._install_daemon_signal_handlers(loop, fake_task, shutdown_state)
 
     assert installed == [signal.SIGINT, signal.SIGTERM]
     assert captured["cancelled"] is True
@@ -309,14 +314,14 @@ def test_install_daemon_signal_handlers_passes_positional_callback_args(monkeypa
 def test_build_run_cli_arguments_includes_overrides(tmp_path: Path) -> None:
     """验证 service 运行参数会带上 run 命令需要的关键覆盖项。"""
 
-    context = wechat_main_module._ResolvedWechatContext(
+    context = wechat_arg_module.ResolvedWechatContext(
         workspace_root=tmp_path / "workspace",
         config_root=tmp_path / "workspace" / "config",
         state_dir=tmp_path / "workspace" / ".dayu" / "wechat-ops",
         execution_options=ExecutionOptions(),
         instance_label="ops",
     )
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     args = parser.parse_args(
         [
             "service",
@@ -333,7 +338,7 @@ def test_build_run_cli_arguments_includes_overrides(tmp_path: Path) -> None:
         ]
     )
 
-    cli_arguments = wechat_main_module._build_run_cli_arguments(args, context)
+    cli_arguments = wechat_runtime_module._build_run_cli_arguments(args, context)
 
     assert cli_arguments[:7] == [
         "run",
@@ -358,7 +363,7 @@ def test_build_run_cli_arguments_includes_overrides(tmp_path: Path) -> None:
 def test_build_run_cli_arguments_persists_non_default_context_delivery_max_attempts(tmp_path: Path) -> None:
     """当 context 已经携带非默认 delivery 重试次数时，应继续写回 run 参数。"""
 
-    context = wechat_main_module._ResolvedWechatContext(
+    context = wechat_arg_module.ResolvedWechatContext(
         workspace_root=tmp_path / "workspace",
         config_root=tmp_path / "workspace" / "config",
         state_dir=tmp_path / "workspace" / ".dayu" / "wechat-ops",
@@ -367,7 +372,7 @@ def test_build_run_cli_arguments_persists_non_default_context_delivery_max_attem
         instance_label="ops",
     )
     args = argparse.Namespace(
-        typing_interval_sec=wechat_main_module.DEFAULT_TYPING_INTERVAL_SEC,
+        typing_interval_sec=wechat_arg_module.DEFAULT_TYPING_INTERVAL_SEC,
         model_name=None,
         temperature=None,
         web_provider=None,
@@ -380,7 +385,7 @@ def test_build_run_cli_arguments_persists_non_default_context_delivery_max_attem
         log_level=None,
     )
 
-    cli_arguments = wechat_main_module._build_run_cli_arguments(args, context)
+    cli_arguments = wechat_runtime_module._build_run_cli_arguments(args, context)
 
     assert "--delivery-max-attempts" in cli_arguments
     assert "5" in cli_arguments
@@ -390,7 +395,7 @@ def test_build_run_cli_arguments_persists_non_default_context_delivery_max_attem
 def test_service_start_requires_install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """验证未安装 service 时不会尝试启动。"""
 
-    identity = wechat_main_module._ResolvedWechatServiceIdentity(
+    identity = wechat_runtime_module.ResolvedWechatServiceIdentity(
         backend="launchd",
         label="com.dayu.wechat.test",
         definition_path=tmp_path / "com.dayu.wechat.test.plist",
@@ -398,11 +403,11 @@ def test_service_start_requires_install(monkeypatch: pytest.MonkeyPatch, tmp_pat
         instance_label="ops",
     )
 
-    monkeypatch.setattr(wechat_main_module, "_resolve_service_identity", lambda _args: identity)
+    monkeypatch.setattr(wechat_service_module, "_resolve_service_identity", lambda _args: identity)
     monkeypatch.setattr(
-        wechat_main_module,
-        "query_service_status",
-        lambda **_kwargs: ServiceStatus(
+        wechat_service_module,
+        "_query_installed_service_status",
+        lambda _identity: ServiceStatus(
             backend=identity.backend,
             label=identity.label,
             definition_path=identity.definition_path,
@@ -411,15 +416,15 @@ def test_service_start_requires_install(monkeypatch: pytest.MonkeyPatch, tmp_pat
         ),
     )
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_service_module,
         "start_service",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("不应启动 service")),
     )
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     args = parser.parse_args(["service", "start"])
 
-    assert wechat_main_module._run_service_start_command(args) == 1
+    assert wechat_service_module._run_service_start_command(args) == 1
 
 
 @pytest.mark.unit
@@ -429,7 +434,7 @@ def test_service_start_returns_running_when_service_already_loaded(
 ) -> None:
     """验证 `service start` 在已运行时不会触发重启。"""
 
-    identity = wechat_main_module._ResolvedWechatServiceIdentity(
+    identity = wechat_runtime_module.ResolvedWechatServiceIdentity(
         backend="launchd",
         label="com.dayu.wechat.test",
         definition_path=tmp_path / "com.dayu.wechat.test.plist",
@@ -438,11 +443,11 @@ def test_service_start_returns_running_when_service_already_loaded(
     )
     logged: list[str] = []
 
-    monkeypatch.setattr(wechat_main_module, "_resolve_service_identity", lambda _args: identity)
+    monkeypatch.setattr(wechat_service_module, "_resolve_service_identity", lambda _args: identity)
     monkeypatch.setattr(
-        wechat_main_module,
-        "query_service_status",
-        lambda **_kwargs: ServiceStatus(
+        wechat_service_module,
+        "_query_installed_service_status",
+        lambda _identity: ServiceStatus(
             backend=identity.backend,
             label=identity.label,
             definition_path=identity.definition_path,
@@ -452,25 +457,25 @@ def test_service_start_returns_running_when_service_already_loaded(
         ),
     )
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_service_module,
         "FileWeChatStateStore",
         lambda _state_dir: (_ for _ in ()).throw(AssertionError("已运行时不应再读取登录态")),
     )
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_service_module,
         "start_service",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("已运行时不应再次启动 service")),
     )
     monkeypatch.setattr(
-        wechat_main_module.Log,
+        wechat_service_module.Log,
         "info",
         lambda message, *, module="APP": logged.append(f"{module}:{message}"),
     )
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     args = parser.parse_args(["service", "start"])
 
-    assert wechat_main_module._run_service_start_command(args) == 0
+    assert wechat_service_module._run_service_start_command(args) == 0
     assert logged == ["APP.WECHAT.MAIN:macOS launchd 服务实例已在运行: ops"]
 
 
@@ -481,7 +486,7 @@ def test_service_start_launchd_loaded_without_pid_still_calls_start(
 ) -> None:
     """验证 launchd 已 bootstrap 但无 pid 时，`service start` 仍会走恢复路径。"""
 
-    identity = wechat_main_module._ResolvedWechatServiceIdentity(
+    identity = wechat_runtime_module.ResolvedWechatServiceIdentity(
         backend="launchd",
         label="com.dayu.wechat.test",
         definition_path=tmp_path / "com.dayu.wechat.test.plist",
@@ -491,18 +496,11 @@ def test_service_start_launchd_loaded_without_pid_still_calls_start(
     printed: list[str] = []
     captured: dict[str, object] = {}
 
-    class _FakeStore:
-        def __init__(self, _state_dir: Path) -> None:
-            self.state_dir = _state_dir
-
-        def load(self) -> WeChatDaemonState:
-            return WeChatDaemonState(bot_token="token-1", base_url="https://ilink.example")
-
-    monkeypatch.setattr(wechat_main_module, "_resolve_service_identity", lambda _args: identity)
+    monkeypatch.setattr(wechat_service_module, "_resolve_service_identity", lambda _args: identity)
     monkeypatch.setattr(
-        wechat_main_module,
-        "query_service_status",
-        lambda **_kwargs: ServiceStatus(
+        wechat_service_module,
+        "_query_installed_service_status",
+        lambda _identity: ServiceStatus(
             backend=identity.backend,
             label=identity.label,
             definition_path=identity.definition_path,
@@ -511,23 +509,23 @@ def test_service_start_launchd_loaded_without_pid_still_calls_start(
             pid=None,
         ),
     )
-    monkeypatch.setattr(wechat_main_module, "FileWeChatStateStore", _FakeStore)
+    monkeypatch.setattr(wechat_service_module, "_has_persisted_wechat_login", lambda _state_dir: True)
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_service_module,
         "start_service",
         lambda **kwargs: captured.update(kwargs),
     )
     monkeypatch.setattr(
-        wechat_main_module.Log,
+        wechat_service_module.Log,
         "info",
         lambda message, *, module="APP": (_ for _ in ()).throw(AssertionError("无 pid 时不应短路成已运行日志")),
     )
     monkeypatch.setattr(builtins, "print", lambda message: printed.append(message))
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     args = parser.parse_args(["service", "start"])
 
-    assert wechat_main_module._run_service_start_command(args) == 0
+    assert wechat_service_module._run_service_start_command(args) == 0
     assert captured == {
         "label": identity.label,
         "definition_path": identity.definition_path,
@@ -540,16 +538,16 @@ def test_service_start_launchd_loaded_without_pid_still_calls_start(
 def test_service_restart_requires_install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """验证未安装 service 时不会尝试重启。"""
 
-    identity = wechat_main_module._ResolvedWechatServiceIdentity(
+    identity = wechat_runtime_module.ResolvedWechatServiceIdentity(
         backend="launchd",
         label="com.dayu.wechat.test",
         definition_path=tmp_path / "com.dayu.wechat.test.plist",
         state_dir=tmp_path / ".wechat",
     )
 
-    monkeypatch.setattr(wechat_main_module, "_resolve_service_identity", lambda _args: identity)
+    monkeypatch.setattr(wechat_service_module, "_resolve_service_identity", lambda _args: identity)
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_service_module,
         "query_service_status",
         lambda **_kwargs: ServiceStatus(
             backend=identity.backend,
@@ -560,22 +558,22 @@ def test_service_restart_requires_install(monkeypatch: pytest.MonkeyPatch, tmp_p
         ),
     )
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_service_module,
         "restart_service",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("不应重启 service")),
     )
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     args = parser.parse_args(["service", "restart"])
 
-    assert wechat_main_module._run_service_restart_command(args) == 1
+    assert wechat_service_module._run_service_restart_command(args) == 1
 
 
 @pytest.mark.unit
 def test_service_restart_restarts_loaded_service(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """验证 `service restart` 会调用 restart_service 并打印重启结果。"""
 
-    identity = wechat_main_module._ResolvedWechatServiceIdentity(
+    identity = wechat_runtime_module.ResolvedWechatServiceIdentity(
         backend="systemd",
         label="com.dayu.wechat.test",
         definition_path=tmp_path / "com.dayu.wechat.test.service",
@@ -585,18 +583,11 @@ def test_service_restart_restarts_loaded_service(monkeypatch: pytest.MonkeyPatch
     printed: list[str] = []
     captured: dict[str, object] = {}
 
-    class _FakeStore:
-        def __init__(self, _state_dir: Path) -> None:
-            self.state_dir = _state_dir
-
-        def load(self) -> WeChatDaemonState:
-            return WeChatDaemonState(bot_token="token-1", base_url="https://ilink.example")
-
-    monkeypatch.setattr(wechat_main_module, "_resolve_service_identity", lambda _args: identity)
+    monkeypatch.setattr(wechat_service_module, "_resolve_service_identity", lambda _args: identity)
     monkeypatch.setattr(
-        wechat_main_module,
-        "query_service_status",
-        lambda **_kwargs: ServiceStatus(
+        wechat_service_module,
+        "_query_installed_service_status",
+        lambda _identity: ServiceStatus(
             backend=identity.backend,
             label=identity.label,
             definition_path=identity.definition_path,
@@ -605,18 +596,18 @@ def test_service_restart_restarts_loaded_service(monkeypatch: pytest.MonkeyPatch
             pid=456,
         ),
     )
-    monkeypatch.setattr(wechat_main_module, "FileWeChatStateStore", _FakeStore)
+    monkeypatch.setattr(wechat_service_module, "_has_persisted_wechat_login", lambda _state_dir: True)
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_service_module,
         "restart_service",
         lambda **kwargs: captured.update(kwargs),
     )
     monkeypatch.setattr(builtins, "print", lambda message: printed.append(message))
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     args = parser.parse_args(["service", "restart"])
 
-    assert wechat_main_module._run_service_restart_command(args) == 0
+    assert wechat_service_module._run_service_restart_command(args) == 0
     assert captured == {
         "label": identity.label,
         "definition_path": identity.definition_path,
@@ -630,7 +621,7 @@ def test_service_install_uses_systemd_backend_on_linux(monkeypatch: pytest.Monke
     """验证 `service install` 在 Linux 上会自动走 systemd backend。"""
 
     captured: dict[str, object] = {}
-    context = wechat_main_module._ResolvedWechatContext(
+    context = wechat_arg_module.ResolvedWechatContext(
         workspace_root=tmp_path,
         config_root=tmp_path / "config",
         state_dir=tmp_path / ".dayu" / "wechat-default",
@@ -645,10 +636,10 @@ def test_service_install_uses_systemd_backend_on_linux(monkeypatch: pytest.Monke
     )
     printed: list[str] = []
 
-    monkeypatch.setattr(wechat_main_module, "_resolve_command_context", lambda _args: context)
-    monkeypatch.setattr(wechat_main_module, "detect_service_backend", lambda: "systemd")
-    monkeypatch.setattr(wechat_main_module, "_resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(wechat_main_module, "_collect_service_environment_variables", lambda _context: {"MIMO_API_KEY": "secret-1"})
+    monkeypatch.setattr(wechat_service_module, "_resolve_command_context", lambda _args: context)
+    monkeypatch.setattr(wechat_service_module, "detect_service_backend", lambda: "systemd")
+    monkeypatch.setattr(wechat_service_module, "_resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(wechat_service_module, "_collect_service_environment_variables", lambda _context: {"MIMO_API_KEY": "secret-1"})
 
     def _fake_build_service_spec(**kwargs) -> ServiceSpec:
         captured["backend"] = kwargs["backend"]
@@ -656,17 +647,17 @@ def test_service_install_uses_systemd_backend_on_linux(monkeypatch: pytest.Monke
         return fake_spec
 
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_service_module,
         "build_service_spec",
         _fake_build_service_spec,
     )
-    monkeypatch.setattr(wechat_main_module, "install_service", lambda spec: captured.setdefault("spec", spec))
+    monkeypatch.setattr(wechat_service_module, "install_service", lambda spec: captured.setdefault("spec", spec))
     monkeypatch.setattr(builtins, "print", lambda message: printed.append(message))
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     args = parser.parse_args(["service", "install"])
 
-    assert wechat_main_module._run_service_install_command(args) == 0
+    assert wechat_service_module._run_service_install_command(args) == 0
     assert captured["backend"] == "systemd"
     assert captured["environment_variables"] == {"MIMO_API_KEY": "secret-1"}
     assert captured["spec"] == fake_spec
@@ -677,7 +668,7 @@ def test_service_install_uses_systemd_backend_on_linux(monkeypatch: pytest.Monke
 def test_service_status_prints_launchd_log_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """验证 `service status` 会打印 macOS 后台日志文件路径。"""
 
-    identity = wechat_main_module._ResolvedWechatServiceIdentity(
+    identity = wechat_runtime_module.ResolvedWechatServiceIdentity(
         backend="launchd",
         label="com.dayu.wechat.test",
         definition_path=tmp_path / "com.dayu.wechat.test.plist",
@@ -692,9 +683,9 @@ def test_service_status_prints_launchd_log_paths(monkeypatch: pytest.MonkeyPatch
         def load(self) -> WeChatDaemonState:
             return WeChatDaemonState(bot_token="token-1", base_url="https://ilink.example")
 
-    monkeypatch.setattr(wechat_main_module, "_resolve_service_identity", lambda _args: identity)
+    monkeypatch.setattr(wechat_service_module, "_resolve_service_identity", lambda _args: identity)
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_service_module,
         "query_service_status",
         lambda **_kwargs: ServiceStatus(
             backend=identity.backend,
@@ -705,13 +696,13 @@ def test_service_status_prints_launchd_log_paths(monkeypatch: pytest.MonkeyPatch
             pid=123,
         ),
     )
-    monkeypatch.setattr(wechat_main_module, "FileWeChatStateStore", _FakeStore)
+    monkeypatch.setattr(wechat_service_module, "FileWeChatStateStore", _FakeStore)
     monkeypatch.setattr(builtins, "print", lambda message: printed.append(message))
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     args = parser.parse_args(["service", "status"])
 
-    assert wechat_main_module._run_service_status_command(args) == 0
+    assert wechat_service_module._run_service_status_command(args) == 0
     assert f"log_stdout: {(tmp_path / '.wechat' / 'logs' / 'launchd.stdout.log').resolve()}" in printed
     assert f"log_stderr: {(tmp_path / '.wechat' / 'logs' / 'launchd.stderr.log').resolve()}" in printed
 
@@ -720,7 +711,7 @@ def test_service_status_prints_launchd_log_paths(monkeypatch: pytest.MonkeyPatch
 def test_service_status_prints_systemd_log_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """验证 `service status` 会打印 Linux journal 查看命令。"""
 
-    identity = wechat_main_module._ResolvedWechatServiceIdentity(
+    identity = wechat_runtime_module.ResolvedWechatServiceIdentity(
         backend="systemd",
         label="com.dayu.wechat.test",
         definition_path=tmp_path / "com.dayu.wechat.test.service",
@@ -735,9 +726,9 @@ def test_service_status_prints_systemd_log_command(monkeypatch: pytest.MonkeyPat
         def load(self) -> WeChatDaemonState:
             return WeChatDaemonState(bot_token="token-1", base_url="https://ilink.example")
 
-    monkeypatch.setattr(wechat_main_module, "_resolve_service_identity", lambda _args: identity)
+    monkeypatch.setattr(wechat_service_module, "_resolve_service_identity", lambda _args: identity)
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_service_module,
         "query_service_status",
         lambda **_kwargs: ServiceStatus(
             backend=identity.backend,
@@ -748,13 +739,13 @@ def test_service_status_prints_systemd_log_command(monkeypatch: pytest.MonkeyPat
             pid=456,
         ),
     )
-    monkeypatch.setattr(wechat_main_module, "FileWeChatStateStore", _FakeStore)
+    monkeypatch.setattr(wechat_service_module, "FileWeChatStateStore", _FakeStore)
     monkeypatch.setattr(builtins, "print", lambda message: printed.append(message))
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     args = parser.parse_args(["service", "status"])
 
-    assert wechat_main_module._run_service_status_command(args) == 0
+    assert wechat_service_module._run_service_status_command(args) == 0
     assert "log_backend: journal" in printed
     assert "log_follow_command: journalctl --user -u com.dayu.wechat.test.service -f" in printed
 
@@ -786,9 +777,9 @@ def test_service_list_only_prints_installed_instances(monkeypatch: pytest.Monkey
             pid=123 if loaded else None,
         )
 
-    monkeypatch.setattr(wechat_main_module, "detect_service_backend", lambda: "launchd")
+    monkeypatch.setattr(wechat_runtime_module, "detect_service_backend", lambda: "launchd")
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_runtime_module,
         "list_installed_service_definitions",
         lambda _backend: (
             InstalledServiceDefinition(
@@ -859,14 +850,14 @@ def test_service_list_only_prints_installed_instances(monkeypatch: pytest.Monkey
             ),
         ),
     )
-    monkeypatch.setattr(wechat_main_module, "query_service_status", _fake_query_service_status)
-    monkeypatch.setattr(wechat_main_module, "FileWeChatStateStore", _FakeStore)
+    monkeypatch.setattr(wechat_runtime_module, "query_service_status", _fake_query_service_status)
+    monkeypatch.setattr(wechat_runtime_module, "FileWeChatStateStore", _FakeStore)
     monkeypatch.setattr(builtins, "print", lambda message: printed.append(message))
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     args = parser.parse_args(["service", "list", "--base", str(tmp_path)])
 
-    assert wechat_main_module._run_service_list_command(args) == 0
+    assert wechat_service_module._run_service_list_command(args) == 0
     assert "instance_label: alpha" in printed
     assert "service: 运行中" in printed
     assert "logged_in: yes" in printed
@@ -879,10 +870,10 @@ def test_service_list_only_prints_installed_instances(monkeypatch: pytest.Monkey
 def test_main_returns_130_on_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
     """验证主入口在 Ctrl+C 时静默返回 130，而不是抛出堆栈。"""
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     logged: list[str] = []
 
-    monkeypatch.setattr(wechat_main_module, "_create_parser", lambda: parser)
+    monkeypatch.setattr(wechat_main_module, "parse_arguments", lambda _argv=None: parser.parse_args(["login"]))
     monkeypatch.setattr(wechat_main_module, "setup_loglevel", lambda _args: None)
     monkeypatch.setattr(
         wechat_main_module,
@@ -904,7 +895,7 @@ def test_wechat_main_helper_functions_cover_noop_services_context_and_daemon_cre
 ) -> None:
     """验证 wechat main 中剩余的 no-op helper 与 daemon/context 组装分支。"""
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     login_args = parser.parse_args(["login", "--base", str(tmp_path)])
     run_args = parser.parse_args(
         [
@@ -917,27 +908,27 @@ def test_wechat_main_helper_functions_cover_noop_services_context_and_daemon_cre
             "4",
         ]
     )
-    context = wechat_main_module._resolve_command_context(login_args)
-    run_context = wechat_main_module._resolve_command_context(run_args)
+    context = wechat_arg_module._resolve_command_context(login_args)
+    run_context = wechat_arg_module._resolve_command_context(run_args)
     created: dict[str, object] = {}
 
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_runtime_module,
         "FileWeChatStateStore",
         lambda state_dir: ("store", state_dir),
     )
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_runtime_module,
         "WeChatDaemon",
         lambda **kwargs: created.setdefault("daemon", kwargs),
     )
 
-    daemon_config = wechat_main_module._build_daemon_config(
+    daemon_config = wechat_runtime_module._build_daemon_config(
         run_args,
         run_context,
         allow_interactive_relogin=False,
     )
-    login_daemon = wechat_main_module._create_login_daemon(login_args, context)
+    login_daemon = wechat_runtime_module._create_login_daemon(login_args, context)
 
     assert context.workspace_root == tmp_path.resolve()
     assert context.config_root == (tmp_path / "config").resolve()
@@ -949,19 +940,19 @@ def test_wechat_main_helper_functions_cover_noop_services_context_and_daemon_cre
     daemon_kwargs = cast(dict[str, object], created["daemon"])
     assert login_daemon == daemon_kwargs
     assert daemon_kwargs["state_store"] == ("store", context.state_dir)
-    assert isinstance(daemon_kwargs["chat_service"], wechat_main_module._NoOpChatService)
-    assert isinstance(daemon_kwargs["reply_delivery_service"], wechat_main_module._NoOpReplyDeliveryService)
+    assert isinstance(daemon_kwargs["chat_service"], wechat_runtime_module.NoOpChatService)
+    assert isinstance(daemon_kwargs["reply_delivery_service"], wechat_runtime_module.NoOpReplyDeliveryService)
     module_file = wechat_main_module.__file__
     assert module_file is not None
-    assert wechat_main_module._resolve_repo_root() == Path(module_file).resolve().parents[2]
+    assert wechat_runtime_module._resolve_repo_root() == Path(module_file).resolve().parents[2]
 
 
 @pytest.mark.unit
 def test_wechat_main_noop_services_raise_for_all_operations() -> None:
     """验证 login 模式下的 no-op service 在误调用时统一抛错。"""
 
-    chat_service = wechat_main_module._NoOpChatService()
-    reply_service = wechat_main_module._NoOpReplyDeliveryService()
+    chat_service = wechat_runtime_module.NoOpChatService()
+    reply_service = wechat_runtime_module.NoOpReplyDeliveryService()
 
     with pytest.raises(RuntimeError, match="ChatService"):
         asyncio.run(chat_service.submit_turn(cast(object, object())))
@@ -990,7 +981,7 @@ def test_prepare_wechat_host_dependencies_runs_unified_startup_recovery(
 ) -> None:
     """WeChat Host runtime 装配后应立即执行统一 startup recovery。"""
 
-    context = wechat_main_module._ResolvedWechatContext(
+    context = wechat_arg_module.ResolvedWechatContext(
         workspace_root=tmp_path,
         config_root=tmp_path / "config",
         state_dir=tmp_path / ".dayu" / "wechat-default",
@@ -1009,29 +1000,29 @@ def test_prepare_wechat_host_dependencies_runs_unified_startup_recovery(
     fake_host = SimpleNamespace(host_marker="wechat-host")
     recover_calls: list[tuple[str, str, str]] = []
 
-    monkeypatch.setattr(wechat_main_module, "prepare_startup_paths", lambda **_kwargs: fake_paths)
-    monkeypatch.setattr(wechat_main_module, "prepare_config_file_resolver", lambda **_kwargs: object())
+    monkeypatch.setattr(wechat_runtime_module, "prepare_startup_paths", lambda **_kwargs: fake_paths)
+    monkeypatch.setattr(wechat_runtime_module, "prepare_config_file_resolver", lambda **_kwargs: object())
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_runtime_module,
         "prepare_config_loader",
         lambda **_kwargs: SimpleNamespace(load_run_config=lambda: SimpleNamespace()),
     )
-    monkeypatch.setattr(wechat_main_module, "prepare_prompt_asset_store", lambda **_kwargs: object())
-    monkeypatch.setattr(wechat_main_module, "prepare_workspace_resources", lambda **_kwargs: fake_workspace)
-    monkeypatch.setattr(wechat_main_module, "prepare_model_catalog", lambda **_kwargs: fake_model_catalog)
+    monkeypatch.setattr(wechat_runtime_module, "prepare_prompt_asset_store", lambda **_kwargs: object())
+    monkeypatch.setattr(wechat_runtime_module, "prepare_workspace_resources", lambda **_kwargs: fake_workspace)
+    monkeypatch.setattr(wechat_runtime_module, "prepare_model_catalog", lambda **_kwargs: fake_model_catalog)
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_runtime_module,
         "prepare_default_execution_options",
         lambda **_kwargs: fake_default_execution_options,
     )
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_runtime_module,
         "prepare_scene_execution_acceptance_preparer",
         lambda **_kwargs: fake_scene_preparer,
     )
-    monkeypatch.setattr(wechat_main_module, "prepare_fins_runtime", lambda **_kwargs: fake_fins_runtime)
+    monkeypatch.setattr(wechat_runtime_module, "prepare_fins_runtime", lambda **_kwargs: fake_fins_runtime)
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_runtime_module,
         "resolve_host_config",
         lambda **_kwargs: SimpleNamespace(
             store_path=tmp_path / "host.sqlite3",
@@ -1039,16 +1030,16 @@ def test_prepare_wechat_host_dependencies_runs_unified_startup_recovery(
             pending_turn_resume_max_attempts=3,
         ),
     )
-    monkeypatch.setattr(wechat_main_module, "Host", lambda **_kwargs: fake_host)
+    monkeypatch.setattr(wechat_runtime_module, "Host", lambda **_kwargs: fake_host)
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_runtime_module,
         "recover_host_startup_state",
         lambda host_admin_service, *, runtime_label, log_module: recover_calls.append(
             (host_admin_service.host.host_marker, runtime_label, log_module)
         ),
     )
 
-    prepared = wechat_main_module._prepare_wechat_host_dependencies(context)
+    prepared = wechat_runtime_module._prepare_wechat_host_dependencies(context)
 
     assert prepared == (
         fake_workspace,
@@ -1067,36 +1058,36 @@ def test_wechat_main_helper_functions_cover_env_identity_parsing_and_signal_clea
 ) -> None:
     """验证环境变量采集、service identity、参数错误与 signal cleanup helper。"""
 
-    context = wechat_main_module._ResolvedWechatContext(
+    context = wechat_arg_module.ResolvedWechatContext(
         workspace_root=tmp_path,
         config_root=tmp_path / "config",
         state_dir=tmp_path / ".wechat",
         execution_options=ExecutionOptions(),
     )
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     args = parser.parse_args(["service", "status", "--base", str(tmp_path)])
     errors: list[str] = []
     removed_signals: list[signal.Signals] = []
 
-    monkeypatch.setattr(wechat_main_module, "ConfigFileResolver", lambda config_root: ("resolver", config_root))
+    monkeypatch.setattr(wechat_runtime_module, "ConfigFileResolver", lambda config_root: ("resolver", config_root))
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_runtime_module,
         "ConfigLoader",
         lambda resolver: SimpleNamespace(collect_referenced_env_vars=lambda: ["MIMO_API_KEY", "EMPTY_ENV"]),
     )
-    monkeypatch.setattr(wechat_main_module.os.environ, "get", lambda name: {
+    monkeypatch.setattr(wechat_runtime_module.os.environ, "get", lambda name: {
         "MIMO_API_KEY": " secret-1 ",
         "EMPTY_ENV": "   ",
     }.get(name))
-    monkeypatch.setattr(wechat_main_module, "detect_service_backend", lambda: "launchd")
-    monkeypatch.setattr(wechat_main_module, "list_installed_service_definitions", lambda _backend: ())
-    monkeypatch.setattr(wechat_main_module, "build_service_label", lambda _state_dir: "com.dayu.wechat.test")
+    monkeypatch.setattr(wechat_runtime_module, "detect_service_backend", lambda: "launchd")
+    monkeypatch.setattr(wechat_runtime_module, "list_installed_service_definitions", lambda _backend: ())
+    monkeypatch.setattr(wechat_runtime_module, "build_service_label", lambda _state_dir: "com.dayu.wechat.test")
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_runtime_module,
         "resolve_service_definition_path",
         lambda label, *, backend: tmp_path / f"{label}.{backend}",
     )
-    monkeypatch.setattr(wechat_main_module.Log, "error", lambda message, **_kwargs: errors.append(str(message)))
+    monkeypatch.setattr(wechat_arg_module.Log, "error", lambda message, **_kwargs: errors.append(str(message)))
 
     class _Loop:
         def remove_signal_handler(self, os_signal: signal.Signals) -> None:
@@ -1104,22 +1095,22 @@ def test_wechat_main_helper_functions_cover_env_identity_parsing_and_signal_clea
             if os_signal == signal.SIGTERM:
                 raise RuntimeError("ignore")
 
-    captured_environment = wechat_main_module._collect_service_environment_variables(context)
-    identity = wechat_main_module._resolve_service_identity(args)
+    captured_environment = wechat_runtime_module._collect_service_environment_variables(context)
+    identity = wechat_runtime_module._resolve_service_identity(args)
 
     assert captured_environment == {"MIMO_API_KEY": "secret-1"}
     assert identity.instance_label == "default"
     assert identity.label == "com.dayu.wechat.test"
     assert identity.definition_path == (tmp_path / "com.dayu.wechat.test.launchd")
     with pytest.raises(SystemExit, match="2"):
-        wechat_main_module._parse_limits_override("{bad json}", field_name="--doc-limits-json")
+        wechat_arg_module._parse_limits_override("{bad json}", field_name="--doc-limits-json")
     with pytest.raises(SystemExit, match="2"):
-        wechat_main_module._parse_limits_override('[1, 2]', field_name="--doc-limits-json")
+        wechat_arg_module._parse_limits_override('[1, 2]', field_name="--doc-limits-json")
     with pytest.raises(SystemExit, match="2"):
-        wechat_main_module._parse_limits_override('{"nested": []}', field_name="--doc-limits-json")
+        wechat_arg_module._parse_limits_override('{"nested": []}', field_name="--doc-limits-json")
     with pytest.raises(SystemExit, match="2"):
-        wechat_main_module._parse_temperature_argument("bad", field_name="--temperature")
-    wechat_main_module._remove_daemon_signal_handlers(_Loop(), [signal.SIGINT, signal.SIGTERM])
+        wechat_arg_module._parse_temperature_argument("bad", field_name="--temperature")
+    wechat_run_module._remove_daemon_signal_handlers(_Loop(), [signal.SIGINT, signal.SIGTERM])
 
     assert any("不是合法 JSON" in message for message in errors)
     assert any("必须是 JSON 对象" in message for message in errors)
@@ -1135,13 +1126,13 @@ def test_resolve_service_identity_prefers_installed_definition_label(
 ) -> None:
     """验证 service 身份解析优先复用已安装 definition 的真实 label。"""
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     args = parser.parse_args(["service", "uninstall", "--base", str(tmp_path)])
     expected_state_dir = (tmp_path / ".dayu" / "wechat-default").resolve()
 
-    monkeypatch.setattr(wechat_main_module, "detect_service_backend", lambda: "launchd")
+    monkeypatch.setattr(wechat_runtime_module, "detect_service_backend", lambda: "launchd")
     monkeypatch.setattr(
-        wechat_main_module,
+        wechat_runtime_module,
         "list_installed_service_definitions",
         lambda _backend: (
             InstalledServiceDefinition(
@@ -1159,9 +1150,9 @@ def test_resolve_service_identity_prefers_installed_definition_label(
             ),
         ),
     )
-    monkeypatch.setattr(wechat_main_module, "build_service_label", lambda _state_dir: "com.dayu.wechat.recomputed")
+    monkeypatch.setattr(wechat_runtime_module, "build_service_label", lambda _state_dir: "com.dayu.wechat.recomputed")
 
-    identity = wechat_main_module._resolve_service_identity(args)
+    identity = wechat_runtime_module._resolve_service_identity(args)
 
     assert identity.instance_label == "default"
     assert identity.state_dir == expected_state_dir
@@ -1176,10 +1167,10 @@ def test_wechat_main_helper_functions_cover_service_dispatch_and_log_levels(
 ) -> None:
     """验证 service stop/uninstall、主命令 dispatch 与日志级别设置。"""
 
-    parser = wechat_main_module._create_parser()
+    parser = wechat_arg_module._create_parser()
     stop_args = parser.parse_args(["service", "stop", "--base", str(tmp_path)])
     uninstall_args = parser.parse_args(["service", "uninstall", "--base", str(tmp_path)])
-    identity = wechat_main_module._ResolvedWechatServiceIdentity(
+    identity = wechat_runtime_module.ResolvedWechatServiceIdentity(
         backend="launchd",
         label="com.dayu.wechat.test",
         definition_path=tmp_path / "com.dayu.wechat.test.plist",
@@ -1190,42 +1181,38 @@ def test_wechat_main_helper_functions_cover_service_dispatch_and_log_levels(
     stop_results = iter([True, False])
     uninstall_results = iter([True, False])
 
-    monkeypatch.setattr(wechat_main_module, "_resolve_service_identity", lambda _args: identity)
-    monkeypatch.setattr(wechat_main_module, "stop_service", lambda **_kwargs: next(stop_results))
-    monkeypatch.setattr(wechat_main_module, "uninstall_service", lambda **_kwargs: next(uninstall_results))
+    monkeypatch.setattr(wechat_service_module, "_resolve_service_identity", lambda _args: identity)
+    monkeypatch.setattr(wechat_service_module, "stop_service", lambda **_kwargs: next(stop_results))
+    monkeypatch.setattr(wechat_service_module, "uninstall_service", lambda **_kwargs: next(uninstall_results))
     monkeypatch.setattr(builtins, "print", lambda message: printed.append(message))
-    monkeypatch.setattr(wechat_main_module.Log, "set_level", lambda level: set_levels.append(level))
+    monkeypatch.setattr(wechat_arg_module.Log, "set_level", lambda level: set_levels.append(level))
 
-    assert wechat_main_module._run_service_stop_command(stop_args) == 0
-    assert wechat_main_module._run_service_stop_command(stop_args) == 0
-    assert wechat_main_module._run_service_uninstall_command(uninstall_args) == 0
-    assert wechat_main_module._run_service_uninstall_command(uninstall_args) == 0
+    assert wechat_service_module._run_service_stop_command(stop_args) == 0
+    assert wechat_service_module._run_service_stop_command(stop_args) == 0
+    assert wechat_service_module._run_service_uninstall_command(uninstall_args) == 0
+    assert wechat_service_module._run_service_uninstall_command(uninstall_args) == 0
 
-    monkeypatch.setattr(wechat_main_module, "_run_service_install_command", lambda _args: 11)
-    monkeypatch.setattr(wechat_main_module, "_run_service_start_command", lambda _args: 12)
-    monkeypatch.setattr(wechat_main_module, "_run_service_restart_command", lambda _args: 13)
-    monkeypatch.setattr(wechat_main_module, "_run_service_stop_command", lambda _args: 14)
-    monkeypatch.setattr(wechat_main_module, "_run_service_status_command", lambda _args: 15)
-    monkeypatch.setattr(wechat_main_module, "_run_service_list_command", lambda _args: 16)
-    monkeypatch.setattr(wechat_main_module, "_run_service_uninstall_command", lambda _args: 17)
+    monkeypatch.setattr(wechat_service_module, "_run_service_install_command", lambda _args: 11)
+    monkeypatch.setattr(wechat_service_module, "_run_service_start_command", lambda _args: 12)
+    monkeypatch.setattr(wechat_service_module, "_run_service_restart_command", lambda _args: 13)
+    monkeypatch.setattr(wechat_service_module, "_run_service_stop_command", lambda _args: 14)
+    monkeypatch.setattr(wechat_service_module, "_run_service_status_command", lambda _args: 15)
+    monkeypatch.setattr(wechat_service_module, "_run_service_list_command", lambda _args: 16)
+    monkeypatch.setattr(wechat_service_module, "_run_service_uninstall_command", lambda _args: 17)
 
-    assert wechat_main_module._run_service_command(SimpleNamespace(service_command="install")) == 11
-    assert wechat_main_module._run_service_command(SimpleNamespace(service_command="start")) == 12
-    assert wechat_main_module._run_service_command(SimpleNamespace(service_command="restart")) == 13
-    assert wechat_main_module._run_service_command(SimpleNamespace(service_command="stop")) == 14
-    assert wechat_main_module._run_service_command(SimpleNamespace(service_command="status")) == 15
-    assert wechat_main_module._run_service_command(SimpleNamespace(service_command="list")) == 16
-    assert wechat_main_module._run_service_command(SimpleNamespace(service_command="uninstall")) == 17
+    assert wechat_service_module.run_service_command(SimpleNamespace(service_command="install")) == 11
+    assert wechat_service_module.run_service_command(SimpleNamespace(service_command="start")) == 12
+    assert wechat_service_module.run_service_command(SimpleNamespace(service_command="restart")) == 13
+    assert wechat_service_module.run_service_command(SimpleNamespace(service_command="stop")) == 14
+    assert wechat_service_module.run_service_command(SimpleNamespace(service_command="status")) == 15
+    assert wechat_service_module.run_service_command(SimpleNamespace(service_command="list")) == 16
+    assert wechat_service_module.run_service_command(SimpleNamespace(service_command="uninstall")) == 17
     with pytest.raises(ValueError, match="未知 service 子命令"):
-        wechat_main_module._run_service_command(SimpleNamespace(service_command="bad"))
+        wechat_service_module.run_service_command(SimpleNamespace(service_command="bad"))
 
-    def _fake_asyncio_run(coro):
-        name = coro.cr_code.co_name
-        coro.close()
-        return {"_run_login_command": 21, "_run_run_command": 22}[name]
-
-    monkeypatch.setattr(wechat_main_module.asyncio, "run", _fake_asyncio_run)
-    monkeypatch.setattr(wechat_main_module, "_run_service_command", lambda _args: 23)
+    monkeypatch.setattr("dayu.wechat.commands.login.run_login_command", lambda _args: 21)
+    monkeypatch.setattr("dayu.wechat.commands.run.run_run_command", lambda _args: 22)
+    monkeypatch.setattr("dayu.wechat.commands.service.run_service_command", lambda _args: 23)
 
     assert wechat_main_module._dispatch_command(SimpleNamespace(command="login")) == 21
     assert wechat_main_module._dispatch_command(SimpleNamespace(command="run")) == 22
@@ -1241,7 +1228,7 @@ def test_wechat_main_helper_functions_cover_service_dispatch_and_log_levels(
         SimpleNamespace(log_level=None, debug=False, verbose=False, info=False, quiet=True),
         SimpleNamespace(log_level=None, debug=False, verbose=False, info=False, quiet=False),
     ):
-        wechat_main_module.setup_loglevel(namespace)
+        wechat_arg_module.setup_loglevel(namespace)
 
     assert printed == [
         "已停止 macOS launchd 服务实例: default",
@@ -1250,10 +1237,10 @@ def test_wechat_main_helper_functions_cover_service_dispatch_and_log_levels(
         "macOS launchd 服务实例尚未安装: default",
     ]
     assert set_levels == [
-        wechat_main_module.LogLevel.DEBUG,
-        wechat_main_module.LogLevel.DEBUG,
-        wechat_main_module.LogLevel.VERBOSE,
-        wechat_main_module.LogLevel.INFO,
-        wechat_main_module.LogLevel.ERROR,
-        wechat_main_module.LogLevel.INFO,
+        wechat_arg_module.LogLevel.DEBUG,
+        wechat_arg_module.LogLevel.DEBUG,
+        wechat_arg_module.LogLevel.VERBOSE,
+        wechat_arg_module.LogLevel.INFO,
+        wechat_arg_module.LogLevel.ERROR,
+        wechat_arg_module.LogLevel.INFO,
     ]

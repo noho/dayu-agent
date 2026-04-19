@@ -48,6 +48,7 @@ from dayu.services.prompt_service import PromptService
 from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
 from dayu.services.write_service import WriteService
 from dayu.services.contracts import WriteRequest
+from dayu.startup.config_file_resolver import resolve_package_assets_path
 from dayu.startup.dependencies import (
     prepare_config_file_resolver,
     prepare_config_loader,
@@ -844,13 +845,7 @@ def setup_write_config(args, paths_config: WorkspaceConfig, running_config: Runn
         if not template_path.is_absolute():
             template_path = (Path.cwd() / template_path).resolve()
     else:
-        workspace_template = paths_config.workspace_dir / "assets" / "定性分析模板.md"
-        if workspace_template.exists():
-            template_path = workspace_template
-        else:
-            from dayu.startup.config_file_resolver import _resolve_package_assets_path
-
-            template_path = _resolve_package_assets_path() / "定性分析模板.md"
+        template_path = _resolve_default_write_template_path(paths_config.workspace_dir)
     if not template_path.exists() or not template_path.is_file():
         Log.error(f"模板文件不存在: {template_path}", module=MODULE)
         raise SystemExit(2)
@@ -872,6 +867,25 @@ def setup_write_config(args, paths_config: WorkspaceConfig, running_config: Runn
         force=raw_force,
         infer=raw_infer,
     )
+
+
+def _resolve_default_write_template_path(workspace_dir: Path) -> Path:
+    """解析默认写作模板路径。
+
+    Args:
+        workspace_dir: 工作区根目录。
+
+    Returns:
+        优先使用工作区模板；若不存在，则返回包内默认模板路径。
+
+    Raises:
+        无。
+    """
+
+    workspace_template = workspace_dir / "assets" / "定性分析模板.md"
+    if workspace_template.exists():
+        return workspace_template
+    return resolve_package_assets_path() / "定性分析模板.md"
 
 
 def _resolve_write_output_dir(*, workspace_dir: Path, ticker: str | None, raw_output: str | None) -> Path:

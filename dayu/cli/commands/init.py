@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 import os
 import platform
 import re
@@ -20,7 +21,7 @@ from argparse import Namespace
 from pathlib import Path
 import urllib.request
 import urllib.error
-from dayu.startup.config_file_resolver import _resolve_package_assets_path, _resolve_package_config_path
+from dayu.startup.config_file_resolver import resolve_package_assets_path, resolve_package_config_path
 
 MODULE = "CLI.INIT"
 
@@ -76,6 +77,14 @@ _HF_MIRROR_URL = "https://hf-mirror.com"
 
 _HF_PROBE_URL = "https://huggingface.co"
 _HF_PROBE_TIMEOUT_SECONDS = 5
+
+_PREWARM_MODULES: tuple[str, ...] = (
+    "dayu.cli.dependency_setup",
+    "dayu.cli.interactive_ui",
+    "dayu.cli.commands.interactive",
+    "dayu.cli.commands.prompt",
+    "dayu.cli.commands.write",
+)
 
 # --------------------------------------------------------------------------- #
 #  环境变量持久化
@@ -221,7 +230,7 @@ def _copy_config(base_dir: Path, *, overwrite: bool) -> Path:
         无。
     """
 
-    src = _resolve_package_config_path()
+    src = resolve_package_config_path()
     dst = (base_dir / "config").resolve()
 
     if dst.exists() and not overwrite:
@@ -249,7 +258,7 @@ def _copy_assets(base_dir: Path, *, overwrite: bool) -> Path:
         无。
     """
 
-    src = _resolve_package_assets_path()
+    src = resolve_package_assets_path()
     dst = (base_dir / "assets").resolve()
 
     if dst.exists() and not overwrite:
@@ -305,49 +314,11 @@ def _run_init_prewarm(*, base_dir: Path, config_dir: Path) -> tuple[bool, str]:
         无。所有异常都会被内部捕获并转成失败结果。
     """
 
+    del base_dir
+    del config_dir
     try:
-        from dayu.cli.dependency_setup import (
-            WorkspaceConfig,
-            _build_chat_service,
-            _build_prompt_service,
-            _build_write_service,
-            _prepare_cli_host_dependencies,
-        )
-        from dayu.execution.options import ExecutionOptions
-
-        workspace_config = WorkspaceConfig(
-            workspace_dir=base_dir,
-            config_root=config_dir,
-            output_dir=(base_dir / "output").resolve(),
-            ticker=None,
-            has_local_filings=False,
-        )
-        (
-            workspace,
-            _default_execution_options,
-            scene_execution_acceptance_preparer,
-            host,
-            fins_runtime,
-        ) = _prepare_cli_host_dependencies(
-            workspace_config=workspace_config,
-            execution_options=ExecutionOptions(),
-        )
-        _build_chat_service(
-            host=host,
-            scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
-            fins_runtime=fins_runtime,
-        )
-        _build_prompt_service(
-            host=host,
-            scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
-            fins_runtime=fins_runtime,
-        )
-        _build_write_service(
-            host=host,
-            workspace=workspace,
-            scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
-            fins_runtime=fins_runtime,
-        )
+        for module_name in _PREWARM_MODULES:
+            importlib.import_module(module_name)
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
     return True, ""
@@ -403,7 +374,7 @@ def _resolve_role_from_package_manifest(manifest_filename: str) -> str | None:
         无。
     """
 
-    pkg_manifests = _resolve_package_config_path() / "prompts" / "manifests"
+    pkg_manifests = resolve_package_config_path() / "prompts" / "manifests"
     pkg_file = pkg_manifests / manifest_filename
     if not pkg_file.exists():
         return None
@@ -703,7 +674,7 @@ def _prompt_huggingface_config() -> list[tuple[str, str]]:
 # --------------------------------------------------------------------------- #
 
 
-def run_init(args: Namespace) -> int:
+def run_init_command(args: Namespace) -> int:
     """执行 ``dayu-cli init`` 子命令。
 
     Args:

@@ -138,6 +138,8 @@ flowchart LR
 - `UI`
   - 负责接入宿主入口，例如 `CLI / Web / FastAPI / WeChat`
   - 在启动期通过 `startup preparation` 拿稳定依赖
+  - `dayu.cli` 当前固定拆成三层：`arg_parsing.py` 只负责参数定义，`main.py` 只负责顶层命令分发，`commands/` 负责各子命令执行；CLI 共享运行时装配真源继续集中在 `dependency_setup.py`
+  - `dayu.wechat` 当前也固定拆成四层：`arg_parsing.py` 只负责参数定义与上下文解析，`runtime.py` 只负责 WeChat 运行时装配与 service helper，`commands/` 负责 `login / run / service` 子命令执行，`main.py` 只负责顶层分发
   - 显式 `new Host(...)`
   - 只向 `Host(...)` 传稳定输入，不显式构造 `SQLiteSessionRegistry`、`SQLiteRunRegistry`、`SQLiteConcurrencyGovernor`、`DefaultScenePreparer`、`DefaultHostExecutor`
   - 显式 `new Service(...)`
@@ -1394,7 +1396,9 @@ sequenceDiagram
 1. `startup/`
 2. `services/`
 3. `host/`
-4. `cli/`、`web/`、`wechat/`
+4. `cli/arg_parsing.py` -> `cli/main.py` -> `cli/commands/`
+5. `wechat/arg_parsing.py` -> `wechat/runtime.py` -> `wechat/commands/` -> `wechat/main.py`
+6. `web/`
 
 对扩展开发者，建议按这个顺序读代码：
 

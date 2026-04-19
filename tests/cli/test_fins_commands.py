@@ -1,4 +1,4 @@
-"""``dayu.cli.fins_commands`` 财报命令构建与执行测试。"""
+"""``dayu.cli.commands.fins`` 财报命令构建与执行测试。"""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from dayu.cli.fins_commands import (
+from dayu.cli.commands.fins import (
     _build_fins_command,
     _consume_fins_stream,
     _format_fins_progress_line,
-    _run_fins_command,
+    run_fins_command,
     _should_log_fins_progress_as_info,
 )
 from dayu.contracts.fins import (
@@ -358,12 +358,12 @@ class TestConsumeFinsStream:
 
 
 # --------------------------------------------------------------------------- #
-#  _run_fins_command
+#  run_fins_command
 # --------------------------------------------------------------------------- #
 
 
 class TestRunFinsCommand:
-    """_run_fins_command 测试。"""
+    """run_fins_command 测试。"""
 
     def test_stream_command_receives_sync_result_raises_runtime_error(self) -> None:
         """流式命令收到同步结果时返回退出码 1（RuntimeError 被捕获）。"""
@@ -392,8 +392,8 @@ class TestRunFinsCommand:
             execution=mock_result,  # stream=True 但返回 FinsResult，触发 RuntimeError
         )
 
-        with patch("dayu.cli.fins_commands._build_fins_ops_service", return_value=mock_service):
-            exit_code = _run_fins_command(args)
+        with patch("dayu.cli.commands.fins._build_fins_ops_service", return_value=mock_service):
+            exit_code = run_fins_command(args)
 
         assert exit_code == 1
 
@@ -421,8 +421,8 @@ class TestRunFinsCommand:
         mock_service = MagicMock()
         mock_service.submit.return_value = MagicMock(execution=mock_result)
 
-        with patch("dayu.cli.fins_commands._build_fins_ops_service", return_value=mock_service):
-            exit_code = _run_fins_command(args)
+        with patch("dayu.cli.commands.fins._build_fins_ops_service", return_value=mock_service):
+            exit_code = run_fins_command(args)
 
         assert exit_code == 0
 
@@ -443,8 +443,8 @@ class TestRunFinsCommand:
         mock_service = MagicMock()
         mock_service.submit.return_value = MagicMock(execution=_fake_stream())
 
-        with patch("dayu.cli.fins_commands._build_fins_ops_service", return_value=mock_service):
-            exit_code = _run_fins_command(args)
+        with patch("dayu.cli.commands.fins._build_fins_ops_service", return_value=mock_service):
+            exit_code = run_fins_command(args)
 
         assert exit_code == 1
 
@@ -452,7 +452,7 @@ class TestRunFinsCommand:
         """构建命令失败时返回退出码 1。"""
         args = argparse.Namespace(command="not_a_fins_command")
 
-        with patch("dayu.cli.fins_commands._build_fins_ops_service", return_value=MagicMock()):
-            exit_code = _run_fins_command(args)
+        with patch("dayu.cli.commands.fins._build_fins_ops_service", return_value=MagicMock()):
+            exit_code = run_fins_command(args)
 
         assert exit_code == 1

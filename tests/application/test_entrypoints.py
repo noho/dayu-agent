@@ -90,7 +90,7 @@ def test_import_dayu_cli_main_keeps_heavy_runtime_modules_lazy() -> None:
             "import json, sys; "
             "import dayu.cli.main; "
             "print(json.dumps({"
-            "\"host_commands\": \"dayu.cli.host_commands\" in sys.modules, "
+            "\"host_commands\": \"dayu.cli.commands.host\" in sys.modules, "
             "\"dependency_setup\": \"dayu.cli.dependency_setup\" in sys.modules, "
             "\"services_package\": \"dayu.services\" in sys.modules, "
             "\"write_service\": \"dayu.services.write_service\" in sys.modules"

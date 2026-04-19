@@ -257,7 +257,7 @@ async def _consume_fins_stream(
     return final_result
 
 
-def _run_fins_command(args: argparse.Namespace) -> int:
+def run_fins_command(args: argparse.Namespace) -> int:
     """执行财报命令并输出结果。
 
     Args:
@@ -288,4 +288,3 @@ def _run_fins_command(args: argparse.Namespace) -> int:
         return 1
     print(format_fins_cli_result(command.name, result))
     return 0
-
