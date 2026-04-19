@@ -108,6 +108,7 @@ dayu-cli init
 4. 自动更新 manifest 中的默认模型为你选择的供应商模型
 5. 可选配置联网检索 API Key（TAVILY / SERPER / FMP）
 6. 自动检测 HuggingFace 官方 Hub 连通性：不可达时默认启用镜像加速（`HF_ENDPOINT`），可达时默认跳过；均可手动选择。可选配置 `HF_TOKEN` 提升下载稳定性。
+7. 首次初始化完成后，自动预热一次 CLI 运行时；若预热失败，不影响工作区初始化成功，但后续首次运行 `prompt` / `interactive` / `write` 时可能更慢。
 
 可选参数：
 

@@ -263,6 +263,96 @@ def _copy_assets(base_dir: Path, *, overwrite: bool) -> Path:
     return dst
 
 
+def _should_run_init_prewarm(
+    *,
+    base_dir: Path,
+    overwrite: bool,
+    main_key_persist_failed: bool,
+) -> bool:
+    """判断当前 `init` 是否应执行首次安装 prewarm。
+
+    Args:
+        base_dir: 工作区根目录。
+        overwrite: 是否显式覆盖初始化。
+        main_key_persist_failed: 主 API Key 是否持久化失败。
+
+    Returns:
+        若属于首次初始化且主 Key 可用，则返回 `True`；否则返回 `False`。
+
+    Raises:
+        无。
+    """
+
+    if overwrite or main_key_persist_failed:
+        return False
+    return not (base_dir / "config").exists()
+
+
+def _run_init_prewarm(*, base_dir: Path, config_dir: Path) -> tuple[bool, str]:
+    """执行 `dayu-cli init` 的首次安装 runtime prewarm。
+
+    该预热只做无副作用的运行时装配，不执行 prompt / interactive / write
+    的真实业务逻辑，用于把首次冷启动成本前移到安装阶段。
+
+    Args:
+        base_dir: 工作区根目录。
+        config_dir: 已复制完成的配置目录。
+
+    Returns:
+        `(success, message)`。成功时 `message` 为空字符串；失败时返回可直接展示给用户的错误摘要。
+
+    Raises:
+        无。所有异常都会被内部捕获并转成失败结果。
+    """
+
+    try:
+        from dayu.cli.dependency_setup import (
+            WorkspaceConfig,
+            _build_chat_service,
+            _build_prompt_service,
+            _build_write_service,
+            _prepare_cli_host_dependencies,
+        )
+        from dayu.execution.options import ExecutionOptions
+
+        workspace_config = WorkspaceConfig(
+            workspace_dir=base_dir,
+            config_root=config_dir,
+            output_dir=(base_dir / "output").resolve(),
+            ticker=None,
+            has_local_filings=False,
+        )
+        (
+            workspace,
+            _default_execution_options,
+            scene_execution_acceptance_preparer,
+            host,
+            fins_runtime,
+        ) = _prepare_cli_host_dependencies(
+            workspace_config=workspace_config,
+            execution_options=ExecutionOptions(),
+        )
+        _build_chat_service(
+            host=host,
+            scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
+            fins_runtime=fins_runtime,
+        )
+        _build_prompt_service(
+            host=host,
+            scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
+            fins_runtime=fins_runtime,
+        )
+        _build_write_service(
+            host=host,
+            workspace=workspace,
+            scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
+            fins_runtime=fins_runtime,
+        )
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    return True, ""
+
+
 # --------------------------------------------------------------------------- #
 #  Manifest 默认模型替换
 # --------------------------------------------------------------------------- #
@@ -628,6 +718,11 @@ def run_init(args: Namespace) -> int:
 
     base_dir = Path(args.base).resolve()
     overwrite: bool = getattr(args, "overwrite", False)
+    should_run_prewarm = _should_run_init_prewarm(
+        base_dir=base_dir,
+        overwrite=overwrite,
+        main_key_persist_failed=False,
+    )
 
     # 1. 复制配置
     config_dir = _copy_config(base_dir, overwrite=overwrite)
@@ -684,6 +779,18 @@ def run_init(args: Namespace) -> int:
             search_persist_failed = True
         display = value if key == "HF_ENDPOINT" else f"{value[:4]}***"
         print(f"✓ {key} 已配置: {display}")
+
+    if should_run_prewarm and not main_key_persist_failed:
+        print("\n正在预热 CLI 运行时，请稍候...")
+        prewarm_success, prewarm_message = _run_init_prewarm(
+            base_dir=base_dir,
+            config_dir=config_dir,
+        )
+        if prewarm_success:
+            print("✓ CLI 运行时预热完成")
+        else:
+            print(f"⚠️  CLI 运行时预热失败: {prewarm_message}")
+            print("   不影响当前工作区初始化成功；后续首次运行 prompt / interactive / write 时可能更慢。")
 
     # 6. 完成提示
     print(f"\n✓ 工作区已初始化: {base_dir}")
