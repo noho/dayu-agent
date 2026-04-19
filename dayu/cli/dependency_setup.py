@@ -822,7 +822,7 @@ def setup_write_config(args, paths_config: WorkspaceConfig, running_config: Runn
     """
 
     raw_output = getattr(args, "output", None)
-    raw_template = getattr(args, "template", "./定性分析模板.md")
+    raw_template = getattr(args, "template", None)
     raw_write_max_retries = int(getattr(args, "write_max_retries", 2))
     raw_resume = bool(getattr(args, "resume", True))
     raw_web_provider = getattr(args, "web_provider", None)
@@ -839,9 +839,18 @@ def setup_write_config(args, paths_config: WorkspaceConfig, running_config: Runn
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    template_path = Path(raw_template).expanduser()
-    if not template_path.is_absolute():
-        template_path = (Path.cwd() / template_path).resolve()
+    if raw_template is not None:
+        template_path = Path(raw_template).expanduser()
+        if not template_path.is_absolute():
+            template_path = (Path.cwd() / template_path).resolve()
+    else:
+        workspace_template = paths_config.workspace_dir / "assets" / "定性分析模板.md"
+        if workspace_template.exists():
+            template_path = workspace_template
+        else:
+            from dayu.startup.config_file_resolver import _resolve_package_assets_path
+
+            template_path = _resolve_package_assets_path() / "定性分析模板.md"
     if not template_path.exists() or not template_path.is_file():
         Log.error(f"模板文件不存在: {template_path}", module=MODULE)
         raise SystemExit(2)

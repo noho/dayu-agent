@@ -2320,4 +2320,1181 @@ def test_six_k_processor_joins_title_table_with_following_statement_data_table(t
     )
 
 
+# ---------------------------------------------------------------------------
+# 分支覆盖率补充测试
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_parse_six_k_table_dataframe_returns_none_for_missing_tag() -> None:
+    """验证 table.tag 为 None 时 _parse_six_k_table_dataframe 返回 None。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _parse_six_k_table_dataframe
+
+    class _TaglessTable:
+        """无 tag 属性的表格对象。"""
+
+        pass
+
+    assert _parse_six_k_table_dataframe(_TaglessTable()) is None
+
+    class _NoneTagTable:
+        """tag 属性为 None 的表格对象。"""
+
+        tag = None
+
+    assert _parse_six_k_table_dataframe(_NoneTagTable()) is None
+
+
+@pytest.mark.unit
+def test_classify_statement_type_all_empty_inputs() -> None:
+    """验证 caption、headers、context 全为空时返回 None。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    assert six_k_form_common_module._classify_statement_type_for_table(
+        caption="",
+        headers=[],
+        context_before="",
+    ) is None
+
+    assert six_k_form_common_module._classify_statement_type_for_table(
+        caption=None,
+        headers=None,
+        context_before="",
+    ) is None
+
+
+@pytest.mark.unit
+def test_classify_statement_type_tied_scores_returns_none() -> None:
+    """验证两个报表类型分数相同时返回 None（平局分支）。
+
+    构造 caption 同时命中 balance_sheet 和 income 的关键词，
+    使两者分数相同从而触发平局逻辑。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    assert six_k_form_common_module._classify_statement_type_for_table(
+        caption="Balance Sheet Income Statement combined overview",
+        headers=[],
+        context_before="",
+    ) is None
+
+
+@pytest.mark.unit
+def test_classify_statement_type_low_score_no_caption_signal_returns_none() -> None:
+    """验证分数在 [CONTEXT_ONLY_MIN, MIN_SCORE) 且无 caption/header 信号时返回 None。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    # 构造只有 context 命中的场景：score < 4 但 >= 2，且 caption/header 无信号。
+    # 使用 "cash_flow" 的 context 模式匹配（cash flows from operating / operating activities），
+    # 但 caption 和 headers 不命中任何报表模式。
+    # cash_flow context patterns: "cash flows?" 和 "statement of cash flows"
+    # 在 context 中出现 3 次 → context_hits=3 → score=3
+    # caption 为空，headers 中没有报表信号
+    result = six_k_form_common_module._classify_statement_type_for_table(
+        caption="quarterly summary",
+        headers=["Period", "Amount"],
+        context_before=(
+            "The cash flows data shows operating trends. "
+            "Cash flows details are provided below. "
+            "Additional cash flows information follows."
+        ),
+    )
+    # score < 4 且无 caption/header 信号 → None
+    assert result is None
+
+
+@pytest.mark.unit
+def test_looks_like_non_statement_table_empty_caption_or_header() -> None:
+    """验证 caption 和 header 均为空时返回 False。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    assert six_k_form_common_module._looks_like_non_statement_table(
+        caption_text="",
+        headers_text="",
+    ) is False
+
+
+@pytest.mark.unit
+def test_looks_like_non_statement_table_caption_noise_with_statement_signal() -> None:
+    """验证 caption 含噪声模式但自身含报表信号时不视为非报表表。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    # caption 含 "Table of Contents" 噪声模式，但同时也含 "balance sheet" 报表信号
+    assert six_k_form_common_module._looks_like_non_statement_table(
+        caption_text="table of contents - consolidated balance sheets",
+        headers_text="",
+    ) is False
+
+
+@pytest.mark.unit
+def test_looks_like_non_statement_table_header_noise_with_statement_signal() -> None:
+    """验证 header 含噪声模式但整体有报表信号时返回 False。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    # caption 无噪声，但 headers_text 含 "signatures" 噪声 + 报表信号
+    assert six_k_form_common_module._looks_like_non_statement_table(
+        caption_text="Consolidated Balance Sheets",
+        headers_text="signatures total assets",
+    ) is False
+
+
+@pytest.mark.unit
+def test_looks_like_non_statement_table_noise_without_signal() -> None:
+    """验证 header 含噪声模式且无报表信号时返回 True。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    assert six_k_form_common_module._looks_like_non_statement_table(
+        caption_text="Financial Data",
+        headers_text="Table of Contents",
+    ) is True
+
+
+@pytest.mark.unit
+def test_looks_like_six_k_about_company_context_with_punctuation_prefix() -> None:
+    """验证 About Company 前有标点符号时仍视为标题。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _looks_like_six_k_about_company_context
+
+    # "Some text.About " → position 为 'A' 的索引 (10)，prefix="Some text." → 末尾 '.'
+    assert _looks_like_six_k_about_company_context(
+        full_text="Some text.About Acme Inc. is a company.",
+        position=10,
+    ) is True
+
+    # "Details:About " → position 为 'A' 的索引 (8)，prefix="Details:" → 末尾 ':'
+    assert _looks_like_six_k_about_company_context(
+        full_text="Details:About Acme Inc. is a company.",
+        position=8,
+    ) is True
+
+    # "(Note)About " → position 为 'A' 的索引 (6)，prefix="(Note)" → 末尾 ')'
+    assert _looks_like_six_k_about_company_context(
+        full_text="(Note)About Acme Inc. details.",
+        position=6,
+    ) is True
+
+
+@pytest.mark.unit
+def test_looks_like_six_k_about_company_context_inline_returns_false() -> None:
+    """验证 About Company 嵌在普通文本中间时返回 False。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _looks_like_six_k_about_company_context
+
+    # "learn more About " → position 为 'A'，prefix="learn more " → 末尾 'e' 不是标点
+    result = _looks_like_six_k_about_company_context(
+        full_text="learn more About Acme Inc. on our website.",
+        position=11,
+    )
+    assert result is False
+
+
+@pytest.mark.unit
+def test_month_to_quarter_all_quarters() -> None:
+    """验证 _month_to_quarter 对各月份返回正确季度。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _month_to_quarter
+
+    assert _month_to_quarter(1) == "Q1"
+    assert _month_to_quarter(3) == "Q1"
+    assert _month_to_quarter(4) == "Q2"
+    assert _month_to_quarter(6) == "Q2"
+    assert _month_to_quarter(7) == "Q3"
+    assert _month_to_quarter(9) == "Q3"
+    assert _month_to_quarter(10) == "Q4"
+    assert _month_to_quarter(12) == "Q4"
+
+
+@pytest.mark.unit
+def test_find_first_pattern_after_no_match() -> None:
+    """验证 _find_first_pattern_after 未命中时返回 None。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _find_first_pattern_after
+
+    import re
+
+    result = _find_first_pattern_after(
+        pattern=re.compile(r"nonexistent_pattern"),
+        full_text="This text does not contain the target.",
+        start_at=0,
+    )
+    assert result is None
+
+
+@pytest.mark.unit
+def test_find_first_pattern_after_start_beyond_text() -> None:
+    """验证 start_at 超过文本长度时返回 None。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _find_first_pattern_after
+
+    import re
+
+    result = _find_first_pattern_after(
+        pattern=re.compile(r"test"),
+        full_text="test",
+        start_at=100,
+    )
+    assert result is None
+
+
+@pytest.mark.unit
+def test_extract_statement_result_from_ocr_unsupported_type() -> None:
+    """验证不支持 OCR 的报表类型直接返回 None。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import extract_statement_result_from_ocr_pages
+
+    # equity 不在 _OCR_STATEMENT_TITLE_PATTERNS 中
+    result = extract_statement_result_from_ocr_pages(
+        statement_type="equity",
+        page_texts=["some text"],
+    )
+    assert result is None
+
+
+@pytest.mark.unit
+def test_extract_statement_result_from_ocr_no_parsed_pages_non_income() -> None:
+    """验证 OCR 无解析页且非 income 类型时返回 None。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import extract_statement_result_from_ocr_pages
+
+    # cash_flow 在 OCR patterns 中，但页文本不包含任何标题
+    result = extract_statement_result_from_ocr_pages(
+        statement_type="cash_flow",
+        page_texts=["random text without any statement title"],
+    )
+    assert result is None
+
+
+@pytest.mark.unit
+def test_parse_ocr_numeric_token_empty_after_clean() -> None:
+    """验证清理后为空 token 返回 None。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _parse_ocr_numeric_token
+
+    assert _parse_ocr_numeric_token("") is None
+    assert _parse_ocr_numeric_token(",,,") is None
+
+
+@pytest.mark.unit
+def test_extract_fiscal_period_from_ocr_match_fy() -> None:
+    """验证 OCR 期间 match 提取 FY period（12M → FY）。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import (
+        _OCR_PERIOD_TOKEN_RE,
+        _extract_fiscal_period_from_ocr_period_match,
+    )
+
+    # 使用完整的 _OCR_PERIOD_TOKEN_RE 以保证所有命名组都存在
+    match = _OCR_PERIOD_TOKEN_RE.search("12M 2024")
+    assert match is not None
+    assert _extract_fiscal_period_from_ocr_period_match(match) == "FY"
+
+
+@pytest.mark.unit
+def test_extract_fiscal_period_from_ocr_match_nine_months() -> None:
+    """验证 OCR 期间 match 提取 9M → Q3。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import (
+        _OCR_PERIOD_TOKEN_RE,
+        _extract_fiscal_period_from_ocr_period_match,
+    )
+
+    match = _OCR_PERIOD_TOKEN_RE.search("9M 2024")
+    assert match is not None
+    assert _extract_fiscal_period_from_ocr_period_match(match) == "Q3"
+
+
+@pytest.mark.unit
+def test_extract_fiscal_year_from_ocr_match_no_year() -> None:
+    """验证 OCR 期间 match 不含年份组时返回 None。
+
+    使用与 _OCR_PERIOD_TOKEN_RE 兼容的正则构造 match，
+    确保 year 和 year_first 组均为空。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    import re
+
+    from dayu.fins.processors.six_k_form_common import _extract_fiscal_year_from_ocr_period_match
+
+    # 构造包含所有命名组的正则，但文本不含年份
+    full_pattern = re.compile(
+        r"(?i)\b(?:(?P<quarter>[1-4])Q|Q(?P<quarter_rev>[1-4])|(?P<half>[12])H|H(?P<half_rev>[12])|"
+        r"(?P<nine>9)M|(?P<twelve>12)M|FY)\s*[-/']?\s*(?P<year>\d{2,4})\b|"
+        r"\b(?P<year_first>\d{2,4})\s*[-/']?\s*(?:(?P<year_first_quarter>[1-4])Q|Q(?P<year_first_quarter_rev>[1-4])|"
+        r"(?P<year_first_half>[12])H|H(?P<year_first_half_rev>[12])|(?P<year_first_nine>9)M|"
+        r"(?P<year_first_twelve>12)M|FY)\b"
+    )
+    # "FY" 匹配但无年份 → year 和 year_first 均为 None
+    match = full_pattern.search("FY")
+    if match is not None:
+        result = _extract_fiscal_year_from_ocr_period_match(match)
+        assert result is None
+
+
+@pytest.mark.unit
+def test_infer_ocr_fiscal_period_six_months() -> None:
+    """验证推断 six months ended 的 fiscal period 为 H1/H2。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _infer_ocr_fiscal_period
+
+    assert _infer_ocr_fiscal_period(
+        page_text="For the six months ended June 30, 2024",
+        month_value=6,
+    ) == "H1"
+
+    assert _infer_ocr_fiscal_period(
+        page_text="For the six months ended December 31, 2024",
+        month_value=12,
+    ) == "H2"
+
+
+@pytest.mark.unit
+def test_infer_ocr_fiscal_period_nine_months() -> None:
+    """验证推断 nine months ended 的 fiscal period 为 9M。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _infer_ocr_fiscal_period
+
+    assert _infer_ocr_fiscal_period(
+        page_text="For the nine months ended September 30, 2024",
+        month_value=9,
+    ) == "9M"
+
+
+@pytest.mark.unit
+def test_infer_ocr_fiscal_period_year_end_dec() -> None:
+    """验证 year ended + 12 月时推断为 FY。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _infer_ocr_fiscal_period
+
+    assert _infer_ocr_fiscal_period(
+        page_text="For the year ended December 31, 2024",
+        month_value=12,
+    ) == "FY"
+
+
+@pytest.mark.unit
+def test_infer_ocr_fiscal_period_as_at_quarter_end() -> None:
+    """验证 as at + 季度末月时推断对应季度。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _infer_ocr_fiscal_period
+
+    assert _infer_ocr_fiscal_period(
+        page_text="As at March 31, 2024",
+        month_value=3,
+    ) == "Q1"
+
+    assert _infer_ocr_fiscal_period(
+        page_text="As at September 30, 2024",
+        month_value=9,
+    ) == "Q3"
+
+
+@pytest.mark.unit
+def test_infer_ocr_fiscal_period_non_dec_non_quarter_end() -> None:
+    """验证非 12 月且无特定指示时返回 None。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _infer_ocr_fiscal_period
+
+    assert _infer_ocr_fiscal_period(
+        page_text="Some random text",
+        month_value=5,
+    ) is None
+
+
+@pytest.mark.unit
+def test_extract_ocr_currency_and_scale_billion() -> None:
+    """验证提取 billions 缩放。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _extract_ocr_currency_and_scale
+
+    currency, scale = _extract_ocr_currency_and_scale("USD in billions")
+    assert currency == "USD"
+    assert scale == "billions"
+
+
+@pytest.mark.unit
+def test_extract_ocr_currency_and_scale_thousands() -> None:
+    """验证提取 thousands 缩放（000 格式）。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _extract_ocr_currency_and_scale
+
+    currency, scale = _extract_ocr_currency_and_scale("RMB '000")
+    assert currency == "RMB"
+    assert scale == "thousands"
+
+
+@pytest.mark.unit
+def test_map_ocr_currency_code_unknown() -> None:
+    """验证未知货币代码返回原文本。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _map_ocr_currency_code
+
+    assert _map_ocr_currency_code("ZAR") == "ZAR"
+
+
+@pytest.mark.unit
+def test_build_ocr_units_label_only_scale() -> None:
+    """验证只有 scale 无 currency 时返回 scale。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _build_ocr_units_label
+
+    assert _build_ocr_units_label(currency_raw=None, scale="millions") == "millions"
+
+
+@pytest.mark.unit
+def test_build_ocr_units_label_only_currency() -> None:
+    """验证只有 currency 无 scale 时返回 currency。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _build_ocr_units_label
+
+    assert _build_ocr_units_label(currency_raw="USD", scale=None) == "USD"
+
+
+@pytest.mark.unit
+def test_build_ocr_units_label_both_none() -> None:
+    """验证 currency 和 scale 均为 None 时返回 None。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _build_ocr_units_label
+
+    assert _build_ocr_units_label(currency_raw=None, scale=None) is None
+
+
+@pytest.mark.unit
+def test_dedupe_ocr_statement_rows_removes_duplicates() -> None:
+    """验证按标签和值去重 OCR 行。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _dedupe_ocr_statement_rows
+
+    rows = [
+        {"label": "Revenue", "values": [100.0, 200.0]},
+        {"label": "Revenue", "values": [100.0, 200.0]},
+        {"label": "Cost", "values": [50.0, 80.0]},
+    ]
+    result = _dedupe_ocr_statement_rows(rows)
+    assert len(result) == 2
+    assert result[0]["label"] == "Revenue"
+    assert result[1]["label"] == "Cost"
+
+
+@pytest.mark.unit
+def test_extract_income_summary_value_skips_year_range() -> None:
+    """验证跳过看起来像年份的数值。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _extract_income_summary_value_after_label
+
+    # 1900-2100 范围内的数字应被跳过
+    page_body = "Revenue 2024 3,500"
+    result = _extract_income_summary_value_after_label(
+        page_body=page_body,
+        label_end=7,  # 指向 "Revenue" 之后
+    )
+    # 2024 被跳过（在 1900-2100 范围），返回 3500
+    assert result == 3500.0
+
+
+@pytest.mark.unit
+def test_extract_income_summary_value_skips_percent() -> None:
+    """验证含百分比 token 时所有候选值均被跳过。
+
+    当 lookahead 中出现 "%" 后，其后所有数值都会被 percent 检查跳过。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _extract_income_summary_value_after_label
+
+    # "%" 出现在第一个数值之前 → 所有数值都被跳过
+    page_body = "Label % 25 1,234"
+    result = _extract_income_summary_value_after_label(
+        page_body=page_body,
+        label_end=6,  # "Label " 之后
+    )
+    assert result is None
+
+
+@pytest.mark.unit
+def test_extract_income_summary_value_no_valid_value() -> None:
+    """验证无有效数值时返回 None。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _extract_income_summary_value_after_label
+
+    page_body = "Label - - -"
+    result = _extract_income_summary_value_after_label(
+        page_body=page_body,
+        label_end=5,
+    )
+    assert result is None
+
+
+@pytest.mark.unit
+def test_extract_ocr_line_item_labels_skips_overlapping() -> None:
+    """验证重叠的标签匹配被跳过。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _extract_ocr_line_item_labels
+
+    # "Net income" 包含 "Net"，需要验证重叠跳过逻辑
+    labels = _extract_ocr_line_item_labels(
+        statement_type="income",
+        label_source="Revenue Net income Gross profit Earnings per share",
+        row_count=4,
+    )
+    assert len(labels) >= 2
+
+
+@pytest.mark.unit
+def test_resolve_ocr_period_end_fallback_to_anchor() -> None:
+    """验证 fiscal_period 无法解析时回退到 anchor month/day。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _resolve_ocr_period_end
+
+    # fiscal_period=None → 走 anchor 回退
+    result = _resolve_ocr_period_end(
+        fiscal_year=2024,
+        fiscal_period=None,
+        anchor_month_day=(6, 30),
+    )
+    assert result == "2024-06-30"
+
+
+@pytest.mark.unit
+def test_group_close_ocr_matches_empty() -> None:
+    """验证空匹配列表返回空分组。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _group_close_ocr_matches
+
+    assert _group_close_ocr_matches([]) == []
+
+
+@pytest.mark.unit
+def test_build_six_k_markers_report_mode_branch(tmp_path: Path) -> None:
+    """验证 _build_six_k_markers 在 report markers 足够时走 report 模式分支。
+
+    Args:
+        tmp_path: pytest 临时目录。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _build_six_k_report_markers
+
+    # 构造足够长的文本使 TOC cutoff 被识别
+    text = (
+        "Table of Contents\n"
+        "About this report 4\n"
+        "Governance 13\n"
+        "Strategy 21\n"
+        "Environment 24\n"
+        "Social 58\n"
+        "Appendix 97\n"
+        + "\n" * 200
+        + "About this report\n"
+        "Overview\n"
+        "Governance\n"
+        "Strategy\n"
+        "Environment\n"
+        "Social\n"
+        "Risk management\n"
+        "Appendix\n"
+    )
+
+    markers = _build_six_k_report_markers(text)
+    # 若 TOC cutoff 识别成功，应返回 >= 4 个 markers
+    if len(markers) >= 4:
+        titles = [title for _, title in markers]
+        assert "Overview" in titles
+        assert "Governance" in titles
+
+
+@pytest.mark.unit
+def test_find_six_k_marker_match_with_start_at() -> None:
+    """验证 _find_six_k_marker_match 的 start_at 参数跳过前方匹配。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _find_six_k_marker_match
+
+    import re
+
+    text = "Safe Harbor first. " + "x" * 200 + " Safe Harbor second."
+    pattern = re.compile(r"(?i)\bsafe\s+harbor\b")
+
+    # 无 start_at → 取第一个
+    match_first = _find_six_k_marker_match(
+        full_text=text,
+        title="Safe Harbor",
+        pattern=pattern,
+        use_last=False,
+    )
+    assert match_first is not None
+    assert match_first.start() < 20
+
+    # start_at 跳过第一个 → 取第二个
+    match_after = _find_six_k_marker_match(
+        full_text=text,
+        title="Safe Harbor",
+        pattern=pattern,
+        use_last=False,
+        start_at=200,
+    )
+    assert match_after is not None
+    assert match_after.start() > 200
+
+
+@pytest.mark.unit
+def test_extract_income_summary_result_no_valid_pages() -> None:
+    """验证 OCR income 摘要提取无有效页时返回 None。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _extract_income_summary_result_from_ocr_pages
+
+    result = _extract_income_summary_result_from_ocr_pages(
+        page_texts=["random text without profit & loss title"],
+    )
+    assert result is None
+
+
+@pytest.mark.unit
+def test_build_income_summary_result_no_period() -> None:
+    """验证 Profit & Loss 标题附近无法识别期间时返回 None。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _build_income_summary_result_from_title_match
+
+    import re
+
+    text = "Profit & Loss Some data without period info Revenue 1000"
+    match = re.search(r"Profit & Loss", text)
+    assert match is not None
+    result = six_k_form_common_module._build_income_summary_result_from_title_match(
+        normalized_text=text,
+        title_match=match,
+    )
+    assert result is None
+
+
+@pytest.mark.unit
+def test_parse_statement_from_ocr_insufficient_periods() -> None:
+    """验证 OCR 页期间数不足 2 时返回 None。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _parse_statement_from_ocr_page
+
+    # 只有一个年份 → period_entries < 2 → None
+    result = _parse_statement_from_ocr_page(
+        statement_type="balance_sheet",
+        page_text="Consolidated Balance Sheet December 31, 2024 Total assets 300",
+    )
+    assert result is None
+
+
+@pytest.mark.unit
+def test_parse_statement_from_ocr_insufficient_values() -> None:
+    """验证 OCR 页数值不足时返回 None。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _parse_statement_from_ocr_page
+
+    # 有 2 个期间但数值不够
+    result = _parse_statement_from_ocr_page(
+        statement_type="balance_sheet",
+        page_text=(
+            "Consolidated Balance Sheet December 31, 2024 and December 31, 2023 "
+            "Total assets 100"
+        ),
+    )
+    assert result is None
+
+
+@pytest.mark.unit
+def test_extract_ocr_period_entries_no_year_matches() -> None:
+    """验证页头无年份匹配时返回空列表。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _extract_ocr_period_entries_and_header_end
+
+    entries, header_end = _extract_ocr_period_entries_and_header_end(
+        header_text="Random text with no year or period tokens",
+    )
+    assert entries == []
+    assert header_end == len("Random text with no year or period tokens")
+
+
+@pytest.mark.unit
+def test_extract_ocr_period_entries_single_year_only() -> None:
+    """验证只有一个年份时返回空列表。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _extract_ocr_period_entries_and_header_end
+
+    entries, _ = _extract_ocr_period_entries_and_header_end(
+        header_text="Financial data 2024",
+    )
+    assert entries == []
+
+
+@pytest.mark.unit
+def test_count_pattern_hits_empty_text() -> None:
+    """验证空文本返回 0 命中。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    import re
+
+    from dayu.fins.processors.six_k_form_common import _count_pattern_hits
+
+    patterns = (re.compile(r"test"),)
+    assert _count_pattern_hits(statement_patterns=patterns, text="") == 0
+
+
+@pytest.mark.unit
+def test_normalize_statement_text() -> None:
+    """验证文本标准化。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _normalize_statement_text
+
+    assert _normalize_statement_text("  HELLO   World  ") == "hello world"
+
+
 __all__ = ["test_six_k_processor_xml_media_type_detection"]

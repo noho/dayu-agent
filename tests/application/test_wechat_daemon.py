@@ -1,5 +1,9 @@
 """WeChat daemon 测试。"""
 
+# pyright: reportOptionalSubscript=false, reportCallIssue=false
+# 原因：iLink API 返回嵌套 JSON 结构，逐层 subscript 产生的 union 类型在 pyright 下
+# 无法自动收窄；测试仅做断言，不需要严格的 subscript 类型推导。
+
 from __future__ import annotations
 
 import asyncio
@@ -7,13 +11,14 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import threading
-from typing import Any, AsyncIterator, Iterator, Mapping
+from typing import AsyncIterator, Iterator, Mapping
 
 import pytest
 
 import dayu.state_dir_lock as state_dir_lock_module
 import dayu.wechat.daemon as wechat_daemon_module
 from dayu.contracts.events import AppEvent, AppEventType
+from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.contracts.reply_outbox import ReplyOutboxState
 from dayu.host.host import Host
 from dayu.host.reply_outbox_store import InMemoryReplyOutboxStore
@@ -28,9 +33,17 @@ from dayu.services.contracts import (
 )
 from dayu.wechat.daemon import (
     _AsyncWeChatStateStoreAdapter,
+    _build_wechat_delivery_context,
     _extract_message_text,
+    _format_log_text_preview,
+    _format_wechat_reply_text,
+    _is_retryable_delivery_error,
+    _parse_int_field,
+    _rebuild_wechat_delivery_context,
+    _resolve_chat_key,
     WeChatDaemon,
     WeChatDaemonConfig,
+    WeChatReply,
     WeChatReplyBuilder,
 )
 from dayu.wechat.ilink_client import IlinkApiError, QRCodeLoginStatus, QRCodeLoginTicket
@@ -45,11 +58,22 @@ from tests.application.conftest import StubHostExecutor, StubRunRegistry, StubSe
 _CREATED_DAEMONS: list[WeChatDaemon] = []
 
 
-def _build_daemon(**kwargs: Any) -> WeChatDaemon:
+def _build_daemon(
+    *,
+    chat_service: _FakeChatService | _FakeResumableChatService | _OrderedResumableChatService | _FailingResumeChatService,
+    state_store: FileWeChatStateStore,
+    client: _FakeIlinkClient | _BusinessFailingIlinkClient | _TransientFailingIlinkClient,
+    reply_delivery_service: ReplyDeliveryService | None = None,
+    config: WeChatDaemonConfig | None = None,
+) -> WeChatDaemon:
     """创建并登记测试用 daemon，便于在测试结束后统一关闭。
 
     Args:
-        **kwargs: 传给 WeChatDaemon 的构造参数。
+        chat_service: 聊天服务桩。
+        state_store: 状态仓储。
+        client: iLink 客户端桩。
+        reply_delivery_service: 可选回复投递服务。
+        config: 可选 daemon 配置。
 
     Returns:
         已登记的 daemon 实例。
@@ -58,7 +82,13 @@ def _build_daemon(**kwargs: Any) -> WeChatDaemon:
         无。
     """
 
-    daemon = WeChatDaemon(**kwargs)
+    daemon = WeChatDaemon(
+        chat_service=chat_service,
+        state_store=state_store,
+        client=client,
+        reply_delivery_service=reply_delivery_service,
+        config=config or WeChatDaemonConfig(),
+    )
     _CREATED_DAEMONS.append(daemon)
     return daemon
 
@@ -246,7 +276,7 @@ class _FakeIlinkClient:
     def __init__(
         self,
         *,
-        updates_payloads: list[dict[str, Any]] | None = None,
+        updates_payloads: list[dict[str, str | int | float | bool | None | list | dict]] | None = None,
         login_ticket: QRCodeLoginTicket | None = None,
         login_status: QRCodeLoginStatus | None = None,
         typing_ticket: str | None = None,
@@ -261,8 +291,8 @@ class _FakeIlinkClient:
         self.typing_ticket = typing_ticket
         self.auth_updates: list[tuple[str | None, str | None]] = []
         self.received_cursors: list[str] = []
-        self.sent_messages: list[dict[str, Any]] = []
-        self.typing_calls: list[dict[str, Any]] = []
+        self.sent_messages: list[dict[str, str | int | float | bool | None | list | dict]] = []
+        self.typing_calls: list[dict[str, str | int | float | bool | None | list | dict]] = []
         self.closed = False
 
     def update_auth(self, *, base_url: str | None, bot_token: str | None) -> None:
@@ -286,7 +316,7 @@ class _FakeIlinkClient:
         assert qrcode == self.login_ticket.qrcode
         return self.login_status
 
-    async def get_updates(self, *, get_updates_buf: str) -> dict[str, Any]:
+    async def get_updates(self, *, get_updates_buf: str) -> dict[str, str | int | float | bool | None | list | dict]:
         """返回脚本化轮询结果。"""
 
         self.received_cursors.append(get_updates_buf)
@@ -299,7 +329,7 @@ class _FakeIlinkClient:
         context_token: str,
         text: str,
         group_id: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, str | int | float | bool | None | list | dict]:
         """记录发消息调用。"""
 
         self.sent_messages.append(
@@ -325,7 +355,7 @@ class _FakeIlinkClient:
         ilink_user_id: str,
         typing_ticket: str,
         status: int = 1,
-    ) -> dict[str, Any]:
+    ) -> dict[str, str | int | float | bool | None | list | dict]:
         """记录 typing 调用。"""
 
         self.typing_calls.append(
@@ -348,7 +378,7 @@ class _BusinessFailingIlinkClient(_FakeIlinkClient):
         context_token: str,
         text: str,
         group_id: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, str | int | float | bool | None | list | dict]:
         await super().send_text_message(
             to_user_id=to_user_id,
             context_token=context_token,
@@ -368,7 +398,7 @@ class _TransientFailingIlinkClient(_FakeIlinkClient):
         context_token: str,
         text: str,
         group_id: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, str | int | float | bool | None | list | dict]:
         await super().send_text_message(
             to_user_id=to_user_id,
             context_token=context_token,
@@ -526,7 +556,7 @@ class _SerialSaveStateStore(FileWeChatStateStore):
             self.exit_order.append(marker)
             self.active_saves -= 1
 
-def _build_text_message(*, text: str, context_token: str, from_user_id: str = "user@im.wechat") -> dict[str, Any]:
+def _build_text_message(*, text: str, context_token: str, from_user_id: str = "user@im.wechat") -> dict[str, str | int | float | bool | None | list | dict]:
     """构建测试用入站文本消息。"""
 
     return {
@@ -1527,7 +1557,7 @@ def test_run_forever_clears_auth_state_after_unauthorized_poll(tmp_path: Path) -
     service = _FakeChatService(scripted_turns=[])
     client = _FakeIlinkClient()
 
-    async def _raise_unauthorized(*, get_updates_buf: str) -> dict[str, Any]:
+    async def _raise_unauthorized(*, get_updates_buf: str) -> dict[str, str | int | float | bool | None | list | dict]:
         _ = get_updates_buf
         raise IlinkApiError("unauthorized", status_code=401)
 
@@ -1569,3 +1599,845 @@ def test_ensure_authenticated_prints_and_opens_qrcode_url(tmp_path: Path, monkey
     asyncio.run(daemon.ensure_authenticated(force_relogin=True))
 
     assert opened == ["https://liteapp.weixin.qq.com/q/demo"]
+
+
+# ── 补充分支覆盖测试 ──────────────────────────────────────────────
+
+
+@pytest.mark.unit
+def test_format_log_text_preview_truncates_long_text() -> None:
+    """验证超长文本会被截断并追加省略号。"""
+
+    text = "a" * 200
+    preview = _format_log_text_preview(text, limit=50)
+    assert len(preview) == 50
+    assert preview.endswith("...")
+
+
+@pytest.mark.unit
+def test_format_log_text_preview_within_limit() -> None:
+    """验证未超长文本原样返回。"""
+
+    preview = _format_log_text_preview("hello", limit=120)
+    assert preview == "hello"
+
+
+@pytest.mark.unit
+def test_parse_int_field_str_value_error() -> None:
+    """验证 str 转 int 失败时返回 None。"""
+
+    assert _parse_int_field("not_a_number") is None
+
+
+@pytest.mark.unit
+def test_parse_int_field_int_passthrough() -> None:
+    """验证 int 值直接透传。"""
+
+    assert _parse_int_field(42) == 42
+
+
+@pytest.mark.unit
+def test_parse_int_field_str_success() -> None:
+    """验证合法数字字符串可正确解析。"""
+
+    assert _parse_int_field("123") == 123
+
+
+@pytest.mark.unit
+def test_extract_message_text_skips_non_dict_item() -> None:
+    """item_list 中非 dict 的 item 应被跳过。"""
+
+    message: dict[str, str | int | float | bool | None | list | dict] = {
+        "from_user_id": "user@im.wechat",
+        "message_type": 1,
+        "context_token": "ctx-1",
+        "item_list": [
+            "not_a_dict",
+            {"type": 1, "text_item": {"text": "hello"}},
+        ],
+    }
+
+    assert _extract_message_text(message) == "hello"
+
+
+@pytest.mark.unit
+def test_extract_message_text_skips_non_dict_text_item() -> None:
+    """text_item 非 dict 的 item 应被跳过。"""
+
+    message: dict[str, str | int | float | bool | None | list | dict] = {
+        "from_user_id": "user@im.wechat",
+        "message_type": 1,
+        "context_token": "ctx-1",
+        "item_list": [
+            {"type": 1, "text_item": "not_a_dict"},
+            {"type": 1, "text_item": {"text": "valid"}},
+        ],
+    }
+
+    assert _extract_message_text(message) == "valid"
+
+
+@pytest.mark.unit
+def test_extract_message_text_returns_none_when_no_text_items() -> None:
+    """item_list 中没有任何有效 text_item 时返回 None。"""
+
+    message: dict[str, str | int | float | bool | None | list | dict] = {
+        "from_user_id": "user@im.wechat",
+        "message_type": 1,
+        "context_token": "ctx-1",
+        "item_list": [
+            {"type": 2, "text_item": {"text": "not_text_type"}},
+        ],
+    }
+
+    assert _extract_message_text(message) is None
+
+
+@pytest.mark.unit
+def test_extract_message_text_returns_none_for_non_list_item_list() -> None:
+    """item_list 非 list 时返回 None。"""
+
+    message: dict[str, str | int | float | bool | None | list | dict] = {
+        "from_user_id": "user@im.wechat",
+        "message_type": 1,
+        "context_token": "ctx-1",
+        "item_list": "not_a_list",
+    }
+
+    assert _extract_message_text(message) is None
+
+
+@pytest.mark.unit
+def test_extract_message_text_returns_none_for_empty_text() -> None:
+    """text 为空白字符串时返回 None。"""
+
+    message: dict[str, str | int | float | bool | None | list | dict] = {
+        "from_user_id": "user@im.wechat",
+        "message_type": 1,
+        "context_token": "ctx-1",
+        "item_list": [{"type": 1, "text_item": {"text": "   "}}],
+    }
+
+    assert _extract_message_text(message) is None
+
+
+@pytest.mark.unit
+def test_resolve_chat_key_returns_none_when_both_empty() -> None:
+    """group_id 和 from_user_id 都为空时返回 None。"""
+
+    message: dict[str, str | int | float | bool | None | list | dict] = {
+        "group_id": "",
+        "from_user_id": "",
+    }
+
+    assert _resolve_chat_key(message) is None
+
+
+@pytest.mark.unit
+def test_resolve_chat_key_prefers_group_id() -> None:
+    """group_id 非空时优先使用 group_id。"""
+
+    message: dict[str, str | int | float | bool | None | list | dict] = {
+        "group_id": "group-1",
+        "from_user_id": "user-1",
+    }
+
+    assert _resolve_chat_key(message) == "group-1"
+
+
+@pytest.mark.unit
+def test_resolve_chat_key_falls_back_to_from_user_id() -> None:
+    """group_id 为空时使用 from_user_id。"""
+
+    message: dict[str, str | int | float | bool | None | list | dict] = {
+        "group_id": "",
+        "from_user_id": "user-1",
+    }
+
+    assert _resolve_chat_key(message) == "user-1"
+
+
+@pytest.mark.unit
+def test_format_wechat_reply_text_cancelled_without_reason() -> None:
+    """cancelled 状态无 cancel_reason 时返回默认取消提示。"""
+
+    reply = WeChatReply(text="", cancelled=True, cancel_reason=None)
+
+    result = _format_wechat_reply_text(reply, empty_reply_text="(empty)")
+
+    assert result == "[cancelled] 当前执行已取消"
+
+
+@pytest.mark.unit
+def test_format_wechat_reply_text_cancelled_with_reason() -> None:
+    """cancelled 状态有 cancel_reason 时返回带原因的取消提示。"""
+
+    reply = WeChatReply(text="", cancelled=True, cancel_reason="timeout")
+
+    result = _format_wechat_reply_text(reply, empty_reply_text="(empty)")
+
+    assert result == "[cancelled] 当前执行已取消: timeout"
+
+
+@pytest.mark.unit
+def test_format_wechat_reply_text_empty_fallback() -> None:
+    """非取消、非过滤、空回复时返回兜底文本。"""
+
+    reply = WeChatReply(text="")
+
+    result = _format_wechat_reply_text(reply, empty_reply_text="(empty)")
+
+    assert result == "(empty)"
+
+
+@pytest.mark.unit
+def test_format_wechat_reply_text_filtered_hint() -> None:
+    """filtered 状态时在回复文本后追加过滤提示。"""
+
+    reply = WeChatReply(text="部分结果", filtered=True)
+
+    result = _format_wechat_reply_text(reply, empty_reply_text="(empty)")
+
+    assert result == "部分结果\n\n[filtered] 内容可能不完整"
+
+
+@pytest.mark.unit
+def test_rebuild_wechat_delivery_context_group_id_none() -> None:
+    """delivery_group_id 为空字符串时重建后 group_id 应为 None。"""
+
+    metadata: ExecutionDeliveryContext = {
+        "delivery_target": "user-1",
+        "delivery_thread_id": "ctx-1",
+        "chat_key": "user-1",
+        "delivery_group_id": "",
+        "wechat_runtime_identity": "runtime-1",
+    }
+
+    result = _rebuild_wechat_delivery_context(metadata, filtered=True)
+
+    assert result.get("delivery_group_id") == ""
+    assert result.get("filtered") is True
+
+
+@pytest.mark.unit
+def test_rebuild_wechat_delivery_context_with_group() -> None:
+    """delivery_group_id 非空时应保留。"""
+
+    metadata: ExecutionDeliveryContext = {
+        "delivery_target": "user-1",
+        "delivery_thread_id": "ctx-1",
+        "chat_key": "group-1",
+        "delivery_group_id": "group-1",
+        "wechat_runtime_identity": "runtime-1",
+    }
+
+    result = _rebuild_wechat_delivery_context(metadata, filtered=False)
+
+    assert result.get("delivery_group_id") == "group-1"
+    assert result.get("filtered") is False
+
+
+@pytest.mark.unit
+def test_is_retryable_delivery_error_non_ilink_error() -> None:
+    """非 IlinkApiError 的异常始终可重试。"""
+
+    assert _is_retryable_delivery_error(RuntimeError("network")) is True
+
+
+@pytest.mark.unit
+def test_is_retryable_delivery_error_business_ret_code() -> None:
+    """IlinkApiError 有 business_ret_code 时不可重试。"""
+
+    exc = IlinkApiError("biz fail", status_code=200, business_ret_code=-1)
+    assert _is_retryable_delivery_error(exc) is False
+
+
+@pytest.mark.unit
+def test_is_retryable_delivery_error_no_status_code() -> None:
+    """IlinkApiError 无 status_code 时可重试。"""
+
+    exc = IlinkApiError("unknown")
+    assert _is_retryable_delivery_error(exc) is True
+
+
+@pytest.mark.unit
+def test_is_retryable_delivery_error_4xx_not_retryable() -> None:
+    """4xx 状态码的 IlinkApiError 不可重试。"""
+
+    exc = IlinkApiError("bad request", status_code=400)
+    assert _is_retryable_delivery_error(exc) is False
+
+
+@pytest.mark.unit
+def test_is_retryable_delivery_error_5xx_retryable() -> None:
+    """5xx 状态码的 IlinkApiError 可重试。"""
+
+    exc = IlinkApiError("server error", status_code=500)
+    assert _is_retryable_delivery_error(exc) is True
+
+
+@pytest.mark.unit
+def test_reply_builder_consume_warning_event() -> None:
+    """WARNING 事件应收集到 warnings 列表。"""
+
+    builder = WeChatReplyBuilder()
+    builder.consume(
+        AppEvent(
+            type=AppEventType.WARNING,
+            payload={"message": "这是警告"},
+            meta={"run_id": "run-1"},
+        )
+    )
+
+    reply = builder.build()
+
+    assert reply.warnings == ("这是警告",)
+    assert reply.source_run_id == "run-1"
+
+
+@pytest.mark.unit
+def test_reply_builder_consume_warning_non_dict_payload() -> None:
+    """WARNING 事件 payload 非 dict 时直接取 payload 值。"""
+
+    builder = WeChatReplyBuilder()
+    builder.consume(
+        AppEvent(type=AppEventType.WARNING, payload="纯文本警告", meta={})
+    )
+
+    reply = builder.build()
+
+    assert reply.warnings == ("纯文本警告",)
+
+
+@pytest.mark.unit
+def test_reply_builder_consume_error_event() -> None:
+    """ERROR 事件应收集到 errors 列表。"""
+
+    builder = WeChatReplyBuilder()
+    builder.consume(
+        AppEvent(
+            type=AppEventType.ERROR,
+            payload={"message": "出错了"},
+            meta={"run_id": "run-err"},
+        )
+    )
+
+    reply = builder.build()
+
+    assert reply.errors == ("出错了",)
+    assert reply.source_run_id == "run-err"
+
+
+@pytest.mark.unit
+def test_reply_builder_consume_error_non_dict_payload() -> None:
+    """ERROR 事件 payload 非 dict 时直接取 payload 值。"""
+
+    builder = WeChatReplyBuilder()
+    builder.consume(
+        AppEvent(type=AppEventType.ERROR, payload="纯文本错误", meta={})
+    )
+
+    reply = builder.build()
+
+    assert reply.errors == ("纯文本错误",)
+
+
+@pytest.mark.unit
+def test_reply_builder_warning_empty_message_skipped() -> None:
+    """WARNING 事件空消息不应加入 warnings。"""
+
+    builder = WeChatReplyBuilder()
+    builder.consume(
+        AppEvent(type=AppEventType.WARNING, payload={"message": "   "}, meta={})
+    )
+
+    reply = builder.build()
+
+    assert reply.warnings == ()
+
+
+@pytest.mark.unit
+def test_reply_builder_error_empty_message_skipped() -> None:
+    """ERROR 事件空消息不应加入 errors。"""
+
+    builder = WeChatReplyBuilder()
+    builder.consume(
+        AppEvent(type=AppEventType.ERROR, payload={"message": ""}, meta={})
+    )
+
+    reply = builder.build()
+
+    assert reply.errors == ()
+
+
+@pytest.mark.unit
+def test_capture_run_id_ignores_non_dict_meta() -> None:
+    """meta 非 dict 时不应尝试提取 run_id。"""
+
+    builder = WeChatReplyBuilder()
+    event = AppEvent(type=AppEventType.CONTENT_DELTA, payload="text", meta={})
+    event.meta = "not_a_dict"  # type: ignore[assignment]
+    builder.consume(event)
+
+    reply = builder.build()
+
+    assert reply.source_run_id is None
+
+
+@pytest.mark.unit
+def test_reply_builder_captures_run_id_from_meta() -> None:
+    """meta 中的 run_id 应被捕获。"""
+
+    builder = WeChatReplyBuilder()
+    builder.consume(
+        AppEvent(
+            type=AppEventType.CONTENT_DELTA,
+            payload="text",
+            meta={"run_id": "run-123"},
+        )
+    )
+
+    reply = builder.build()
+
+    assert reply.source_run_id == "run-123"
+
+
+@pytest.mark.unit
+def test_reply_builder_content_delta_empty_payload_skipped() -> None:
+    """CONTENT_DELTA 事件 payload 为空时不加入 chunks。"""
+
+    builder = WeChatReplyBuilder()
+    builder.consume(AppEvent(type=AppEventType.CONTENT_DELTA, payload="", meta={}))
+    builder.consume(AppEvent(type=AppEventType.CONTENT_DELTA, payload="hello", meta={}))
+
+    reply = builder.build()
+
+    assert reply.text == "hello"
+
+
+@pytest.mark.unit
+def test_state_io_adapter_run_sync_call_raises_when_closed(tmp_path: Path) -> None:
+    """适配器关闭后提交新请求应抛出 RuntimeError。"""
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    adapter = _AsyncWeChatStateStoreAdapter(store)
+    adapter._closed = True
+
+    with pytest.raises(RuntimeError, match="已关闭"):
+        asyncio.run(adapter.load())
+
+
+@pytest.mark.unit
+def test_state_io_adapter_run_sync_call_base_exception_forgets_future(tmp_path: Path) -> None:
+    """BaseException 应导致 future 从跟踪集合中移除。"""
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    adapter = _AsyncWeChatStateStoreAdapter(store)
+
+    async def _run_scenario() -> None:
+        # 先正常关闭 adapter
+        await adapter.aclose()
+
+    # adapter 已关闭，_run_sync_call 应抛 RuntimeError
+    asyncio.run(_run_scenario())
+
+    assert adapter._closed is True
+
+
+@pytest.mark.unit
+def test_state_io_adapter_build_close_error_returns_none_for_empty_list() -> None:
+    """错误列表为空时 _build_close_error 返回 None。"""
+
+    store = FileWeChatStateStore(Path("/tmp/never_used"))
+    adapter = _AsyncWeChatStateStoreAdapter(store)
+
+    assert adapter._build_close_error([]) is None
+
+
+@pytest.mark.unit
+def test_state_io_adapter_build_close_error_returns_single_error() -> None:
+    """错误列表只有一个异常时直接返回该异常。"""
+
+    store = FileWeChatStateStore(Path("/tmp/never_used"))
+    adapter = _AsyncWeChatStateStoreAdapter(store)
+    exc = ValueError("single error")
+
+    result = adapter._build_close_error([exc])
+
+    assert result is exc
+
+
+@pytest.mark.unit
+def test_state_io_adapter_build_close_error_returns_exception_group() -> None:
+    """错误列表有多个异常时返回 ExceptionGroup。"""
+
+    store = FileWeChatStateStore(Path("/tmp/never_used"))
+    adapter = _AsyncWeChatStateStoreAdapter(store)
+    errors = [ValueError("err1"), OSError("err2")]
+
+    result = adapter._build_close_error(errors)
+
+    assert isinstance(result, ExceptionGroup)
+    assert len(result.exceptions) == 2
+
+
+@pytest.mark.unit
+def test_process_once_skips_non_list_messages(tmp_path: Path) -> None:
+    """get_updates 返回的 msgs 非 list 时应跳过消息处理。"""
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    store.save(WeChatDaemonState(bot_token="token-1", base_url="https://ilink.example"))
+    service = _FakeChatService(scripted_turns=[])
+    client = _FakeIlinkClient(
+        updates_payloads=[
+            {"ret": 0, "msgs": "not_a_list", "get_updates_buf": "cursor-1"}
+        ]
+    )
+    daemon = _build_daemon(chat_service=service, state_store=store, client=client)
+
+    processed = asyncio.run(daemon.process_once())
+
+    assert processed == 0
+
+
+@pytest.mark.unit
+def test_process_once_skips_non_dict_message_in_list(tmp_path: Path) -> None:
+    """msgs 列表中非 dict 的元素应被跳过。"""
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    store.save(WeChatDaemonState(bot_token="token-1", base_url="https://ilink.example"))
+    service = _FakeChatService(scripted_turns=[])
+    client = _FakeIlinkClient(
+        updates_payloads=[
+            {
+                "ret": 0,
+                "msgs": ["not_a_dict", 123],
+                "get_updates_buf": "cursor-1",
+            }
+        ]
+    )
+    daemon = _build_daemon(chat_service=service, state_store=store, client=client)
+
+    processed = asyncio.run(daemon.process_once())
+
+    assert processed == 0
+
+
+@pytest.mark.unit
+def test_handle_inbound_message_returns_false_for_non_text(tmp_path: Path) -> None:
+    """非文本消息应返回 False 且不触发 chat_service。"""
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    store.save(WeChatDaemonState(bot_token="token-1", base_url="https://ilink.example"))
+    service = _FakeChatService(scripted_turns=[])
+    client = _FakeIlinkClient(
+        updates_payloads=[
+            {
+                "ret": 0,
+                "msgs": [{"from_user_id": "u1", "message_type": 2, "context_token": "ctx-1"}],
+                "get_updates_buf": "cursor-1",
+            }
+        ]
+    )
+    daemon = _build_daemon(chat_service=service, state_store=store, client=client)
+
+    processed = asyncio.run(daemon.process_once())
+
+    assert processed == 0
+    assert service.submit_turn_requests == []
+
+
+@pytest.mark.unit
+def test_handle_inbound_message_returns_false_without_chat_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """无 chat_key 的消息应跳过。"""
+
+    logged: list[str] = []
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    store.save(WeChatDaemonState(bot_token="token-1", base_url="https://ilink.example"))
+    service = _FakeChatService(scripted_turns=[])
+    client = _FakeIlinkClient(
+        updates_payloads=[
+            {
+                "ret": 0,
+                "msgs": [{
+                    "message_type": 1,
+                    "context_token": "ctx-1",
+                    "item_list": [{"type": 1, "text_item": {"text": "hello"}}],
+                    # no group_id, no from_user_id
+                }],
+                "get_updates_buf": "cursor-1",
+            }
+        ]
+    )
+    daemon = _build_daemon(chat_service=service, state_store=store, client=client)
+    monkeypatch.setattr(
+        "dayu.wechat.daemon.Log.warning",
+        lambda message, *, module="": logged.append(message),
+    )
+
+    processed = asyncio.run(daemon.process_once())
+
+    assert processed == 0
+    assert any("chat_key" in msg for msg in logged)
+
+
+@pytest.mark.unit
+def test_handle_inbound_message_returns_false_without_to_user_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """无 to_user_id / context_token 的消息应跳过。"""
+
+    logged: list[str] = []
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    store.save(WeChatDaemonState(bot_token="token-1", base_url="https://ilink.example"))
+    service = _FakeChatService(scripted_turns=[])
+    client = _FakeIlinkClient(
+        updates_payloads=[
+            {
+                "ret": 0,
+                "msgs": [{
+                    "message_type": 1,
+                    "from_user_id": "",  # empty -> no to_user_id
+                    "context_token": "",  # empty
+                    "group_id": "group-1",
+                    "item_list": [{"type": 1, "text_item": {"text": "hello"}}],
+                }],
+                "get_updates_buf": "cursor-1",
+            }
+        ]
+    )
+    daemon = _build_daemon(chat_service=service, state_store=store, client=client)
+    monkeypatch.setattr(
+        "dayu.wechat.daemon.Log.warning",
+        lambda message, *, module="": logged.append(message),
+    )
+
+    processed = asyncio.run(daemon.process_once())
+
+    assert processed == 0
+    assert any("to_user_id" in msg for msg in logged)
+
+
+@pytest.mark.unit
+def test_process_once_with_errors_in_reply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """回复中包含 ERROR 事件时应记录警告。"""
+
+    logged: list[str] = []
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    store.save(WeChatDaemonState(bot_token="token-1", base_url="https://ilink.example"))
+    service = _FakeChatService(
+        scripted_turns=[
+            _ScriptedTurn(
+                events=(
+                    AppEvent(
+                        type=AppEventType.FINAL_ANSWER,
+                        payload={"content": "部分结果"},
+                        meta={"run_id": "run-err"},
+                    ),
+                    AppEvent(
+                        type=AppEventType.ERROR,
+                        payload={"message": "tool failed"},
+                        meta={},
+                    ),
+                )
+            )
+        ]
+    )
+    client = _FakeIlinkClient(
+        updates_payloads=[
+            {"ret": 0, "msgs": [_build_text_message(text="问题", context_token="ctx-1")], "get_updates_buf": "cursor-1"}
+        ]
+    )
+    daemon = _build_daemon(chat_service=service, state_store=store, client=client)
+    monkeypatch.setattr(
+        "dayu.wechat.daemon.Log.warning",
+        lambda message, *, module="": logged.append(message),
+    )
+
+    asyncio.run(daemon.process_once())
+
+    assert any("tool failed" in msg for msg in logged)
+
+
+@pytest.mark.unit
+def test_open_login_url_handles_webbrowser_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """webbrowser.open 抛异常时不应崩溃。"""
+
+    logged: list[str] = []
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    service = _FakeChatService(scripted_turns=[])
+    client = _FakeIlinkClient(
+        login_ticket=QRCodeLoginTicket(
+            qrcode="qr-1",
+            url="https://liteapp.weixin.qq.com/q/demo",
+            qrcode_img_content=None,
+        ),
+        login_status=QRCodeLoginStatus(status="confirmed", bot_token="token-1", base_url="https://ilink.example"),
+    )
+    daemon = _build_daemon(chat_service=service, state_store=store, client=client)
+
+    def _raise(*args: str | int, **kwargs: str | int) -> bool:
+        raise OSError("no display")
+
+    monkeypatch.setattr("webbrowser.open", _raise)
+    monkeypatch.setattr(
+        "dayu.wechat.daemon.Log.warning",
+        lambda message, *, module="": logged.append(message),
+    )
+
+    state = asyncio.run(daemon.ensure_authenticated(force_relogin=True))
+
+    assert state.bot_token == "token-1"
+    assert any("无法自动打开" in msg for msg in logged)
+
+
+@pytest.mark.unit
+def test_open_login_url_returns_false_no_success_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """webbrowser.open 返回 False 时不打印成功消息。"""
+
+    printed: list[str] = []
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    service = _FakeChatService(scripted_turns=[])
+    client = _FakeIlinkClient(
+        login_ticket=QRCodeLoginTicket(
+            qrcode="qr-1",
+            url="https://liteapp.weixin.qq.com/q/demo",
+            qrcode_img_content=None,
+        ),
+        login_status=QRCodeLoginStatus(status="confirmed", bot_token="token-1", base_url="https://ilink.example"),
+    )
+    daemon = _build_daemon(chat_service=service, state_store=store, client=client)
+
+    monkeypatch.setattr("webbrowser.open", lambda url, new=0: False)
+    monkeypatch.setattr("builtins.print", lambda *args: printed.append(" ".join(str(a) for a in args)))
+
+    asyncio.run(daemon.ensure_authenticated(force_relogin=True))
+
+    assert not any("已尝试在默认浏览器" in p for p in printed)
+
+
+@pytest.mark.unit
+def test_daemon_aclose_handles_cancelled_state_io(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """state_io.aclose 被取消后 daemon 应标记 close_cancelled。"""
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    service = _FakeChatService(scripted_turns=[])
+    client = _FakeIlinkClient()
+    daemon = WeChatDaemon(chat_service=service, state_store=store, client=client)
+
+    async def _cancel_state_io() -> None:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(daemon._state_io, "aclose", _cancel_state_io)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(daemon.aclose())
+
+
+@pytest.mark.unit
+def test_daemon_aclose_handles_client_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """client.aclose 失败时应抛出 client 异常。"""
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    service = _FakeChatService(scripted_turns=[])
+    client = _FakeIlinkClient()
+    daemon = WeChatDaemon(chat_service=service, state_store=store, client=client)
+
+    async def _fail_client_close() -> None:
+        raise OSError("client close failed")
+
+    monkeypatch.setattr(client, "aclose", _fail_client_close)
+
+    with pytest.raises(OSError, match="client close failed"):
+        asyncio.run(daemon.aclose())
+
+
+@pytest.mark.unit
+def test_daemon_aclose_handles_lock_release_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_instance_lock.release() 失败时应抛出锁异常。"""
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    service = _FakeChatService(scripted_turns=[])
+    client = _FakeIlinkClient()
+    daemon = WeChatDaemon(chat_service=service, state_store=store, client=client)
+
+    def _fail_release() -> None:
+        raise RuntimeError("lock release failed")
+
+    monkeypatch.setattr(daemon._instance_lock, "release", _fail_release)
+
+    with pytest.raises(RuntimeError, match="lock release failed"):
+        asyncio.run(daemon.aclose())
+
+
+@pytest.mark.unit
+def test_daemon_aclose_multiple_errors_raises_exception_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """多个关闭异常应合并为 ExceptionGroup。"""
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    service = _FakeChatService(scripted_turns=[])
+    client = _FakeIlinkClient()
+    daemon = WeChatDaemon(chat_service=service, state_store=store, client=client)
+
+    async def _fail_client_close() -> None:
+        raise OSError("client error")
+
+    def _fail_lock_release() -> None:
+        raise RuntimeError("lock error")
+
+    monkeypatch.setattr(client, "aclose", _fail_client_close)
+    monkeypatch.setattr(daemon._instance_lock, "release", _fail_lock_release)
+
+    with pytest.raises(ExceptionGroup):
+        asyncio.run(daemon.aclose())
+
+
+@pytest.mark.unit
+def test_ensure_authenticated_expired_qrcode(tmp_path: Path) -> None:
+    """二维码过期时应抛出 RuntimeError。"""
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    service = _FakeChatService(scripted_turns=[])
+    client = _FakeIlinkClient(
+        login_ticket=QRCodeLoginTicket(qrcode="qr-1", url=None, qrcode_img_content=None),
+        login_status=QRCodeLoginStatus(status="expired", bot_token=None, base_url=None),
+    )
+    daemon = _build_daemon(chat_service=service, state_store=store, client=client)
+
+    with pytest.raises(RuntimeError, match="二维码登录失败"):
+        asyncio.run(daemon.ensure_authenticated(force_relogin=True))
+
+
+@pytest.mark.unit
+def test_ensure_authenticated_qrcode_timeout(tmp_path: Path) -> None:
+    """等待扫码超时时应抛出 TimeoutError。"""
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    service = _FakeChatService(scripted_turns=[])
+    client = _FakeIlinkClient(
+        login_ticket=QRCodeLoginTicket(qrcode="qr-1", url=None, qrcode_img_content=None),
+        login_status=QRCodeLoginStatus(status="scanned", bot_token=None, base_url=None),
+    )
+    daemon = _build_daemon(
+        chat_service=service,
+        state_store=store,
+        client=client,
+        config=WeChatDaemonConfig(qrcode_poll_interval_sec=0.01, qrcode_timeout_sec=0.05),
+    )
+
+    with pytest.raises(TimeoutError, match="等待微信扫码登录超时"):
+        asyncio.run(daemon.ensure_authenticated(force_relogin=True))
+
+
+@pytest.mark.unit
+def test_ensure_authenticated_no_bot_token_after_confirm(tmp_path: Path) -> None:
+    """二维码确认但服务端未返回 bot_token 时应抛出 RuntimeError。"""
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    service = _FakeChatService(scripted_turns=[])
+    client = _FakeIlinkClient(
+        login_ticket=QRCodeLoginTicket(qrcode="qr-1", url=None, qrcode_img_content=None),
+        login_status=QRCodeLoginStatus(status="confirmed", bot_token="", base_url="https://ilink.example"),
+    )
+    daemon = _build_daemon(chat_service=service, state_store=store, client=client)
+
+    with pytest.raises(RuntimeError, match="bot_token"):
+        asyncio.run(daemon.ensure_authenticated(force_relogin=True))

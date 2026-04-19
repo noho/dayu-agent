@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -346,3 +347,204 @@ async def _publish_later(event_bus: AsyncQueueEventBus) -> None:
         "run_1",
         AppEvent(type=AppEventType.DONE, payload={"ok": True}, meta={}),
     )
+
+
+@pytest.mark.unit
+def test_create_session_with_valid_source() -> None:
+    """create_session 使用合法来源时应返回新会话视图。"""
+
+    service, _event_bus = _build_service()
+
+    view = service.create_session(source="web", scene_name="test_scene")
+
+    assert view.session_id == "session_created"
+    assert view.source == "web"
+    assert view.state == "active"
+    assert view.scene_name == "test_scene"
+
+
+@pytest.mark.unit
+def test_list_sessions_with_state_none() -> None:
+    """list_sessions 不传 state 时应返回全部会话。"""
+
+    service, _event_bus = _build_service()
+
+    sessions = service.list_sessions(state=None)
+
+    assert len(sessions) == 1
+    assert sessions[0].session_id == "session_1"
+
+
+@pytest.mark.unit
+def test_list_runs_with_state_filter() -> None:
+    """list_runs 传 state 参数时应使用 _parse_run_state 解析。"""
+
+    service, _event_bus = _build_service()
+
+    running_runs = service.list_runs(state="running")
+    assert all(run.state == "running" for run in running_runs)
+
+    succeeded_runs = service.list_runs(state="succeeded")
+    assert all(run.state == "succeeded" for run in succeeded_runs)
+
+
+@pytest.mark.unit
+def test_list_runs_without_state_returns_all() -> None:
+    """list_runs 不传 state 时应跳过状态过滤。"""
+
+    service, _event_bus = _build_service()
+
+    all_runs = service.list_runs()
+    assert len(all_runs) == 2
+
+
+@pytest.mark.unit
+def test_list_runs_active_only_with_session_id_and_service_type() -> None:
+    """list_runs active_only=True 时按 session_id 和 service_type 过滤。"""
+
+    service, _event_bus = _build_service()
+
+    # active_only + session_id 过滤
+    runs_by_session = service.list_runs(active_only=True, session_id="session_1")
+    assert [run.run_id for run in runs_by_session] == ["run_1"]
+
+    # active_only + session_id 匹配不到
+    runs_empty = service.list_runs(active_only=True, session_id="nonexistent")
+    assert runs_empty == []
+
+    # active_only + service_type 过滤
+    runs_by_type = service.list_runs(active_only=True, service_type="prompt")
+    assert [run.run_id for run in runs_by_type] == ["run_1"]
+
+    # active_only + service_type 匹配不到
+    runs_empty2 = service.list_runs(active_only=True, service_type="other")
+    assert runs_empty2 == []
+
+
+@pytest.mark.unit
+def test_get_session_returns_none_for_missing() -> None:
+    """get_session 找不到会话时应返回 None。"""
+
+    service, _event_bus = _build_service()
+
+    result = service.get_session("nonexistent_session")
+
+    assert result is None
+
+
+@pytest.mark.unit
+def test_get_session_returns_view_for_existing() -> None:
+    """get_session 找到会话时应返回视图。"""
+
+    service, _event_bus = _build_service()
+
+    result = service.get_session("session_1")
+
+    assert result is not None
+    assert result.session_id == "session_1"
+
+
+@pytest.mark.unit
+def test_get_run_returns_none_for_missing() -> None:
+    """get_run 找不到运行时应返回 None。"""
+
+    service, _event_bus = _build_service()
+
+    result = service.get_run("nonexistent_run")
+
+    assert result is None
+
+
+@pytest.mark.unit
+def test_cancel_run_returns_run_admin_view() -> None:
+    """cancel_run 应返回更新后的 RunAdminView。"""
+
+    service, _event_bus = _build_service()
+
+    result = service.cancel_run("run_1")
+
+    assert result.run_id == "run_1"
+    assert result.cancel_requested_at is not None
+    assert result.cancel_requested_reason == "user_cancelled"
+
+
+@pytest.mark.unit
+def test_cancel_session_runs_returns_cancelled_ids() -> None:
+    """cancel_session_runs 应返回被取消的 run_id 列表。"""
+
+    service, _event_bus = _build_service()
+
+    cancelled = service.cancel_session_runs("session_1")
+
+    assert cancelled == ["run_1"]
+
+
+@pytest.mark.unit
+def test_subscribe_session_events_wraps_event_bus() -> None:
+    """subscribe_session_events 应把 Host event bus 包装成事件流。"""
+
+    service, event_bus = _build_service()
+
+    async def _collect() -> PublishedRunEventProtocol:
+        stream = service.subscribe_session_events("session_1")
+        publish_task = asyncio.create_task(_publish_session_event(event_bus))
+        try:
+            async for event in stream:
+                return event
+        finally:
+            await publish_task
+        raise AssertionError("未收到事件")
+
+    event = asyncio.run(_collect())
+
+    assert event.type == AppEventType.DONE
+    assert event.payload == {"session_ok": True}
+
+
+async def _publish_session_event(event_bus: AsyncQueueEventBus) -> None:
+    """异步发布一条 session 级别测试事件。"""
+
+    await asyncio.sleep(0)
+    event_bus.publish(
+        "run_1",
+        AppEvent(type=AppEventType.DONE, payload={"session_ok": True}, meta={}),
+    )
+
+
+@pytest.mark.unit
+def test_stream_subscription_events_closes_on_completion() -> None:
+    """_stream_subscription_events 在迭代结束时应调用 subscription.close。"""
+
+    class _EmptySubscription:
+        """立即结束的空订阅，用于验证 finally 中 close 调用。"""
+
+        def __init__(self) -> None:
+            self.close_called = False
+
+        @property
+        def is_closed(self) -> bool:
+            return self.close_called
+
+        def close(self) -> None:
+            self.close_called = True
+
+        def __aiter__(self) -> AsyncIterator[PublishedRunEventProtocol]:
+            """返回自身作为迭代器。"""
+            return self
+
+        async def __anext__(self) -> PublishedRunEventProtocol:
+            """立即抛出 StopAsyncIteration。"""
+            raise StopAsyncIteration
+
+    from dayu.services.host_admin_service import _stream_subscription_events
+
+    sub = _EmptySubscription()
+
+    async def _drain() -> None:
+        stream = _stream_subscription_events(sub)  # type: ignore[arg-type]
+        async for _event in stream:
+            pass  # pragma: no cover
+
+    asyncio.run(_drain())
+
+    assert sub.close_called is True

@@ -3,8 +3,7 @@
   "include": [
     "dayu",
     "tests",
-    "utils",
-    "render"
+    "utils"
   ],
   "exclude": [
     "workspace",

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dayu-agent"
-version = "0.1.1"
-description = "大愚 Agent：LLM + 结构化财报工具 + 财报下载/预处理管线 + 报告写作的统一系统"
+version = "0.1.2"
+description = "大愚 Agent：每个投资者的助理分析师"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -44,7 +44,9 @@ dependencies = [
     "edgartools>=3.0.0",
     "docling>=2.15.0",
     "docling-core>=2.15.0",
-    "pandas>=2.0.0",
+    # pandas 下界需与 docling / docling-core 当前依赖树保持一致，
+    # 否则会把无法解析或未验证的版本区间错误声明为支持范围。
+    "pandas>=2.1.4",
     "lxml>=4.9.0",
     "click>=8.1.0",
     "trafilatura>=1.12.0",
@@ -103,6 +105,10 @@ exclude = [
     "*.json",
     "prompts/**/*.md",
     "prompts/**/*.json",
+    "prompts/**/*.yaml",
+]
+"dayu.assets" = [
+    "*.md",
 ]
 "dayu.render" = [
     "*.css",

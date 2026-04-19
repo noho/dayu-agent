@@ -547,8 +547,8 @@ def _add_write_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--template",
         type=str,
-        default="./定性分析模板.md",
-        help="写作模板文件路径（默认: ./定性分析模板.md）",
+        default=None,
+        help="写作模板文件路径（默认: workspace/assets/定性分析模板.md，回退 dayu/assets/定性分析模板.md）",
     )
     parser.add_argument(
         "--output",

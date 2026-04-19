@@ -343,7 +343,7 @@ def test_docling_processor_read_section_replaces_tables_with_placeholders(
     table_2 = FakeTableItem(
         self_ref="#/tables/1",
         page_no=3,
-        df=pd.DataFrame([["A", "B"]], columns=["dup", "dup"]),
+        df=pd.DataFrame([["A", "B"]], columns=pd.Index(["dup", "dup"], dtype="object")),
         markdown="TABLE_RAW_2",
     )
 
@@ -422,7 +422,7 @@ def test_docling_processor_read_table_and_search(tmp_path: Path, monkeypatch: py
     markdown_table = FakeTableItem(
         self_ref="#/tables/1",
         page_no=6,
-        df=pd.DataFrame([["X", "Y"]], columns=["col", "col"]),
+        df=pd.DataFrame([["X", "Y"]], columns=pd.Index(["col", "col"], dtype="object")),
         markdown="MARKDOWN_FALLBACK",
     )
     linear_items = [
@@ -555,7 +555,7 @@ def test_docling_processor_read_table_markdown_export_failure_falls_back_to_data
     table = FakeTableItemMarkdownFail(
         self_ref="#/tables/0",
         page_no=1,
-        df=pd.DataFrame([["A", "B"]], columns=["dup", "dup"]),
+        df=pd.DataFrame([["A", "B"]], columns=pd.Index(["dup", "dup"], dtype="object")),
         markdown="RAW_MD",
     )
     linear_items = [
@@ -600,10 +600,13 @@ def test_docling_processor_table_headers_fallback_to_column_headers(
     table = FakeTableItem(
         self_ref="#/tables/0",
         page_no=1,
-        df=pd.DataFrame([
-            ["-", 10],
-            ["n/a", 20],
-        ], columns=["Name", "Value"]),
+        df=pd.DataFrame(
+            [
+                ["-", 10],
+                ["n/a", 20],
+            ],
+            columns=pd.Index(["Name", "Value"], dtype="object"),
+        ),
         markdown="MD",
     )
     linear_items = [

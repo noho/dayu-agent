@@ -2247,7 +2247,7 @@ def test_context_and_header_helper_paths() -> None:
     assert sec_table_extraction._extract_context_before("s_0001", by_ref, "   ") == ""
     assert sec_table_extraction._resolve_dom_context_by_index([" a "], 2) == ""
 
-    df = pd.DataFrame(columns=["Products", "Products"])
+    df = pd.DataFrame(columns=pd.Index(["Products", "Products"], dtype="object"))
     assert sec_table_extraction._extract_headers_from_dataframe(df) is None
     assert sec_table_extraction._extract_row_headers_from_table_dict(_BadTableDict()) is None
 

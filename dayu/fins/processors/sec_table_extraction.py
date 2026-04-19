@@ -1446,7 +1446,7 @@ def _recover_index_as_column(df: pd.DataFrame) -> pd.DataFrame:
     result.insert(
         0,
         _resolve_recovered_index_column_name(df.index),
-        recovered_values,
+        pd.Index(recovered_values, dtype="object"),
         allow_duplicates=True,
     )
     return result
@@ -1663,7 +1663,7 @@ def _collapse_ghost_columns(df: pd.DataFrame) -> pd.DataFrame:
         result_cols.append(clean_name)
         result_data[clean_name] = merged_values
 
-    return pd.DataFrame(result_data, columns=result_cols)
+    return pd.DataFrame(result_data, columns=pd.Index(result_cols, dtype="object"))
 
 
 def _ghost_column_base_name(col_name: Any) -> str:
@@ -2186,7 +2186,9 @@ def _render_markdown_table(table_obj: Any, fallback_text: str) -> str:
         try:
             # NaN 在 MultiIndex 合并单元格中常见，转 markdown 前统一填为空字符串
             cleaned_df = table_df.fillna("")
-            return cleaned_df.to_markdown(index=False)
+            markdown = cleaned_df.to_markdown(index=False)
+            if isinstance(markdown, str):
+                return markdown
         except Exception:
             pass
     if fallback_text:

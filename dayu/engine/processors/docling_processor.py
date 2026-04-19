@@ -913,7 +913,9 @@ def _render_markdown_table(
         try:
             # NaN 在合并单元格中常见，转 markdown 前统一填为空字符串
             cleaned_df = table_df.fillna("")
-            return cleaned_df.to_markdown(index=False)
+            markdown = cleaned_df.to_markdown(index=False)
+            if isinstance(markdown, str):
+                return markdown
         except Exception:
             pass
 

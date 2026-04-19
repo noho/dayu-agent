@@ -670,7 +670,7 @@ def test_render_records_table_dataframe_low_quality_fallback_to_markdown() -> No
     """
     table = FakeTable(
         text_value="| 0 | 1 | 2 |\n| 3 | 4 | 5 |",
-        df=pd.DataFrame([[0, 1, 2], [3, 4, 5]], columns=[0, 1, 2]),
+        df=pd.DataFrame([[0, 1, 2], [3, 4, 5]], columns=pd.Index([0, 1, 2], dtype="int64")),
     )
 
     result = sec_table_extraction._render_records_table(
@@ -730,7 +730,7 @@ def test_render_records_table_with_generated_columns_allowed() -> None:
     """
     table = FakeTable(
         text_value="Value1 Value2 Value3",
-        df=pd.DataFrame([["A", "B", "C"]], columns=[0, 1, 2]),
+        df=pd.DataFrame([["A", "B", "C"]], columns=pd.Index([0, 1, 2], dtype="int64")),
     )
 
     result = sec_table_extraction._render_records_table(
@@ -790,7 +790,7 @@ def test_render_records_table_expected_col_count_validation() -> None:
     """
     table = FakeTable(
         text_value="A B",
-        df=pd.DataFrame([["X", "Y"]], columns=["Col1", "Col2"]),
+        df=pd.DataFrame([["X", "Y"]], columns=pd.Index(["Col1", "Col2"], dtype="object")),
     )
     table.col_count = 3  # 声明 3 列，但实际只有 2 列
 
@@ -817,7 +817,7 @@ def test_render_records_table_duplicate_columns_handling() -> None:
     Raises:
         AssertionError: 断言失败时抛出。
     """
-    df = pd.DataFrame([[1, 2, 3]], columns=["Name", "Name", "Value"])
+    df = pd.DataFrame([[1, 2, 3]], columns=pd.Index(["Name", "Name", "Value"], dtype="object"))
     table = FakeTable(
         text_value="Name Name Value",
         df=df,
@@ -1292,7 +1292,7 @@ def test_extract_table_headers_from_dataframe_index() -> None:
             "2024": [100, 200],
             "2023": [150, 250],
         },
-        index=["Revenue", "Cost"],
+        index=pd.Index(["Revenue", "Cost"], dtype="object"),
     )
     table = FakeTable(
         text_value="",
@@ -1319,7 +1319,7 @@ def test_extract_table_headers_from_table_dict() -> None:
     Raises:
         AssertionError: 断言失败时抛出。
     """
-    df = pd.DataFrame([["A", "B"], ["C", "D"]], columns=["Col1", "Col2"])
+    df = pd.DataFrame([["A", "B"], ["C", "D"]], columns=pd.Index(["Col1", "Col2"], dtype="object"))
     table = FakeTable(
         text_value="",
         df=df,
@@ -1345,7 +1345,7 @@ def test_extract_table_headers_from_table_object_headers_attribute() -> None:
     Raises:
         AssertionError: 断言失败时抛出。
     """
-    df = pd.DataFrame([["A", "B"]], columns=["Col1", "Col2"])
+    df = pd.DataFrame([["A", "B"]], columns=pd.Index(["Col1", "Col2"], dtype="object"))
     table = FakeTable(
         text_value="",
         df=df,
@@ -1933,7 +1933,7 @@ def test_render_records_quality_strict_mode() -> None:
     """
     table = FakeTable(
         text_value="| 1 | 2 |",
-        df=pd.DataFrame([[1, 2]], columns=["A", "B"]),
+        df=pd.DataFrame([[1, 2]], columns=pd.Index(["A", "B"], dtype="object")),
     )
 
     result = sec_table_extraction._render_records_table(
@@ -1964,7 +1964,7 @@ def test_render_records_quality_aggressive_mode() -> None:
     """
     table = FakeTable(
         text_value="| 1 | 2 |",
-        df=pd.DataFrame([[1, 2]], columns=["A", "B"]),
+        df=pd.DataFrame([[1, 2]], columns=pd.Index(["A", "B"], dtype="object")),
     )
 
     result = sec_table_extraction._render_records_table(
@@ -2118,7 +2118,7 @@ def test_render_records_table_with_null_col_count() -> None:
     """
     table = FakeTable(
         text_value="A B C",
-        df=pd.DataFrame([["1", "2", "3"]], columns=["X", "Y", "Z"]),
+        df=pd.DataFrame([["1", "2", "3"]], columns=pd.Index(["X", "Y", "Z"], dtype="object")),
     )
     table.col_count = cast(Any, None)
 
@@ -2211,7 +2211,7 @@ def test_extract_table_headers_case_normalization() -> None:
     """
     df = pd.DataFrame(
         [["A", "B"]], 
-        columns=["Revenue", "Expense"],
+        columns=pd.Index(["Revenue", "Expense"], dtype="object"),
     )
     table = FakeTable(
         text_value="",
@@ -2412,7 +2412,7 @@ def test_render_records_normalize_column_names() -> None:
     """
     df = pd.DataFrame(
         [[1, 2]],
-        columns=["col (1)", "col [2]"],
+        columns=pd.Index(["col (1)", "col [2]"], dtype="object"),
     )
     table = FakeTable(
         text_value="",
@@ -2445,7 +2445,7 @@ def test_render_records_large_dataframe() -> None:
     """
     df = pd.DataFrame(
         [[float(i * j) for j in range(10)] for i in range(100)],
-        columns=[f"Col{i}" for i in range(10)],
+        columns=pd.Index([f"Col{i}" for i in range(10)], dtype="object"),
     )
     table = FakeTable(
         text_value="",
@@ -2583,7 +2583,7 @@ def test_extract_table_headers_numeric_columns() -> None:
     """
     df = pd.DataFrame(
         [[1, 2, 3]],
-        columns=[2024, 2023, 2022],
+        columns=pd.Index([2024, 2023, 2022], dtype="int64"),
     )
     table = FakeTable(
         text_value="",
@@ -3106,7 +3106,7 @@ def test_extract_headers_from_dataframe_standard() -> None:
     """
     df = pd.DataFrame(
         [[1, 2]],
-        columns=["A", "B"],
+        columns=pd.Index(["A", "B"], dtype="object"),
     )
     
     result = sec_table_extraction._extract_headers_from_dataframe(df)

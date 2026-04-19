@@ -383,7 +383,7 @@ END_ITEM_RULE
 def test_actual_template_parses_with_expected_top_level_structure() -> None:
     """验证真实模板能够被解析，并具备稳定的顶层结构。"""
 
-    template_path = Path(__file__).resolve().parents[2] / "定性分析模板.md"
+    template_path = Path(__file__).resolve().parents[2] / "dayu" / "assets" / "定性分析模板.md"
     layout = parse_template_layout(template_path.read_text(encoding="utf-8"))
 
     assert layout.report_goal.strip()
@@ -400,7 +400,7 @@ def test_actual_template_parses_with_expected_top_level_structure() -> None:
 def test_actual_template_chapters_keep_minimum_contract_structure() -> None:
     """验证真实模板各章节至少保留可解析的目标、骨架与章节合同。"""
 
-    template_path = Path(__file__).resolve().parents[2] / "定性分析模板.md"
+    template_path = Path(__file__).resolve().parents[2] / "dayu" / "assets" / "定性分析模板.md"
     layout = parse_template_layout(template_path.read_text(encoding="utf-8"))
 
     for chapter in layout.chapters:
@@ -417,7 +417,7 @@ def test_actual_template_chapters_keep_minimum_contract_structure() -> None:
 def test_actual_template_item_rules_bind_to_visible_headings() -> None:
     """验证真实模板中的 ITEM_RULE 都绑定到对应章节 skeleton 的可见标题。"""
 
-    template_path = Path(__file__).resolve().parents[2] / "定性分析模板.md"
+    template_path = Path(__file__).resolve().parents[2] / "dayu" / "assets" / "定性分析模板.md"
     layout = parse_template_layout(template_path.read_text(encoding="utf-8"))
 
     for chapter in layout.chapters:

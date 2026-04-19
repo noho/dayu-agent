@@ -519,11 +519,17 @@ def test_dataframe_header_and_markdown_fallback_helpers() -> None:
     assert isinstance(dp._safe_table_dataframe(cast(TableItem, _TypeErrorDfExporter()), fake_document), pd.DataFrame)
     assert dp._safe_table_dataframe(cast(TableItem, _BadDfExporter()), fake_document) is None
 
-    df_headers = pd.DataFrame([["-", "x"], ["--", "y"]], columns=["unnamed: 0", "unnamed: 1"])
+    df_headers = pd.DataFrame(
+        [["-", "x"], ["--", "y"]],
+        columns=pd.Index(["unnamed: 0", "unnamed: 1"], dtype="object"),
+    )
     table = _MinimalTableItem(self_ref="#/tables/1", df=df_headers, markdown="md")
     assert dp._extract_table_headers(cast(TableItem, table), fake_document) is None
 
-    df_named = pd.DataFrame([["资产", 1], ["负债", 2]], columns=["项目", "金额"])
+    df_named = pd.DataFrame(
+        [["资产", 1], ["负债", 2]],
+        columns=pd.Index(["项目", "金额"], dtype="object"),
+    )
     table_named = _MinimalTableItem(self_ref="#/tables/2", df=df_named, markdown="md")
     assert dp._extract_table_headers(cast(TableItem, table_named), fake_document) == ["资产", "负债"]
 

@@ -20,7 +20,7 @@ from argparse import Namespace
 from pathlib import Path
 import urllib.request
 import urllib.error
-from dayu.startup.config_file_resolver import _resolve_package_config_path
+from dayu.startup.config_file_resolver import _resolve_package_assets_path, _resolve_package_config_path
 
 MODULE = "CLI.INIT"
 
@@ -226,6 +226,34 @@ def _copy_config(base_dir: Path, *, overwrite: bool) -> Path:
 
     if dst.exists() and not overwrite:
         print(f"配置目录已存在: {dst}（使用 --overwrite 覆盖）")
+        return dst
+
+    if dst.exists() and overwrite:
+        shutil.rmtree(dst)
+
+    shutil.copytree(src, dst)
+    return dst
+
+
+def _copy_assets(base_dir: Path, *, overwrite: bool) -> Path:
+    """复制包内 assets 到工作区。
+
+    Args:
+        base_dir: 工作区根目录。
+        overwrite: 是否覆盖已有文件。
+
+    Returns:
+        目标 assets 目录路径。
+
+    Raises:
+        无。
+    """
+
+    src = _resolve_package_assets_path()
+    dst = (base_dir / "assets").resolve()
+
+    if dst.exists() and not overwrite:
+        print(f"assets 目录已存在: {dst}（使用 --overwrite 覆盖）")
         return dst
 
     if dst.exists() and overwrite:
@@ -604,6 +632,10 @@ def run_init(args: Namespace) -> int:
     # 1. 复制配置
     config_dir = _copy_config(base_dir, overwrite=overwrite)
     print(f"✓ 配置已复制到: {config_dir}")
+
+    # 1b. 复制 assets（定性分析模板等）
+    assets_dir = _copy_assets(base_dir, overwrite=overwrite)
+    print(f"✓ assets 已复制到: {assets_dir}")
 
     # 2. 选择供应商 + 输入 API Key（已有则跳过）
     chosen_key = _prompt_provider_selection()

@@ -34,6 +34,19 @@ def _resolve_package_config_path() -> Path:
     return (Path(__file__).resolve().parent.parent / "config").resolve()
 
 
+def _resolve_package_assets_path() -> Path:
+    """解析包内默认 assets 目录路径。
+
+    Returns:
+        ``dayu/assets`` 的绝对路径。
+
+    Raises:
+        无。
+    """
+
+    return (Path(__file__).resolve().parent.parent / "assets").resolve()
+
+
 class ConfigFileResolver:
     """配置目录 fallback 解析器。"""
 

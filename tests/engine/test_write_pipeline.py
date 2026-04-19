@@ -38,18 +38,37 @@ from dayu.prompting.scene_definition import load_scene_definition
 from dayu.services.internal.write_pipeline.chapter_contracts import ChapterContract, ItemRule, PreferredLens
 from dayu.services.internal.write_pipeline.audit_evidence_rewriter import (
     _build_anchor_rewrite_evidence_lines,
+    _build_evidence_prefix_from_existing_lines,
+    _extract_anchor_locator_from_hint,
+    _extract_period_value_from_hint,
+    _extract_rows_from_hint,
+    _has_anchor_rewrite_candidates,
+    _rewrite_evidence_lines_and_collect_resolved_anchor_issues,
     _rewrite_evidence_lines_for_confirmed_anchor_issues,
+    _rewrite_financial_statement_evidence_line,
+    _validate_anchor_rewrite_postconditions,
 )
 from dayu.services.internal.write_pipeline.audit_formatting import (
+    _build_current_visible_headings_block,
     _collect_all_evidence_items,
+    _extract_evidence_section_block,
+    _extract_json_text,
     _extract_markdown_content,
+    _find_all_occurrences,
+    _find_enclosing_heading_section,
+    _find_markdown_section_span,
+    _find_normalized_line_like_spans,
+    _find_normalized_match_spans,
+    _find_normalized_paragraph_spans,
     _has_evidence_section,
     _matches_skeleton_structure,
     _normalize_chapter_markdown_for_audit,
     _normalize_evidence_location_segment,
     _normalize_heading_text,
+    _replace_evidence_section_block,
     _should_run_fix_placeholders,
     _strip_evidence_section,
+    _strip_generated_parenthetical_summary,
 )
 from dayu.services.internal.write_pipeline.audit_rules import (
     ConfirmOutputError,
@@ -103,6 +122,7 @@ from dayu.services.internal.write_pipeline.enums import (
     EvidenceConfirmationStatus,
     RepairResolutionMode,
     RepairStrategy,
+    RepairTargetKind,
     build_audit_scope_rules_payload,
     normalize_audit_rule_code,
 )
@@ -7431,3 +7451,1164 @@ def test_run_repair_prompt_raises_repair_output_error_after_parse_retry_exhauste
 
     with pytest.raises(RepairOutputError):
         runner._prompt_runner.run_repair_prompt("测试 repair prompt")
+
+
+@pytest.mark.unit
+def test_extract_json_text_extracts_from_text() -> None:
+    """验证 _extract_json_text 从文本中抽取 JSON 子串。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    assert _extract_json_text("prefix {\"a\": 1} suffix") == '{"a": 1}'
+    assert _extract_json_text('no json here') == ""
+    assert _extract_json_text("{only open") == ""
+    assert _extract_json_text("}only close") == ""
+    assert _extract_json_text("}only close then {open") == ""
+    assert _extract_json_text("{\"ok\": true}") == '{"ok": true}'
+
+
+@pytest.mark.unit
+def test_strip_evidence_section_at_end_of_document() -> None:
+    """验证 _strip_evidence_section 剥除文末证据小节。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    content = "## 第一章\n\n正文\n\n### 证据与出处\n\n- 来源1"
+    result = _strip_evidence_section(content)
+    assert "### 证据与出处" not in result
+    assert "来源1" not in result
+
+
+@pytest.mark.unit
+def test_strip_evidence_section_between_headings() -> None:
+    """验证 _strip_evidence_section 在两个同级标题之间剥除。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    content = (
+        "## 公司概况\n\n正文A\n\n"
+        "### 证据与出处\n\n- 来源X\n\n"
+        "## 财务分析\n\n正文B"
+    )
+    result = _strip_evidence_section(content)
+    assert "### 证据与出处" not in result
+    assert "来源X" not in result
+    assert "## 财务分析" in result
+    assert "正文B" in result
+
+
+@pytest.mark.unit
+def test_strip_generated_parenthetical_summary() -> None:
+    """验证 _strip_generated_parenthetical_summary 各分支。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    # 无括号：直接返回
+    assert _strip_generated_parenthetical_summary("年报 第5页") == "年报 第5页"
+    # 空 inner：返回 head
+    assert _strip_generated_parenthetical_summary("年报 ()") == "年报"
+    # inner 仅有逗号：返回 head
+    assert _strip_generated_parenthetical_summary("年报 (,)") == "年报"
+    # 全是四位年份：保留
+    assert _strip_generated_parenthetical_summary("年报 (2023, 2024)") == "年报 (2023, 2024)"
+    # 两个以上非年份 token：截断
+    assert _strip_generated_parenthetical_summary("年报 (收入增长, 利润下降, 现金流)") == "年报"
+    # 单个非年份 token：保留
+    assert _strip_generated_parenthetical_summary("年报 (收入增长)") == "年报 (收入增长)"
+
+
+@pytest.mark.unit
+def test_build_current_visible_headings_block() -> None:
+    """验证 _build_current_visible_headings_block 有标题和无标题情况。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    # 无标题
+    result = _build_current_visible_headings_block("纯正文没有标题")
+    assert "没有可见标题" in result
+    # 有标题
+    result = _build_current_visible_headings_block("## 标题A\n\n### 子标题")
+    assert "# 标题A" in result
+    assert "## 子标题" in result
+
+
+@pytest.mark.unit
+def test_find_enclosing_heading_section_multiple_and_missing() -> None:
+    """验证 _find_enclosing_heading_section 各分支覆盖。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    # 无 headings → None
+    assert _find_enclosing_heading_section(
+        markdown_text="some text",
+        label_text="label",
+        headings=[],
+    ) is None
+
+    # 多处匹配 → None
+    md = "## H1\n\n- slot: 值\n\n## H2\n\n- slot: 值"
+    result = _find_enclosing_heading_section(
+        markdown_text=md,
+        label_text="slot:",
+        headings=[
+            {"level": 2, "title": "H1", "start": 0, "end": 5},
+            {"level": 2, "title": "H2", "start": 17, "end": 22},
+        ],
+    )
+    assert result is None
+
+    # 唯一匹配但无 enclosing heading（label 在所有 heading 之前）
+    result = _find_enclosing_heading_section(
+        markdown_text="preamble\n- slot: 值\n## H1\n\nbody",
+        label_text="slot:",
+        headings=[
+            {"level": 2, "title": "H1", "start": 18, "end": 23},
+        ],
+    )
+    assert result is None
+
+
+@pytest.mark.unit
+def test_find_enclosing_heading_section_finds_enclosing() -> None:
+    """验证 _find_enclosing_heading_section 找到正确的 enclosing heading。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    md = "## H1\n\n- slot: 值\n\n## H2\n\nbody2"
+    result = _find_enclosing_heading_section(
+        markdown_text=md,
+        label_text="slot:",
+        headings=[
+            {"level": 2, "title": "H1", "start": 0, "end": 5},
+            {"level": 2, "title": "H2", "start": 17, "end": 22},
+        ],
+    )
+    assert result == (0, 17)
+
+
+@pytest.mark.unit
+def test_find_markdown_section_span_strategy3_fallback() -> None:
+    """验证 _find_markdown_section_span 策略3回退到 enclosing heading。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    # heading_text 既不是精确标题也不是归一化标题，而是 bullet 标签
+    md = "## H1\n\n- slotA: 值\n\n## H2\n\nbody2"
+    result = _find_markdown_section_span(markdown_text=md, heading_text="slotA:")
+    # 应 fallback 到 enclosing heading section 查找
+    assert result is not None
+
+
+@pytest.mark.unit
+def test_find_markdown_section_span_not_found() -> None:
+    """验证 _find_markdown_section_span 找不到标题返回 None。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    md = "## H1\n\nbody\n\n## H2\n\nbody2"
+    assert _find_markdown_section_span(markdown_text=md, heading_text="不存在的标题") is None
+
+
+@pytest.mark.unit
+def test_find_normalized_line_like_spans() -> None:
+    """验证 _find_normalized_line_like_spans 各分支。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    # 空 target → []
+    assert _find_normalized_line_like_spans("some text", "", bullet_only=False) == []
+
+    # 空行跳过
+    text = "第一行\n\n第二行\n"
+    spans = _find_normalized_line_like_spans(text, "第二行", bullet_only=False)
+    assert len(spans) == 1
+    assert spans[0][0] > 0
+
+    # bullet_only=True 但行不是 bullet → 不匹配
+    text = "普通行\n- bullet行\n"
+    spans = _find_normalized_line_like_spans(text, "普通行", bullet_only=True)
+    assert len(spans) == 0
+
+    # bullet_only=True 且匹配（normalize 后包含 bullet 前缀）
+    spans = _find_normalized_line_like_spans(text, "-bullet行", bullet_only=True)
+    assert len(spans) == 1
+
+    # startswith 匹配（target 是行的前缀）：用非 bullet 行
+    text = "来源详情页码\n"
+    spans = _find_normalized_line_like_spans(text, "来源详情", bullet_only=False)
+    assert len(spans) == 1
+
+    # target 更长于行，target startswith 行（行是 target 前缀）
+    text = "短\n"
+    spans = _find_normalized_line_like_spans(text, "短文本更多内容", bullet_only=False)
+    assert len(spans) == 1
+
+
+@pytest.mark.unit
+def test_find_normalized_paragraph_spans() -> None:
+    """验证 _find_normalized_paragraph_spans 各分支。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    # 空 target → []
+    assert _find_normalized_paragraph_spans("some text", "") == []
+
+    # 完全匹配段落
+    text = "段落一\n\n段落二\n"
+    spans = _find_normalized_paragraph_spans(text, "段落一")
+    assert len(spans) == 1
+    assert spans[0] == (0, len("段落一\n"))
+
+    # target 段落 startswith 匹配
+    spans = _find_normalized_paragraph_spans(text, "段落")
+    assert len(spans) == 2
+
+    # 不匹配
+    spans = _find_normalized_paragraph_spans(text, "不存在")
+    assert len(spans) == 0
+
+    # 多行段落
+    text = "第一行\n第二行\n\n下一节\n"
+    spans = _find_normalized_paragraph_spans(text, "第一行第二行")
+    assert len(spans) == 1
+
+
+@pytest.mark.unit
+def test_find_normalized_match_spans_all_kinds() -> None:
+    """验证 _find_normalized_match_spans 各 target_kind 分支。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    text = "普通段落内容\n\n- bullet项目\n"
+
+    # 空 target → []
+    assert _find_normalized_match_spans(text, "", RepairTargetKind.SUBSTRING) == []
+
+    # SUBSTRING
+    spans = _find_normalized_match_spans(text, "普通段落内容", RepairTargetKind.SUBSTRING)
+    assert len(spans) == 1
+
+    # LINE
+    spans = _find_normalized_match_spans(text, "普通段落内容", RepairTargetKind.LINE)
+    assert len(spans) == 1
+
+    # BULLET
+    spans = _find_normalized_match_spans(text, "-bullet项目", RepairTargetKind.BULLET)
+    assert len(spans) == 1
+
+    # PARAGRAPH
+    spans = _find_normalized_match_spans(text, "普通段落", RepairTargetKind.PARAGRAPH)
+    assert len(spans) == 1
+
+
+@pytest.mark.unit
+def test_find_all_occurrences() -> None:
+    """验证 _find_all_occurrences 各分支。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    # 空 target → []
+    assert _find_all_occurrences("abc", "") == []
+
+    # 多次匹配
+    assert _find_all_occurrences("abcabc", "abc") == [0, 3]
+
+    # 无匹配
+    assert _find_all_occurrences("xyz", "abc") == []
+
+    # 重叠不应出现（非重叠搜索）
+    assert _find_all_occurrences("aaa", "aa") == [0]
+
+
+@pytest.mark.unit
+def test_should_run_fix_placeholders_empty() -> None:
+    """验证 _should_run_fix_placeholders 空内容返回 False。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    assert _should_run_fix_placeholders("") is False
+    assert _should_run_fix_placeholders("   \n  ") is False
+
+
+@pytest.mark.unit
+def test_normalize_evidence_line_no_dash_prefix() -> None:
+    """验证 _normalize_evidence_line 非 dash 开头行原样返回。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.services.internal.write_pipeline.audit_formatting import _normalize_evidence_line
+
+    assert _normalize_evidence_line("不是 evidence 行") == "不是 evidence 行"
+
+
+@pytest.mark.unit
+def test_normalize_chapter_markdown_for_audit_strips_code_fences() -> None:
+    """验证 _normalize_chapter_markdown_for_audit 在 evidence section 中去除代码围栏。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    content = (
+        "## 公司概况\n\n正文\n\n"
+        "### 证据与出处\n\n"
+        "```\n"
+        "- 来源A | 详情 | 页码\n"
+        "```\n"
+    )
+    result = _normalize_chapter_markdown_for_audit(content)
+    assert "```" not in result
+    assert "- 来源A" in result
+
+
+@pytest.mark.unit
+def test_normalize_chapter_markdown_for_audit_non_evidence_heading() -> None:
+    """验证 evidence section 内遇到新 heading 退出 evidence 模式。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    content = (
+        "### 证据与出处\n\n"
+        "- 来源A | 详情 | 页码\n\n"
+        "### 下一节标题\n\n"
+        "不是 evidence 行\n"
+    )
+    result = _normalize_chapter_markdown_for_audit(content)
+    # "### 下一节标题" 之后的行不应被当作 evidence 处理
+    assert "### 下一节标题" in result
+    assert "不是 evidence 行" in result
+
+
+@pytest.mark.unit
+def test_extract_evidence_section_block_empty() -> None:
+    """验证 _extract_evidence_section_block 无证据小节返回空字符串。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    assert _extract_evidence_section_block("## 只有标题\n\n正文") == ""
+
+
+@pytest.mark.unit
+def test_replace_evidence_section_block_errors() -> None:
+    """验证 _replace_evidence_section_block 错误路径。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    # 新 section 不以 "### 证据与出处" 开头
+    with pytest.raises(ValueError, match="证据与出处"):
+        _replace_evidence_section_block(
+            chapter_markdown="## 正文",
+            evidence_section="### 错误标题",
+        )
+
+    # 正文缺少 evidence section
+    with pytest.raises(ValueError, match="缺少"):
+        _replace_evidence_section_block(
+            chapter_markdown="## 正文\n\n没有证据小节",
+            evidence_section="### 证据与出处\n\n- 来源",
+        )
+
+
+@pytest.mark.unit
+def test_collect_all_evidence_items_without_ordered_titles() -> None:
+    """验证 _collect_all_evidence_items 不传 ordered_titles 时遍历 values。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    chapter_results = {
+        "第一章": ChapterResult(
+            index=1,
+            title="第一章",
+            status="passed",
+            content="## 第一章",
+            evidence_items=["来源X"],
+            audit_passed=True,
+        ),
+        "第二章": ChapterResult(
+            index=2,
+            title="第二章",
+            status="passed",
+            content="## 第二章",
+            evidence_items=["来源Y"],
+            audit_passed=True,
+        ),
+    }
+    items = _collect_all_evidence_items(chapter_results)
+    assert sorted(items) == ["来源X", "来源Y"]
+
+
+# ── audit_evidence_rewriter 单元函数补充测试 ──────────────────────────────────
+
+
+@pytest.mark.unit
+def test_has_anchor_rewrite_candidates_returns_false_for_empty_entries() -> None:
+    """验证空条目列表时 _has_anchor_rewrite_candidates 返回 False。"""
+
+    result = EvidenceConfirmationResult(entries=[])
+    assert _has_anchor_rewrite_candidates(result) is False
+
+
+@pytest.mark.unit
+def test_has_anchor_rewrite_candidates_returns_false_for_unrelated_status() -> None:
+    """验证条目状态不匹配可重写类型时返回 False。"""
+
+    result = EvidenceConfirmationResult(
+        entries=[
+            EvidenceConfirmationEntry(
+                violation_id="v1",
+                rule=AuditRuleCode.E1,
+                excerpt="测试",
+                status=EvidenceConfirmationStatus.SUPPORTED,
+                reason="已支持",
+                rewrite_hint="",
+            )
+        ]
+    )
+    assert _has_anchor_rewrite_candidates(result) is False
+
+
+@pytest.mark.unit
+def test_extract_anchor_locator_from_hint_full_line() -> None:
+    """验证 _extract_anchor_locator_from_hint 提取完整证据条目定位。"""
+
+    hint = "将证据条目更改为：SEC EDGAR | Form 10-K | Part II - Item 7"
+    locator = _extract_anchor_locator_from_hint(hint)
+    assert locator == "SEC EDGAR | Form 10-K | Part II - Item 7"
+
+
+@pytest.mark.unit
+def test_extract_anchor_locator_from_hint_path_match() -> None:
+    """验证 _extract_anchor_locator_from_hint 提取 Part 路径。"""
+
+    reason = "数据在同一文件的 Part II - Item 8 - Financial Information 中。"
+    locator = _extract_anchor_locator_from_hint(reason)
+    assert locator == "Part II - Item 8 - Financial Information"
+
+
+@pytest.mark.unit
+def test_extract_anchor_locator_from_hint_returns_empty() -> None:
+    """验证 _extract_anchor_locator_from_hint 无法匹配时返回空串。"""
+
+    locator = _extract_anchor_locator_from_hint("无任何定位信息")
+    assert locator == ""
+
+
+@pytest.mark.unit
+def test_extract_period_value_from_hint_matched() -> None:
+    """验证 _extract_period_value_from_hint 匹配 Period 串。"""
+
+    value = _extract_period_value_from_hint(
+        rewrite_hint="Period:FY2025,FY2024",
+        reason="需要扩展期间",
+    )
+    assert value == "FY2025,FY2024"
+
+
+@pytest.mark.unit
+def test_extract_period_value_from_hint_no_match() -> None:
+    """验证 _extract_period_value_from_hint 无匹配时返回空串。"""
+
+    value = _extract_period_value_from_hint(
+        rewrite_hint="无期间信息",
+        reason="无期间信息",
+    )
+    assert value == ""
+
+
+@pytest.mark.unit
+def test_extract_rows_from_hint_with_rows_and_quoted() -> None:
+    """验证 _extract_rows_from_hint 同时提取 Rows: 和引号行标签。"""
+
+    rows = _extract_rows_from_hint(
+        rewrite_hint='Rows:Net sales,Products',
+        reason='"Services"行也应包含',
+    )
+    assert "Net sales" in rows
+    assert "Products" in rows
+    assert "Services" in rows
+
+
+@pytest.mark.unit
+def test_extract_rows_from_hint_skips_part_and_fs_prefix() -> None:
+    """验证 _extract_rows_from_hint 跳过 Part 和 Financial Statement 前缀引号。"""
+
+    rows = _extract_rows_from_hint(
+        rewrite_hint="",
+        reason='"Part II - Item 7"应引用，"Financial Statement:income"应包含',
+    )
+    assert "Part II - Item 7" not in rows
+    assert "Financial Statement:income" not in rows
+
+
+@pytest.mark.unit
+def test_extract_rows_from_hint_deduplicates() -> None:
+    """验证 _extract_rows_from_hint 对重复行标签去重。"""
+
+    rows = _extract_rows_from_hint(
+        rewrite_hint='Rows:Net sales,"Net sales"',
+        reason="",
+    )
+    assert rows.count("Net sales") == 1
+
+
+@pytest.mark.unit
+def test_extract_rows_from_hint_empty_quoted() -> None:
+    """验证 _extract_rows_from_hint 空引号内容不加入结果。"""
+
+    rows = _extract_rows_from_hint(
+        rewrite_hint="",
+        reason='""空值',
+    )
+    assert rows == []
+
+
+@pytest.mark.unit
+def test_rewrite_financial_statement_evidence_line_adds_period() -> None:
+    """验证 _rewrite_financial_statement_evidence_line 补入缺失的 Period。"""
+
+    line = "SEC EDGAR | Form 10-K | Filed 2025 | Accession 001 | Financial Statement:income | Rows:Net sales"
+    result = _rewrite_financial_statement_evidence_line(
+        line, statement_type="income", period_value="FY2025,FY2024", rows=[],
+    )
+    assert "Period:FY2025,FY2024" in result
+    assert "Rows:Net sales" in result
+
+
+@pytest.mark.unit
+def test_rewrite_financial_statement_evidence_line_merges_periods() -> None:
+    """验证 _rewrite_financial_statement_evidence_line 合并已有 Period。"""
+
+    line = "SEC EDGAR | Form 10-K | Filed 2025 | Accession 001 | Financial Statement:income | Period:FY2025 | Rows:Net sales"
+    result = _rewrite_financial_statement_evidence_line(
+        line, statement_type="income", period_value="FY2024,FY2023", rows=[],
+    )
+    assert "FY2025,FY2024,FY2023" in result
+
+
+@pytest.mark.unit
+def test_rewrite_financial_statement_evidence_line_merges_periods_label() -> None:
+    """验证 _rewrite_financial_statement_evidence_line 使用 Periods: 标签合并。"""
+
+    line = "SEC EDGAR | Form 10-K | Filed 2025 | Accession 001 | Financial Statement:income | Periods:FY2025 | Rows:Net sales"
+    result = _rewrite_financial_statement_evidence_line(
+        line, statement_type="income", period_value="FY2024", rows=[],
+    )
+    assert "Periods:FY2025,FY2024" in result
+
+
+@pytest.mark.unit
+def test_rewrite_financial_statement_evidence_line_adds_rows() -> None:
+    """验证 _rewrite_financial_statement_evidence_line 补入缺失的 Rows。"""
+
+    line = "SEC EDGAR | Form 10-K | Filed 2025 | Accession 001 | Financial Statement:income | Period:FY2025"
+    result = _rewrite_financial_statement_evidence_line(
+        line, statement_type="income", period_value="", rows=["Products", "Services"],
+    )
+    assert "Rows:Products,Services" in result
+
+
+@pytest.mark.unit
+def test_rewrite_financial_statement_evidence_line_merges_rows() -> None:
+    """验证 _rewrite_financial_statement_evidence_line 合并已有 Rows。"""
+
+    line = "SEC EDGAR | Form 10-K | Filed 2025 | Accession 001 | Financial Statement:income | Period:FY2025 | Rows:Net sales"
+    result = _rewrite_financial_statement_evidence_line(
+        line, statement_type="income", period_value="", rows=["Products", "Services"],
+    )
+    assert "Net sales" in result
+    assert "Products" in result
+    assert "Services" in result
+
+
+@pytest.mark.unit
+def test_rewrite_financial_statement_evidence_line_no_match_returns_original() -> None:
+    """验证报表类型不匹配时原样返回。"""
+
+    line = "SEC EDGAR | Form 10-K | Filed 2025 | Accession 001 | Financial Statement:income | Period:FY2025"
+    result = _rewrite_financial_statement_evidence_line(
+        line, statement_type="cash_flow", period_value="FY2024", rows=[],
+    )
+    assert result == line
+
+
+@pytest.mark.unit
+def test_rewrite_evidence_lines_no_evidence_returns_empty() -> None:
+    """验证无证据条目时返回空列表和空集合。"""
+
+    chapter_markdown = "## 章节标题\n\n无证据条目"
+    confirmation = EvidenceConfirmationResult(
+        entries=[
+            EvidenceConfirmationEntry(
+                violation_id="v1",
+                rule=AuditRuleCode.E1,
+                excerpt="测试",
+                status=EvidenceConfirmationStatus.SUPPORTED_ELSEWHERE_IN_SAME_FILING,
+                reason="Part II - Item 7",
+                rewrite_hint="",
+            )
+        ]
+    )
+    lines, resolved = _rewrite_evidence_lines_and_collect_resolved_anchor_issues(
+        chapter_markdown=chapter_markdown,
+        confirmation_result=confirmation,
+    )
+    assert lines == []
+    assert resolved == set()
+
+
+@pytest.mark.unit
+def test_rewrite_evidence_lines_with_same_filing_statement_anchor_fix() -> None:
+    """验证 anchor_fix.kind=same_filing_statement 时从结构化数据补入 period/rows。"""
+
+    chapter_markdown = (
+        "## 财务表现\n\n"
+        "### 结论要点\n\n"
+        "- test\n\n"
+        "### 证据与出处\n\n"
+        "- SEC EDGAR | Form 10-K | Filed 2025-10-31 | Accession 0000320193-25-000079 | "
+        "Financial Statement:income | Period:FY2025 | Rows:Net sales\n"
+    )
+    confirmation = EvidenceConfirmationResult(
+        entries=[
+            EvidenceConfirmationEntry(
+                violation_id="evidence_1",
+                rule=AuditRuleCode.E2,
+                excerpt="毛利率",
+                status=EvidenceConfirmationStatus.SUPPORTED_ELSEWHERE_IN_SAME_FILING,
+                reason="需要补入",
+                rewrite_hint="",
+                anchor_fix=EvidenceAnchorFix(
+                    kind="same_filing_statement",
+                    action="append",
+                    keep_existing_evidence=True,
+                    statement_type="income",
+                    period="FY2025,FY2024",
+                    rows=["Products", "Services"],
+                ),
+            )
+        ]
+    )
+
+    rewritten, resolved = _rewrite_evidence_lines_and_collect_resolved_anchor_issues(
+        chapter_markdown=chapter_markdown,
+        confirmation_result=confirmation,
+    )
+
+    normalized = [line.replace(" ", "") for line in rewritten]
+    assert any("FY2025,FY2024" in l for l in normalized)
+    assert any("Products" in l for l in normalized)
+    assert "evidence_1" in resolved
+
+
+@pytest.mark.unit
+def test_rewrite_evidence_lines_appends_new_statement_line() -> None:
+    """验证现有行不匹配报表类型时，anchor_fix 非 None 时补建新 evidence line。"""
+
+    chapter_markdown = (
+        "## 财务表现\n\n"
+        "### 结论要点\n\n"
+        "- test\n\n"
+        "### 证据与出处\n\n"
+        "- SEC EDGAR | Form 10-K | Filed 2025-10-31 | Accession 0000320193-25-000079 | "
+        "Financial Statement:cash_flow | Period:FY2025 | Rows:Cash\n"
+    )
+    confirmation = EvidenceConfirmationResult(
+        entries=[
+            EvidenceConfirmationEntry(
+                violation_id="evidence_1",
+                rule=AuditRuleCode.E2,
+                excerpt="收入增长",
+                status=EvidenceConfirmationStatus.SUPPORTED_ELSEWHERE_IN_SAME_FILING,
+                reason="需要补入利润表",
+                rewrite_hint="Financial Statement:income | Period:FY2025 | Rows:Net sales",
+                anchor_fix=EvidenceAnchorFix(
+                    kind="same_filing_statement",
+                    action="append",
+                    keep_existing_evidence=True,
+                    statement_type="income",
+                    period="FY2025",
+                    rows=["Net sales"],
+                ),
+            )
+        ]
+    )
+
+    rewritten, resolved = _rewrite_evidence_lines_and_collect_resolved_anchor_issues(
+        chapter_markdown=chapter_markdown,
+        confirmation_result=confirmation,
+    )
+
+    assert any("Financial Statement:income" in line for line in rewritten)
+    assert "evidence_1" in resolved
+
+
+@pytest.mark.unit
+def test_rewrite_evidence_lines_raw_locator_empty_with_resolved() -> None:
+    """验证 raw_locator 为空但已通过报表重写解决时，仍收集 violation_id。"""
+
+    chapter_markdown = (
+        "## 财务表现\n\n"
+        "### 结论要点\n\n"
+        "- test\n\n"
+        "### 证据与出处\n\n"
+        "- SEC EDGAR | Form 10-K | Filed 2025-10-31 | Accession 0000320193-25-000079 | "
+        "Financial Statement:income | Period:FY2025 | Rows:Net sales\n"
+    )
+    confirmation = EvidenceConfirmationResult(
+        entries=[
+            EvidenceConfirmationEntry(
+                violation_id="evidence_1",
+                rule=AuditRuleCode.E2,
+                excerpt="收入增长",
+                status=EvidenceConfirmationStatus.SUPPORTED_ELSEWHERE_IN_SAME_FILING,
+                reason="需要补入",
+                rewrite_hint="Financial Statement:income | Period:FY2024 | Rows:Products",
+                anchor_fix=EvidenceAnchorFix(
+                    kind="same_filing_statement",
+                    action="append",
+                    keep_existing_evidence=True,
+                    statement_type="income",
+                    period="FY2024",
+                    rows=["Products"],
+                ),
+            )
+        ]
+    )
+
+    _, resolved = _rewrite_evidence_lines_and_collect_resolved_anchor_issues(
+        chapter_markdown=chapter_markdown,
+        confirmation_result=confirmation,
+    )
+
+    assert "evidence_1" in resolved
+
+
+@pytest.mark.unit
+def test_rewrite_evidence_lines_sec_edgar_raw_locator() -> None:
+    """验证 raw_locator 以 SEC EDGAR 开头时直接作为候选行。"""
+
+    chapter_markdown = (
+        "## 章节\n\n"
+        "### 结论要点\n\n"
+        "- test\n\n"
+        "### 证据与出处\n\n"
+        "- SEC EDGAR | Form 10-K | Filed 2025-10-31 | Accession 0000320193-25-000079 | Part I\n"
+    )
+    confirmation = EvidenceConfirmationResult(
+        entries=[
+            EvidenceConfirmationEntry(
+                violation_id="evidence_1",
+                rule=AuditRuleCode.E1,
+                excerpt="测试",
+                status=EvidenceConfirmationStatus.SUPPORTED_ELSEWHERE_IN_SAME_FILING,
+                reason="在另一部分",
+                rewrite_hint="将证据条目更改为：SEC EDGAR | Form 10-K | Filed 2025-10-31 | Accession 0000320193-25-000079 | Part II - Item 7",
+            )
+        ]
+    )
+
+    rewritten, resolved = _rewrite_evidence_lines_and_collect_resolved_anchor_issues(
+        chapter_markdown=chapter_markdown,
+        confirmation_result=confirmation,
+    )
+
+    assert any("Part II - Item 7" in line for line in rewritten)
+    assert "evidence_1" in resolved
+
+
+@pytest.mark.unit
+def test_rewrite_evidence_lines_uploaded_raw_locator() -> None:
+    """验证 raw_locator 以 Uploaded 开头时直接作为候选行。"""
+
+    chapter_markdown = (
+        "## 章节\n\n"
+        "### 结论要点\n\n"
+        "- test\n\n"
+        "### 证据与出处\n\n"
+        "- SEC EDGAR | Form 10-K | Filed 2025-10-31 | Accession 0000320193-25-000079 | Part I\n"
+    )
+    confirmation = EvidenceConfirmationResult(
+        entries=[
+            EvidenceConfirmationEntry(
+                violation_id="evidence_1",
+                rule=AuditRuleCode.E1,
+                excerpt="测试",
+                status=EvidenceConfirmationStatus.SUPPORTED_ELSEWHERE_IN_SAME_FILING,
+                reason="在上传文件中",
+                rewrite_hint="将证据条目更改为：Uploaded | 2025 Annual Report | Part 3",
+            )
+        ]
+    )
+
+    rewritten, resolved = _rewrite_evidence_lines_and_collect_resolved_anchor_issues(
+        chapter_markdown=chapter_markdown,
+        confirmation_result=confirmation,
+    )
+
+    assert any("Uploaded | 2025 Annual Report | Part 3" in line for line in rewritten)
+    assert "evidence_1" in resolved
+
+
+@pytest.mark.unit
+def test_rewrite_evidence_lines_evidence_prefix_empty_with_resolved() -> None:
+    """验证 evidence_prefix 为空但已通过报表重写解决时，仍收集 violation_id。"""
+
+    chapter_markdown = (
+        "## 章节\n\n"
+        "### 结论要点\n\n"
+        "- test\n\n"
+        "### 证据与出处\n\n"
+        "- short_line\n"
+    )
+    confirmation = EvidenceConfirmationResult(
+        entries=[
+            EvidenceConfirmationEntry(
+                violation_id="evidence_1",
+                rule=AuditRuleCode.E1,
+                excerpt="测试",
+                status=EvidenceConfirmationStatus.SUPPORTED_ELSEWHERE_IN_SAME_FILING,
+                reason="Part II - Item 7 应引用",
+                rewrite_hint="Financial Statement:income | Period:FY2025 | Rows:Net sales",
+                anchor_fix=EvidenceAnchorFix(
+                    kind="same_filing_statement",
+                    action="append",
+                    keep_existing_evidence=True,
+                    statement_type="income",
+                    period="FY2025",
+                    rows=["Net sales"],
+                ),
+            )
+        ]
+    )
+
+    _, resolved = _rewrite_evidence_lines_and_collect_resolved_anchor_issues(
+        chapter_markdown=chapter_markdown,
+        confirmation_result=confirmation,
+    )
+
+    assert "evidence_1" not in resolved
+
+
+@pytest.mark.unit
+def test_rewrite_evidence_lines_duplicate_locator_skipped() -> None:
+    """验证已存在的归一化定位行不重复添加。"""
+
+    chapter_markdown = (
+        "## 章节\n\n"
+        "### 结论要点\n\n"
+        "- test\n\n"
+        "### 证据与出处\n\n"
+        "- SEC EDGAR | Form 10-K | Filed 2025-10-31 | Accession 0000320193-25-000079 | Part II - Item 7 | Free Cash Flow\n"
+    )
+    confirmation = EvidenceConfirmationResult(
+        entries=[
+            EvidenceConfirmationEntry(
+                violation_id="evidence_1",
+                rule=AuditRuleCode.E1,
+                excerpt="测试",
+                status=EvidenceConfirmationStatus.SUPPORTED_ELSEWHERE_IN_SAME_FILING,
+                reason="已在 Part II - Item 7",
+                rewrite_hint="将证据条目更改为：SEC EDGAR | Form 10-K | Filed 2025-10-31 | Accession 0000320193-25-000079 | Part II - Item 7 | Free Cash Flow",
+            )
+        ]
+    )
+
+    rewritten = _rewrite_evidence_lines_for_confirmed_anchor_issues(
+        chapter_markdown=chapter_markdown,
+        confirmation_result=confirmation,
+    )
+
+    assert len(rewritten) == 1
+
+
+@pytest.mark.unit
+def test_rewrite_evidence_lines_locator_with_preferred_accession() -> None:
+    """验证从 rewrite_hint 提取 preferred_accession 并匹配对应 filing 前缀。"""
+
+    chapter_markdown = (
+        "## 章节\n\n"
+        "### 结论要点\n\n"
+        "- test\n\n"
+        "### 证据与出处\n\n"
+        "- SEC EDGAR | Form 10-K | Filed 2025-10-31 | Accession 0000320193-25-000079 | Part I\n"
+        "- SEC EDGAR | Form 10-K | Filed 2026-01-29 | Accession 0001628280-26-003942 | Part I\n"
+    )
+    confirmation = EvidenceConfirmationResult(
+        entries=[
+            EvidenceConfirmationEntry(
+                violation_id="evidence_1",
+                rule=AuditRuleCode.E1,
+                excerpt="测试",
+                status=EvidenceConfirmationStatus.SUPPORTED_ELSEWHERE_IN_SAME_FILING,
+                reason="在第二个 filing 中",
+                rewrite_hint="Accession 0001628280-26-003942 应引用 Part II - Item 7",
+            )
+        ]
+    )
+
+    rewritten = _rewrite_evidence_lines_for_confirmed_anchor_issues(
+        chapter_markdown=chapter_markdown,
+        confirmation_result=confirmation,
+    )
+
+    new_lines = [l for l in rewritten if "Part II - Item 7" in l]
+    assert len(new_lines) == 1
+    assert "0001628280-26-003942" in new_lines[0]
+
+
+@pytest.mark.unit
+def test_rewrite_evidence_lines_locator_no_prefix_no_resolved() -> None:
+    """验证 locator 非 SEC EDGAR/Uploaded 且无可用 prefix 时，未解决的 entry 不加入 resolved。"""
+
+    chapter_markdown = (
+        "## 章节\n\n"
+        "### 结论要点\n\n"
+        "- test\n\n"
+        "### 证据与出处\n\n"
+        "- short\n"
+    )
+    confirmation = EvidenceConfirmationResult(
+        entries=[
+            EvidenceConfirmationEntry(
+                violation_id="evidence_1",
+                rule=AuditRuleCode.E1,
+                excerpt="测试",
+                status=EvidenceConfirmationStatus.SUPPORTED_ELSEWHERE_IN_SAME_FILING,
+                reason="Part II - Item 7 应引用",
+                rewrite_hint="Part II - Item 7",
+            )
+        ]
+    )
+
+    _, resolved = _rewrite_evidence_lines_and_collect_resolved_anchor_issues(
+        chapter_markdown=chapter_markdown,
+        confirmation_result=confirmation,
+    )
+
+    assert "evidence_1" not in resolved
+
+
+@pytest.mark.unit
+def test_build_evidence_prefix_from_existing_lines_matched_accession() -> None:
+    """验证 _build_evidence_prefix_from_existing_lines 按 accession 匹配。"""
+
+    lines = [
+        "SEC EDGAR | Form 10-K | Filed 2025-10-31 | Accession 0000320193-25-000079 | Part I",
+        "SEC EDGAR | Form 10-K | Filed 2026-01-29 | Accession 0001628280-26-003942 | Part I",
+    ]
+    prefix = _build_evidence_prefix_from_existing_lines(
+        lines, preferred_accession="0001628280-26-003942",
+    )
+    assert prefix == "SEC EDGAR | Form 10-K | Filed 2026-01-29 | Accession 0001628280-26-003942"
+
+
+@pytest.mark.unit
+def test_build_evidence_prefix_from_existing_lines_strips_dash_prefix() -> None:
+    """验证 _build_evidence_prefix_from_existing_lines 剥离 `- ` 前缀。"""
+
+    lines = ["- SEC EDGAR | Form 10-K | Filed 2025 | Accession 001 | Part I"]
+    prefix = _build_evidence_prefix_from_existing_lines(lines)
+    assert prefix == "SEC EDGAR | Form 10-K | Filed 2025 | Accession 001"
+
+
+@pytest.mark.unit
+def test_build_evidence_prefix_from_existing_lines_short_line_skipped() -> None:
+    """验证不足 5 段的行被跳过，最终返回空串。"""
+
+    lines = ["SEC EDGAR | Form 10-K"]
+    prefix = _build_evidence_prefix_from_existing_lines(lines)
+    assert prefix == ""
+
+
+@pytest.mark.unit
+def test_build_evidence_prefix_from_existing_lines_empty() -> None:
+    """验证空列表时返回空串。"""
+
+    prefix = _build_evidence_prefix_from_existing_lines([])
+    assert prefix == ""
+
+
+@pytest.mark.unit
+def test_validate_anchor_rewrite_postconditions_no_diff() -> None:
+    """验证重写前后无差异时返回失败原因。"""
+
+    error = _validate_anchor_rewrite_postconditions(
+        original_chapter_markdown="same content",
+        rewritten_chapter_markdown="same content",
+        expected_evidence_lines=[],
+        skeleton="## 章节",
+    )
+    assert error == "rewrite 未产生正文差异"
+
+
+@pytest.mark.unit
+def test_validate_anchor_rewrite_postconditions_evidence_mismatch() -> None:
+    """验证 evidence section 与期望不一致时返回失败原因。"""
+
+    original = "## 章节\n\n### 证据与出处\n\n- line1\n"
+    rewritten = "## 章节\n\n### 证据与出处\n\n- line1\n- line2\n"
+    error = _validate_anchor_rewrite_postconditions(
+        original_chapter_markdown=original,
+        rewritten_chapter_markdown=rewritten,
+        expected_evidence_lines=["line1", "line2", "line3"],
+        skeleton="## 章节",
+    )
+    assert error == "evidence section 与期望重写结果不一致"

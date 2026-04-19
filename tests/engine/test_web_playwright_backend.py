@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from multiprocessing.process import BaseProcess
+import time
+from pathlib import Path
+from queue import Empty
 from types import SimpleNamespace
 import sys
-from typing import Any, cast
+from typing import cast
 
 import pytest
 
@@ -147,11 +151,11 @@ def test_playwright_process_helpers_cover_terminate_and_route_branching() -> Non
     """验证进程终止 helper 与资源路由 helper 的剩余分支。"""
 
     finished_process = _FakeProcess(alive=False)
-    backend_mod._terminate_playwright_process(cast(Any, finished_process))
+    backend_mod._terminate_playwright_process(cast(BaseProcess, finished_process))
     assert finished_process.join_calls == [0]
 
     alive_process = _FakeProcess(alive=True)
-    backend_mod._terminate_playwright_process(cast(Any, alive_process))
+    backend_mod._terminate_playwright_process(cast(BaseProcess, alive_process))
     assert alive_process.terminate_calls == 1
     assert alive_process.kill_calls == 1
     assert alive_process.join_calls == [backend_mod._PW_PROCESS_TERMINATE_GRACE_SECONDS, backend_mod._PW_PROCESS_TERMINATE_GRACE_SECONDS]
@@ -194,7 +198,7 @@ def test_get_playwright_browser_reuses_browser_and_handles_launch_failure(
     launches: list[dict[str, object]] = []
     fake_browser = SimpleNamespace(close=lambda: None)
 
-    def _fake_launch(**kwargs: object) -> object:
+    def _fake_launch(**kwargs: bool | str) -> object:
         launches.append(dict(kwargs))
         return fake_browser
 
@@ -230,3 +234,251 @@ def test_get_playwright_browser_reuses_browser_and_handles_launch_failure(
 
     assert backend_mod._get_playwright_browser(playwright_channel=None, headless=True) is None
     assert any("Playwright 浏览器初始化失败" in message for message in warnings)
+
+
+@pytest.mark.unit
+def test_is_picklable_worker_detects_unpicklable() -> None:
+    """不可 pickle 的 callable 应返回 False。"""
+
+    class _Unpicklable:
+        def __call__(self) -> dict[str, int]:
+            return {}
+
+        def __reduce__(self) -> tuple[type, tuple[int, ...]]:
+            raise TypeError("cannot pickle")
+
+    # 函数级 lambda 无法 pickle（捕获了本地作用域）
+    assert backend_mod._is_picklable_worker(lambda: {}) is False
+    assert backend_mod._is_picklable_worker(_Unpicklable()) is False
+    # 模块级函数可以 pickle
+    assert backend_mod._is_picklable_worker(_noop_callable) is True
+
+
+def _noop_callable() -> dict[str, int]:
+    """测试用可 pickle callable。"""
+
+    return {}
+
+
+@pytest.mark.unit
+def test_poll_playwright_result_queue_returns_none_on_timeout() -> None:
+    """空队列在超时后应返回 None。"""
+
+    class _EmptyQueue:
+        def get(self, *, timeout: float = 0) -> None:
+            raise Empty()
+
+        def get_nowait(self) -> None:
+            raise Empty()
+
+    result = backend_mod._poll_playwright_result_queue(result_queue=_EmptyQueue(), timeout=0.1)
+    assert result is None
+
+    result_nowait = backend_mod._poll_playwright_result_queue(result_queue=_EmptyQueue(), timeout=0)
+    assert result_nowait is None
+
+
+@pytest.mark.unit
+def test_poll_playwright_result_queue_returns_item() -> None:
+    """有结果的队列应返回结果。"""
+
+    class _QueueWithItem:
+        def get(self, *, timeout: float = 0) -> dict[str, object]:
+            return {"ok": True}
+
+        def get_nowait(self) -> dict[str, object]:
+            return {"ok": True}
+
+    result = backend_mod._poll_playwright_result_queue(result_queue=_QueueWithItem(), timeout=0.1)
+    assert result == {"ok": True}
+
+    result_nowait = backend_mod._poll_playwright_result_queue(result_queue=_QueueWithItem(), timeout=0)
+    assert result_nowait == {"ok": True}
+
+
+@pytest.mark.unit
+def test_close_playwright_result_queue_handles_exceptions() -> None:
+    """close 和 join_thread 抛异常时不应影响函数返回。"""
+
+    class _BrokenQueue:
+        def close(self) -> None:
+            raise RuntimeError("close failed")
+
+        def join_thread(self) -> None:
+            raise RuntimeError("join failed")
+
+    backend_mod._close_playwright_result_queue(_BrokenQueue())
+
+
+@pytest.mark.unit
+def test_close_playwright_result_queue_handles_missing_methods() -> None:
+    """队列无 close/join_thread 方法时应安全跳过。"""
+
+    backend_mod._close_playwright_result_queue(SimpleNamespace())
+
+
+@pytest.mark.unit
+def test_normalize_playwright_storage_state_dir_variants() -> None:
+    """测试 storage state 目录规范化各分支。"""
+
+    assert backend_mod._normalize_playwright_storage_state_dir(None) is None
+    assert backend_mod._normalize_playwright_storage_state_dir("") is None
+    assert backend_mod._normalize_playwright_storage_state_dir("  ") is None
+    assert backend_mod._normalize_playwright_storage_state_dir("/tmp/states") == "/tmp/states"
+    assert backend_mod._normalize_playwright_storage_state_dir("  /tmp/states  ") == "/tmp/states"
+
+
+@pytest.mark.unit
+def test_resolve_playwright_storage_state_path_variants(tmp_path: Path) -> None:
+    """测试 storage state 路径解析各分支。"""
+
+    # dir 为 None → 空字符串
+    assert backend_mod._resolve_playwright_storage_state_path(url="https://example.com", playwright_storage_state_dir=None) == ""
+
+    # url 无 host → 空字符串
+    assert backend_mod._resolve_playwright_storage_state_path(url="", playwright_storage_state_dir=str(tmp_path)) == ""
+
+    # 文件不存在 → 空字符串
+    assert backend_mod._resolve_playwright_storage_state_path(url="https://example.com", playwright_storage_state_dir=str(tmp_path)) == ""
+
+    # 文件存在 → 返回路径
+    state_file = tmp_path / "example.com.json"
+    state_file.write_text("{}")
+    result = backend_mod._resolve_playwright_storage_state_path(url="https://example.com", playwright_storage_state_dir=str(tmp_path))
+    assert result == str(state_file)
+
+    # www. 前缀 host 应 fallback 到无 www 版本
+    www_file = tmp_path / "www.example.org.json"
+    www_file.write_text("{}")
+    result2 = backend_mod._resolve_playwright_storage_state_path(url="https://www.example.org", playwright_storage_state_dir=str(tmp_path))
+    assert result2 == str(www_file)
+
+
+@pytest.mark.unit
+def test_get_remaining_playwright_timeout_ms() -> None:
+    """测试剩余超时毫秒数计算。"""
+
+    fake_time = 100.0
+    assert backend_mod._get_remaining_playwright_timeout_ms(105.0, time_monotonic=lambda: fake_time) == 5000
+    assert backend_mod._get_remaining_playwright_timeout_ms(100.0, time_monotonic=lambda: fake_time) == 0
+    assert backend_mod._get_remaining_playwright_timeout_ms(99.0, time_monotonic=lambda: fake_time) == 0
+    # 小数进位
+    assert backend_mod._get_remaining_playwright_timeout_ms(100.002, time_monotonic=lambda: 100.0) == 2
+
+
+@pytest.mark.unit
+def test_require_playwright_timeout_ms_raises_on_expired() -> None:
+    """deadline 已过时应抛 RuntimeError。"""
+
+    with pytest.raises(RuntimeError, match="Playwright 页面加载超时"):
+        backend_mod._require_playwright_timeout_ms(0.0, time_monotonic=lambda: 1.0)
+
+
+@pytest.mark.unit
+def test_require_playwright_timeout_ms_returns_value() -> None:
+    """deadline 未过时应返回剩余毫秒。"""
+
+    result = backend_mod._require_playwright_timeout_ms(10.0, time_monotonic=lambda: 0.0)
+    assert result == 10000
+
+
+@pytest.mark.unit
+def test_close_playwright_browser_noop_when_already_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """浏览器实例为 None 时关闭应为 no-op。"""
+
+    monkeypatch.setattr(backend_mod, "_PW_BROWSER", None)
+    monkeypatch.setattr(backend_mod, "_PW_INSTANCE", None)
+    monkeypatch.setattr(backend_mod, "_PW_BROWSER_KEY", ("chrome", True))
+    backend_mod._close_playwright_browser()
+    assert backend_mod._PW_BROWSER is None
+    assert backend_mod._PW_INSTANCE is None
+    assert backend_mod._PW_BROWSER_KEY is None
+
+
+def _fake_resolve_timeout(_timeout: float, **_kw: float | str | None) -> float:
+    """测试用 timeout 预算解析。"""
+
+    return 10.0
+
+
+def _fake_detect_bot_challenge(**_kw: bool | str) -> SimpleNamespace:
+    """测试用 bot challenge 检测。"""
+
+    return SimpleNamespace(challenge_detected=False, challenge_signals=[])
+
+
+@pytest.mark.unit
+def test_fetch_and_convert_with_playwright_playwright_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """playwright 未安装时应返回 unavailable 结果。"""
+
+    # 模拟 playwright 包不存在：清除 sys.modules 中的 playwright 相关模块
+    for key in list(sys.modules):
+        if key.startswith("playwright"):
+            monkeypatch.delitem(sys.modules, key, raising=False)
+    # 阻止 import playwright 重新加载
+    monkeypatch.setitem(sys.modules, "playwright", None)
+    result = backend_mod._fetch_and_convert_with_playwright(
+        url="https://example.com",
+        timeout_seconds=10.0,
+        headers={},
+        timeout_budget=None,
+        deadline_monotonic=time.monotonic() + 60,
+        cancellation_token=None,
+        playwright_channel=None,
+        playwright_storage_state_path="",
+        resolve_timeout_budget=_fake_resolve_timeout,
+        playwright_sync_worker=lambda **_kw: {},
+        detect_bot_challenge=_fake_detect_bot_challenge,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "playwright_not_installed"
+
+
+@pytest.mark.unit
+def test_fetch_and_convert_with_playwright_timeout_on_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """resolve_timeout_budget 抛 TimeoutError 时应返回 timeout 结果。"""
+
+    from requests import Timeout
+
+    def _raise_timeout(_timeout: float, **_kw: float | str | None) -> float:
+        raise Timeout()
+
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", SimpleNamespace(sync_playwright=lambda: None))
+    result = backend_mod._fetch_and_convert_with_playwright(
+        url="https://example.com",
+        timeout_seconds=10.0,
+        headers={},
+        timeout_budget=None,
+        deadline_monotonic=time.monotonic() + 60,
+        cancellation_token=None,
+        playwright_channel=None,
+        playwright_storage_state_path="",
+        resolve_timeout_budget=_raise_timeout,
+        playwright_sync_worker=lambda **_kw: {},
+        detect_bot_challenge=_fake_detect_bot_challenge,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "playwright_timeout"
+
+
+@pytest.mark.unit
+def test_fetch_and_convert_with_playwright_nonpicklable_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """worker 不可 pickle 时走内联执行路径（非子进程）。"""
+
+    fake_result = {"ok": True, "content": "hello", "http_status": 200, "response_headers": {}}
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", SimpleNamespace(sync_playwright=lambda: None))
+
+    result = backend_mod._fetch_and_convert_with_playwright(
+        url="https://example.com",
+        timeout_seconds=10.0,
+        headers={},
+        timeout_budget=None,
+        deadline_monotonic=time.monotonic() + 60,
+        cancellation_token=None,
+        playwright_channel=None,
+        playwright_storage_state_path="",
+        resolve_timeout_budget=_fake_resolve_timeout,
+        playwright_sync_worker=lambda **_kw: fake_result,
+        detect_bot_challenge=_fake_detect_bot_challenge,
+    )
+    assert result == fake_result

@@ -50,3 +50,29 @@ jobs:
 
       - name: Run pytest
         run: pytest -q --timeout=60
+
+  min-pandas:
+    name: min-pandas (ubuntu-latest, py3.11, pandas 2.1.4)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies with minimum supported pandas
+        # 单独锁定 pandas 下界，验证 pyproject 中声明的最低支持版本真实可用。
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test,dev,browser]" "pandas==2.1.4"
+
+      - name: Run pyright
+        run: pyright
+
+      - name: Run pytest
+        run: pytest -q --timeout=60
