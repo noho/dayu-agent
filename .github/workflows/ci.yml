@@ -5,14 +5,29 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      run_extended_integration:
+        description: "是否运行扩展 integration 层"
+        required: false
+        default: false
+        type: boolean
+      run_full_matrix:
+        description: "是否运行四平台完整验证"
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "0 2 * * *"
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  min-compat:
-    name: min-compat (ubuntu-latest, py3.11)
+  pr-required-min-compat:
+    name: pr-required min-compat (ubuntu-latest, py3.11)
     runs-on: ubuntu-latest
 
     steps:
@@ -33,12 +48,100 @@ jobs:
       - name: Run pyright
         run: pyright
 
-      - name: Run pytest
-        run: pytest -q --timeout=60
+      - name: Run required pytest lane
+        run: pytest -q --timeout=60 -m "not integration and not slow and not e2e"
 
-  lock-validation:
-    name: lock-validation (${{ matrix.platform_id }}, py3.11)
+  pr-required-lock-smoke:
+    name: pr-required lock-smoke (linux-x64, py3.11)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install locked dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test,dev,browser]" -c constraints/lock-linux-x64-py311.txt
+
+      - name: Run required Docling integration smoke
+        run: |
+          pytest -q --timeout=120 \
+            tests/engine/test_docling_processor_integration.py \
+            tests/fins/test_docling_upload_service_integration.py \
+            tests/engine/test_web_fetch_docling_integration.py
+
+      - name: Build wheel
+        run: python -m pip wheel --no-deps --wheel-dir dist .
+
+      - name: Build offline bundle
+        shell: bash
+        run: |
+          WHEEL_PATH="$(python - <<'PY'
+          from pathlib import Path
+          wheels = sorted(Path("dist").glob("dayu_agent-*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit(f"unexpected wheels: {wheels}")
+          print(wheels[0])
+          PY
+          )"
+          BUNDLE_PATH="$(python utils/build_offline_bundle.py \
+            --wheel "$WHEEL_PATH" \
+            --constraints constraints/lock-linux-x64-py311.txt \
+            --platform-id "linux-x64" \
+            --output-dir dist/offline)"
+          echo "BUNDLE_PATH=$BUNDLE_PATH" >> "$GITHUB_ENV"
+
+      - name: Smoke test offline bundle
+        run: python utils/smoke_test_offline_bundle.py --archive "${{ env.BUNDLE_PATH }}"
+
+  extended-integration:
+    name: extended integration (ubuntu-latest, py3.11)
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'schedule' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' &&
+        (inputs.run_extended_integration == true || inputs.run_full_matrix == true)) ||
+      (github.event_name == 'pull_request' &&
+        contains(github.event.pull_request.labels.*.name, 'full-integration'))
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install locked dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test,dev,browser]" -c constraints/lock-linux-x64-py311.txt
+
+      - name: Run extended integration lane
+        run: pytest -q --timeout=120 -m "integration and not e2e"
+
+  full-platform-validation:
+    name: full-platform-validation (${{ matrix.platform_id }}, py3.11)
     runs-on: ${{ matrix.runner }}
+    if: >
+      github.event_name == 'schedule' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' &&
+        inputs.run_full_matrix == true) ||
+      (github.event_name == 'pull_request' &&
+        contains(github.event.pull_request.labels.*.name, 'full-integration'))
     strategy:
       fail-fast: false
       matrix:
@@ -78,7 +181,7 @@ jobs:
             pyright
           fi
 
-      - name: Run pytest
+      - name: Run full pytest lane
         run: pytest -q --timeout=60
 
       - name: Build wheel

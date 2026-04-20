@@ -210,6 +210,42 @@ push 后 PR 自动更新，CI 重新跑。最终 merge 时用 **Squash and merge
   gh pr merge <PR号> --squash --delete-branch
   ```
 
+### 4.1 CI 分三层运行
+
+当前 GitHub Actions 已固定为三层验证，不靠创建 PR 时手工挑选：
+
+1. `PR 必跑`
+   - 触发：所有 `pull_request`
+   - 内容：
+     - `pyright`
+     - 最低支持版本 `min-compat`
+     - 快速 `pytest` 主链：`not integration and not slow and not e2e`
+     - `linux-x64` 锁定环境下的最小真实 Docling 集成 smoke
+     - `linux-x64` 离线安装包构建与 smoke
+   - 目标：几分钟内给出主反馈，不把所有慢测试塞进每个 PR
+
+2. `PR 扩展`
+   - 默认不跑
+   - 触发方式：
+     - 给 PR 加 label：`full-integration`
+   - 内容：
+     - Ubuntu 下完整 `integration` 测试层
+     - 四平台完整验证矩阵
+
+3. `主线 / 定时 / 手工完整验证`
+   - `push main`：自动跑扩展层与四平台完整验证
+   - `schedule`：每日定时跑扩展层与四平台完整验证
+   - `workflow_dispatch`：可手工触发
+     - 默认只跑快主链
+     - 勾选 `run_extended_integration=true` 时再跑扩展 integration 层
+     - 勾选 `run_full_matrix=true` 时再跑四平台完整验证
+
+这三层的设计原则是：
+
+- 主链 CI 必须包含少量真实集成 smoke
+- 更慢的真实集成测试与四平台完整矩阵分层运行
+- 发布前完整验证仍以 Release workflow 为准
+
 ### 5. PR merge 后本地同步
 
 `gh pr merge --delete-branch` 会自动删除本地和远端分支并切回 main，只需拉取最新：
