@@ -42,7 +42,7 @@ from dayu.cli.interactive_state import (
     InteractiveSessionState,
     build_interactive_session_id,
 )
-from dayu.services.contracts import FinsSubmission
+from dayu.services.contracts import FinsSubmission, WriteRunConfig
 from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
 from dayu.services.write_service import WriteService
 from dayu.startup.workspace import WorkspaceResources
@@ -3522,6 +3522,80 @@ def test_main_write_mode_calls_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert run_write_command(args) == 4
     assert any("写作流水线启动" in item for item in collector.info_logs)
     assert any("写作流水线结束但返回非零" in item for item in collector.warn_logs)
+
+
+@pytest.mark.unit
+def test_main_write_mode_uses_resolved_company_name_and_normalized_model_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证写作 CLI 会传递公司名而非 ticker，并显式归一化主写作模型覆盖名。"""
+
+    filings_dir = tmp_path / "portfolio" / "AAPL" / "filings"
+    filings_dir.mkdir(parents=True, exist_ok=True)
+    workspace_config = WorkspaceConfig(
+        workspace_dir=tmp_path,
+        output_dir=tmp_path / "output",
+        config_loader=ConfigLoader(ConfigFileResolver(tmp_path / "config")),
+        prompt_asset_store=FilePromptAssetStore(ConfigFileResolver(tmp_path / "config")),
+        ticker="AAPL",
+        has_local_filings=True,
+    )
+    running_config = RunningConfig(
+        runner_running_config=AsyncOpenAIRunnerRunningConfig(),
+        agent_running_config=AgentRunningConfig(),
+        doc_tool_limits=DocToolLimits(),
+        fins_tool_limits=FinsToolLimits(),
+        web_tools_config=WebToolsConfig(provider="auto"),
+        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+    )
+    captured_write_config: dict[str, object] = {}
+    args = Namespace(
+        command="write",
+        log_level=None,
+        debug=False,
+        verbose=False,
+        info=False,
+        quiet=False,
+        output=str(tmp_path / "draft"),
+        template=None,
+        write_max_retries=2,
+        resume=True,
+        web_provider="auto",
+        audit_model_name="deepseek-thinking",
+        model_name=None,
+    )
+
+    monkeypatch.setattr("dayu.cli.commands.write.setup_loglevel", lambda _args: None)
+    monkeypatch.setattr("dayu.cli.commands.write.setup_paths", partial(_return_value, workspace_config))
+    monkeypatch.setattr(
+        "dayu.cli.commands.write.setup_model_name",
+        partial(_return_value, ModelName(model_name="")),
+    )
+    monkeypatch.setattr(
+        "dayu.cli.commands.write._build_execution_options",
+        lambda _args: SimpleNamespace(model_name=None),
+    )
+    fake_dependencies = _FakeCliHostDependencies(running_config=running_config)
+    fake_dependencies.fins_runtime = SimpleNamespace(
+        get_company_name=lambda *_args, **_kwargs: "Apple Inc.",
+        get_company_meta_summary=lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        "dayu.cli.commands.write._prepare_cli_host_dependencies",
+        lambda **_kwargs: fake_dependencies.as_tuple(),
+    )
+    monkeypatch.setattr("dayu.cli.commands.write._build_write_service", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        "dayu.cli.commands.write.run_write_pipeline",
+        lambda **kwargs: captured_write_config.update({"write_config": kwargs["write_config"]}) or 0,
+    )
+
+    assert run_write_command(args) == 0
+    write_config = cast(WriteRunConfig, captured_write_config["write_config"])
+    assert write_config.company == "Apple Inc."
+    assert write_config.ticker == "AAPL"
+    assert write_config.write_model_override_name == ""
 
 
 @pytest.mark.unit

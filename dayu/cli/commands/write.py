@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from time import perf_counter
+from typing import Callable
 
 from dayu.cli.dependency_setup import (
     RunningConfig,
@@ -25,6 +26,46 @@ from dayu.services.write_service import WRITE_CANCELLED_EXIT_CODE, WriteService
 MODULE = "APP.WRITE"
 
 
+def _resolve_write_model_override_name(args: argparse.Namespace) -> str:
+    """解析主写作模型覆盖名。
+
+    Args:
+        args: 解析后的命令行参数。
+
+    Returns:
+        归一化后的主写作模型覆盖名；未显式配置时返回空字符串。
+
+    Raises:
+        无。
+    """
+
+    return setup_model_name(args).model_name
+
+
+def _resolve_write_company_name(
+    *,
+    ticker: str,
+    company_name_resolver: Callable[[str], str],
+) -> str:
+    """解析写作配置中的公司名称。
+
+    Args:
+        ticker: 公司股票代码。
+        company_name_resolver: 公司名称解析函数。
+
+    Returns:
+        解析后的公司名称；缺失或解析失败时返回空字符串。
+
+    Raises:
+        无。
+    """
+
+    try:
+        return str(company_name_resolver(ticker) or "").strip()
+    except Exception:
+        return ""
+
+
 def run_write_command(args: argparse.Namespace) -> int:
     """执行写作 CLI 命令。
 
@@ -40,11 +81,7 @@ def run_write_command(args: argparse.Namespace) -> int:
 
     setup_loglevel(args)
     paths_config = setup_paths(args)
-    model_name = (
-        setup_model_name(args).model_name
-        if getattr(args, "model_name", None) is not None
-        else ""
-    )
+    write_model_override_name = _resolve_write_model_override_name(args)
     execution_options = _build_execution_options(args)
     Log.info(f"工作目录: {paths_config.workspace_dir}", module=MODULE)
     if paths_config.ticker:
@@ -86,15 +123,19 @@ def run_write_command(args: argparse.Namespace) -> int:
         scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
         fins_runtime=fins_runtime,
     )
+    company_name = _resolve_write_company_name(
+        ticker=paths_config.ticker,
+        company_name_resolver=fins_runtime.get_company_name,
+    )
     write_config = WriteRunConfig(
         ticker=paths_config.ticker,
-        company=paths_config.ticker,
+        company=company_name,
         template_path=str(write_cli_config.template_path),
         output_dir=str(write_cli_config.output_dir),
         write_max_retries=write_cli_config.write_max_retries,
         web_provider=write_cli_config.web_provider,
         resume=write_cli_config.resume,
-        write_model_override_name=model_name,
+        write_model_override_name=write_model_override_name,
         audit_model_override_name=write_cli_config.audit_model_override_name,
         chapter_filter=write_cli_config.chapter_filter,
         fast=write_cli_config.fast,
