@@ -20,6 +20,19 @@ from dayu.prompting.scene_definition import ToolSelectionMode, ToolSelectionPoli
 from dayu.startup.config_file_resolver import ConfigFileResolver
 from dayu.startup.prompt_assets import FilePromptAssetStore
 
+_EXPECTED_THINKING_ALLOWED_NAMES: tuple[str, ...] = (
+    "mimo-v2-flash-thinking",
+    "mimo-v2-pro-thinking",
+    "mimo-v2-pro-thinking-plan",
+    "mimo-v2-pro-thinking-plan-sg",
+    "deepseek-thinking",
+    "qwen3-thinking",
+    "qwen3:30b-thinking",
+    "gpt-5.4",
+    "claude-sonnet-4-6",
+    "gemini-2.5-flash",
+)
+
 
 @pytest.mark.unit
 def test_compose_interactive_scene_contains_base_and_scene_fragments() -> None:
@@ -161,17 +174,7 @@ def test_manifest_tool_selection_is_loaded_from_shared_parser() -> None:
     manifest = load_scene_definition(FilePromptAssetStore(ConfigFileResolver()), "audit")
 
     assert manifest.model.default_name == "mimo-v2-pro-thinking-plan"
-    assert manifest.model.allowed_names == (
-        "mimo-v2-flash-thinking",
-        "mimo-v2-pro-thinking",
-      "mimo-v2-pro-thinking-plan",
-        "deepseek-thinking",
-        "qwen3-thinking",
-        "qwen3:30b-thinking",
-        "gpt-5.4",
-        "claude-sonnet-4-6",
-        "gemini-2.5-flash",
-    )
+    assert manifest.model.allowed_names == _EXPECTED_THINKING_ALLOWED_NAMES
     assert manifest.model.temperature_profile == "audit"
     assert manifest.runtime.agent.max_iterations == 24
     assert manifest.runtime.agent.max_consecutive_failed_tool_batches is None

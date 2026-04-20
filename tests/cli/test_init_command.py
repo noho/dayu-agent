@@ -13,6 +13,9 @@ import pytest
 from dayu.cli.commands.init import (
     _HF_MIRROR_URL,
     _INIT_ROLE_KEY,
+    _PROVIDER_OPTION_DEEPSEEK,
+    _PROVIDER_OPTION_MIMO_FLASH,
+    _PROVIDER_OPTION_MIMO_PRO,
     _ROLE_NON_THINKING,
     _ROLE_THINKING,
     _classify_model_role,
@@ -33,6 +36,24 @@ from dayu.cli.commands.init import (
     _write_env_windows,
     run_init_command,
 )
+
+_PROVIDER_ENV_KEYS: tuple[str, ...] = (
+    "MIMO_PLAN_API_KEY",
+    "MIMO_PLAN_SG_API_KEY",
+    "MIMO_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "QWEN_API_KEY",
+)
+
+
+def _clear_provider_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    """清理 `dayu-cli init` 主模型供应商相关环境变量。"""
+
+    for key in _PROVIDER_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -360,7 +381,8 @@ class TestRunInit:
         )
 
         # 确保环境变量中没有任何模型 key 和搜索 key
-        for k in ("DEEPSEEK_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "FMP_API_KEY"):
+        _clear_provider_env_vars(monkeypatch)
+        for k in ("TAVILY_API_KEY", "SERPER_API_KEY", "FMP_API_KEY"):
             monkeypatch.delenv(k, raising=False)
 
         # 清除 HF 环境变量
@@ -369,9 +391,10 @@ class TestRunInit:
         # Mock HF Hub 不可达 → 默认 Y
         monkeypatch.setattr("dayu.cli.commands.init._is_hf_hub_reachable", lambda: False)
 
-        # Mock 交互输入: 选择 3 (DeepSeek)，输入 key，跳过可选 key x3，HF 镜像回车(默认Y)，HF_TOKEN 跳过
-        inputs = iter(["3", "sk-test-key-123", "", "", "", "", ""])
+        # Mock 交互输入: 输入 key，跳过可选 key x3，HF 镜像回车(默认Y)，HF_TOKEN 跳过
+        inputs = iter(["sk-test-key-123", "", "", "", "", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
 
         # Mock 环境变量持久化
         monkeypatch.setattr(
@@ -422,6 +445,7 @@ class TestRunInit:
             lambda: pkg_assets,
         )
 
+        _clear_provider_env_vars(monkeypatch)
         # 预设 DEEPSEEK_API_KEY 和所有搜索 key
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-already-set-123456")
         monkeypatch.setenv("TAVILY_API_KEY", "tvly-xxx")
@@ -431,10 +455,6 @@ class TestRunInit:
         # 预设 HF 环境变量
         monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com")
         monkeypatch.setenv("HF_TOKEN", "hf-test-xxx")
-
-        # 只需要选供应商（选 3 = DeepSeek），不需要输入 key
-        inputs = iter(["3"])
-        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
 
         # _persist_env_var 不应被调用
         persist_calls: list[str] = []
@@ -448,6 +468,7 @@ class TestRunInit:
             "dayu.cli.commands.init._run_init_prewarm",
             lambda **_kwargs: (True, ""),
         )
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
 
         base = tmp_path / "workspace"
         base.mkdir()
@@ -888,18 +909,23 @@ class TestPromptProviderSelection:
     def test_empty_input_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """空输入时选择默认供应商（第一个已配置的）。"""
         monkeypatch.setenv("MIMO_API_KEY", "existing")
-        for k in ("MIMO_PLAN_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY",
+        for k in ("MIMO_PLAN_API_KEY", "MIMO_PLAN_SG_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY",
                    "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "QWEN_API_KEY"):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.setattr("builtins.input", lambda *_args: "")
         result = _prompt_provider_selection()
-        assert result == "MIMO_API_KEY"
+        assert result == _PROVIDER_OPTION_MIMO_PRO
+
+    def test_select_mimo_flash_option(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """显式选择 Flash 方案时返回独立方案 key。"""
+        _clear_provider_env_vars(monkeypatch)
+        monkeypatch.setattr("builtins.input", lambda *_args: "4")
+        result = _prompt_provider_selection()
+        assert result == _PROVIDER_OPTION_MIMO_FLASH
 
     def test_invalid_non_integer(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """非整数输入时调用 sys.exit(1)。"""
-        for k in ("MIMO_PLAN_API_KEY", "MIMO_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY",
-                   "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "QWEN_API_KEY"):
-            monkeypatch.delenv(k, raising=False)
+        _clear_provider_env_vars(monkeypatch)
         monkeypatch.setattr("builtins.input", lambda *_args: "abc")
         with pytest.raises(SystemExit) as exc_info:
             _prompt_provider_selection()
@@ -907,9 +933,7 @@ class TestPromptProviderSelection:
 
     def test_out_of_range(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """编号超出范围时调用 sys.exit(1)。"""
-        for k in ("MIMO_PLAN_API_KEY", "MIMO_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY",
-                   "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "QWEN_API_KEY"):
-            monkeypatch.delenv(k, raising=False)
+        _clear_provider_env_vars(monkeypatch)
         monkeypatch.setattr("builtins.input", lambda *_args: "999")
         with pytest.raises(SystemExit) as exc_info:
             _prompt_provider_selection()
@@ -917,13 +941,11 @@ class TestPromptProviderSelection:
 
     def test_first_configured_provider_branch(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """首个已配置供应商触发 first_configured_idx 分支。"""
-        for k in ("MIMO_PLAN_API_KEY", "MIMO_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY",
-                   "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "QWEN_API_KEY"):
-            monkeypatch.delenv(k, raising=False)
+        _clear_provider_env_vars(monkeypatch)
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-already")
         monkeypatch.setattr("builtins.input", lambda *_args: "")
         result = _prompt_provider_selection()
-        assert result == "DEEPSEEK_API_KEY"
+        assert result == _PROVIDER_OPTION_DEEPSEEK
 
 
 # --------------------------------------------------------------------------- #
@@ -1045,8 +1067,8 @@ class TestRunInitFailurePaths:
             "dayu.cli.commands.init.resolve_package_assets_path",
             lambda: pkg_assets,
         )
-        for k in ("DEEPSEEK_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "FMP_API_KEY",
-                   "HF_ENDPOINT", "HF_TOKEN"):
+        _clear_provider_env_vars(monkeypatch)
+        for k in ("TAVILY_API_KEY", "SERPER_API_KEY", "FMP_API_KEY", "HF_ENDPOINT", "HF_TOKEN"):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.setattr("dayu.cli.commands.init._is_hf_hub_reachable", lambda: True)
         monkeypatch.setattr(
@@ -1062,8 +1084,9 @@ class TestRunInitFailurePaths:
         base = self._prepare_mocks(tmp_path, monkeypatch)
         prewarm_calls: list[tuple[Path, Path]] = []
 
-        inputs = iter(["3", "sk-test", "", "", "", "n", ""])
+        inputs = iter(["sk-test", "", "", "", "n", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
         monkeypatch.setattr(
             "dayu.cli.commands.init._persist_env_var",
             lambda _k, _v: ("setx", False),
@@ -1084,8 +1107,9 @@ class TestRunInitFailurePaths:
         """搜索 Key 持久化失败时触发 search_persist_failed 分支。"""
         base = self._prepare_mocks(tmp_path, monkeypatch)
 
-        inputs = iter(["3", "sk-test", "tvly-test", "", "", "n", ""])
+        inputs = iter(["sk-test", "tvly-test", "", "", "n", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
 
         call_count = 0
 
@@ -1131,12 +1155,13 @@ class TestInitPrewarm:
             lambda: pkg_assets,
         )
 
-        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        _clear_provider_env_vars(monkeypatch)
         monkeypatch.delenv("HF_ENDPOINT", raising=False)
         monkeypatch.delenv("HF_TOKEN", raising=False)
         monkeypatch.setattr("dayu.cli.commands.init._is_hf_hub_reachable", lambda: True)
-        init_inputs = iter(["3", "sk-test", "", "", "", "n", ""])
+        init_inputs = iter(["sk-test", "", "", "", "n", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(init_inputs))
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
         monkeypatch.setattr(
             "dayu.cli.commands.init._persist_env_var",
             lambda _k, _v: ("~/.zshrc", True),
@@ -1225,14 +1250,14 @@ class TestInitPrewarm:
         assert run_init_command(Namespace(base=str(base), overwrite=False)) == 0
         assert prewarm_calls == [(base.resolve(), (base / "config").resolve())]
 
-        second_inputs = iter(["3"])
-        monkeypatch.setattr("builtins.input", lambda *_args: next(second_inputs))
+        monkeypatch.setattr("builtins.input", lambda *_args: "")
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-already-set-123456")
         monkeypatch.setenv("TAVILY_API_KEY", "tvly-xxx")
         monkeypatch.setenv("SERPER_API_KEY", "sp-xxx")
         monkeypatch.setenv("FMP_API_KEY", "fmp-xxx")
         monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com")
         monkeypatch.setenv("HF_TOKEN", "hf-test-xxx")
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
         assert run_init_command(Namespace(base=str(base), overwrite=False)) == 0
         assert prewarm_calls == [(base.resolve(), (base / "config").resolve())]
 
@@ -1255,14 +1280,14 @@ class TestInitPrewarm:
         assert run_init_command(Namespace(base=str(base), overwrite=False)) == 0
         assert len(prewarm_calls) == 1
 
-        overwrite_inputs = iter(["3"])
-        monkeypatch.setattr("builtins.input", lambda *_args: next(overwrite_inputs))
+        monkeypatch.setattr("builtins.input", lambda *_args: "")
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-already-set-123456")
         monkeypatch.setenv("TAVILY_API_KEY", "tvly-xxx")
         monkeypatch.setenv("SERPER_API_KEY", "sp-xxx")
         monkeypatch.setenv("FMP_API_KEY", "fmp-xxx")
         monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com")
         monkeypatch.setenv("HF_TOKEN", "hf-test-xxx")
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
         assert run_init_command(Namespace(base=str(base), overwrite=True)) == 0
         assert len(prewarm_calls) == 1
 
@@ -1295,7 +1320,7 @@ class TestInitPrewarm:
         """主 API Key 持久化失败时不执行 prewarm。"""
 
         base = self._prepare_run_init_environment(tmp_path, monkeypatch)
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: "DEEPSEEK_API_KEY")
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
         monkeypatch.setattr("dayu.cli.commands.init._prompt_api_key", lambda _key: "sk-test")
         monkeypatch.setattr("dayu.cli.commands.init._persist_env_var", lambda _k, _v: ("~/.zshrc", False))
         monkeypatch.setattr("dayu.cli.commands.init._prompt_optional_search_keys", lambda: [])
@@ -1321,8 +1346,9 @@ class TestInitPrewarm:
             lambda **_kwargs: (True, ""),
         )
 
-        inputs = iter(["3", "sk-test", "", "", "", "n", ""])
+        inputs = iter(["sk-test", "", "", "", "n", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
         monkeypatch.setattr(
             "dayu.cli.commands.init._persist_env_var",
             lambda _k, _v: ("setx（重开终端生效）", True),
@@ -1340,8 +1366,9 @@ class TestInitPrewarm:
             lambda **_kwargs: (True, ""),
         )
 
-        inputs = iter(["3", "sk-test", "", "", "", "y", "hf-token-val"])
+        inputs = iter(["sk-test", "", "", "", "y", "hf-token-val"])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
 
         call_count = 0
 

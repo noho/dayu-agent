@@ -2,7 +2,7 @@
 
 模块职责：
 - 复制包内配置到工作区
-- 交互式选择模型供应商 → 配置 API Key → 更新 manifest 默认模型
+- 交互式选择初始化模型方案 → 配置 API Key → 更新 manifest 默认模型
 - 可选配置联网检索 API Key
 - 跨平台环境变量持久化（macOS/Linux shell profile，Windows setx）
 """
@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 from argparse import Namespace
+from dataclasses import dataclass
 from pathlib import Path
 import urllib.request
 import urllib.error
@@ -29,33 +30,100 @@ MODULE = "CLI.INIT"
 #  供应商定义
 # --------------------------------------------------------------------------- #
 
-_PROVIDER_DISPLAY_NAMES: dict[str, str] = {
-    "MIMO_PLAN_API_KEY": "Mimo Token Plan",
-    "MIMO_PLAN_SG_API_KEY": "Mimo Token Plan (海外)",
-    "MIMO_API_KEY": "Mimo",
-    "DEEPSEEK_API_KEY": "DeepSeek",
-    "OPENAI_API_KEY": "OpenAI",
-    "ANTHROPIC_API_KEY": "Anthropic",
-    "GEMINI_API_KEY": "Google Gemini",
-    "QWEN_API_KEY": "阿里通义千问",
-}
+@dataclass(frozen=True)
+class _ProviderOption:
+    """`dayu-cli init` 中的单个初始化模型方案定义。"""
 
-_PROVIDER_MODEL_MAP: dict[str, tuple[str, str]] = {
-    "MIMO_PLAN_API_KEY": ("mimo-v2-pro-plan", "mimo-v2-pro-thinking-plan"),
-    "MIMO_PLAN_SG_API_KEY": ("mimo-v2-pro-plan-sg", "mimo-v2-pro-thinking-plan-sg"),
-    "MIMO_API_KEY": ("mimo-v2-pro", "mimo-v2-pro-thinking"),
-    "DEEPSEEK_API_KEY": ("deepseek-chat", "deepseek-thinking"),
-    "OPENAI_API_KEY": ("gpt-5.4", "gpt-5.4"),
-    "ANTHROPIC_API_KEY": ("claude-sonnet-4-6", "claude-sonnet-4-6"),
-    "GEMINI_API_KEY": ("gemini-2.5-flash", "gemini-2.5-flash"),
-    "QWEN_API_KEY": ("qwen3", "qwen3-thinking"),
-}
+    option_key: str
+    display_name: str
+    api_key_name: str
+    non_thinking_model: str
+    thinking_model: str
 
-# 从 _PROVIDER_MODEL_MAP 推导：所有可能出现在 manifest default_name 中的 non-thinking 模型名集合
-_ALL_NON_THINKING_MODELS: frozenset[str] = frozenset(m[0] for m in _PROVIDER_MODEL_MAP.values())
+
+_PROVIDER_OPTION_MIMO_PLAN = "mimo_plan"
+_PROVIDER_OPTION_MIMO_PLAN_SG = "mimo_plan_sg"
+_PROVIDER_OPTION_MIMO_PRO = "mimo_pro"
+_PROVIDER_OPTION_MIMO_FLASH = "mimo_flash"
+_PROVIDER_OPTION_DEEPSEEK = "deepseek"
+_PROVIDER_OPTION_OPENAI = "openai"
+_PROVIDER_OPTION_ANTHROPIC = "anthropic"
+_PROVIDER_OPTION_GEMINI = "gemini"
+_PROVIDER_OPTION_QWEN = "qwen"
+
+_PROVIDER_OPTIONS: tuple[_ProviderOption, ...] = (
+    _ProviderOption(
+        option_key=_PROVIDER_OPTION_MIMO_PLAN,
+        display_name="Mimo Token Plan",
+        api_key_name="MIMO_PLAN_API_KEY",
+        non_thinking_model="mimo-v2-pro-plan",
+        thinking_model="mimo-v2-pro-thinking-plan",
+    ),
+    _ProviderOption(
+        option_key=_PROVIDER_OPTION_MIMO_PLAN_SG,
+        display_name="Mimo Token Plan (海外)",
+        api_key_name="MIMO_PLAN_SG_API_KEY",
+        non_thinking_model="mimo-v2-pro-plan-sg",
+        thinking_model="mimo-v2-pro-thinking-plan-sg",
+    ),
+    _ProviderOption(
+        option_key=_PROVIDER_OPTION_MIMO_PRO,
+        display_name="Mimo Pro（常规 API）",
+        api_key_name="MIMO_API_KEY",
+        non_thinking_model="mimo-v2-pro",
+        thinking_model="mimo-v2-pro-thinking",
+    ),
+    _ProviderOption(
+        option_key=_PROVIDER_OPTION_MIMO_FLASH,
+        display_name="Mimo Flash（常规 API）",
+        api_key_name="MIMO_API_KEY",
+        non_thinking_model="mimo-v2-flash",
+        thinking_model="mimo-v2-flash-thinking",
+    ),
+    _ProviderOption(
+        option_key=_PROVIDER_OPTION_DEEPSEEK,
+        display_name="DeepSeek",
+        api_key_name="DEEPSEEK_API_KEY",
+        non_thinking_model="deepseek-chat",
+        thinking_model="deepseek-thinking",
+    ),
+    _ProviderOption(
+        option_key=_PROVIDER_OPTION_OPENAI,
+        display_name="OpenAI",
+        api_key_name="OPENAI_API_KEY",
+        non_thinking_model="gpt-5.4",
+        thinking_model="gpt-5.4",
+    ),
+    _ProviderOption(
+        option_key=_PROVIDER_OPTION_ANTHROPIC,
+        display_name="Anthropic",
+        api_key_name="ANTHROPIC_API_KEY",
+        non_thinking_model="claude-sonnet-4-6",
+        thinking_model="claude-sonnet-4-6",
+    ),
+    _ProviderOption(
+        option_key=_PROVIDER_OPTION_GEMINI,
+        display_name="Google Gemini",
+        api_key_name="GEMINI_API_KEY",
+        non_thinking_model="gemini-2.5-flash",
+        thinking_model="gemini-2.5-flash",
+    ),
+    _ProviderOption(
+        option_key=_PROVIDER_OPTION_QWEN,
+        display_name="阿里通义千问",
+        api_key_name="QWEN_API_KEY",
+        non_thinking_model="qwen3",
+        thinking_model="qwen3-thinking",
+    ),
+)
+
+_PROVIDER_OPTIONS_BY_KEY: dict[str, _ProviderOption] = {option.option_key: option for option in _PROVIDER_OPTIONS}
+
+# 从初始化方案推导：所有可能出现在 manifest default_name 中的 non-thinking 模型名集合
+_ALL_NON_THINKING_MODELS: frozenset[str] = frozenset(option.non_thinking_model for option in _PROVIDER_OPTIONS)
 
 # 所有可能出现的 thinking 模型名集合
-_ALL_THINKING_MODELS: frozenset[str] = frozenset(m[1] for m in _PROVIDER_MODEL_MAP.values())
+_ALL_THINKING_MODELS: frozenset[str] = frozenset(option.thinking_model for option in _PROVIDER_OPTIONS)
 
 # 仅出现在 non-thinking 集合而不在 thinking 集合中的模型名
 _ONLY_NON_THINKING: frozenset[str] = _ALL_NON_THINKING_MODELS - _ALL_THINKING_MODELS
@@ -490,32 +558,29 @@ def _update_manifest_default_models(
 
 
 def _prompt_provider_selection() -> str:
-    """交互式让用户选择模型供应商。
+    """交互式让用户选择初始化模型方案。
 
-    已在环境变量中设置了 API Key 的供应商会标注「✓ 已配置」。
+    已在环境变量中设置了 API Key 的方案会标注「✓ 已配置」。
 
     Returns:
-        选中的 API Key 名称。
+        选中的方案 key。
 
     Raises:
         SystemExit: 用户输入无效或 EOF 时退出。
     """
 
-    keys = list(_PROVIDER_DISPLAY_NAMES.keys())
-
-    # 找第一个已配置的供应商作为默认推荐
+    # 找第一个已配置的方案作为默认推荐；共享同一 API Key 的方案按声明顺序优先。
     first_configured_idx = 0
-    for i, key in enumerate(keys):
-        if os.environ.get(key):
+    for i, option in enumerate(_PROVIDER_OPTIONS):
+        if os.environ.get(option.api_key_name):
             first_configured_idx = i
             break
 
-    print("\n请选择你要使用的模型供应商（输入编号）：\n")
-    for i, key in enumerate(keys, 1):
-        display = _PROVIDER_DISPLAY_NAMES[key]
-        configured = "  ✓ 已配置" if os.environ.get(key) else ""
+    print("\n请选择你要使用的初始化模型方案（输入编号）：\n")
+    for i, option in enumerate(_PROVIDER_OPTIONS, 1):
+        configured = "  ✓ 已配置" if os.environ.get(option.api_key_name) else ""
         default_marker = "（默认）" if (i - 1) == first_configured_idx else ""
-        print(f"  {i}. {display}  — {key}{configured}{default_marker}")
+        print(f"  {i}. {option.display_name}  — {option.api_key_name}{configured}{default_marker}")
 
     print()
     default_num = first_configured_idx + 1
@@ -526,7 +591,7 @@ def _prompt_provider_selection() -> str:
         sys.exit(1)
 
     if raw == "":
-        return keys[first_configured_idx]
+        return _PROVIDER_OPTIONS[first_configured_idx].option_key
 
     try:
         idx = int(raw)
@@ -534,11 +599,11 @@ def _prompt_provider_selection() -> str:
         print(f"无效输入: {raw}")
         sys.exit(1)
 
-    if idx < 1 or idx > len(keys):
+    if idx < 1 or idx > len(_PROVIDER_OPTIONS):
         print(f"编号超出范围: {idx}")
         sys.exit(1)
 
-    return keys[idx - 1]
+    return _PROVIDER_OPTIONS[idx - 1].option_key
 
 
 def _prompt_api_key(api_key_name: str) -> str:
@@ -718,30 +783,32 @@ def run_init_command(args: Namespace) -> int:
     assets_dir = _copy_assets(base_dir, overwrite=overwrite)
     print(f"✓ assets 已复制到: {assets_dir}")
 
-    # 2. 选择供应商 + 输入 API Key（已有则跳过）
-    chosen_key = _prompt_provider_selection()
+    # 2. 选择初始化模型方案 + 输入 API Key（已有则跳过）
+    chosen_option_key = _prompt_provider_selection()
+    chosen_option = _PROVIDER_OPTIONS_BY_KEY[chosen_option_key]
     env_vars_written = False
     main_key_persist_failed = False
 
-    existing_value = os.environ.get(chosen_key)
+    existing_value = os.environ.get(chosen_option.api_key_name)
     if existing_value:
         masked = existing_value[:4] + "***" + existing_value[-4:] if len(existing_value) > 8 else "***"
-        print(f"\n✓ {chosen_key} 已在环境变量中配置（{masked}），跳过写入。")
+        print(f"\n✓ {chosen_option.api_key_name} 已在环境变量中配置（{masked}），跳过写入。")
     else:
-        api_key_value = _prompt_api_key(chosen_key)
-        _target, ok = _persist_env_var(chosen_key, api_key_value)
+        api_key_value = _prompt_api_key(chosen_option.api_key_name)
+        _target, ok = _persist_env_var(chosen_option.api_key_name, api_key_value)
         env_vars_written = True
         if not ok:
             main_key_persist_failed = True
-            print(f"\n❌ {chosen_key} 无法持久化到系统环境变量。")
+            print(f"\n❌ {chosen_option.api_key_name} 无法持久化到系统环境变量。")
             print(f"   已为当前进程设置，但重开终端后会丢失。")
             print(f"   为避免切换模型后下次启动找不到 API Key，跳过 manifest 更新。")
             print(f"   请手动配置环境变量后重新运行 dayu-cli init。")
 
     # 3. 更新 manifest 默认模型（仅在主 key 持久化成功或已存在时执行）
-    non_thinking, thinking = _PROVIDER_MODEL_MAP[chosen_key]
+    non_thinking = chosen_option.non_thinking_model
+    thinking = chosen_option.thinking_model
     if main_key_persist_failed:
-        print(f"\n⚠️  跳过 manifest 更新（{chosen_key} 未持久化）")
+        print(f"\n⚠️  跳过 manifest 更新（{chosen_option.api_key_name} 未持久化）")
     else:
         updated_count = _update_manifest_default_models(config_dir, non_thinking, thinking)
         print(f"✓ 默认模型已设置为: {non_thinking} / {thinking}（更新了 {updated_count} 个 manifest）")
