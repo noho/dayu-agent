@@ -50,7 +50,10 @@ from dayu.services.internal.write_pipeline.source_list_builder import (
     extract_evidence_items,
     render_source_list_chapter,
 )
-from dayu.services.internal.write_pipeline.template_parser import parse_template_layout
+from dayu.services.internal.write_pipeline.template_parser import (
+    TemplateLayout,
+    parse_template_layout,
+)
 from dayu.services.scene_execution_acceptance import (
     SceneExecutionAcceptancePreparer,
 )
@@ -607,13 +610,41 @@ class WritePipelineRunner:
         worker_count = min(_MIDDLE_CHAPTER_MAX_WORKERS, len(pending_tasks))
         completed_results: dict[str, ChapterResult] = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
-            future_to_task = {
-                executor.submit(self._run_middle_task_worker, task=task, company_name=company_name): task
-                for task in pending_tasks
-            }
-            for future in concurrent.futures.as_completed(future_to_task):
-                task = future_to_task[future]
-                completed_results[task.title] = future.result()
+            future_to_task: dict[concurrent.futures.Future[ChapterResult], ChapterTask] = {}
+            pending_index = 0
+
+            while pending_index < len(pending_tasks) and len(future_to_task) < worker_count:
+                task = pending_tasks[pending_index]
+                future = executor.submit(
+                    self._run_middle_task_worker,
+                    task=task,
+                    company_name=company_name,
+                )
+                future_to_task[future] = task
+                pending_index += 1
+
+            try:
+                while future_to_task:
+                    completed_futures, _ = concurrent.futures.wait(
+                        tuple(future_to_task),
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
+                    for future in completed_futures:
+                        task = future_to_task.pop(future)
+                        completed_results[task.title] = future.result()
+                        if pending_index >= len(pending_tasks):
+                            continue
+                        next_task = pending_tasks[pending_index]
+                        next_future = executor.submit(
+                            self._run_middle_task_worker,
+                            task=next_task,
+                            company_name=company_name,
+                        )
+                        future_to_task[next_future] = next_task
+                        pending_index += 1
+            except (CancelledError, SceneAgentCreationError):
+                self._cancel_pending_middle_task_futures(future_to_task)
+                raise
 
         for task in middle_tasks:
             result = completed_results.get(task.title)
@@ -623,6 +654,32 @@ class WritePipelineRunner:
             self._store.persist_chapter_artifacts(result)
             self._store.persist_manifest(manifest=manifest, chapter_results=chapter_results)
         return chapter_results
+
+    def _cancel_pending_middle_task_futures(
+        self,
+        future_to_task: dict[concurrent.futures.Future[ChapterResult], ChapterTask],
+    ) -> None:
+        """取消尚未启动的中间章节 future，避免继续派发无效任务。
+
+        Args:
+            future_to_task: 当前仍未完成的 future 到任务映射。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        cancelled_titles: list[str] = []
+        for future, task in future_to_task.items():
+            if future.cancel():
+                cancelled_titles.append(task.title)
+        if cancelled_titles:
+            Log.info(
+                f"中止中间章节批次后，已取消尚未启动任务: {cancelled_titles}",
+                module=MODULE,
+            )
 
     def _run_middle_task_worker(self, *, task: ChapterTask, company_name: str) -> ChapterResult:
         """执行单个中间章节 worker，并在可恢复异常时生成兜底结果。
@@ -1161,7 +1218,44 @@ def run_write_pipeline(
     return runner.run()
 
 
-def _build_middle_tasks(layout: Any) -> list[ChapterTask]:
+def _build_chapter_tasks(
+    *,
+    layout: TemplateLayout,
+    excluded_titles: frozenset[str],
+) -> list[ChapterTask]:
+    """按模板顺序构建章节任务列表。
+
+    Args:
+        layout: 模板布局对象。
+        excluded_titles: 需要排除的章节标题集合。
+
+    Returns:
+        章节任务列表。
+
+    Raises:
+        无。
+    """
+
+    tasks: list[ChapterTask] = []
+    for chapter in layout.chapters:
+        if chapter.title in excluded_titles:
+            continue
+        tasks.append(
+            ChapterTask(
+                index=chapter.index,
+                title=chapter.title,
+                skeleton=chapter.skeleton,
+                report_goal=layout.report_goal,
+                audience_profile=layout.audience_profile,
+                chapter_goal=chapter.chapter_goal,
+                chapter_contract=chapter.chapter_contract,
+                item_rules=chapter.item_rules,
+            )
+        )
+    return tasks
+
+
+def _build_middle_tasks(layout: TemplateLayout) -> list[ChapterTask]:
     """构建常规中间章节任务列表。
 
     这里会跳过：
@@ -1179,26 +1273,19 @@ def _build_middle_tasks(layout: Any) -> list[ChapterTask]:
         无。
     """
 
-    tasks: list[ChapterTask] = []
-    for chapter in layout.chapters:
-        if chapter.title in {_OVERVIEW_CHAPTER_TITLE, _DECISION_CHAPTER_TITLE, _SOURCE_CHAPTER_TITLE}:
-            continue
-        tasks.append(
-            ChapterTask(
-                index=chapter.index,
-                title=chapter.title,
-                skeleton=chapter.skeleton,
-                report_goal=layout.report_goal,
-                audience_profile=layout.audience_profile,
-                chapter_goal=chapter.chapter_goal,
-                chapter_contract=chapter.chapter_contract,
-                item_rules=chapter.item_rules,
-            )
-        )
-    return tasks
+    return _build_chapter_tasks(
+        layout=layout,
+        excluded_titles=frozenset(
+            {
+                _OVERVIEW_CHAPTER_TITLE,
+                _DECISION_CHAPTER_TITLE,
+                _SOURCE_CHAPTER_TITLE,
+            }
+        ),
+    )
 
 
-def _build_overview_dependency_tasks(layout: Any) -> list[ChapterTask]:
+def _build_overview_dependency_tasks(layout: TemplateLayout) -> list[ChapterTask]:
     """构建第0章概览回填依赖的章节任务列表。
 
     约定：
@@ -1215,23 +1302,15 @@ def _build_overview_dependency_tasks(layout: Any) -> list[ChapterTask]:
         无。
     """
 
-    tasks: list[ChapterTask] = []
-    for chapter in layout.chapters:
-        if chapter.title in {_OVERVIEW_CHAPTER_TITLE, _SOURCE_CHAPTER_TITLE}:
-            continue
-        tasks.append(
-            ChapterTask(
-                index=chapter.index,
-                title=chapter.title,
-                skeleton=chapter.skeleton,
-                report_goal=layout.report_goal,
-                audience_profile=layout.audience_profile,
-                chapter_goal=chapter.chapter_goal,
-                chapter_contract=chapter.chapter_contract,
-                item_rules=chapter.item_rules,
-            )
-        )
-    return tasks
+    return _build_chapter_tasks(
+        layout=layout,
+        excluded_titles=frozenset(
+            {
+                _OVERVIEW_CHAPTER_TITLE,
+                _SOURCE_CHAPTER_TITLE,
+            }
+        ),
+    )
 
 
 def _build_signature(

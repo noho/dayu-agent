@@ -1387,6 +1387,60 @@ def test_host_executor_helper_functions_cover_deadline_and_summary_edges() -> No
 
 
 @pytest.mark.unit
+def test_run_deadline_watcher_start_is_idempotent_and_timeout_after_stop_is_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证 deadline watcher 的 timer 状态切换保持幂等。"""
+
+    from tests.application.conftest import StubRunRegistry
+
+    class _FakeTimer:
+        """测试用 timer。"""
+
+        def __init__(self, interval: float, callback: object) -> None:
+            self.interval = interval
+            self.callback = callback
+            self.daemon = False
+            self.name = ""
+            self.start_count = 0
+            self.cancel_count = 0
+
+        def start(self) -> None:
+            """记录启动次数。"""
+
+            self.start_count += 1
+
+        def cancel(self) -> None:
+            """记录取消次数。"""
+
+            self.cancel_count += 1
+
+    timers: list[_FakeTimer] = []
+
+    def _build_fake_timer(interval: float, callback: object) -> _FakeTimer:
+        """构建测试用假 timer。"""
+
+        timer = _FakeTimer(interval, callback)
+        timers.append(timer)
+        return timer
+
+    monkeypatch.setattr(executor_module.threading, "Timer", _build_fake_timer)
+
+    run_registry = StubRunRegistry()
+    token = executor_module.CancellationToken()
+    watcher = executor_module.RunDeadlineWatcher(run_registry, "run-1", token, 10)
+
+    watcher.start()
+    watcher.start()
+    watcher._on_timeout()
+    watcher.stop()
+
+    assert len(timers) == 1
+    assert timers[0].start_count == 1
+    assert timers[0].cancel_count == 0
+
+
+@pytest.mark.unit
 def test_host_executor_finish_cancel_and_pending_turn_reconcile_helpers() -> None:
     """验证取消收口与 pending turn reconcile 的辅助分支。"""
 

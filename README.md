@@ -136,7 +136,7 @@ dayu-cli init --overwrite              # 覆盖已有配置
 ```
 
 API Key 申请地址：
-- MIMO_PLAN_API_KEY / MIMO_API_KEY：https://platform.xiaomimimo.com/#/console/api-keys
+- MIMO_PLAN_API_KEY / MIMO_PLAN_SG_API_KEY / MIMO_API_KEY：https://platform.xiaomimimo.com/#/console/api-keys
 - DEEPSEEK_API_KEY：https://platform.deepseek.com/api_keys
 - FMP_API_KEY：https://site.financialmodelingprep.com/developer/docs/dashboard
 - TAVILY_API_KEY：https://app.tavily.com/home

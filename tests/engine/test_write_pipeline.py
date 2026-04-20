@@ -89,6 +89,7 @@ from dayu.services.internal.write_pipeline.pipeline import (
     ChapterExecutionState,
     WritePipelineRunner,
     _build_middle_tasks,
+    _build_overview_dependency_tasks,
     _build_signature,
     _log_write_pipeline_config,
     print_write_report,
@@ -2177,6 +2178,28 @@ x
 
     assert len(tasks) == 1
     assert tasks[0].title == "公司介绍"
+
+
+@pytest.mark.unit
+def test_build_overview_dependency_tasks_keeps_decision_and_skips_source() -> None:
+    """验证概览回填依赖会保留决策章，但跳过概览章与来源章。"""
+
+    layout = parse_template_layout(
+        """
+## 投资要点概览
+x
+## 公司介绍
+x
+## 是否值得继续深研与待验证问题
+x
+## 来源清单
+x
+""".strip()
+    )
+
+    tasks = _build_overview_dependency_tasks(layout)
+
+    assert [task.title for task in tasks] == ["公司介绍", "是否值得继续深研与待验证问题"]
 
 
 @pytest.mark.unit
@@ -7406,6 +7429,61 @@ def test_run_middle_task_worker_reraises_cancelled_error(
 
     with pytest.raises(CancelledError, match="用户取消"):
         runner._run_middle_task_worker(task=task, company_name="TestCo")
+
+
+@pytest.mark.unit
+def test_run_middle_tasks_in_parallel_stops_dispatching_after_scene_creation_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证中间章节批次遇到 Agent 创建失败后不会继续派发后续任务。"""
+
+    from dayu.services.internal.write_pipeline import pipeline as pipeline_module
+
+    runner = _build_runner(tmp_path)
+    monkeypatch.setattr(pipeline_module, "_MIDDLE_CHAPTER_MAX_WORKERS", 2)
+
+    started_titles: list[str] = []
+    middle_tasks = [
+        ChapterTask(index=1, title="A", skeleton="## A"),
+        ChapterTask(index=2, title="B", skeleton="## B"),
+        ChapterTask(index=3, title="C", skeleton="## C"),
+        ChapterTask(index=4, title="D", skeleton="## D"),
+    ]
+
+    def _run_worker(*, task: ChapterTask, company_name: str) -> ChapterResult:
+        """测试桩：首个任务失败，其余已启动任务短暂占位。"""
+
+        del company_name
+        started_titles.append(task.title)
+        if task.title == "A":
+            raise SceneAgentCreationError(scene_name="write", agent_label="写作 Agent")
+        time.sleep(0.05)
+        return ChapterResult(
+            index=task.index,
+            title=task.title,
+            status="passed",
+            content=f"## {task.title}\n正文",
+            audit_passed=True,
+        )
+
+    monkeypatch.setattr(runner, "_run_middle_task_worker", _run_worker)
+
+    with pytest.raises(SceneAgentCreationError, match="写作 Agent 创建失败: scene=write"):
+        runner._run_middle_tasks_in_parallel(
+            middle_tasks=middle_tasks,
+            chapter_results={},
+            manifest=RunManifest(
+                version="v1",
+                signature="sig",
+                config=runner._write_config,
+            ),
+            company_name="TestCo",
+        )
+
+    assert "C" not in started_titles
+    assert "D" not in started_titles
+    assert set(started_titles).issubset({"A", "B"})
 
 
 @pytest.mark.unit

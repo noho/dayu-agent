@@ -64,8 +64,7 @@ class BsTenQFormProcessor(_BaseBsReportFormProcessor):
         super().__init__(source=source, form_type=form_type, media_type=media_type)
         # 在父类初始化完成后再次执行一次 10-Q 专项正文修复，确保最终暴露给
         # FinsToolService 的虚拟章节已应用最新边界收敛逻辑。
-        if hasattr(self, "_virtual_sections"):
-            self._postprocess_virtual_sections(self._collect_document_text())
+        self._postprocess_virtual_sections(self._collect_document_text())
 
     def _build_markers(self, full_text: str) -> list[tuple[int, Optional[str]]]:
         """构建 10-Q 专项边界标记。

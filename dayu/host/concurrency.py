@@ -156,10 +156,9 @@ class SQLiteConcurrencyGovernor(ConcurrencyGovernorProtocol):
                 stale_ids.append(row["permit_id"])
 
         if stale_ids:
-            placeholders = ",".join("?" for _ in stale_ids)
-            conn.execute(
-                f"DELETE FROM permits WHERE permit_id IN ({placeholders})",  # noqa: S608
-                stale_ids,
+            conn.executemany(
+                "DELETE FROM permits WHERE permit_id = ?",
+                ((permit_id,) for permit_id in stale_ids),
             )
             conn.commit()
 

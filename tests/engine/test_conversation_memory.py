@@ -40,6 +40,7 @@ from dayu.host.conversation_memory import (
     DefaultEpisodicMemoryCompressor,
     DefaultWorkingMemoryPolicy,
     _estimate_tokens,
+    _truncate_text_to_token_budget,
 )
 from dayu.host.conversation_runtime import (
     ConversationCompactionAgentProtocol,
@@ -294,6 +295,17 @@ def test_estimate_tokens_counts_wide_chars_more_conservatively() -> None:
 
     assert _estimate_tokens("abcd") == 2
     assert _estimate_tokens("中文测试") == 4
+    assert _estimate_tokens("ab中文c") == 4
+
+
+@pytest.mark.unit
+def test_truncate_text_to_token_budget_respects_mixed_width_budget() -> None:
+    """验证 mixed-width 文本截断后仍维持保守预算语义。"""
+
+    truncated = _truncate_text_to_token_budget("ab中文cd中文ef中文gh", 9)
+
+    assert truncated.endswith("...<truncated>")
+    assert _estimate_tokens(truncated) <= 9
 
 
 @pytest.mark.unit
@@ -656,6 +668,51 @@ def test_default_episodic_memory_compressor_parses_json_payload() -> None:
     assert fake_agent.calls
     assert _message_role(fake_agent.calls[0][0]) == "system"
     assert runtime.compaction_requests == [ConversationCompactionRequest(session_id="sess_1.compaction")]
+
+
+@pytest.mark.unit
+def test_default_episodic_memory_compressor_rejects_empty_summary_title() -> None:
+    """验证空标题 episode summary 会被视为无效压缩结果。"""
+
+    fake_agent = _FakeAsyncAgent(
+        [[
+            StreamEvent(
+                type=EventType.FINAL_ANSWER,
+                data={
+                    "content": json.dumps(
+                        {
+                            "episode_summary": {
+                                "title": "   ",
+                                "goal": "更新公司信息",
+                            },
+                            "pinned_state_patch": {
+                                "current_goal": "跟踪公司最新变化",
+                            },
+                        },
+                        ensure_ascii=False,
+                    )
+                },
+                metadata={},
+            ),
+        ]]
+    )
+    runtime = _FakeRuntime(
+        resolved_options=_build_resolved_options(),
+        compaction_agent=fake_agent,
+    )
+    compressor = DefaultEpisodicMemoryCompressor(runtime)
+    transcript = ConversationTranscript.create_empty("sess_1").append_turn(_build_turn(1))
+
+    result = asyncio.run(
+        compressor.compress(
+            session_id="sess_1",
+            transcript=transcript,
+            turns=(transcript.turns[0],),
+            settings=ConversationMemorySettings(),
+        )
+    )
+
+    assert result is None
 
 
 @pytest.mark.unit

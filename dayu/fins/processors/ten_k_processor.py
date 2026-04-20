@@ -39,6 +39,7 @@ from .ten_k_form_common import (  # noqa: F401  re-export for backward compat
 )
 from .sec_report_form_common import _BaseSecReportFormProcessor
 
+
 class TenKFormProcessor(_BaseSecReportFormProcessor):
     """10-K 表单专项处理器。"""
 
@@ -70,8 +71,7 @@ class TenKFormProcessor(_BaseSecReportFormProcessor):
         super().__init__(source=source, form_type=form_type, media_type=media_type)
         # 在父类初始化完成后再次执行一次 10-K 专项正文修复，确保最终暴露给
         # FinsToolService 的虚拟章节已应用最新边界收敛逻辑。
-        if hasattr(self, "_virtual_sections"):
-            self._postprocess_virtual_sections(self._collect_document_text())
+        self._postprocess_virtual_sections(self._collect_document_text())
 
     def _build_markers(self, full_text: str) -> list[tuple[int, Optional[str]]]:
         """构建 10-K 专项边界。
@@ -109,7 +109,6 @@ class TenKFormProcessor(_BaseSecReportFormProcessor):
             section.ref: section for section in self._virtual_sections
         }
         self._assign_tables_to_virtual_sections()
-
 
 
 __all__ = ["TenKFormProcessor"]

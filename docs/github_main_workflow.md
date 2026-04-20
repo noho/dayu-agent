@@ -403,9 +403,9 @@ python utils/smoke_test_offline_bundle.py --archive $archive.FullName
 ```bash
 git switch main
 git pull
-git tag -a v0.2.0 -m "v0.2.0 — 简短描述"
-git push github v0.2.0
-git push lan v0.2.0
+git tag -a v0.1.2 -m "v0.1.2 — 提供离线安装；支持MiMo Plan海外；bug fix"
+git push github v0.1.2
+git push lan v0.1.2
 ```
 
 ##### 第 3 步：创建 GitHub Release
@@ -413,9 +413,43 @@ git push lan v0.2.0
 推荐用 `gh`，也可以直接在 GitHub 网页操作。
 
 ```bash
-gh release create v0.2.0 \
-  --title "v0.2.0 — 简短描述" \
-  --notes "本版本的主要更新：..."
+gh release create v0.1.2 \
+  --title "v0.1.2 — 提供离线安装；支持MiMo Plan海外；bug fix" \
+  --notes "$(cat <<'EOF'
+## 安装
+
+```bash
+pip install https://github.com/noho/dayu-agent/releases/download/v0.1.2/dayu_agent-0.1.2-py3-none-any.whl
+```
+
+## 更新到新版本
+
+```bash
+pip install --upgrade https://github.com/noho/dayu-agent/releases/download/v0.1.2/dayu_agent-0.1.2-py3-none-any.whl
+```
+
+## 离线安装
+
+从 [Releases](https://github.com/noho/dayu-agent/releases/tag/v0.1.2) 页面下载对应平台的离线安装包：
+
+- macOS ARM64: `dayu-agent-0.1.2-macos-arm64-offline.tar.gz`
+- macOS x64: `dayu-agent-0.1.2-macos-x64-offline.tar.gz`
+- Linux x64: `dayu-agent-0.1.2-linux-x64-offline.tar.gz`
+- Windows x64: `dayu-agent-0.1.2-windows-x64-offline.zip`
+
+## 本次更新
+
+- 提供离线安装包，支持 4 个平台（macOS ARM64/x64、Linux x64、Windows x64）
+- 支持 MiMo Plan 海外（需运行 dayu-cli init --overwrite）
+- bug fix
+
+安装后可用命令：
+- `dayu-cli init` — 初始化配置
+- `dayu-cli` — 财报分析 CLI
+- `dayu-wechat` — WeChat 服务
+- `dayu-render` — 报告渲染
+EOF
+)"
 ```
 
 说明：

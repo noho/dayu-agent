@@ -75,12 +75,24 @@ def test_bs_ten_q_init_and_build_markers(monkeypatch: pytest.MonkeyPatch) -> Non
         captured["source"] = source
         captured["form_type"] = form_type
         captured["media_type"] = media_type
+        self._virtual_sections = []
 
     monkeypatch.setattr(module._BaseBsReportFormProcessor, "__init__", _fake_init)
     monkeypatch.setattr(module, "_build_ten_q_markers", lambda text: [(456, "Item 1")])
+    monkeypatch.setattr(
+        module.BsTenQFormProcessor,
+        "_collect_document_text",
+        lambda self: "document text",
+    )
+    monkeypatch.setattr(
+        module.BsTenQFormProcessor,
+        "_postprocess_virtual_sections",
+        lambda self, full_text: captured.setdefault("postprocess_text", full_text),
+    )
 
     processor = module.BsTenQFormProcessor(_SourceStub(), form_type="10-Q", media_type="text/html")
 
     assert captured["form_type"] == "10-Q"
     assert captured["media_type"] == "text/html"
+    assert captured["postprocess_text"] == "document text"
     assert processor._build_markers("dummy") == [(456, "Item 1")]

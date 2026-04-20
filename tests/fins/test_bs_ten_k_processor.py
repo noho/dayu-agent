@@ -141,14 +141,26 @@ def test_bs_ten_k_init_and_build_markers(monkeypatch: pytest.MonkeyPatch) -> Non
         captured["source"] = source
         captured["form_type"] = form_type
         captured["media_type"] = media_type
+        self._virtual_sections = []
 
     monkeypatch.setattr(module._BaseBsReportFormProcessor, "__init__", _fake_init)
     monkeypatch.setattr(module, "_build_ten_k_markers", lambda text: [(123, "Item 1")])
+    monkeypatch.setattr(
+        module.BsTenKFormProcessor,
+        "_collect_document_text",
+        lambda self: "document text",
+    )
+    monkeypatch.setattr(
+        module.BsTenKFormProcessor,
+        "_postprocess_virtual_sections",
+        lambda self, full_text: captured.setdefault("postprocess_text", full_text),
+    )
 
     processor = module.BsTenKFormProcessor(_SourceStub(), form_type="10-K", media_type="text/html")
 
     assert captured["form_type"] == "10-K"
     assert captured["media_type"] == "text/html"
+    assert captured["postprocess_text"] == "document text"
     assert processor._build_markers("dummy") == [(123, "Item 1")]
 
 

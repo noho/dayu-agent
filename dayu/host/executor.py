@@ -81,34 +81,39 @@ class RunDeadlineWatcher:
         self._token = token
         self._timeout_ms = timeout_ms
         self._timer: threading.Timer | None = None
+        self._timer_lock = threading.Lock()
 
     def start(self) -> None:
         """启动 watcher。幂等。"""
 
-        if self._timeout_ms is None or self._timer is not None:
-            return
-        self._timer = threading.Timer(self._timeout_ms / 1000.0, self._on_timeout)
-        self._timer.daemon = True
-        self._timer.name = f"run-deadline-{self._run_id}"
-        self._timer.start()
+        with self._timer_lock:
+            if self._timeout_ms is None or self._timer is not None:
+                return
+            timer = threading.Timer(self._timeout_ms / 1000.0, self._on_timeout)
+            timer.daemon = True
+            timer.name = f"run-deadline-{self._run_id}"
+            self._timer = timer
+        timer.start()
 
     def stop(self) -> None:
         """停止 watcher。幂等。"""
 
-        if self._timer is None:
-            return
-        self._timer.cancel()
-        self._timer = None
+        with self._timer_lock:
+            timer = self._timer
+            self._timer = None
+        if timer is not None:
+            timer.cancel()
 
     def _on_timeout(self) -> None:
         """处理 deadline 到时。在 Timer 线程执行。"""
 
+        with self._timer_lock:
+            self._timer = None
         self._run_registry.request_cancel(
             self._run_id,
             cancel_reason=RunCancelReason.TIMEOUT,
         )
         self._token.cancel()
-        self._timer = None
 
 
 @dataclass

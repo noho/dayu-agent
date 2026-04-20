@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from functools import lru_cache
 import json
 import math
 import unicodedata
@@ -37,6 +38,62 @@ from dayu.execution.options import ConversationMemorySettings
 MODULE = "RUNTIME.CONVERSATION_MEMORY"
 _COMPATION_USER_PROMPT_HEADER = "请基于以下会话片段生成结构化阶段摘要。仅输出严格 JSON。"
 _WORKING_MEMORY_TRUNCATION_SUFFIX = "...<truncated>"
+_HALF_WIDTH_TOKEN_UNITS = 1
+_FULL_WIDTH_TOKEN_UNITS = 2
+_TOKEN_UNITS_PER_ESTIMATED_TOKEN = 2
+
+
+@lru_cache(maxsize=256)
+def _token_units_for_char(char: str) -> int:
+    """返回单个字符对应的 token 估算单位。
+
+    Args:
+        char: 单个字符。
+
+    Returns:
+        宽字符返回 ``2``，其余字符返回 ``1``。
+
+    Raises:
+        无。
+    """
+
+    if unicodedata.east_asian_width(char) in {"W", "F"}:
+        return _FULL_WIDTH_TOKEN_UNITS
+    return _HALF_WIDTH_TOKEN_UNITS
+
+
+def _estimate_token_units(text: str) -> int:
+    """估算文本对应的原始 token 单位数。
+
+    Args:
+        text: 原始文本。
+
+    Returns:
+        估算得到的 token 单位总数。
+
+    Raises:
+        无。
+    """
+
+    return sum(_token_units_for_char(char) for char in text)
+
+
+def _token_units_to_estimated_tokens(token_units: int) -> int:
+    """将 token 单位数转换为保守 token 估算值。
+
+    Args:
+        token_units: token 单位总数。
+
+    Returns:
+        保守 token 估算值。
+
+    Raises:
+        无。
+    """
+
+    if token_units <= 0:
+        return 0
+    return max(1, math.ceil(token_units / _TOKEN_UNITS_PER_ESTIMATED_TOKEN))
 
 
 def _estimate_tokens(text: str) -> int:
@@ -55,13 +112,7 @@ def _estimate_tokens(text: str) -> int:
     normalized = str(text or "")
     if not normalized:
         return 0
-    weighted_chars = 0.0
-    for char in normalized:
-        if unicodedata.east_asian_width(char) in {"W", "F"}:
-            weighted_chars += 1.0
-            continue
-        weighted_chars += 0.5
-    return max(1, math.ceil(weighted_chars))
+    return _token_units_to_estimated_tokens(_estimate_token_units(normalized))
 
 
 def _estimate_turn_tokens(turn: ConversationTurnRecord) -> int:
@@ -306,14 +357,16 @@ def _truncate_text_to_token_budget(text: str, token_budget: int) -> str:
         return suffix
 
     kept_chars: list[str] = []
-    used_tokens = 0
-    max_content_tokens = token_budget - suffix_tokens
+    used_token_units = 0
+    max_content_token_units = (
+        token_budget * _TOKEN_UNITS_PER_ESTIMATED_TOKEN
+    ) - _estimate_token_units(suffix)
     for char in normalized:
-        char_tokens = _estimate_tokens(char)
-        if used_tokens + char_tokens > max_content_tokens:
+        char_token_units = _token_units_for_char(char)
+        if used_token_units + char_token_units > max_content_token_units:
             break
         kept_chars.append(char)
-        used_tokens += char_tokens
+        used_token_units += char_token_units
     kept_text = "".join(kept_chars).rstrip()
     if not kept_text:
         return suffix
@@ -878,11 +931,18 @@ class DefaultEpisodicMemoryCompressor:
             Log.warning("conversation compaction 缺少 episode_summary，已跳过本次压缩", module=MODULE)
             return None
         raw_patch = payload.get("pinned_state_patch")
+        summary_title = str(raw_summary.get("title") or "").strip()
+        if not summary_title:
+            Log.warning(
+                "conversation compaction episode_summary.title 为空，已跳过本次压缩",
+                module=MODULE,
+            )
+            return None
         summary = ConversationEpisodeSummary(
             episode_id=f"ep_{uuid.uuid4().hex[:8]}",
             start_turn_id=turns[0].turn_id,
             end_turn_id=turns[-1].turn_id,
-            title=str(raw_summary.get("title") or "").strip(),
+            title=summary_title,
             goal=str(raw_summary.get("goal") or "").strip(),
             completed_actions=_coerce_string_tuple(raw_summary.get("completed_actions")),
             confirmed_facts=_coerce_string_tuple(raw_summary.get("confirmed_facts")),
