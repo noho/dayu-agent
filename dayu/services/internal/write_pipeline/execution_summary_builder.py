@@ -9,7 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from dayu.services.internal.write_pipeline.models import ChapterResult, WriteRunConfig
+from dayu.services.contracts import WriteRunConfig
+from dayu.services.internal.write_pipeline.models import ChapterResult
 
 
 class ExecutionSummaryBuilder:

@@ -110,33 +110,7 @@ _DEFAULT_RUN_CONFIG = _DefaultRunConfig(
         debug_sse_throttle_sec=0.0,
         tool_timeout_seconds=90.0,
     ),
-    agent_running_config=AgentRuntimeConfig(
-        max_iterations=16,
-        fallback_prompt=(
-            "Based on the information gathered, answer the question directly. "
-            "Do not fabricate if information is insufficient."
-        ),
-        duplicate_tool_hint_prompt=(
-            "You just called the same tool ({{tool_name}}) with identical parameters. "
-            "Reuse the existing results first. Only call a tool again if you clearly "
-            "need new information, and provide your conclusion promptly."
-        ),
-        continuation_prompt=(
-            "Your previous response was truncated (finish_reason=length). "
-            "Continue from where you left off without repeating content already produced."
-        ),
-        compaction_summary_header="[Context Compaction Summary]",
-        compaction_summary_instruction=(
-            "Continue reasoning based on recent context. "
-            "Avoid repeating tool calls that have already been completed."
-        ),
-        max_consecutive_failed_tool_batches=2,
-        max_duplicate_tool_calls=2,
-        budget_soft_limit_ratio=0.75,
-        budget_hard_limit_ratio=0.90,
-        max_continuations=3,
-        max_compactions=3,
-    ),
+    agent_running_config=AgentRuntimeConfig(),
     doc_tool_limits=DocToolLimits(
         list_files_max=200,
         get_sections_max=200,
@@ -1010,15 +984,15 @@ def deserialize_execution_options_snapshot(
     )
 
 
-@dataclass(frozen=True, init=False)
+@dataclass(frozen=True)
 class ResolvedExecutionOptions:
     """合并后的执行选项。"""
 
     model_name: str
     runner_running_config: RunnerRuntimeConfig
     agent_running_config: AgentRuntimeConfig
-    toolset_configs: tuple[ToolsetConfigSnapshot, ...]
     trace_settings: TraceSettings
+    toolset_configs: tuple[ToolsetConfigSnapshot, ...] = ()
     temperature: float | None = None
     conversation_memory_config: ConversationMemoryConfig = field(
         default_factory=ConversationMemoryConfig
@@ -1027,29 +1001,11 @@ class ResolvedExecutionOptions:
         default_factory=ConversationMemorySettings
     )
 
-    def __init__(
-        self,
-        *,
-        model_name: str,
-        runner_running_config: RunnerRuntimeConfig,
-        agent_running_config: AgentRuntimeConfig,
-        trace_settings: TraceSettings,
-        temperature: float | None = None,
-        conversation_memory_config: ConversationMemoryConfig | None = None,
-        conversation_memory_settings: ConversationMemorySettings | None = None,
-        toolset_configs: tuple[ToolsetConfigSnapshot, ...] = (),
-    ) -> None:
-        """初始化合并后的执行选项。
+    def __post_init__(self) -> None:
+        """执行冻结 dataclass 的派生字段规范化。
 
         Args:
-            model_name: 已解析的模型名。
-            runner_running_config: Runner 运行配置。
-            agent_running_config: Agent 运行配置。
-            trace_settings: Trace 配置。
-            temperature: 已解析 temperature。
-            conversation_memory_config: 会话记忆配置集合。
-            conversation_memory_settings: 已解析的会话记忆配置。
-            toolset_configs: 通用 toolset 配置快照。
+            无。
 
         Returns:
             无。
@@ -1059,22 +1015,7 @@ class ResolvedExecutionOptions:
             ValueError: 当 toolset 名称非法时抛出。
         """
 
-        object.__setattr__(self, "model_name", model_name)
-        object.__setattr__(self, "runner_running_config", runner_running_config)
-        object.__setattr__(self, "agent_running_config", agent_running_config)
-        object.__setattr__(self, "toolset_configs", normalize_toolset_configs(toolset_configs))
-        object.__setattr__(self, "trace_settings", trace_settings)
-        object.__setattr__(self, "temperature", temperature)
-        object.__setattr__(
-            self,
-            "conversation_memory_config",
-            conversation_memory_config or ConversationMemoryConfig(),
-        )
-        object.__setattr__(
-            self,
-            "conversation_memory_settings",
-            conversation_memory_settings or ConversationMemorySettings(),
-        )
+        object.__setattr__(self, "toolset_configs", normalize_toolset_configs(self.toolset_configs))
 
 
 def _merge_section(base: dict[str, Any], incoming: Any) -> dict[str, Any]:

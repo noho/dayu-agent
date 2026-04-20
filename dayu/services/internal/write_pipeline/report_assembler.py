@@ -7,7 +7,8 @@
 from __future__ import annotations
 
 from dayu.services.internal.write_pipeline.audit_formatting import _strip_evidence_section
-from dayu.services.internal.write_pipeline.models import ChapterResult, WriteRunConfig
+from dayu.services.contracts import WriteRunConfig
+from dayu.services.internal.write_pipeline.models import ChapterResult
 from dayu.services.internal.write_pipeline.template_parser import TemplateLayout, build_report_markdown
 
 _OVERVIEW_CHAPTER_TITLE = "投资要点概览"

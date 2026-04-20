@@ -19,10 +19,7 @@ from dayu.services.internal.write_pipeline.enums import (
     EvidenceConfirmationStatus,
     RepairStrategy,
 )
-
-# SceneModelConfig / WriteRunConfig 的公共真源已迁移至 dayu.services.contracts，
-# 此处 re-export 保持内部模块的现有导入路径。
-from dayu.services.contracts import SceneModelConfig, WriteRunConfig  # noqa: F401
+from dayu.services.contracts import SceneModelConfig, WriteRunConfig
 
 ChapterStatus = Literal["pending", "passed", "failed"]
 

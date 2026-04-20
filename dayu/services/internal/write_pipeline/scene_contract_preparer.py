@@ -17,12 +17,12 @@ from typing import Callable
 from dayu.contracts.agent_execution import ExecutionContract
 from dayu.contracts.infrastructure import ConfigLoaderProtocol
 from dayu.execution.options import ExecutionOptions
+from dayu.services.contracts import WriteRunConfig
 from dayu.services.contract_preparation import prepare_execution_contract
 from dayu.services.internal.write_pipeline.execution_options import (
     build_execution_options_with_scene_overrides,
 )
 from dayu.services.internal.write_pipeline.enums import AUDIT_WRITE_SCENES, WriteSceneName
-from dayu.services.internal.write_pipeline.models import WriteRunConfig
 from dayu.services.prompt_contributions import (
     build_base_user_contribution,
     build_fins_default_subject_contribution,
