@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -162,3 +163,65 @@ def test_file_conversation_store_emits_load_save_logs(tmp_path: Path, monkeypatc
     assert any("transcript 不存在" in message for message in debug_messages)
     assert any("保存 transcript" in message for message in debug_messages)
     assert any("加载 transcript" in message for message in debug_messages)
+
+
+@pytest.mark.unit
+def test_file_conversation_store_serializes_concurrent_save_and_surfaces_revision_conflict(
+    tmp_path: Path,
+) -> None:
+    """并发保存同一 session 时，后写线程必须在锁内看到 revision 冲突。"""
+
+    store = FileConversationStore(tmp_path / "conversations")
+    base = ConversationTranscript.create_empty("sess_race")
+    store.save(base)
+    first_update = base.append_turn(
+        ConversationTurnRecord(
+            turn_id="turn_1",
+            scene_name="interactive",
+            user_text="Q1",
+            assistant_final="A1",
+        )
+    )
+    second_update = base.append_turn(
+        ConversationTurnRecord(
+            turn_id="turn_2",
+            scene_name="interactive",
+            user_text="Q2",
+            assistant_final="A2",
+        )
+    )
+
+    barrier = threading.Barrier(3)
+    results: list[str] = []
+    errors: list[str] = []
+    result_lock = threading.Lock()
+
+    def _save_worker(transcript: ConversationTranscript) -> None:
+        """并发执行保存。"""
+
+        barrier.wait()
+        try:
+            saved = store.save(transcript, expected_revision=base.revision)
+        except RuntimeError as exc:
+            with result_lock:
+                errors.append(str(exc))
+            return
+        with result_lock:
+            results.append(saved.revision)
+
+    first_thread = threading.Thread(target=_save_worker, args=(first_update,))
+    second_thread = threading.Thread(target=_save_worker, args=(second_update,))
+    first_thread.start()
+    second_thread.start()
+    barrier.wait()
+    first_thread.join()
+    second_thread.join()
+
+    assert len(results) == 1
+    assert len(errors) == 1
+    assert "revision 冲突" in errors[0]
+
+    loaded = store.load("sess_race")
+    assert loaded is not None
+    assert loaded.revision == results[0]
+    assert len(loaded.turns) == 1

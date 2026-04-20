@@ -51,11 +51,12 @@ class _StubGovernor:
 
     def __init__(self) -> None:
         self.acquired: list[str] = []
+        self.acquire_timeouts: list[float | None] = []
         self.released: list[str] = []
 
     def acquire(self, lane: str, *, timeout: float | None = None) -> _Permit:
-        del timeout
         self.acquired.append(lane)
+        self.acquire_timeouts.append(timeout)
         return _Permit(permit_id=f"permit-{lane}", lane=lane)
 
     def try_acquire(self, lane: str):
@@ -162,6 +163,7 @@ def test_run_stream_manages_run_lifecycle_and_event_publish() -> None:
 
     assert len(events) == 1
     assert governor.acquired == ["llm_api"]
+    assert governor.acquire_timeouts == [executor_module._DEFAULT_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS]
     assert governor.released == ["llm_api"]
     run = next(iter(run_registry._runs.values()))
     assert run.state.value == "succeeded"
@@ -1438,6 +1440,36 @@ def test_run_deadline_watcher_start_is_idempotent_and_timeout_after_stop_is_safe
     assert len(timers) == 1
     assert timers[0].start_count == 1
     assert timers[0].cancel_count == 0
+
+
+@pytest.mark.unit
+def test_run_operation_uses_run_timeout_as_concurrency_acquire_budget() -> None:
+    """验证宿主执行器会把 run timeout 传给 permit 获取流程。"""
+
+    from tests.application.conftest import StubRunRegistry
+
+    run_registry = StubRunRegistry()
+    governor = _StubGovernor()
+    executor = DefaultHostExecutor(
+        run_registry=run_registry,
+        concurrency_governor=governor,  # type: ignore[arg-type]
+    )
+    spec = HostedRunSpec(
+        operation_name="prompt",
+        session_id="s1",
+        concurrency_lane="llm_api",
+        timeout_ms=1500,
+    )
+
+    def _operation(_context: HostedRunContext) -> int:
+        """测试桩：直接返回。"""
+
+        return 1
+
+    result = executor.run_operation_sync(spec=spec, operation=_operation)
+
+    assert result == 1
+    assert governor.acquire_timeouts == [1.5]
 
 
 @pytest.mark.unit

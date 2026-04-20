@@ -89,6 +89,26 @@ class TestAcquireBlocking:
         with pytest.raises(TimeoutError, match="获取并发许可超时"):
             governor.acquire("sec_download", timeout=0.2)
 
+    @pytest.mark.unit
+    def test_acquire_without_explicit_timeout_keeps_current_infinite_wait_contract(
+        self,
+        governor: SQLiteConcurrencyGovernor,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """显式不传 timeout 时，governor 仍保持协议约定的无限等待语义。"""
+
+        governor.try_acquire("sec_download")
+
+        def _raise_after_first_sleep(_seconds: float) -> None:
+            """测试桩：避免测试真的无限阻塞。"""
+
+            raise RuntimeError("stop loop")
+
+        monkeypatch.setattr("dayu.host.concurrency.time.sleep", _raise_after_first_sleep)
+
+        with pytest.raises(RuntimeError, match="stop loop"):
+            governor.acquire("sec_download")
+
 
 class TestLaneStatus:
     """get_lane_status / get_all_status 测试。"""

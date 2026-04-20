@@ -44,6 +44,25 @@ from dayu.log import Log
 TStreamEvent = TypeVar("TStreamEvent", bound=PublishedRunEventProtocol)
 TSyncResult = TypeVar("TSyncResult")
 MODULE = "HOST.EXECUTOR"
+_DEFAULT_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS = 300.0
+
+
+def _resolve_concurrency_acquire_timeout_seconds(timeout_ms: int | None) -> float:
+    """解析并发 permit 获取超时。
+
+    Args:
+        timeout_ms: run 级超时毫秒数。
+
+    Returns:
+        permit 获取最大等待秒数；未配置 run 超时时返回默认值。
+
+    Raises:
+        无。
+    """
+
+    if timeout_ms is None:
+        return _DEFAULT_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS
+    return max(0.001, timeout_ms / 1000.0)
 
 
 class RunDeadlineWatcher:
@@ -547,7 +566,10 @@ class DefaultHostExecutor(HostExecutorProtocol):
         self.run_registry.start_run(run_id)
         permit = None
         if self.concurrency_governor is not None and spec.concurrency_lane:
-            permit = self.concurrency_governor.acquire(spec.concurrency_lane)
+            permit = self.concurrency_governor.acquire(
+                spec.concurrency_lane,
+                timeout=_resolve_concurrency_acquire_timeout_seconds(spec.timeout_ms),
+            )
         return HostedRunContext(run_id=run_id, cancellation_token=token), bridge, deadline_watcher, permit
 
     def _finish_run(

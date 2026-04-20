@@ -3,18 +3,25 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Iterator, Protocol, TextIO
+
+import dayu.file_lock as file_lock_module
 
 from dayu.log import Log
 from dayu.host._coercion import _coerce_string_tuple
 
 _SESSION_FILE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 MODULE = "HOST.CONVERSATION_STORE"
+_CONVERSATION_LOCK_REGION_BYTES = 1
+_LOCK_FILE_SUFFIX = ".lock"
 
 
 def _utc_now_iso() -> str:
@@ -93,6 +100,105 @@ def _serialize_transcript(transcript: "ConversationTranscript") -> dict[str, obj
         "episodes": [asdict(item) for item in transcript.episodes],
         "turns": [asdict(turn) for turn in transcript.turns],
     }
+
+
+def _fsync_parent_directory(path: Path) -> None:
+    """尽力 fsync 父目录，降低原子替换后的目录元数据丢失风险。
+
+    Args:
+        path: 目标文件路径。
+
+    Returns:
+        无。
+
+    Raises:
+        无。
+    """
+
+    try:
+        dir_fd = os.open(str(path.parent), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        return
+    finally:
+        os.close(dir_fd)
+
+
+def _atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+    """通过临时文件 + 原子替换写入文本。
+
+    Args:
+        path: 目标文件路径。
+        content: 待写入文本。
+        encoding: 文本编码。
+
+    Returns:
+        无。
+
+    Raises:
+        OSError: 写入或替换失败时抛出。
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_path_text = tempfile.mkstemp(prefix=f".{path.name}.tmp.", dir=str(path.parent))
+    temp_path = Path(temp_path_text)
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_path, path)
+        _fsync_parent_directory(path)
+    except Exception:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _acquire_transcript_stream_lock(stream: TextIO) -> None:
+    """获取 transcript 锁文件的跨进程排他锁。
+
+    Args:
+        stream: 已打开的锁文件流。
+
+    Returns:
+        无。
+
+    Raises:
+        OSError: 底层加锁失败时抛出。
+    """
+
+    file_lock_module.acquire_text_file_lock(
+        stream,
+        blocking=True,
+        region_bytes=_CONVERSATION_LOCK_REGION_BYTES,
+        lock_name="conversation transcript 文件锁",
+    )
+
+
+def _release_transcript_stream_lock(stream: TextIO) -> None:
+    """释放 transcript 锁文件的跨进程排他锁。
+
+    Args:
+        stream: 已打开且已持锁的锁文件流。
+
+    Returns:
+        无。
+
+    Raises:
+        OSError: 底层解锁失败时抛出。
+    """
+
+    file_lock_module.release_text_file_lock(
+        stream,
+        region_bytes=_CONVERSATION_LOCK_REGION_BYTES,
+        lock_name="conversation transcript 文件锁",
+    )
 
 
 @dataclass(frozen=True)
@@ -448,6 +554,8 @@ class FileConversationStore:
 
         self._root_dir = root_dir.resolve()
         self._root_dir.mkdir(parents=True, exist_ok=True)
+        self._lock_dir = self._root_dir / ".locks"
+        self._lock_dir.mkdir(parents=True, exist_ok=True)
 
     def load(self, session_id: str) -> ConversationTranscript | None:
         """读取指定 session 的 transcript。
@@ -492,23 +600,25 @@ class FileConversationStore:
         """
 
         file_path = self._resolve_file_path(transcript.session_id)
-        if file_path.exists():
-            existing = self.load(transcript.session_id)
-            if existing is not None and expected_revision is not None and existing.revision != expected_revision:
-                Log.warning(
-                    "conversation transcript revision 冲突: "
-                    f"session_id={transcript.session_id}, expected={expected_revision}, actual={existing.revision}",
-                    module=MODULE,
-                )
-                raise RuntimeError(
-                    "conversation transcript revision 冲突："
-                    f"session_id={transcript.session_id}, expected={expected_revision}, actual={existing.revision}"
-                )
-        # 文件不存在时直接写入：首轮 transcript 仅存在于内存，不构成并发冲突
-        file_path.write_text(
-            json.dumps(_serialize_transcript(transcript), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        with self._transcript_file_lock(transcript.session_id):
+            if file_path.exists():
+                existing = self.load(transcript.session_id)
+                if existing is not None and expected_revision is not None and existing.revision != expected_revision:
+                    Log.warning(
+                        "conversation transcript revision 冲突: "
+                        f"session_id={transcript.session_id}, expected={expected_revision}, actual={existing.revision}",
+                        module=MODULE,
+                    )
+                    raise RuntimeError(
+                        "conversation transcript revision 冲突："
+                        f"session_id={transcript.session_id}, expected={expected_revision}, actual={existing.revision}"
+                    )
+            # 文件不存在时直接写入：首轮 transcript 仅存在于内存，不构成并发冲突
+            _atomic_write_text(
+                file_path,
+                json.dumps(_serialize_transcript(transcript), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         Log.debug(
             "保存 transcript: "
             f"session_id={transcript.session_id}, revision={transcript.revision}, turns={len(transcript.turns)}, "
@@ -532,6 +642,45 @@ class FileConversationStore:
 
         normalized_session_id = _normalize_session_file_name(session_id)
         return self._root_dir / f"{normalized_session_id}.json"
+
+    def _resolve_lock_file_path(self, session_id: str) -> Path:
+        """解析指定 session 的锁文件路径。
+
+        Args:
+            session_id: 会话 ID。
+
+        Returns:
+            锁文件绝对路径。
+
+        Raises:
+            ValueError: 当会话 ID 非法时抛出。
+        """
+
+        normalized_session_id = _normalize_session_file_name(session_id)
+        return self._lock_dir / f"{normalized_session_id}{_LOCK_FILE_SUFFIX}"
+
+    @contextmanager
+    def _transcript_file_lock(self, session_id: str) -> Iterator[TextIO]:
+        """对单个 session transcript 的读改写流程加跨进程排他锁。
+
+        Args:
+            session_id: 会话 ID。
+
+        Yields:
+            已打开并持有排他锁的锁文件流。
+
+        Raises:
+            OSError: 锁文件打开或加锁失败时抛出。
+        """
+
+        lock_path = self._resolve_lock_file_path(session_id)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+", encoding="utf-8") as stream:
+            _acquire_transcript_stream_lock(stream)
+            try:
+                yield stream
+            finally:
+                _release_transcript_stream_lock(stream)
 
 
 __all__ = [

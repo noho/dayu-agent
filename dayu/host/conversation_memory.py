@@ -36,7 +36,7 @@ from dayu.host.conversation_runtime import (
 from dayu.execution.options import ConversationMemorySettings
 
 MODULE = "RUNTIME.CONVERSATION_MEMORY"
-_COMPATION_USER_PROMPT_HEADER = "请基于以下会话片段生成结构化阶段摘要。仅输出严格 JSON。"
+_COMPACTION_USER_PROMPT_HEADER = "请基于以下会话片段生成结构化阶段摘要。仅输出严格 JSON。"
 _WORKING_MEMORY_TRUNCATION_SUFFIX = "...<truncated>"
 _HALF_WIDTH_TOKEN_UNITS = 1
 _FULL_WIDTH_TOKEN_UNITS = 2
@@ -857,7 +857,7 @@ class DefaultEpisodicMemoryCompressor:
         """
 
         payload = {
-            "task": _COMPATION_USER_PROMPT_HEADER,
+            "task": _COMPACTION_USER_PROMPT_HEADER,
             "pinned_state": {
                 "current_goal": transcript.pinned_state.current_goal,
                 "confirmed_subjects": list(transcript.pinned_state.confirmed_subjects),
