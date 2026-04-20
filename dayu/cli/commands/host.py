@@ -17,8 +17,10 @@ from dayu.host import Host, resolve_host_config
 from dayu.services.host_admin_service import HostAdminService
 from dayu.services.protocols import HostAdminServiceProtocol
 from dayu.cli.dependency_setup import setup_loglevel
-from dayu.startup.dependencies import prepare_config_file_resolver, prepare_config_loader, prepare_startup_paths
+from dayu.startup.config_file_resolver import ConfigFileResolver
+from dayu.startup.config_loader import ConfigLoader
 from dayu.startup.paths import StartupPaths
+from dayu.startup.paths import resolve_startup_paths
 
 
 @dataclass(frozen=True)
@@ -80,12 +82,12 @@ def _build_host_runtime(args: argparse.Namespace) -> HostCliRuntime:
     workspace_root = Path(str(getattr(args, "base", "./workspace"))).expanduser().resolve()
     raw_config_root = getattr(args, "config", None)
     config_root = Path(str(raw_config_root)).expanduser().resolve() if raw_config_root else None
-    paths = prepare_startup_paths(
+    paths = resolve_startup_paths(
         workspace_root=workspace_root,
         config_root=config_root,
     )
-    resolver = prepare_config_file_resolver(config_root=paths.config_root)
-    config_loader = prepare_config_loader(resolver=resolver)
+    resolver = ConfigFileResolver(paths.config_root)
+    config_loader = ConfigLoader(resolver)
     run_config = config_loader.load_run_config()
     host_config = resolve_host_config(
         workspace_root=paths.workspace_root,

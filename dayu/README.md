@@ -178,7 +178,7 @@ sequenceDiagram
     participant SP as scene preparation
     participant Agent as AsyncAgent
 
-    UI->>Startup: prepare_* startup functions + prepare_host_runtime_dependencies(...)
+    UI->>Startup: resolve_startup_paths / ConfigLoader / prepare_host_runtime_dependencies(...)
     Startup-->>UI: workspace/model/prompt/default execution options/Host 稳定依赖
     UI->>Service: new PromptService(...)
     UI->>Service: submit(PromptRequest(user_text, ticker, session_id?, session_resolution_policy, execution_options))
@@ -1273,7 +1273,7 @@ sequenceDiagram
     participant SP as scene preparation
     participant Agent as AsyncAgent
 
-    UI->>Startup: prepare_* startup functions + prepare_host_runtime_dependencies(...)
+    UI->>Startup: resolve_startup_paths / ConfigLoader / prepare_host_runtime_dependencies(...)
     Startup-->>UI: workspace/model/runtime/default execution options/Host 稳定依赖
     UI->>Service: new ChatService(host, scene_execution_acceptance_preparer, ...)
     UI->>Service: list_resumable_pending_turns(session_id, "interactive")

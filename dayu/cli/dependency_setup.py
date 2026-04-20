@@ -26,6 +26,8 @@ from dayu.execution.options import (
     ExecutionOptions,
     ResolvedExecutionOptions,
     TraceSettings,
+    build_base_execution_options,
+    merge_execution_options,
     resolve_doc_tool_limits_from_toolset_configs,
     resolve_fins_tool_limits_from_toolset_configs,
     resolve_web_tools_config_from_toolset_configs,
@@ -43,13 +45,10 @@ from dayu.services.prompt_service import PromptService
 from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
 from dayu.services.write_service import WriteService
 from dayu.services.contracts import WriteRequest
+from dayu.startup.config_file_resolver import ConfigFileResolver
+from dayu.startup.config_loader import ConfigLoader
 from dayu.startup.config_file_resolver import resolve_package_assets_path
-from dayu.startup.dependencies import (
-    prepare_config_file_resolver,
-    prepare_config_loader,
-    prepare_default_execution_options,
-    prepare_startup_paths,
-)
+from dayu.startup.paths import resolve_startup_paths
 from dayu.startup.workspace import WorkspaceResources
 from dayu.workspace_paths import build_host_store_default_path, build_interactive_state_dir
 
@@ -452,15 +451,19 @@ def _prepare_cli_default_execution_options(
         无。
     """
 
-    paths = prepare_startup_paths(
+    paths = resolve_startup_paths(
         workspace_root=workspace_config.workspace_dir,
         config_root=workspace_config.config_root,
     )
-    resolver = prepare_config_file_resolver(config_root=paths.config_root)
-    config_loader = prepare_config_loader(resolver=resolver)
-    return prepare_default_execution_options(
-        workspace_root=paths.workspace_root,
-        config_loader=config_loader,
+    resolver = ConfigFileResolver(paths.config_root)
+    config_loader = ConfigLoader(resolver)
+    base_execution_options = build_base_execution_options(
+        workspace_dir=paths.workspace_root,
+        run_config=config_loader.load_run_config(),
+    )
+    return merge_execution_options(
+        base_options=base_execution_options,
+        workspace_dir=paths.workspace_root,
         execution_options=execution_options,
     )
 

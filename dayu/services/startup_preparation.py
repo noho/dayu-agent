@@ -19,16 +19,12 @@ from dayu.services.host_admin_service import HostAdminService
 from dayu.services.scene_definition_reader import SceneDefinitionReader
 from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
 from dayu.services.startup_recovery import recover_host_startup_state
-from dayu.startup.dependencies import (
-    prepare_config_file_resolver,
-    prepare_config_loader,
-    prepare_default_execution_options,
-    prepare_fins_runtime,
-    prepare_model_catalog,
-    prepare_prompt_asset_store,
-    prepare_startup_paths,
-    prepare_workspace_resources,
-)
+from dayu.execution.options import build_base_execution_options, merge_execution_options
+from dayu.startup.config_file_resolver import ConfigFileResolver
+from dayu.startup.config_loader import ConfigLoader
+from dayu.startup.model_catalog import ConfigLoaderModelCatalog
+from dayu.startup.paths import resolve_startup_paths
+from dayu.startup.prompt_assets import FilePromptAssetStore
 from dayu.startup.workspace import WorkspaceResources
 
 
@@ -108,22 +104,28 @@ def prepare_host_runtime_dependencies(
         无。
     """
 
-    paths = prepare_startup_paths(
+    paths = resolve_startup_paths(
         workspace_root=workspace_root,
         config_root=config_root,
     )
-    resolver = prepare_config_file_resolver(config_root=paths.config_root)
-    config_loader = prepare_config_loader(resolver=resolver)
-    prompt_asset_store = prepare_prompt_asset_store(resolver=resolver)
-    workspace = prepare_workspace_resources(
-        paths=paths,
+    resolver = ConfigFileResolver(paths.config_root)
+    config_loader = ConfigLoader(resolver)
+    prompt_asset_store = FilePromptAssetStore(resolver)
+    workspace = WorkspaceResources(
+        workspace_dir=paths.workspace_root,
+        config_root=paths.config_root,
+        output_dir=paths.output_dir,
         config_loader=config_loader,
         prompt_asset_store=prompt_asset_store,
     )
-    model_catalog = prepare_model_catalog(config_loader=config_loader)
-    default_execution_options = prepare_default_execution_options(
-        workspace_root=paths.workspace_root,
-        config_loader=config_loader,
+    model_catalog = ConfigLoaderModelCatalog(config_loader)
+    base_execution_options = build_base_execution_options(
+        workspace_dir=paths.workspace_root,
+        run_config=config_loader.load_run_config(),
+    )
+    default_execution_options = merge_execution_options(
+        base_options=base_execution_options,
+        workspace_dir=paths.workspace_root,
         execution_options=execution_options,
     )
     scene_execution_acceptance_preparer = prepare_scene_execution_acceptance_preparer(
@@ -132,7 +134,7 @@ def prepare_host_runtime_dependencies(
         model_catalog=model_catalog,
         prompt_asset_store=prompt_asset_store,
     )
-    fins_runtime = prepare_fins_runtime(workspace_root=paths.workspace_root)
+    fins_runtime = DefaultFinsRuntime.create(workspace_root=paths.workspace_root)
     run_config = config_loader.load_run_config()
     host_config = resolve_host_config(
         workspace_root=paths.workspace_root,

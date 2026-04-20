@@ -37,31 +37,35 @@ def test_prepare_host_runtime_dependencies_runs_unified_startup_recovery(
     recover_calls: list[tuple[Host, str, str]] = []
 
     monkeypatch.setattr(
-        "dayu.services.startup_preparation.prepare_startup_paths",
+        "dayu.services.startup_preparation.resolve_startup_paths",
         lambda **_kwargs: fake_paths,
     )
     monkeypatch.setattr(
-        "dayu.services.startup_preparation.prepare_config_file_resolver",
-        lambda **_kwargs: object(),
+        "dayu.services.startup_preparation.ConfigFileResolver",
+        lambda _config_root: object(),
     )
     monkeypatch.setattr(
-        "dayu.services.startup_preparation.prepare_config_loader",
-        lambda **_kwargs: SimpleNamespace(load_run_config=lambda: SimpleNamespace()),
+        "dayu.services.startup_preparation.ConfigLoader",
+        lambda _resolver: SimpleNamespace(load_run_config=lambda: SimpleNamespace()),
     )
     monkeypatch.setattr(
-        "dayu.services.startup_preparation.prepare_prompt_asset_store",
-        lambda **_kwargs: object(),
+        "dayu.services.startup_preparation.FilePromptAssetStore",
+        lambda _resolver: object(),
     )
     monkeypatch.setattr(
-        "dayu.services.startup_preparation.prepare_workspace_resources",
+        "dayu.services.startup_preparation.WorkspaceResources",
         lambda **_kwargs: fake_workspace,
     )
     monkeypatch.setattr(
-        "dayu.services.startup_preparation.prepare_model_catalog",
-        lambda **_kwargs: fake_model_catalog,
+        "dayu.services.startup_preparation.ConfigLoaderModelCatalog",
+        lambda _config_loader: fake_model_catalog,
     )
     monkeypatch.setattr(
-        "dayu.services.startup_preparation.prepare_default_execution_options",
+        "dayu.services.startup_preparation.build_base_execution_options",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "dayu.services.startup_preparation.merge_execution_options",
         lambda **_kwargs: fake_default_execution_options,
     )
     monkeypatch.setattr(
@@ -69,7 +73,7 @@ def test_prepare_host_runtime_dependencies_runs_unified_startup_recovery(
         lambda **_kwargs: fake_scene_preparer,
     )
     monkeypatch.setattr(
-        "dayu.services.startup_preparation.prepare_fins_runtime",
+        "dayu.services.startup_preparation.DefaultFinsRuntime.create",
         lambda **_kwargs: fake_fins_runtime,
     )
     monkeypatch.setattr(

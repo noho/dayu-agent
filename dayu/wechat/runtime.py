@@ -29,10 +29,6 @@ from dayu.services.reply_delivery_service import ReplyDeliveryService
 from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
 from dayu.startup.config_file_resolver import ConfigFileResolver
 from dayu.startup.config_loader import ConfigLoader
-from dayu.startup.dependencies import (
-    prepare_config_file_resolver,
-    prepare_config_loader,
-)
 from dayu.startup.workspace import WorkspaceResources
 from dayu.wechat.arg_parsing import (
     DEFAULT_TYPING_INTERVAL_SEC,
