@@ -123,7 +123,13 @@ def _run_command(command: Sequence[str], *, env: Mapping[str, str] | None = None
         subprocess.CalledProcessError：命令执行失败时抛出。
     """
 
-    subprocess.run(command, check=True, env=dict(env) if env is not None else None)
+    subprocess.run(
+        command,
+        check=True,
+        env=dict(env) if env is not None else None,
+        stdout=sys.stderr,
+        stderr=sys.stderr,
+    )
 
 
 def _flatten_constraints_text(constraints_path: Path) -> str:

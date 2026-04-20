@@ -190,6 +190,13 @@ git push -u github <feat/short-topic>
 gh pr create --fill          # 或去网页开
 ```
 
+如果想让 CI 额外跑扩展集成测试和四平台完整验证：
+```bash
+git branch --show-current
+git push -u github <feat/short-topic>
+gh pr create --fill --label full-integration
+```
+
 `-u` 只在该分支**第一次** push 时加，后续直接 `git push`。
 
 - **CI 失败或验证发现问题**：在功能分支上继续改、commit、push，PR 自动更新，CI 重跑。
