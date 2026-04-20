@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator, Optional
 import pytest
 
 from dayu.contracts.agent_types import AgentMessage
-from dayu.contracts.protocols import ToolExecutionContext, ToolExecutionContextMapping
+from dayu.contracts.protocols import ToolExecutionContext
 from dayu.engine.async_agent import AgentRunningConfig, AsyncAgent
 from dayu.engine.duplicate_call_guard import _make_tool_signature
 from dayu.engine.events import (
@@ -120,7 +120,7 @@ class _ToolExecutorStub:
         self,
         name: str,
         arguments: dict[str, Any],
-        context: ToolExecutionContext | ToolExecutionContextMapping | None = None,
+        context: ToolExecutionContext | None = None,
     ) -> dict[str, Any]:
         """返回最小成功结果。
 

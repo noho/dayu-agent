@@ -136,8 +136,8 @@ class ToolExecutor(Protocol):
 
 当前工具执行契约补充：
 - `context` 的稳定真源已经收敛为强类型 `ToolExecutionContext`，包含 `run_id / iteration_id / tool_call_id / index_in_iteration / timeout_seconds / cancellation_token`
-- `ToolExecutionContext` 提供受控字典式访问，但轮次字段真源只保留 `iteration_id`
-- `ToolRegistry` 与 `TruncationManager` 必须共同消费同一份 `ToolExecutionContext` / 兼容 mapping 边界；不要在分页续读链路把上下文签名退回旧的 `dict[str, Any]` 专用接口
+- `ToolExecutionContext` 只保留属性访问，不再提供 `dict` / `Mapping` 兼容桥接；调用方应直接构造并透传强类型对象
+- `ToolRegistry` 与 `TruncationManager` 必须共同消费同一份 `ToolExecutionContext`；不要在分页续读链路把上下文签名退回旧的 `dict[str, Any]` 专用接口
 - 只有显式声明 `execution_context_param_name` 的工具才会收到 execution context 注入；未声明的旧工具继续走兼容路径
 - `ToolRegistry` / `TruncationManager` 只负责工具结果契约级截断：按工具 schema 的 `truncate_spec` 处理单次返回，并在需要时生成 `fetch_more` 续读信息；它们不感知 Agent 主循环的全局上下文预算
 - `ToolsetRegistrationContext.registry` 依赖结构化 `ToolRegistryProtocol`；协议方法签名必须与 `ToolRegistry` 的公开方法保持同名同参，尤其是 `register_allowed_paths(paths)` 这类会被 Host 直接注入的注册入口

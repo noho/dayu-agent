@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from dayu.contracts.agent_types import AgentMessage
-from dayu.contracts.protocols import ToolExecutionContext, ToolExecutionContextMapping
+from dayu.contracts.protocols import ToolExecutionContext
 from dayu.engine.async_openai_runner import AsyncOpenAIRunner
 from dayu.engine import EventType
 from dayu.engine.tool_contracts import DupCallSpec
@@ -44,7 +44,7 @@ class DummyToolExecutor:
         self,
         name: str,
         arguments: dict[str, Any],
-        context: ToolExecutionContext | ToolExecutionContextMapping | None = None,
+        context: ToolExecutionContext | None = None,
     ) -> dict[str, Any]:
         """执行测试工具调用。
 

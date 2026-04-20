@@ -10,6 +10,7 @@ from typing import Any, Dict, List, cast
 
 import pytest
 
+from dayu.contracts.protocols import ToolExecutionContext
 from dayu.engine.tool_contracts import TRUNCATION_STRATEGIES, ToolTruncateSpec
 from dayu.engine.truncation_manager import TruncationManager
 
@@ -317,7 +318,12 @@ def test_store_cursor_uses_context_timeout_and_cleans_expired_entries(monkeypatc
         template=None,
         field_path=None,
         mode="list",
-        context={"timeout": 10, "run_id": "r1", "iteration_id": "i1", "tool_call_id": "c1"},
+        context=ToolExecutionContext(
+            run_id="r1",
+            iteration_id="i1",
+            tool_call_id="c1",
+            timeout_seconds=10,
+        ),
     )
 
     assert cursor == "fixed_cursor_id"

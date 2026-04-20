@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import pytest
 
+from dayu.contracts.protocols import ToolExecutionContext
 from dayu.engine import ToolRegistry, ConfigError
 from dayu.engine.tool_contracts import ToolTruncateSpec
 from dayu.engine.tool_errors import ToolBusinessError
@@ -311,19 +312,19 @@ def test_execute_fetch_more_error_paths():
         template=None,
         field_path=None,
         mode="text",
-        context={"run_id": "r1"},
+        context=ToolExecutionContext(run_id="r1"),
     )
     scope_token2 = registry._truncation_manager._cursor_store[cursor2]["scope_token"]
     mismatch = registry._truncation_manager.execute_fetch_more(
         {"cursor": cursor2, "scope_token": scope_token2},
-        context={"run_id": "r2"},
+        context=ToolExecutionContext(run_id="r2"),
     )
     assert mismatch["error"] == "cursor_scope_mismatch"
 
     # 同一 run 内跨 iteration 续读应成功
     cross_turn_ok = registry._truncation_manager.execute_fetch_more(
         {"cursor": cursor2, "scope_token": scope_token2},
-        context={"run_id": "r1", "iteration_id": "iteration-next"},
+        context=ToolExecutionContext(run_id="r1", iteration_id="iteration-next"),
     )
     assert cross_turn_ok["ok"] is True
 

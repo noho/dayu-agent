@@ -7,13 +7,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Collection, Mapping, Optional, Protocol, Sequence, TypeAlias
+from typing import Any, Callable, Collection, Optional, Protocol, Sequence
 
 from dayu.contracts.agent_types import AgentMessage
 from dayu.contracts.cancellation import CancellationToken
-
-ToolExecutionContextValue: TypeAlias = str | int | float | bool | None | CancellationToken
-ToolExecutionContextMapping: TypeAlias = Mapping[str, ToolExecutionContextValue]
 
 
 @dataclass(frozen=True)
@@ -41,134 +38,6 @@ class ToolExecutionContext:
     index_in_iteration: int = 0
     timeout_seconds: float | None = None
     cancellation_token: CancellationToken | None = None
-
-    @classmethod
-    def from_value(
-        cls,
-        value: "ToolExecutionContext | ToolExecutionContextMapping | None",
-    ) -> "ToolExecutionContext | None":
-        """把兼容上下文输入收敛为强类型对象。
-
-        Args:
-            value: 现有上下文对象、兼容映射或 ``None``。
-
-        Returns:
-            规整后的强类型上下文；无输入时返回 ``None``。
-
-        Raises:
-            无。
-        """
-
-        if value is None:
-            return None
-        if isinstance(value, cls):
-            return value
-        iteration_id = cls._normalize_optional_str(value.get("iteration_id"))
-        timeout_value = value.get("timeout_seconds")
-        if timeout_value is None:
-            timeout_value = value.get("timeout")
-        cancellation_token = value.get("cancellation_token")
-        return cls(
-            run_id=cls._normalize_optional_str(value.get("run_id")),
-            iteration_id=iteration_id,
-            tool_call_id=cls._normalize_optional_str(value.get("tool_call_id")),
-            index_in_iteration=cls._normalize_index(value.get("index_in_iteration")),
-            timeout_seconds=cls._normalize_timeout(timeout_value),
-            cancellation_token=(
-                cancellation_token
-                if isinstance(cancellation_token, CancellationToken)
-                else None
-            ),
-        )
-
-    def get(self, key: str, default: ToolExecutionContextValue = None) -> ToolExecutionContextValue:
-        """按兼容字典语义读取上下文字段。
-
-        Args:
-            key: 目标字段名。
-            default: 字段不存在时返回的默认值。
-
-        Returns:
-            对应字段值；不存在时返回 ``default``。
-
-        Raises:
-            无。
-        """
-
-        try:
-            return self[key]
-        except KeyError:
-            return default
-
-    def __getitem__(self, key: str) -> ToolExecutionContextValue:
-        """按兼容字典语义读取上下文字段。
-
-        Args:
-            key: 目标字段名。
-
-        Returns:
-            对应字段值。
-
-        Raises:
-            KeyError: 字段不存在时抛出。
-        """
-
-        if key == "run_id":
-            return self.run_id
-        if key == "iteration_id":
-            return self.iteration_id
-        if key == "tool_call_id":
-            return self.tool_call_id
-        if key == "index_in_iteration":
-            return self.index_in_iteration
-        if key in {"timeout", "timeout_seconds"}:
-            return self.timeout_seconds
-        if key == "cancellation_token":
-            return self.cancellation_token
-        raise KeyError(key)
-
-    @staticmethod
-    def _normalize_optional_str(value: ToolExecutionContextValue) -> str | None:
-        """标准化可选字符串字段。"""
-
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            return str(value)
-        normalized = value.strip()
-        return normalized or None
-
-    @staticmethod
-    def _normalize_index(value: ToolExecutionContextValue) -> int:
-        """标准化工具顺序索引。"""
-
-        if isinstance(value, bool):
-            return int(value)
-        if isinstance(value, int):
-            return value
-        if isinstance(value, float):
-            return int(value)
-        if isinstance(value, str) and value.strip():
-            try:
-                return int(value)
-            except ValueError:
-                return 0
-        return 0
-
-    @staticmethod
-    def _normalize_timeout(value: ToolExecutionContextValue) -> float | None:
-        """标准化超时字段。"""
-
-        if isinstance(value, bool):
-            return float(value)
-        if isinstance(value, int | float):
-            return float(value)
-        if isinstance(value, str) and value.strip():
-            try:
-                return float(value)
-            except ValueError:
-                return None
-        return None
 
 
 class DupCallSpecProtocol(Protocol):
@@ -271,7 +140,7 @@ class ToolExecutor(Protocol):
         self,
         name: str,
         arguments: dict[str, Any],
-        context: ToolExecutionContext | ToolExecutionContextMapping | None = None,
+        context: ToolExecutionContext | None = None,
     ) -> dict[str, Any]:
         """执行工具并返回结构化结果。"""
 

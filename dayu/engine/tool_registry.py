@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
-from dayu.contracts.protocols import ToolExecutionContext, ToolExecutionContextMapping
+from dayu.contracts.protocols import ToolExecutionContext
 
 from .argument_validator import ArgumentValidator
 from .exceptions import ConfigError, FileAccessError
@@ -450,7 +450,7 @@ class ToolRegistry:
         self,
         name: str,
         arguments: Dict[str, Any],
-        context: ToolExecutionContext | ToolExecutionContextMapping | None = None,
+        context: ToolExecutionContext | None = None,
     ) -> Dict[str, Any]:
         """执行工具并返回结构化结果。
 
@@ -468,7 +468,6 @@ class ToolRegistry:
         """
         # Log.debug(f"执行工具: {name}, 参数: {arguments}", module=MODULE)
         
-        normalized_context = ToolExecutionContext.from_value(context)
         try:
             # 检查工具是否存在
             if name not in self.tools:
@@ -486,7 +485,7 @@ class ToolRegistry:
                 return validation
 
             if name == "fetch_more":
-                return self._truncation_manager.execute_fetch_more(validation["arguments"], normalized_context)
+                return self._truncation_manager.execute_fetch_more(validation["arguments"], context)
 
             # 执行工具前：自动路径安全检查
             arguments = validation["arguments"]
@@ -530,7 +529,7 @@ class ToolRegistry:
                 result = func(**arguments)
             else:
                 call_arguments = dict(arguments)
-                call_arguments[execution_context_param_name] = normalized_context
+                call_arguments[execution_context_param_name] = context
                 result = func(**call_arguments)
 
             # 截断处理
@@ -539,13 +538,13 @@ class ToolRegistry:
                 name=name,
                 arguments=arguments,
                 value=result,
-                context=normalized_context,
+                context=context,
                 truncate_spec=truncate_spec,
             )
             result = build_success(value=value, truncation=truncation)
             # 链式执行 response middleware；透传 context 以支持按轮次感知（index_in_iteration）
             for middleware in self._response_middlewares:
-                result = middleware(name, result, normalized_context)
+                result = middleware(name, result, context)
             return result
 
         except ToolBusinessError as e:

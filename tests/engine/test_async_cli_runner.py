@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from dayu.contracts.agent_types import AgentMessage
-from dayu.contracts.protocols import ToolExecutionContext, ToolExecutionContextMapping
+from dayu.contracts.protocols import ToolExecutionContext
 from dayu.engine.async_cli_runner import AsyncCliRunner, create_codex_runner
 from dayu.engine import EventType, content_complete, content_delta, done_event
 
@@ -75,7 +75,7 @@ class _NoopExecutor:
         self,
         name: str,
         arguments: dict[str, Any],
-        context: ToolExecutionContext | ToolExecutionContextMapping | None = None,
+        context: ToolExecutionContext | None = None,
     ) -> dict[str, Any]:
         """测试桩不实际执行工具。"""
 

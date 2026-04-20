@@ -459,7 +459,7 @@ async def test_run_tool_call_context_timeout_prefers_tool_timeout_seconds():
     assert result["result"]["ok"] is True
     assert executor.context is not None
     assert isinstance(executor.context, ToolExecutionContext)
-    assert executor.context["timeout"] == 12.5
+    assert executor.context.timeout_seconds == 12.5
 
 
 @pytest.mark.asyncio

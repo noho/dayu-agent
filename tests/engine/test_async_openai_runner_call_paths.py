@@ -10,7 +10,7 @@ from typing import Any, Optional
 import pytest
 
 from dayu.engine import async_openai_runner as aor
-from dayu.contracts.protocols import ToolExecutionContext, ToolExecutionContextMapping
+from dayu.contracts.protocols import ToolExecutionContext
 from dayu.contracts.cancellation import CancelledError as EngineCancelledError, CancellationToken
 from dayu.engine.events import EventType, StreamEvent
 
@@ -52,7 +52,7 @@ class _DummyExecutor:
         self,
         name: str,
         arguments: dict[str, Any],
-        context: ToolExecutionContext | ToolExecutionContextMapping | None = None,
+        context: ToolExecutionContext | None = None,
     ) -> dict[str, Any]:
         """执行工具。
 

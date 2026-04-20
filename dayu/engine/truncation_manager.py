@@ -16,7 +16,7 @@ import uuid
 from threading import RLock
 from typing import Any, Dict, List, Optional
 
-from dayu.contracts.protocols import ToolExecutionContext, ToolExecutionContextMapping
+from dayu.contracts.protocols import ToolExecutionContext
 from dayu.log import Log
 from .tool_contracts import TRUNCATION_STRATEGIES, ToolTruncateSpec
 from .tool_result import build_error, build_success
@@ -29,7 +29,7 @@ _CURSOR_TTL_FALLBACK_SEC = 300.0
 _CONTINUATION_ACTION_FETCH_MORE = "fetch_more"
 _CONTINUATION_PRIORITY_HIGH = "high"
 _SCOPE_MISMATCH_ERROR = {"code": "cursor_scope_mismatch", "message": "cursor scope mismatch"}
-TruncationContext = ToolExecutionContext | ToolExecutionContextMapping | None
+TruncationContext = ToolExecutionContext | None
 
 
 class TruncationManager:
@@ -214,12 +214,15 @@ class TruncationManager:
                     template=record["template"],
                     field_path=record["field_path"],
                     mode=record["mode"],
-                    context={
-                        "run_id": record.get("run_id"),
-                        "iteration_id": record.get("iteration_id"),
-                        "tool_call_id": record.get("tool_call_id"),
-                        "timeout": max(record.get("expires_at", 0) - record.get("created_at", 0), _CURSOR_TTL_FALLBACK_SEC),
-                    },
+                    context=ToolExecutionContext(
+                        run_id=str(record.get("run_id") or "").strip() or None,
+                        iteration_id=str(record.get("iteration_id") or "").strip() or None,
+                        tool_call_id=str(record.get("tool_call_id") or "").strip() or None,
+                        timeout_seconds=max(
+                            record.get("expires_at", 0) - record.get("created_at", 0),
+                            _CURSOR_TTL_FALLBACK_SEC,
+                        ),
+                    ),
                     length_field=record.get("length_field"),
                 )
                 truncation = self._build_truncation_info(
@@ -566,9 +569,9 @@ class TruncationManager:
             now = time.monotonic()
             ttl = _CURSOR_TTL_FALLBACK_SEC
             if context:
-                timeout = context.get("timeout")
-                if isinstance(timeout, (int, float)) and timeout > 0:
-                    ttl = float(timeout)
+                timeout_seconds = context.timeout_seconds
+                if isinstance(timeout_seconds, (int, float)) and timeout_seconds > 0:
+                    ttl = float(timeout_seconds)
             cursor = uuid.uuid4().hex
             self._cleanup_expired_cursors(now)
             self._cursor_store[cursor] = {
@@ -586,9 +589,9 @@ class TruncationManager:
                 "length_field": length_field,
                 "created_at": now,
                 "expires_at": now + ttl,
-                "run_id": context.get("run_id") if context else None,
-                "iteration_id": context.get("iteration_id") if context else None,
-                "tool_call_id": context.get("tool_call_id") if context else None,
+                "run_id": context.run_id if context else None,
+                "iteration_id": context.iteration_id if context else None,
+                "tool_call_id": context.tool_call_id if context else None,
             }
             self._cursor_store[cursor]["scope_token"] = self._build_scope_token(
                 cursor=cursor,
@@ -741,7 +744,7 @@ class TruncationManager:
             return None
 
         expected_run_id = record.get("run_id")
-        actual_run_id = context.get("run_id")
+        actual_run_id = context.run_id
         if expected_run_id and actual_run_id and expected_run_id != actual_run_id:
             return {
                 "code": "cursor_scope_mismatch",
