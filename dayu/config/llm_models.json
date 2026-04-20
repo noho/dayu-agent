@@ -504,6 +504,94 @@
       }
     }
   },
+  "mimo-v2-pro-plan-sg": {
+    "runner_type": "openai_compatible",
+    "name": "mimo-v2-pro-plan-sg",
+    "endpoint_url": "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions",
+    "model": "mimo-v2-pro",
+    "headers": {
+      "Authorization": "Bearer {{MIMO_PLAN_SG_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "thinking": {
+        "type": "disabled"
+      }
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": false,
+    "max_context_tokens": 1048576,
+    "max_output_tokens": 131072,
+    "description": "Mimo V2 Pro 模型 - 用于对话和内容生成（1M context, 131.1K output）",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "write": {
+          "temperature": 0.8
+        },
+        "overview": {
+          "temperature": 0.3
+        }
+      },
+      "conversation_memory": {
+        "working_memory_token_budget_cap": 80000
+      }
+    }
+  },
+  "mimo-v2-pro-thinking-plan-sg": {
+    "runner_type": "openai_compatible",
+    "name": "mimo-v2-pro-thinking-plan-sg",
+    "endpoint_url": "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions",
+    "model": "mimo-v2-pro",
+    "headers": {
+      "Authorization": "Bearer {{MIMO_PLAN_SG_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "thinking": {
+        "type": "enabled"
+      }
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": false,
+    "max_context_tokens": 1048576,
+    "max_output_tokens": 131072,
+    "description": "Mimo V2 Pro Thinking 模型 - 用于深度推理和复杂任务（1M context, 131.1K output）",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "audit": {
+          "temperature": 0.4
+        },
+        "decision": {
+          "temperature": 0.6
+        },
+        "interactive": {
+          "temperature": 0.8
+        },
+        "prompt": {
+          "temperature": 0.8
+        },
+        "infer": {
+          "temperature": 0.3
+        },
+        "conversation_compaction": {
+          "temperature": 0.3
+        }
+      },
+      "conversation_memory": {
+        "working_memory_token_budget_cap": 80000
+      }
+    }
+  },
   "qwen3": {
     "runner_type": "openai_compatible",
     "name": "qwen3",

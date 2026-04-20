@@ -31,6 +31,7 @@ MODULE = "CLI.INIT"
 
 _PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "MIMO_PLAN_API_KEY": "Mimo Token Plan",
+    "MIMO_PLAN_SG_API_KEY": "Mimo Token Plan (海外)",
     "MIMO_API_KEY": "Mimo",
     "DEEPSEEK_API_KEY": "DeepSeek",
     "OPENAI_API_KEY": "OpenAI",
@@ -41,6 +42,7 @@ _PROVIDER_DISPLAY_NAMES: dict[str, str] = {
 
 _PROVIDER_MODEL_MAP: dict[str, tuple[str, str]] = {
     "MIMO_PLAN_API_KEY": ("mimo-v2-pro-plan", "mimo-v2-pro-thinking-plan"),
+    "MIMO_PLAN_SG_API_KEY": ("mimo-v2-pro-plan-sg", "mimo-v2-pro-thinking-plan-sg"),
     "MIMO_API_KEY": ("mimo-v2-pro", "mimo-v2-pro-thinking"),
     "DEEPSEEK_API_KEY": ("deepseek-chat", "deepseek-thinking"),
     "OPENAI_API_KEY": ("gpt-5.4", "gpt-5.4"),

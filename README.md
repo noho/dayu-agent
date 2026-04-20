@@ -144,6 +144,7 @@ API Key 申请地址：
 
 说明：
 - 默认推荐 Mimo Token Plan（mimo-v2-pro-plan），性价比最优。（注： MIMO_PLAN_API_KEY / MIMO_API_KEY 是两个不同的KEY，不能混用）。
+- 海外用户选Mimo Token Plan SG。
 - 联网搜索默认可走 `auto`，若配置了 Tavily / Serper，会优先使用对应 provider。
 - 若运行环境需要访问 `localhost`、私网 IP 或内网域名，可在 `workspace/config/run.json` 的 `web_tools_config.allow_private_network_url` 中显式打开内网访问开关。
 - `workspace/config/llm_models.json` 当前只允许 `openai_compatible` 模型配置；CLI runner 已禁用。
