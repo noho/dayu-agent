@@ -14,7 +14,12 @@ on:
         default: false
         type: boolean
       run_full_matrix:
-        description: "是否运行四平台完整验证"
+        description: "是否运行完整平台验证"
+        required: false
+        default: false
+        type: boolean
+      include_macos_x64:
+        description: "完整平台验证时是否额外运行 macos-x64"
         required: false
         default: false
         type: boolean
@@ -136,24 +141,47 @@ jobs:
     name: full-platform-validation (${{ matrix.platform_id }}, py3.11)
     runs-on: ${{ matrix.runner }}
     if: >
-      github.event_name == 'schedule' ||
-      github.event_name == 'push' ||
+      (github.event_name == 'schedule' &&
+        matrix.run_on_schedule == true) ||
+      (github.event_name == 'push' &&
+        matrix.run_on_push_main == true) ||
       (github.event_name == 'workflow_dispatch' &&
-        inputs.run_full_matrix == true) ||
+        inputs.run_full_matrix == true &&
+        (
+          matrix.run_on_workflow_dispatch == true ||
+          (matrix.platform_id == 'macos-x64' && inputs.include_macos_x64 == true)
+        )) ||
       (github.event_name == 'pull_request' &&
-        contains(github.event.pull_request.labels.*.name, 'full-integration'))
+        contains(github.event.pull_request.labels.*.name, 'full-integration') &&
+        matrix.run_on_pull_request == true)
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: macos-14
             platform_id: macos-arm64
+            run_on_pull_request: true
+            run_on_push_main: true
+            run_on_schedule: true
+            run_on_workflow_dispatch: true
           - runner: macos-13
             platform_id: macos-x64
+            run_on_pull_request: false
+            run_on_push_main: false
+            run_on_schedule: false
+            run_on_workflow_dispatch: false
           - runner: ubuntu-latest
             platform_id: linux-x64
+            run_on_pull_request: true
+            run_on_push_main: true
+            run_on_schedule: true
+            run_on_workflow_dispatch: true
           - runner: windows-latest
             platform_id: windows-x64
+            run_on_pull_request: true
+            run_on_push_main: true
+            run_on_schedule: true
+            run_on_workflow_dispatch: true
 
     steps:
       - name: Checkout

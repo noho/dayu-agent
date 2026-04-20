@@ -190,7 +190,7 @@ git push -u github <feat/short-topic>
 gh pr create --fill          # 或去网页开
 ```
 
-如果想让 CI 额外跑扩展集成测试和四平台完整验证：
+如果想让 CI 额外跑扩展集成测试和 PR 可执行的平台完整验证：
 ```bash
 git branch --show-current
 git push -u github <feat/short-topic>
@@ -242,20 +242,37 @@ push 后 PR 自动更新，CI 重新跑。最终 merge 时用 **Squash and merge
      - 给 PR 加 label：`full-integration`
    - 内容：
      - Ubuntu 下完整 `integration` 测试层
-     - 四平台完整验证矩阵
+     - PR 可执行的平台完整验证矩阵：
+       - `linux-x64`
+       - `windows-x64`
+       - `macos-arm64`
+     - `macos-x64` 不在 PR 层阻塞，避免长期排队占用反馈时间
 
 3. `主线 / 定时 / 手工完整验证`
-   - `push main`：自动跑扩展层与四平台完整验证
-   - `schedule`：每日定时跑扩展层与四平台完整验证
+   - `push main`：自动跑扩展层与主线默认平台完整验证
+   - `schedule`：每日定时跑扩展层与主线默认平台完整验证
    - `workflow_dispatch`：可手工触发
      - 默认只跑快主链
      - 勾选 `run_extended_integration=true` 时再跑扩展 integration 层
-     - 勾选 `run_full_matrix=true` 时再跑四平台完整验证
+     - 勾选 `run_full_matrix=true` 时再跑主线默认平台完整验证
+     - 只有再额外勾选 `include_macos_x64=true` 时，才补跑 `macos-x64`
+
+这里的“主线默认平台”固定为：
+
+- `linux-x64`
+- `windows-x64`
+- `macos-arm64`
+
+`macos-x64` 因为 GitHub runner 长期稀缺，不放进 `PR`、`push main`、`schedule` 的阻塞层，只保留在：
+
+- `workflow_dispatch(run_full_matrix=true, include_macos_x64=true)`
+- `release` 正式发布工作流
 
 这三层的设计原则是：
 
 - 主链 CI 必须包含少量真实集成 smoke
-- 更慢的真实集成测试与四平台完整矩阵分层运行
+- 更慢的真实集成测试与完整平台矩阵分层运行
+- 稀缺 runner（当前是 `macos-x64`）不放进日常阻塞层，只在手工完整验证和正式发布层收口
 - 发布前完整验证仍以 Release workflow 为准
 
 ### 5. PR merge 后本地同步
@@ -408,7 +425,8 @@ python utils/smoke_test_offline_bundle.py --archive $archive.FullName
 
 - 当前开发机先验证 `macos-arm64`
 - Docker 再验证 `linux-x64`
-- `macos-x64 / windows-x64` 至少确认对应宿主机流程可跑，剩余收口交给 GitHub Actions
+- `windows-x64` 至少确认对应宿主机流程可跑，剩余收口交给 GitHub Actions
+- `macos-x64` 如需提前验证，需要在 Intel macOS 宿主机手工完成；正式 Release 会继续构建并上传该平台离线包
 
 如果 PR 的改动直接触及离线打包、安装脚本、平台差异依赖或 CLI 入口，则尽量不要跳过任何平台。
 
