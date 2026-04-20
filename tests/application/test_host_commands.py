@@ -289,6 +289,7 @@ def test_run_sessions_command_does_not_render_ticker_column(
 def test_run_host_command_dispatches_known_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     """验证顶层命令分发会路由到对应处理函数。"""
 
+    monkeypatch.setattr(host_commands_module, "setup_loglevel", lambda _args: None)
     monkeypatch.setattr(host_commands_module, "_run_sessions_command", lambda _args: 11)
     monkeypatch.setattr(host_commands_module, "_run_runs_command", lambda _args: 22)
     monkeypatch.setattr(host_commands_module, "_run_cancel_command", lambda _args: 33)
@@ -299,6 +300,22 @@ def test_run_host_command_dispatches_known_commands(monkeypatch: pytest.MonkeyPa
     assert host_commands_module.run_host_command(argparse.Namespace(command="cancel")) == 33
     assert host_commands_module.run_host_command(argparse.Namespace(command="host")) == 44
     assert host_commands_module.run_host_command(argparse.Namespace(command="unknown")) == 1
+
+
+@pytest.mark.unit
+def test_run_host_command_configures_loglevel_before_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证宿主管理命令入口会先配置日志级别。"""
+
+    setup_calls: list[argparse.Namespace] = []
+    monkeypatch.setattr(host_commands_module, "setup_loglevel", lambda args: setup_calls.append(args))
+    monkeypatch.setattr(host_commands_module, "_run_sessions_command", lambda _args: 11)
+
+    args = argparse.Namespace(command="sessions")
+
+    assert host_commands_module.run_host_command(args) == 11
+    assert setup_calls == [args]
 
 
 @pytest.mark.unit

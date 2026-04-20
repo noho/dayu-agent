@@ -35,7 +35,7 @@ from dayu.presenters import format_fins_cli_result
 from dayu.services.contracts import FinsSubmitRequest
 
 from dayu.cli.command_names import FINS_COMMANDS
-from dayu.cli.dependency_setup import MODULE, _build_fins_ops_service
+from dayu.cli.dependency_setup import MODULE, _build_fins_ops_service, setup_loglevel
 
 
 def _build_fins_command(args: argparse.Namespace) -> FinsCommand:
@@ -260,6 +260,7 @@ def run_fins_command(args: argparse.Namespace) -> int:
     """
 
     try:
+        setup_loglevel(args)
         service = _build_fins_ops_service(args)
         command = _build_fins_command(args)
         submission = service.submit(FinsSubmitRequest(command=command))

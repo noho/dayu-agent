@@ -16,6 +16,7 @@ from typing import Protocol
 from dayu.host import Host, resolve_host_config
 from dayu.services.host_admin_service import HostAdminService
 from dayu.services.protocols import HostAdminServiceProtocol
+from dayu.cli.dependency_setup import setup_loglevel
 from dayu.startup.dependencies import prepare_config_file_resolver, prepare_config_loader, prepare_startup_paths
 from dayu.startup.paths import StartupPaths
 
@@ -50,6 +51,7 @@ def run_host_command(args: argparse.Namespace) -> int:
         无。
     """
 
+    setup_loglevel(args)
     command = args.command
     if command == "sessions":
         return _run_sessions_command(args)

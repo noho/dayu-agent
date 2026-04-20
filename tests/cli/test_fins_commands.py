@@ -365,6 +365,21 @@ class TestConsumeFinsStream:
 class TestRunFinsCommand:
     """run_fins_command 测试。"""
 
+    def test_run_command_configures_loglevel_before_execution(self) -> None:
+        """命令入口应先应用日志级别参数。"""
+
+        args = argparse.Namespace(command="not_a_fins_command")
+        setup_calls: list[argparse.Namespace] = []
+
+        with (
+            patch("dayu.cli.commands.fins.setup_loglevel", side_effect=lambda namespace: setup_calls.append(namespace)),
+            patch("dayu.cli.commands.fins._build_fins_ops_service", return_value=MagicMock()),
+        ):
+            exit_code = run_fins_command(args)
+
+        assert exit_code == 1
+        assert setup_calls == [args]
+
     def test_stream_command_receives_sync_result_raises_runtime_error(self) -> None:
         """流式命令收到同步结果时返回退出码 1（RuntimeError 被捕获）。"""
         args = argparse.Namespace(
@@ -377,6 +392,11 @@ class TestRunFinsCommand:
             rebuild=False,
             infer=False,
             ticker_aliases=(),
+            log_level=None,
+            debug=False,
+            verbose=False,
+            info=False,
+            quiet=False,
         )
 
         mock_service = MagicMock()
@@ -405,6 +425,11 @@ class TestRunFinsCommand:
             document_id="doc-1",
             overwrite=False,
             ci=False,
+            log_level=None,
+            debug=False,
+            verbose=False,
+            info=False,
+            quiet=False,
         )
 
         result_data = ProcessSingleResultData(
@@ -434,6 +459,11 @@ class TestRunFinsCommand:
             document_id="doc-1",
             overwrite=False,
             ci=False,
+            log_level=None,
+            debug=False,
+            verbose=False,
+            info=False,
+            quiet=False,
         )
 
         async def _fake_stream() -> AsyncIterator[FinsEvent]:
@@ -450,7 +480,14 @@ class TestRunFinsCommand:
 
     def test_build_command_error_returns_one(self) -> None:
         """构建命令失败时返回退出码 1。"""
-        args = argparse.Namespace(command="not_a_fins_command")
+        args = argparse.Namespace(
+            command="not_a_fins_command",
+            log_level=None,
+            debug=False,
+            verbose=False,
+            info=False,
+            quiet=False,
+        )
 
         with patch("dayu.cli.commands.fins._build_fins_ops_service", return_value=MagicMock()):
             exit_code = run_fins_command(args)
