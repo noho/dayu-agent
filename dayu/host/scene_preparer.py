@@ -6,7 +6,7 @@ from importlib import import_module
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast, runtime_checkable
+from typing import Any, Callable, Literal, Protocol, cast, runtime_checkable
 
 from dayu.contracts.agent_execution import (
     AgentCreateArgs,
@@ -17,28 +17,31 @@ from dayu.contracts.agent_execution import (
     ExecutionWebPermissions,
 )
 from dayu.contracts.agent_types import AgentMessage, AgentRuntimeLimits, AgentTraceIdentity
+from dayu.contracts.execution_options import ExecutionOptions
 from dayu.contracts.model_config import ModelConfig
 from dayu.contracts.protocols import PromptToolExecutorProtocol, ToolTraceRecorderFactory
+from dayu.contracts.tool_configs import WebToolsConfig
 from dayu.contracts.toolset_config import (
     build_toolset_config_snapshot,
     find_toolset_config,
     normalize_toolset_configs,
     replace_toolset_config,
 )
-from dayu.contracts.toolset_registrar import ToolsetRegistrarProtocol, ToolsetRegistrationContext
+from dayu.contracts.toolset_registrar import (
+    ToolRegistryProtocol,
+    ToolsetRegistrarProtocol,
+    ToolsetRegistrationContext,
+)
 from dayu.log import Log
-from dayu.engine.tool_registry import ToolRegistry
 from dayu.execution.runtime_config import build_agent_running_config_from_snapshot, build_runner_running_config_from_snapshot
 from dayu.execution.options import (
     ConversationMemorySettings,
-    ExecutionOptions,
     ResolvedExecutionOptions,
     resolve_web_tools_config_from_toolset_configs,
     resolve_scene_execution_options,
     resolve_scene_temperature,
     resolve_conversation_memory_settings,
 )
-from dayu.execution.web_limits import WebToolsConfig
 from dayu.host.agent_builder import build_agent_create_args, build_async_agent
 from dayu.host.conversation_memory import DefaultConversationMemoryManager
 from dayu.host.conversation_runtime import (
@@ -130,6 +133,14 @@ class ScenePreparationProtocol(Protocol):
     ) -> AgentInput:
         """从 prepared turn 快照重建 ``AgentInput``。"""
         ...
+
+
+@runtime_checkable
+class PreparedToolRegistryProtocol(ToolRegistryProtocol, PromptToolExecutorProtocol, Protocol):
+    """scene preparation 需要的最小工具注册表协议。"""
+
+
+ToolRegistryFactory = Callable[[], PreparedToolRegistryProtocol]
 
 
 @dataclass(frozen=True)
@@ -337,6 +348,7 @@ class DefaultScenePreparer(ScenePreparationProtocol):
     workspace: WorkspaceResourcesProtocol
     model_catalog: ModelCatalogProtocol
     default_execution_options: ResolvedExecutionOptions
+    tool_registry_factory: ToolRegistryFactory
     conversation_store: ConversationStore | None = None
 
     def __post_init__(self) -> None:
@@ -622,7 +634,7 @@ class DefaultScenePreparer(ScenePreparationProtocol):
             selected_toolsets=selected_toolsets,
             installed_toolsets=tuple(toolset_registrars.keys()),
         )
-        registry = ToolRegistry()
+        registry = self.tool_registry_factory()
         for toolset_name in enabled_toolsets:
             registrar_path = toolset_registrars.get(toolset_name)
             if registrar_path is None:

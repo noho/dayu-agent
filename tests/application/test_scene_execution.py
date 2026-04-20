@@ -9,7 +9,16 @@ from typing import cast
 
 import pytest
 
-from dayu.contracts.agent_execution import AcceptedExecutionSpec, ExecutionDocPermissions, ExecutionPermissions, ExecutionWebPermissions
+from dayu.contracts.agent_execution import (
+    AcceptedExecutionSpec,
+    AcceptedInfrastructureSpec,
+    AcceptedModelSpec,
+    AcceptedRuntimeSpec,
+    AcceptedToolConfigSpec,
+    ExecutionDocPermissions,
+    ExecutionPermissions,
+    ExecutionWebPermissions,
+)
 from dayu.contracts.infrastructure import ModelCatalogProtocol, PromptAssetStoreProtocol
 from dayu.contracts.model_config import ModelConfig, RunnerType
 from dayu.contracts.protocols import PromptToolExecutorProtocol
@@ -20,9 +29,16 @@ import dayu.host.scene_preparer as scene_preparer_module
 from dayu.host.scene_preparer import DefaultScenePreparer, PreparedSceneState, _resolve_enabled_toolsets
 from dayu.contracts.agent_execution import AgentCreateArgs
 from dayu.engine.async_agent import AgentRunningConfig
+from dayu.engine.tool_registry import ToolRegistry
 from dayu.contracts.cancellation import CancellationToken
 from dayu.engine.async_openai_runner import AsyncOpenAIRunner
-from dayu.execution.runtime_config import AgentRuntimeConfig, FallbackMode, OpenAIRunnerRuntimeConfig
+from dayu.execution.runtime_config import (
+    AgentRunningConfigSnapshot,
+    AgentRuntimeConfig,
+    FallbackMode,
+    OpenAIRunnerRuntimeConfig,
+    RunnerRunningConfigSnapshot,
+)
 from dayu.execution.options import (
     ConversationMemorySettings,
     DocToolLimits,
@@ -42,6 +58,40 @@ from dayu.prompting import SceneConversationDefinition, SceneDefinition, SceneMo
 from dayu.prompting.prompt_plan import PromptAssemblyPlan
 from dayu.prompting.scene_definition import ToolSelectionMode, ToolSelectionPolicy
 from dayu.startup.workspace import WorkspaceResources
+
+
+def _build_accepted_execution_spec(
+    *,
+    model_name: str,
+    temperature: float | None,
+    runner_running_config: RunnerRunningConfigSnapshot | None = None,
+    agent_running_config: AgentRunningConfigSnapshot | None = None,
+    doc_tool_limits: DocToolLimits | None = None,
+    fins_tool_limits: FinsToolLimits | None = None,
+    web_tools_config: WebToolsConfig | None = None,
+    trace_settings: TraceSettings | None = None,
+    conversation_memory_settings: ConversationMemorySettings | None = None,
+) -> AcceptedExecutionSpec:
+    """构造分组式 accepted execution spec。"""
+
+    return AcceptedExecutionSpec(
+        model=AcceptedModelSpec(model_name=model_name, temperature=temperature),
+        runtime=AcceptedRuntimeSpec(
+            runner_running_config=runner_running_config or {},
+            agent_running_config=agent_running_config or {},
+        ),
+        tools=AcceptedToolConfigSpec(
+            toolset_configs=_build_toolset_configs(
+                doc_tool_limits=doc_tool_limits,
+                fins_tool_limits=fins_tool_limits,
+                web_tools_config=web_tools_config,
+            ),
+        ),
+        infrastructure=AcceptedInfrastructureSpec(
+            trace_settings=trace_settings,
+            conversation_memory_settings=conversation_memory_settings,
+        ),
+    )
 
 
 class _ConfigLoaderStub:
@@ -438,6 +488,7 @@ def _build_scene_preparer(tmp_path: Path, *, web_provider: str) -> DefaultSceneP
         workspace=workspace,  # type: ignore[arg-type]
         model_catalog=cast(ModelCatalogProtocol, SimpleNamespace()),
         default_execution_options=resolved_options,
+        tool_registry_factory=lambda: ToolRegistry(),
     )
 
 
@@ -615,7 +666,7 @@ async def test_scene_preparer_uses_manifest_conversation_flag_for_custom_scene(
     contract = prepare_execution_contract(
         service_name="chat_turn",
         scene_name="custom_scene",
-        accepted_execution_spec=AcceptedExecutionSpec(
+        accepted_execution_spec=_build_accepted_execution_spec(
             model_name="test-model",
             temperature=0.2,
             runner_running_config={},
@@ -666,7 +717,7 @@ async def test_scene_preparer_rejects_resumable_when_conversation_disabled(
     contract = prepare_execution_contract(
         service_name="chat_turn",
         scene_name="single_turn_scene",
-        accepted_execution_spec=AcceptedExecutionSpec(
+        accepted_execution_spec=_build_accepted_execution_spec(
             model_name="test-model",
             temperature=0.2,
             runner_running_config={},
@@ -714,7 +765,7 @@ async def test_scene_preparer_rejects_resumable_without_session_key(
     contract = prepare_execution_contract(
         service_name="chat_turn",
         scene_name="custom_scene",
-        accepted_execution_spec=AcceptedExecutionSpec(
+        accepted_execution_spec=_build_accepted_execution_spec(
             model_name="test-model",
             temperature=0.2,
             runner_running_config={},
@@ -872,7 +923,7 @@ def test_scene_preparer_helper_functions_cover_single_turn_and_execution_option_
     contract = prepare_execution_contract(
         service_name="chat_turn",
         scene_name="prompt",
-        accepted_execution_spec=AcceptedExecutionSpec(
+        accepted_execution_spec=_build_accepted_execution_spec(
             model_name="accepted-model",
             temperature=0.35,
             runner_running_config={"tool_timeout_seconds": 18.0},
@@ -1042,7 +1093,7 @@ async def test_scene_preparer_prepare_restore_and_host_owned_state_helpers(
     contract = prepare_execution_contract(
         service_name="chat_turn",
         scene_name="prompt",
-        accepted_execution_spec=AcceptedExecutionSpec(
+        accepted_execution_spec=_build_accepted_execution_spec(
             model_name="test-model",
             temperature=0.25,
             runner_running_config={"tool_timeout_seconds": 11.0},

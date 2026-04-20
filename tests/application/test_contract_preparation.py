@@ -13,15 +13,13 @@ from dayu.contracts.agent_execution import (
     AcceptedRuntimeSpec,
     AcceptedToolConfigSpec,
 )
+from dayu.contracts.tool_configs import DocToolLimits, FinsToolLimits, WebToolsConfig
 from dayu.contracts.toolset_config import build_toolset_config_snapshot
-from dayu.execution.doc_limits import DocToolLimits
-from dayu.execution.web_limits import WebToolsConfig
 from dayu.execution.options import (
     ConversationMemorySettings,
     TraceSettings,
     resolve_web_tools_config_from_toolset_configs,
 )
-from dayu.fins.tools.fins_limits import FinsToolLimits
 from dayu.services.contract_preparation import (
     prepare_execution_contract,
     prepare_execution_permissions,

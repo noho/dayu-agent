@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from dayu.execution.doc_limits import DocToolLimits
-from dayu.fins.tools.fins_limits import FinsToolLimits
+from dayu.contracts.tool_configs import DocToolLimits, FinsToolLimits
 
 
 __all__ = ["DocToolLimits", "FinsToolLimits"]

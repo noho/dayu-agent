@@ -6,13 +6,14 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Protocol
 
 from dayu.contracts.agent_execution import AgentCreateArgs
+from dayu.contracts.execution_options import ExecutionOptions
 from dayu.contracts.agent_types import AgentMessage, AgentTraceIdentity
 from dayu.contracts.infrastructure import PromptAssetStoreProtocol
 from dayu.contracts.model_config import ModelConfig
 from dayu.contracts.protocols import PromptToolExecutorProtocol, ToolTraceRecorderFactory
+from dayu.contracts.tool_configs import WebToolsConfig
 from dayu.engine.events import StreamEvent
-from dayu.execution.options import ConversationMemorySettings, ExecutionOptions
-from dayu.execution.web_limits import WebToolsConfig
+from dayu.execution.options import ConversationMemorySettings
 from dayu.prompting.scene_definition import SceneDefinition
 
 

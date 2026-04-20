@@ -8,13 +8,24 @@ from typing import cast
 
 import pytest
 
-from dayu.contracts.agent_execution import AcceptedExecutionSpec, ExecutionContract
+from dayu.contracts.agent_execution import (
+    AcceptedExecutionSpec,
+    AcceptedInfrastructureSpec,
+    AcceptedModelSpec,
+    AcceptedRuntimeSpec,
+    AcceptedToolConfigSpec,
+    ExecutionContract,
+)
 from dayu.contracts.model_config import OpenAICompatibleModelConfig
 from dayu.contracts.toolset_config import ToolsetConfigSnapshot, build_toolset_config_snapshot
 from dayu.contracts.events import AppEventType
 from dayu.contracts.session import SessionSource
-from dayu.execution.runtime_config import AgentRuntimeConfig, OpenAIRunnerRuntimeConfig
-from dayu.execution.options import ExecutionOptions, ResolvedExecutionOptions
+from dayu.execution.runtime_config import (
+    AgentRunningConfigSnapshot,
+    AgentRuntimeConfig,
+    OpenAIRunnerRuntimeConfig,
+)
+from dayu.execution.options import ConversationMemorySettings, ExecutionOptions, ResolvedExecutionOptions
 from dayu.execution.options import (
     DocToolLimits,
     FinsToolLimits,
@@ -106,6 +117,39 @@ def _last_execution_contract(gateway: object) -> ExecutionContract:
     return contract
 
 
+def _build_accepted_execution_spec(
+    *,
+    model_name: str,
+    temperature: float | None,
+    agent_running_config: AgentRunningConfigSnapshot,
+    doc_tool_limits: DocToolLimits | None,
+    fins_tool_limits: FinsToolLimits | None,
+    web_tools_config: WebToolsConfig | None,
+    trace_settings: TraceSettings | None,
+    conversation_memory_settings: ConversationMemorySettings | None,
+) -> AcceptedExecutionSpec:
+    """构造分组式 accepted execution spec。"""
+
+    return AcceptedExecutionSpec(
+        model=AcceptedModelSpec(model_name=model_name, temperature=temperature),
+        runtime=AcceptedRuntimeSpec(
+            runner_running_config={},
+            agent_running_config=agent_running_config,
+        ),
+        tools=AcceptedToolConfigSpec(
+            toolset_configs=_build_toolset_configs(
+                doc_tool_limits=doc_tool_limits,
+                fins_tool_limits=fins_tool_limits,
+                web_tools_config=web_tools_config,
+            ),
+        ),
+        infrastructure=AcceptedInfrastructureSpec(
+            trace_settings=trace_settings,
+            conversation_memory_settings=conversation_memory_settings,
+        ),
+    )
+
+
 class _FakeSceneExecutionAcceptancePreparer:
     """测试用 scene 执行接受准备器。"""
 
@@ -141,10 +185,9 @@ class _FakeSceneExecutionAcceptancePreparer:
             resolved_execution_options=resolved_execution_options,
             model_config=_build_model_config(),
             resolved_temperature=0.2,
-            accepted_execution_spec=AcceptedExecutionSpec(
+            accepted_execution_spec=_build_accepted_execution_spec(
                 model_name="test-model",
                 temperature=0.2,
-                runner_running_config={},
                 agent_running_config={
                     "max_iterations": 8,
                     "max_context_tokens": 32000,

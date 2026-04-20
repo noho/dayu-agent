@@ -12,6 +12,7 @@ from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, Rep
 from dayu.contracts.run import RunCancelReason, RunRecord, RunState
 from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 from dayu.execution.options import ResolvedExecutionOptions
+from dayu.engine.tool_registry import ToolRegistry
 from dayu.host.concurrency import SQLiteConcurrencyGovernor
 from dayu.host.executor import DefaultHostExecutor
 from dayu.host.host_execution import HostExecutorProtocol, HostedRunContext, HostedRunSpec
@@ -1181,6 +1182,7 @@ def _build_default_scene_preparation(
         workspace=workspace,
         model_catalog=model_catalog,
         default_execution_options=default_execution_options,
+        tool_registry_factory=lambda: ToolRegistry(),
     )
 
 

@@ -997,7 +997,7 @@ Scene 当前负责声明：
 
 这三层语义求交之后，`Host` 只做一件机械动作：按 `toolset_name -> registrar import path` 的安装清单加载对应 registrar，并把通用注册上下文交给它。当前安装清单来自 `toolset_registrars.json`，它不是第四层执行决策，也不负责放宽 scene / Service 已经收窄过的工具集合。
 
-这里的“通用注册上下文”已经进一步收紧为：`Host` 只把当前 `toolset_name` 命中的单个 `toolset_config` 快照、动态 `execution_permissions` 与工作区稳定资源交给 registrar；具体如何把 payload 反解成 `DocToolLimits / FinsToolLimits / WebToolsConfig`，由各包内 adapter 自己完成。
+这里的“通用注册上下文”已经进一步收紧为：`Host` 只把当前 `toolset_name` 命中的单个 `toolset_config` 快照、动态 `execution_permissions` 与工作区稳定资源交给 registrar；registrar 负责在 adapter 边界把这些通用输入适配成叶子 `register_*_tools(...)` 所需参数。共享的 limits/config 反序列化统一收口在 `dayu.contracts.tool_configs`，而像 doc 白名单解析这类 domain 规则则留在对应 toolset 的边界模块内部，不能再让 `Host` 直接解释。
 
 因此需要明确两点：
 

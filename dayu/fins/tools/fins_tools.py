@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from dayu.log import Log
+from dayu.contracts.tool_configs import FinsToolLimits
 from dayu.engine.tool_contracts import ToolTruncateSpec
 from dayu.engine.tool_registry import ToolRegistry
 from dayu.engine.tools.base import tool
 
-from .fins_limits import FinsToolLimits
 from .ingestion_tools import register_ingestion_tools
 from .result_types import (
     DocumentSectionsResult,

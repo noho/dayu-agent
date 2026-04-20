@@ -6,8 +6,7 @@ from .tool_registry import ToolRegistry
 from .tools.doc_tools import register_doc_tools
 from .tools.utils_tools import register_utils_builtin_tools
 from .tools.web_tools import register_web_tools
-from dayu.execution.doc_limits import DocToolLimits
-from dayu.execution.web_limits import WebToolsConfig
+from dayu.contracts.tool_configs import DocToolLimits, WebToolsConfig
 
 # 事件模型
 from .events import (

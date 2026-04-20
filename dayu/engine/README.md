@@ -141,7 +141,8 @@ class ToolExecutor(Protocol):
 - 只有显式声明 `execution_context_param_name` 的工具才会收到 execution context 注入；未声明的旧工具继续走兼容路径
 - `ToolRegistry` / `TruncationManager` 只负责工具结果契约级截断：按工具 schema 的 `truncate_spec` 处理单次返回，并在需要时生成 `fetch_more` 续读信息；它们不感知 Agent 主循环的全局上下文预算
 - `ToolsetRegistrationContext.registry` 依赖结构化 `ToolRegistryProtocol`；协议方法签名必须与 `ToolRegistry` 的公开方法保持同名同参，尤其是 `register_allowed_paths(paths)` 这类会被 Host 直接注入的注册入口
-- toolset registrar 从 `ToolsetConfigSnapshot.payload` 反序列化数值限制时，必须通过 `dayu.contracts.toolset_config` 的统一 coercion helper 收口字符串/数值边界，不能在 adapter 内部直接对 `ToolsetConfigValue` 做裸 `int()` / `float()`
+- toolset registrar 从 `ToolsetConfigSnapshot.payload` 恢复 `DocToolLimits / FinsToolLimits / WebToolsConfig` 时，应优先复用 `dayu.contracts.tool_configs` 的共享 helper；底层数值收口仍统一走 `dayu.contracts.toolset_config` 的 coercion helper，不能在 adapter 内部直接对 `ToolsetConfigValue` 做裸 `int()` / `float()`
+- doc 工具白名单解析属于 doc toolset 自身边界，当前收口在 `dayu.engine.doc_access_policy`；`Host` 只能传通用 `workspace + execution_permissions`，不能上推解释 doc domain 规则
 - Agent 级预算闸门的真源已经收口到 `dayu.engine.context_budget`：当工具结果已经序列化、准备注入下一轮 `tool` message 时，`AsyncAgent` 会基于 `ContextBudgetState` 做预测性预算裁剪
 - `AsyncAgent` 会在提交 `final_answer` 前再次检查取消，避免同一轮同时对外落出“已回答”和“已取消”两种事实
 - `DefaultHostExecutor` 会在写 transcript 前再次检查取消，取消 run 不再把本轮回答持久化进会话 transcript

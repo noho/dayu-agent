@@ -23,6 +23,15 @@ from dayu.contracts.agent_types import (
 )
 from dayu.contracts.cancellation import CancellationToken
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
+from dayu.contracts.execution_options import (
+    ConversationMemorySettings,
+    ExecutionOptions,
+    ExecutionOptionsSnapshot,
+    ExecutionOptionsSnapshotValue,
+    TraceSettings,
+    deserialize_execution_options_snapshot,
+    serialize_execution_options_snapshot,
+)
 from dayu.contracts.model_config import RunnerParams
 from dayu.contracts.protocols import ToolExecutor, ToolTraceRecorderFactory
 from dayu.contracts.toolset_config import (
@@ -33,19 +42,7 @@ from dayu.contracts.toolset_config import (
     replace_toolset_config,
     serialize_toolset_config_payload_value,
 )
-from dayu.execution.doc_limits import DocToolLimits
 from dayu.execution.runtime_config import AgentRunningConfigSnapshot, RunnerRunningConfigSnapshot
-from dayu.execution.web_limits import WebToolsConfig
-from dayu.execution.options import (
-    ConversationMemorySettings,
-    ExecutionOptions,
-    ExecutionOptionsSnapshot,
-    ExecutionOptionsSnapshotValue,
-    TraceSettings,
-    deserialize_execution_options_snapshot,
-    serialize_execution_options_snapshot,
-)
-from dayu.fins.tools.fins_limits import FinsToolLimits
 
 ExecutionContractSnapshotScalar: TypeAlias = str | int | float | bool | None
 ExecutionContractSnapshotValue: TypeAlias = (
@@ -313,20 +310,10 @@ class AcceptedExecutionSpec:
 
     def __init__(
         self,
-        model: AcceptedModelSpec | None = None,
+        model: AcceptedModelSpec,
         runtime: AcceptedRuntimeSpec | None = None,
         tools: AcceptedToolConfigSpec | None = None,
         infrastructure: AcceptedInfrastructureSpec | None = None,
-        *,
-        model_name: str | None = None,
-        temperature: float | None = None,
-        runner_running_config: RunnerRunningConfigSnapshot | None = None,
-        agent_running_config: AgentRunningConfigSnapshot | None = None,
-        doc_tool_limits: DocToolLimits | None = None,
-        fins_tool_limits: FinsToolLimits | None = None,
-        web_tools_config: WebToolsConfig | None = None,
-        trace_settings: TraceSettings | None = None,
-        conversation_memory_settings: ConversationMemorySettings | None = None,
     ) -> None:
         """初始化已接受执行规格。
 
@@ -335,68 +322,18 @@ class AcceptedExecutionSpec:
             runtime: 已接受的运行时快照规格。
             tools: 已接受的工具域配置。
             infrastructure: 已接受的基础设施配置。
-            model_name: 兼容旧调用点的模型名。
-            temperature: 兼容旧调用点的 temperature。
-            runner_running_config: 兼容旧调用点的 runner 运行配置快照。
-            agent_running_config: 兼容旧调用点的 agent 运行配置快照。
-            doc_tool_limits: 兼容旧调用点的文档工具限制配置。
-            fins_tool_limits: 兼容旧调用点的财报工具限制配置。
-            web_tools_config: 兼容旧调用点的联网工具配置。
-            trace_settings: 兼容旧调用点的工具追踪配置。
-            conversation_memory_settings: 兼容旧调用点的会话记忆配置。
 
         Returns:
             无。
 
         Raises:
-            ValueError: 当同时混用分组参数与旧式平铺参数时抛出。
+            无。
         """
 
-        flat_fields_provided = any(
-            value is not None
-            for value in (
-                model_name,
-                temperature,
-                runner_running_config,
-                agent_running_config,
-                doc_tool_limits,
-                fins_tool_limits,
-                web_tools_config,
-                trace_settings,
-                conversation_memory_settings,
-            )
-        )
-        grouped_fields_provided = any(value is not None for value in (model, runtime, tools, infrastructure))
-        if flat_fields_provided and grouped_fields_provided:
-            raise ValueError("AcceptedExecutionSpec 不能同时混用分组参数与平铺参数")
-
-        resolved_model = model
-        resolved_runtime = runtime
-        resolved_tools = tools
-        resolved_infrastructure = infrastructure
-        if not grouped_fields_provided:
-            resolved_model = AcceptedModelSpec(model_name=str(model_name or "").strip(), temperature=temperature)
-            resolved_runtime = AcceptedRuntimeSpec(
-                runner_running_config=runner_running_config or _empty_runner_running_config_snapshot(),
-                agent_running_config=agent_running_config or _empty_agent_running_config_snapshot(),
-            )
-            resolved_tools = AcceptedToolConfigSpec(
-                toolset_configs=_build_legacy_toolset_configs(
-                    doc_tool_limits=doc_tool_limits,
-                    fins_tool_limits=fins_tool_limits,
-                    web_tools_config=web_tools_config,
-                ),
-            )
-            resolved_infrastructure = AcceptedInfrastructureSpec(
-                trace_settings=trace_settings,
-                conversation_memory_settings=conversation_memory_settings,
-            )
-        if resolved_model is None:
-            raise ValueError("AcceptedExecutionSpec.model 不能为空")
-        object.__setattr__(self, "model", resolved_model)
-        object.__setattr__(self, "runtime", resolved_runtime or AcceptedRuntimeSpec())
-        object.__setattr__(self, "tools", resolved_tools or AcceptedToolConfigSpec())
-        object.__setattr__(self, "infrastructure", resolved_infrastructure or AcceptedInfrastructureSpec())
+        object.__setattr__(self, "model", model)
+        object.__setattr__(self, "runtime", runtime or AcceptedRuntimeSpec())
+        object.__setattr__(self, "tools", tools or AcceptedToolConfigSpec())
+        object.__setattr__(self, "infrastructure", infrastructure or AcceptedInfrastructureSpec())
 
     @property
     def model_name(self) -> str:
@@ -832,188 +769,6 @@ def _coerce_execution_options_snapshot(
         str(key): _coerce_execution_options_snapshot_value(item)
         for key, item in payload.items()
     }
-
-
-def _build_doc_tool_limits_from_snapshot(
-    payload: Mapping[str, ExecutionContractSnapshotValue] | None,
-) -> DocToolLimits | None:
-    """从契约快照对象恢复文档工具限制配置。
-
-    Args:
-        payload: 文档工具限制快照对象。
-
-    Returns:
-        恢复后的文档工具限制；输入为空时返回 ``None``。
-
-    Raises:
-        无。
-    """
-
-    if payload is None:
-        return None
-    defaults = DocToolLimits()
-    return DocToolLimits(
-        list_files_max=_snapshot_int_or_default(payload.get("list_files_max"), default=defaults.list_files_max),
-        get_sections_max=_snapshot_int_or_default(payload.get("get_sections_max"), default=defaults.get_sections_max),
-        search_files_max_results=_snapshot_int_or_default(
-            payload.get("search_files_max_results"),
-            default=defaults.search_files_max_results,
-        ),
-        read_file_max_chars=_snapshot_int_or_default(
-            payload.get("read_file_max_chars"),
-            default=defaults.read_file_max_chars,
-        ),
-        read_file_section_max_chars=_snapshot_int_or_default(
-            payload.get("read_file_section_max_chars"),
-            default=defaults.read_file_section_max_chars,
-        ),
-    )
-
-
-def _build_fins_tool_limits_from_snapshot(
-    payload: Mapping[str, ExecutionContractSnapshotValue] | None,
-) -> FinsToolLimits | None:
-    """从契约快照对象恢复财报工具限制配置。
-
-    Args:
-        payload: 财报工具限制快照对象。
-
-    Returns:
-        恢复后的财报工具限制；输入为空时返回 ``None``。
-
-    Raises:
-        无。
-    """
-
-    if payload is None:
-        return None
-    defaults = FinsToolLimits()
-    return FinsToolLimits(
-        processor_cache_max_entries=_snapshot_int_or_default(
-            payload.get("processor_cache_max_entries"),
-            default=defaults.processor_cache_max_entries,
-        ),
-        list_documents_max_items=_snapshot_int_or_default(
-            payload.get("list_documents_max_items"),
-            default=defaults.list_documents_max_items,
-        ),
-        get_document_sections_max_items=_snapshot_int_or_default(
-            payload.get("get_document_sections_max_items"),
-            default=defaults.get_document_sections_max_items,
-        ),
-        search_document_max_items=_snapshot_int_or_default(
-            payload.get("search_document_max_items"),
-            default=defaults.search_document_max_items,
-        ),
-        list_tables_max_items=_snapshot_int_or_default(
-            payload.get("list_tables_max_items"),
-            default=defaults.list_tables_max_items,
-        ),
-        read_section_max_chars=_snapshot_int_or_default(
-            payload.get("read_section_max_chars"),
-            default=defaults.read_section_max_chars,
-        ),
-        get_page_content_max_chars=_snapshot_int_or_default(
-            payload.get("get_page_content_max_chars"),
-            default=defaults.get_page_content_max_chars,
-        ),
-        get_table_max_items=_snapshot_int_or_default(
-            payload.get("get_table_max_items"),
-            default=defaults.get_table_max_items,
-        ),
-        get_financial_statement_max_items=_snapshot_int_or_default(
-            payload.get("get_financial_statement_max_items"),
-            default=defaults.get_financial_statement_max_items,
-        ),
-        query_xbrl_facts_max_items=_snapshot_int_or_default(
-            payload.get("query_xbrl_facts_max_items"),
-            default=defaults.query_xbrl_facts_max_items,
-        ),
-    )
-
-
-def _build_web_tools_config_from_snapshot(
-    payload: Mapping[str, ExecutionContractSnapshotValue] | None,
-) -> WebToolsConfig | None:
-    """从契约快照对象恢复联网工具配置。
-
-    Args:
-        payload: 联网工具配置快照对象。
-
-    Returns:
-        恢复后的联网工具配置；输入为空时返回 ``None``。
-
-    Raises:
-        无。
-    """
-
-    if payload is None:
-        return None
-    defaults = WebToolsConfig()
-    playwright_channel = payload.get("playwright_channel")
-    playwright_storage_state_dir = payload.get("playwright_storage_state_dir")
-    return WebToolsConfig(
-        provider=_snapshot_str_or_default(payload.get("provider"), default=defaults.provider),
-        request_timeout_seconds=_snapshot_float_or_default(
-            payload.get("request_timeout_seconds"),
-            default=defaults.request_timeout_seconds,
-        ),
-        max_search_results=_snapshot_int_or_default(
-            payload.get("max_search_results"),
-            default=defaults.max_search_results,
-        ),
-        fetch_truncate_chars=_snapshot_int_or_default(
-            payload.get("fetch_truncate_chars"),
-            default=defaults.fetch_truncate_chars,
-        ),
-        allow_private_network_url=_snapshot_bool_or_default(
-            payload.get("allow_private_network_url"),
-            default=defaults.allow_private_network_url,
-        ),
-        playwright_channel=(
-            str(playwright_channel)
-            if isinstance(playwright_channel, str)
-            else defaults.playwright_channel
-        ),
-        playwright_storage_state_dir=(
-            str(playwright_storage_state_dir)
-            if isinstance(playwright_storage_state_dir, str)
-            else defaults.playwright_storage_state_dir
-        ),
-    )
-
-
-def _build_legacy_toolset_configs(
-    *,
-    doc_tool_limits: DocToolLimits | None,
-    fins_tool_limits: FinsToolLimits | None,
-    web_tools_config: WebToolsConfig | None,
-) -> tuple[ToolsetConfigSnapshot, ...]:
-    """把旧式专用工具配置转换为通用 toolset 快照。
-
-    Args:
-        doc_tool_limits: 文档工具限制配置。
-        fins_tool_limits: 财报工具限制配置。
-        web_tools_config: 联网工具配置。
-
-    Returns:
-        通用 toolset 配置快照序列。
-
-    Raises:
-        TypeError: 当旧式配置无法序列化时抛出。
-        ValueError: 当 toolset 名称非法时抛出。
-    """
-
-    snapshots: tuple[ToolsetConfigSnapshot, ...] = ()
-    for snapshot in (
-        build_toolset_config_snapshot("doc", doc_tool_limits),
-        build_toolset_config_snapshot("fins", fins_tool_limits),
-        build_toolset_config_snapshot("web", web_tools_config),
-    ):
-        if snapshot is None:
-            continue
-        snapshots = replace_toolset_config(snapshots, snapshot)
-    return snapshots
 
 
 def _coerce_toolset_config_payload(

@@ -15,14 +15,20 @@ import pytest
 
 from dayu.services.internal.write_pipeline import artifact_store as artifact_store_module
 from dayu.services.internal.write_pipeline import audit_rules as audit_rules_module
-from dayu.contracts.agent_execution import AcceptedExecutionSpec
+from dayu.contracts.agent_execution import (
+    AcceptedExecutionSpec,
+    AcceptedInfrastructureSpec,
+    AcceptedModelSpec,
+    AcceptedRuntimeSpec,
+    AcceptedToolConfigSpec,
+)
 from dayu.contracts.cancellation import CancelledError
 from dayu.contracts.events import AppEvent, AppEventType, AppResult
 from dayu.contracts.infrastructure import WorkspaceResourcesProtocol
 from dayu.contracts.model_config import ModelConfig
 from dayu.contracts.prompt_assets import SceneManifestAsset, TaskPromptContractAsset
+from dayu.contracts.tool_configs import DocToolLimits, FinsToolLimits, WebToolsConfig
 from dayu.contracts.toolset_config import ToolsetConfigSnapshot, build_toolset_config_snapshot
-from dayu.execution.doc_limits import DocToolLimits
 from dayu.execution.options import (
     ConversationMemorySettings,
     ExecutionOptions,
@@ -30,8 +36,6 @@ from dayu.execution.options import (
     TraceSettings,
 )
 from dayu.execution.runtime_config import AgentRuntimeConfig, OpenAIRunnerRuntimeConfig
-from dayu.execution.web_limits import WebToolsConfig
-from dayu.fins.tools.fins_limits import FinsToolLimits
 from dayu.host.host_execution import HostExecutorProtocol
 from dayu.log import Log
 from dayu.prompting.scene_definition import load_scene_definition
@@ -1311,18 +1315,25 @@ class _FakeAgentProvider:
             model_config=_build_test_model_config(f"model-{scene_name}"),
             resolved_temperature=0.7,
             accepted_execution_spec=AcceptedExecutionSpec(
-                model_name=f"model-{scene_name}",
-                temperature=0.7,
-                runner_running_config={},
-                agent_running_config={},
-                doc_tool_limits=DocToolLimits(),
-                fins_tool_limits=FinsToolLimits(),
-                web_tools_config=WebToolsConfig(
-                    provider=web_provider,
-                    allow_private_network_url=False,
+                model=AcceptedModelSpec(model_name=f"model-{scene_name}", temperature=0.7),
+                runtime=AcceptedRuntimeSpec(
+                    runner_running_config={},
+                    agent_running_config={},
                 ),
-                trace_settings=TraceSettings(enabled=False, output_dir=trace_dir),
-                conversation_memory_settings=ConversationMemorySettings(),
+                tools=AcceptedToolConfigSpec(
+                    toolset_configs=_build_toolset_configs(
+                        doc_tool_limits=DocToolLimits(),
+                        fins_tool_limits=FinsToolLimits(),
+                        web_tools_config=WebToolsConfig(
+                            provider=web_provider,
+                            allow_private_network_url=False,
+                        ),
+                    ),
+                ),
+                infrastructure=AcceptedInfrastructureSpec(
+                    trace_settings=TraceSettings(enabled=False, output_dir=trace_dir),
+                    conversation_memory_settings=ConversationMemorySettings(),
+                ),
             ),
         )
 

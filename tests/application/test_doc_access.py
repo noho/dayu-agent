@@ -11,7 +11,7 @@ import pytest
 
 from dayu.contracts.agent_execution import ExecutionDocPermissions
 from dayu.contracts.infrastructure import WorkspaceResourcesProtocol
-from dayu.execution.doc_access import (
+from dayu.engine.doc_access_policy import (
     build_doc_tool_allowed_paths,
     build_effective_doc_allowed_paths,
     path_is_covered_by_allowed_roots,

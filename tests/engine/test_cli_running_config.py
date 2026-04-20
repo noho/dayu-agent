@@ -59,24 +59,22 @@ from dayu.contracts.fins import (
     UploadFilingResultData,
     UploadMaterialCommandPayload,
 )
+from dayu.contracts.tool_configs import DocToolLimits, FinsToolLimits, WebToolsConfig
 from dayu.contracts.toolset_config import build_toolset_config_snapshot
+from dayu.engine.doc_access_policy import build_effective_doc_allowed_paths
 from dayu.engine.events import content_delta, final_answer_event
 from dayu.engine.toolset_registrars import (
     register_doc_toolset as _register_doc_toolset,
     register_web_toolset as _register_web_toolset,
 )
-from dayu.execution.doc_access import build_effective_doc_allowed_paths
-from dayu.execution.doc_limits import DocToolLimits
 from dayu.execution.runtime_config import (
     AgentRuntimeConfig as AgentRunningConfig,
     OpenAIRunnerRuntimeConfig as AsyncOpenAIRunnerRunningConfig,
 )
-from dayu.execution.web_limits import WebToolsConfig
 from dayu.startup.config_file_resolver import ConfigFileResolver
 from dayu.startup.config_loader import ConfigLoader
 from dayu.startup.prompt_assets import FilePromptAssetStore
 from dayu.fins.toolset_registrars import register_fins_read_toolset as _register_fins_read_toolset
-from dayu.fins.tools.fins_limits import FinsToolLimits
 class _CallCollector:
     """测试调用记录器。"""
 

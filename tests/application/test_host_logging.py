@@ -9,6 +9,7 @@ import pytest
 
 from dayu.contracts.agent_execution import (
     AcceptedExecutionSpec,
+    AcceptedModelSpec,
     ExecutionContract,
     ExecutionHostPolicy,
     ExecutionMessageInputs,
@@ -39,7 +40,7 @@ def _build_execution_contract() -> ExecutionContract:
         host_policy=ExecutionHostPolicy(session_key="session_1", resumable=True),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=AcceptedExecutionSpec(model=AcceptedModelSpec(model_name="test-model")),
     )
 
 

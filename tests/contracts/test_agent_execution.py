@@ -24,16 +24,14 @@ from dayu.contracts.agent_execution import (
     serialize_execution_contract_snapshot,
 )
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext
+from dayu.contracts.tool_configs import DocToolLimits, FinsToolLimits, WebToolsConfig
 from dayu.contracts.toolset_config import ToolsetConfigSnapshot, build_toolset_config_snapshot
-from dayu.execution.doc_limits import DocToolLimits
-from dayu.execution.web_limits import WebToolsConfig
 from dayu.execution.options import (
     ExecutionOptionsSnapshot,
     ConversationMemorySettings,
     ExecutionOptions,
     TraceSettings,
 )
-from dayu.fins.tools.fins_limits import FinsToolLimits
 
 
 def _build_toolset_configs(
@@ -262,4 +260,3 @@ def test_execution_contract_snapshot_roundtrip_toolset_config_overrides() -> Non
     assert not hasattr(restored.execution_options, "doc_tool_limits_override")
     assert not hasattr(restored.execution_options, "fins_tool_limits_override")
     assert not hasattr(restored.execution_options, "web_tools_config_override")
-

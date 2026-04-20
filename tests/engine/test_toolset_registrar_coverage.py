@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import pytest
 
+from dayu.contracts import tool_configs
 from dayu.contracts.toolset_config import ToolsetConfigSnapshot
-from dayu.engine import toolset_registrars as engine_registrars
-from dayu.fins import toolset_registrars as fins_registrars
 
 
 @pytest.mark.unit
 def test_build_doc_tool_limits_accepts_string_numbers() -> None:
     """验证 doc toolset 快照中的字符串数字会被收敛为整数。"""
 
-    limits = engine_registrars._build_doc_tool_limits(
+    limits = tool_configs.build_doc_tool_limits(
         ToolsetConfigSnapshot(
             toolset_name="doc",
             payload={
@@ -37,7 +36,7 @@ def test_build_doc_tool_limits_accepts_string_numbers() -> None:
 def test_build_web_tool_limits_accepts_string_numbers() -> None:
     """验证 web toolset 快照中的字符串数字会被收敛为数值。"""
 
-    config = engine_registrars._build_web_tools_config(
+    config = tool_configs.build_web_tools_config(
         ToolsetConfigSnapshot(
             toolset_name="web",
             payload={
@@ -59,7 +58,7 @@ def test_build_web_tool_limits_accepts_string_numbers() -> None:
 def test_build_fins_tool_limits_accepts_string_numbers() -> None:
     """验证 fins toolset 快照中的字符串数字会被收敛为整数。"""
 
-    limits = fins_registrars._build_fins_tool_limits(
+    limits = tool_configs.build_fins_tool_limits(
         ToolsetConfigSnapshot(
             toolset_name="fins",
             payload={

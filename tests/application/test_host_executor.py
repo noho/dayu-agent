@@ -11,6 +11,7 @@ import pytest
 import dayu.host.executor as executor_module
 from dayu.contracts.agent_execution import (
     AcceptedExecutionSpec,
+    AcceptedModelSpec,
     AgentCreateArgs,
     AgentInput,
     ExecutionContract,
@@ -35,6 +36,12 @@ from dayu.contracts.cancellation import CancelledError
 from dayu.engine.events import EventType, StreamEvent
 from dayu.host.pending_turn_store import PendingConversationTurnState
 from dayu.log import Log
+
+
+def _minimal_accepted_execution_spec() -> AcceptedExecutionSpec:
+    """构造仅包含模型信息的最小 accepted execution spec。"""
+
+    return AcceptedExecutionSpec(model=AcceptedModelSpec(model_name="test-model"))
 
 
 @dataclass(frozen=True)
@@ -338,7 +345,7 @@ def test_run_agent_stream_cleans_pending_turn_before_marking_success(monkeypatch
         host_policy=ExecutionHostPolicy(session_key="s1", resumable=True),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
         execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
         metadata={"delivery_channel": "interactive", "interactive_key": "cli-default"},
     )
@@ -400,7 +407,7 @@ def test_run_agent_stream_keeps_session_id_for_non_resumable_turn(monkeypatch: p
         host_policy=ExecutionHostPolicy(session_key="s-non-resumable", resumable=False),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
         execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
         metadata={"delivery_channel": "interactive"},
     )
@@ -454,7 +461,7 @@ def test_run_agent_stream_keeps_accepted_pending_turn_when_prepare_times_out(mon
         host_policy=ExecutionHostPolicy(session_key="s1", resumable=True),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
         execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
         metadata={"delivery_channel": "interactive"},
     )
@@ -523,7 +530,7 @@ def test_run_agent_stream_keeps_prepared_pending_turn_when_timeout_occurs_before
         host_policy=ExecutionHostPolicy(session_key="s1", resumable=True),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
         execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
         metadata={"delivery_channel": "interactive", "interactive_key": "cli-default"},
     )
@@ -595,7 +602,7 @@ def test_run_agent_stream_keeps_prepared_pending_turn_when_timeout_occurs_after_
         host_policy=ExecutionHostPolicy(session_key="s1", resumable=True),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
         execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
         metadata={"delivery_channel": "interactive", "interactive_key": "cli-default"},
     )
@@ -680,7 +687,7 @@ def test_run_agent_stream_skips_persist_turn_after_external_cancel(monkeypatch: 
         host_policy=ExecutionHostPolicy(session_key="s1", resumable=True),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
         execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
         metadata={"delivery_channel": "interactive"},
     )
@@ -769,7 +776,7 @@ def test_run_agent_stream_emits_verbose_logs_for_pending_turn_lifecycle(monkeypa
         host_policy=ExecutionHostPolicy(session_key="s1", resumable=True),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
     )
 
     async def _collect() -> None:
@@ -827,7 +834,7 @@ def test_run_agent_stream_deletes_pending_turn_for_user_cancel(monkeypatch: pyte
         host_policy=ExecutionHostPolicy(session_key="s1", resumable=True),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
         metadata={"delivery_channel": "interactive"},
     )
 
@@ -892,7 +899,7 @@ def test_run_prepared_turn_stream_yields_cancelled_event(monkeypatch: pytest.Mon
         host_policy=ExecutionHostPolicy(session_key="s1", resumable=True),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
         execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
         metadata={"delivery_channel": "interactive"},
     )
@@ -951,7 +958,7 @@ def test_run_agent_stream_keeps_prepared_pending_turn_when_agent_build_fails(mon
         host_policy=ExecutionHostPolicy(session_key="s1", resumable=True),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
         execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
         metadata={"delivery_channel": "interactive"},
     )
@@ -1021,7 +1028,7 @@ def test_run_agent_stream_keeps_prepared_pending_turn_when_persist_turn_fails(mo
         host_policy=ExecutionHostPolicy(session_key="s1", resumable=True),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
         execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
         metadata={"delivery_channel": "interactive"},
     )
@@ -1100,7 +1107,7 @@ def test_run_agent_stream_keeps_success_when_sent_to_llm_update_fails(monkeypatc
         host_policy=ExecutionHostPolicy(session_key="s1", resumable=True),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
         execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
         metadata={"delivery_channel": "interactive"},
     )
@@ -1176,7 +1183,7 @@ def test_run_agent_stream_delete_pending_failure_keeps_succeeded_run_and_blocks_
         host_policy=ExecutionHostPolicy(session_key="s1", resumable=True),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
         execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
         metadata={"delivery_channel": "interactive"},
     )
@@ -1252,7 +1259,7 @@ def test_run_agent_sync_returns_filtered_app_result(monkeypatch: pytest.MonkeyPa
         host_policy=ExecutionHostPolicy(session_key="s1", resumable=False),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
         execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
     )
 
@@ -1290,7 +1297,7 @@ def test_run_agent_and_wait_uses_app_event_enum_instead_of_value_string(monkeypa
         host_policy=ExecutionHostPolicy(session_key="s1", resumable=False),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
         execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
     )
 
@@ -1323,7 +1330,7 @@ def test_run_agent_and_wait_raises_cancelled_error_on_cancelled_event(monkeypatc
         host_policy=ExecutionHostPolicy(session_key="s1", resumable=False),
         preparation_spec=ScenePreparationSpec(),
         message_inputs=ExecutionMessageInputs(user_message="问题"),
-        accepted_execution_spec=AcceptedExecutionSpec(model_name="test-model"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
         execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
     )
 

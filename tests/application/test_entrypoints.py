@@ -70,8 +70,7 @@ def test_module_entrypoints_raise_system_exit(
 def test_tool_limits_reexports_stable_limit_types() -> None:
     """稳定导出模块应直接重导出 doc/fins limits 类型。"""
 
-    from dayu.execution.doc_limits import DocToolLimits
-    from dayu.fins.tools.fins_limits import FinsToolLimits
+    from dayu.contracts.tool_configs import DocToolLimits, FinsToolLimits
     from dayu.tool_limits import __all__, DocToolLimits as ExportedDocToolLimits, FinsToolLimits as ExportedFinsToolLimits
 
     assert ExportedDocToolLimits is DocToolLimits
