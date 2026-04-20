@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from dayu.console_output import configure_standard_streams_for_console_output
+
 
 DEFAULT_CHROME_MAC_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 HTML_EXTENSIONS = {"html", "htm"}
@@ -326,6 +328,8 @@ def main() -> int:
         subprocess.CalledProcessError: 外部命令执行失败时抛出。
         FileNotFoundError: 外部命令不存在时抛出。
     """
+    configure_standard_streams_for_console_output()
+
     if len(sys.argv) >= 2 and sys.argv[1] in {"-h", "--help"}:
         _print_help()
         return 0

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 
+from dayu.console_output import configure_standard_streams_for_console_output
 from dayu.log import Log
 from dayu.wechat.arg_parsing import MODULE, parse_arguments, setup_loglevel
 
@@ -53,6 +54,8 @@ def main(argv: list[str] | None = None) -> int:
         无。
     """
 
+    # 先收口标准流容错，避免非 UTF-8 终端在打印中文帮助/错误文案时崩溃。
+    configure_standard_streams_for_console_output()
     args = parse_arguments(argv)
     setup_loglevel(args)
     try:

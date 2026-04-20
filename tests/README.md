@@ -106,6 +106,7 @@ python -m pytest tests --cov=dayu --cov-report=term --cov-branch
 其中：
 - `test_web_routes.py` 负责守住 Web 依赖装配已经收口到 `fastapi_app` 的显式窄依赖注入，router 工厂不再回退到全局 service locator 或旧 `Application` API。
 - `test_chat_service.py`、`test_fins_service.py` 与 `test_web_routes.py` 还要共同守住请求受理时机：`Service.submit_*()` 必须在返回 submission 前完成同步校验，校验失败时不得创建新的 Host session，Web 入口也不得返回 `202 Accepted` 或启动后台消费任务。
+- `tests/application/test_console_output.py` 负责守住 CLI / WeChat / render 入口的标准流容错边界：在非 UTF-8 终端里打印中文 help 或错误文案时不得因 `UnicodeEncodeError` 崩溃。
 - `test_web_routes.py` 还要守住 Web 的客户端错误语义：像 `PromptService.submit()` 这类已经在 Service 边界同步抛出的 `ValueError`，router 必须映射成 `4xx`，不能漏成 `500`。
 - `test_web_routes.py` 还要守住 `/api/write` 的未支持语义：当 Web 当前不支持在线写作时，route 必须显式返回 `501`，不能再用 `202` / `accepted=true` 伪装成已受理。
 - `test_fins_service.py`、`test_sec_process_workflow.py`、`test_sec_pipeline_process_filing_source.py`、`test_cn_pipeline_process.py` 与 `test_tool_snapshot_export.py` 还要共同守住 Fins 同步取消传播链路：`Host` 的取消状态只能以窄 `cancel_checker` 形式从 `FinsService -> FinsRuntime -> Pipeline` 下传，`process_filing/process_material` 必须在单文档决策、批量 stream 文档边界和工具快照导出阶段及时抛出 `CancelledError` 或收口为 cancelled，不能等整个同步 direct operation 结束后才统一收口。

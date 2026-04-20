@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dayu.cli.command_names import FINS_COMMANDS, HOST_COMMANDS
 from dayu.cli.arg_parsing import parse_arguments
+from dayu.console_output import configure_standard_streams_for_console_output
+from dayu.console_output import configure_standard_streams_for_console_output
 
 
 def main() -> int:
@@ -25,6 +27,12 @@ def main() -> int:
         无。
     """
 
+    # Windows 等非 UTF-8 终端下，中文帮助信息可能因输出编码不支持而崩溃。
+    # 入口层先收口标准流容错，确保 `--help` 至少不会直接抛出编码异常。
+    configure_standard_streams_for_console_output()
+    # 非 UTF-8 终端下打印中文帮助信息可能直接触发编码异常，
+    # 入口层先统一收口标准流容错，确保 `--help` 不会因终端编码而崩溃。
+    configure_standard_streams_for_console_output()
     args = parse_arguments()
     if args.command == "init":
         # `init` 必须保持冷启动轻量，只在命中该命令时再导入实现模块。
