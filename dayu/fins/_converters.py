@@ -70,8 +70,34 @@ def normalize_optional_text(value: object) -> str | None:
     return normalized or None
 
 
+def require_non_empty_text(value: object, *, empty_error: Exception) -> str:
+    """标准化必填文本：仅拒绝 `None` 与空白字符串。
+
+    该函数复用 `normalize_optional_text()` 的语义：
+    - `None` 与去空白后为空的字符串视为缺失；
+    - 其它值先执行 `str(...).strip()` 后保留，因此 `0` / `False`
+      不会被误判为空。
+
+    Args:
+        value: 原始值。
+        empty_error: 值缺失时需要抛出的异常实例。
+
+    Returns:
+        去空白后的非空字符串。
+
+    Raises:
+        Exception: 当值缺失时抛出调用方提供的异常。
+    """
+
+    normalized = normalize_optional_text(value)
+    if normalized is None:
+        raise empty_error
+    return normalized
+
+
 __all__ = [
     "optional_int",
     "int_or_zero",
     "normalize_optional_text",
+    "require_non_empty_text",
 ]

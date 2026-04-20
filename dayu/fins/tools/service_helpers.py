@@ -301,34 +301,6 @@ def _collect_available_document_types(documents: list[dict[str, Any]]) -> list[s
     return sorted(doc_types)
 
 
-# =====================================================================
-# 文本标准化
-# =====================================================================
-
-def _normalize_required_text(*, tool_name: str, arg_name: str, value: Any) -> str:
-    """标准化必填文本参数。
-
-    Args:
-        tool_name: 工具名。
-        arg_name: 参数名。
-        value: 原始值。
-
-    Returns:
-        去空白后的字符串。
-
-    Raises:
-        ToolArgumentError: 参数为空或类型非法时抛出。
-    """
-
-    if value is None:
-        raise ToolArgumentError(tool_name, arg_name, value, "Argument must not be empty")
-    normalized = str(value).strip()
-    if not normalized:
-        raise ToolArgumentError(tool_name, arg_name, value, "Argument must not be empty")
-    return normalized
-
-
-
 def _collect_parent_titles(
     section: SectionSummary,
     ref_to_section: dict[str, SectionSummary],

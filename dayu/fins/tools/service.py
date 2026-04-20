@@ -71,9 +71,8 @@ from .result_types import (
     TablesListResult,
     XbrlQueryResult,
 )
-from dayu.fins._converters import normalize_optional_text
+from dayu.fins._converters import normalize_optional_text, require_non_empty_text
 from .service_helpers import (
-    _normalize_required_text,
     _collect_parent_titles,
     _normalize_form_type_for_matching,
     _normalize_document_types,
@@ -504,10 +503,9 @@ class FinsToolService:
             document_id=document_id,
             tool_name="read_section",
         )
-        normalized_ref = _normalize_required_text(
-            tool_name="read_section",
-            arg_name="ref",
-            value=ref,
+        normalized_ref = require_non_empty_text(
+            ref,
+            empty_error=ToolArgumentError("read_section", "ref", ref, "Argument must not be empty"),
         )
         processor = self._get_or_create_processor(
             ticker=normalized_ticker,
@@ -1051,10 +1049,9 @@ class FinsToolService:
             document_id=document_id,
             tool_name="get_table",
         )
-        normalized_table_ref = _normalize_required_text(
-            tool_name="get_table",
-            arg_name="table_ref",
-            value=table_ref,
+        normalized_table_ref = require_non_empty_text(
+            table_ref,
+            empty_error=ToolArgumentError("get_table", "table_ref", table_ref, "Argument must not be empty"),
         )
         processor = self._get_or_create_processor(
             ticker=normalized_ticker,
@@ -1195,10 +1192,14 @@ class FinsToolService:
             document_id=document_id,
             tool_name="get_financial_statement",
         )
-        normalized_statement_type = _normalize_required_text(
-            tool_name="get_financial_statement",
-            arg_name="statement_type",
-            value=statement_type,
+        normalized_statement_type = require_non_empty_text(
+            statement_type,
+            empty_error=ToolArgumentError(
+                "get_financial_statement",
+                "statement_type",
+                statement_type,
+                "Argument must not be empty",
+            ),
         )
 
         processor = self._get_or_create_processor(
@@ -1357,10 +1358,14 @@ class FinsToolService:
         """
 
         normalized_ticker = self._resolve_canonical_ticker(ticker=ticker, tool_name=tool_name)
-        normalized_document_id = _normalize_required_text(
-            tool_name=tool_name,
-            arg_name="document_id",
-            value=document_id,
+        normalized_document_id = require_non_empty_text(
+            document_id,
+            empty_error=ToolArgumentError(
+                tool_name,
+                "document_id",
+                document_id,
+                "Argument must not be empty",
+            ),
         )
         resolved_document_id = self._resolve_canonical_document_id(
             ticker=normalized_ticker,
@@ -1384,10 +1389,14 @@ class FinsToolService:
             ToolBusinessError: ticker 未收录于当前工作区时抛出。
         """
 
-        normalized_ticker = _normalize_required_text(
-            tool_name=tool_name,
-            arg_name="ticker",
-            value=ticker,
+        normalized_ticker = require_non_empty_text(
+            ticker,
+            empty_error=ToolArgumentError(
+                tool_name,
+                "ticker",
+                ticker,
+                "Argument must not be empty",
+            ),
         )
         candidates = _build_ticker_alias_candidates(normalized_ticker)
         resolved_ticker = self._company_repository.resolve_existing_ticker(candidates)

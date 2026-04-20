@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 from dayu.engine.exceptions import ToolArgumentError
-from dayu.fins._converters import normalize_optional_text
+from dayu.fins._converters import normalize_optional_text, require_non_empty_text
 from dayu.engine.tool_contracts import DupCallSpec
 from dayu.engine.tool_registry import ToolRegistry
 from dayu.engine.tools.base import tool
@@ -167,10 +167,14 @@ def _create_start_download_job_tool(
             ToolArgumentError: 参数非法时抛出。
         """
 
-        normalized_ticker = _normalize_required_text(
-            tool_name="start_financial_filing_download_job",
-            arg_name="ticker",
-            value=ticker,
+        normalized_ticker = require_non_empty_text(
+            ticker,
+            empty_error=ToolArgumentError(
+                "start_financial_filing_download_job",
+                "ticker",
+                ticker,
+                "不能为空",
+            ),
         )
         market_profile = MarketResolver.resolve(normalized_ticker)
         if market_profile.market not in _SUPPORTED_DOWNLOAD_MARKETS:
@@ -255,10 +259,14 @@ def _create_get_download_job_status_tool(
             ToolArgumentError: 参数非法时抛出。
         """
 
-        normalized_job_id = _normalize_required_text(
-            tool_name="get_financial_filing_download_job_status",
-            arg_name="job_id",
-            value=job_id,
+        normalized_job_id = require_non_empty_text(
+            job_id,
+            empty_error=ToolArgumentError(
+                "get_financial_filing_download_job_status",
+                "job_id",
+                job_id,
+                "不能为空",
+            ),
         )
         snapshot = manager.get_job_snapshot(normalized_job_id)
         return _build_status_response(
@@ -325,10 +333,14 @@ def _create_cancel_download_job_tool(
             ToolArgumentError: 参数非法时抛出。
         """
 
-        normalized_job_id = _normalize_required_text(
-            tool_name="cancel_financial_filing_download_job",
-            arg_name="job_id",
-            value=job_id,
+        normalized_job_id = require_non_empty_text(
+            job_id,
+            empty_error=ToolArgumentError(
+                "cancel_financial_filing_download_job",
+                "job_id",
+                job_id,
+                "不能为空",
+            ),
         )
         cancellation_outcome, snapshot = manager.cancel_job(normalized_job_id)
         return _build_cancel_response(
@@ -405,10 +417,14 @@ def _create_start_process_job_tool(
             ToolArgumentError: 参数非法时抛出。
         """
 
-        normalized_ticker = _normalize_required_text(
-            tool_name="start_financial_document_preprocess_job",
-            arg_name="ticker",
-            value=ticker,
+        normalized_ticker = require_non_empty_text(
+            ticker,
+            empty_error=ToolArgumentError(
+                "start_financial_document_preprocess_job",
+                "ticker",
+                ticker,
+                "不能为空",
+            ),
         )
         request_outcome, snapshot = manager.start_process_job(
             ticker=normalized_ticker,
@@ -483,10 +499,14 @@ def _create_get_process_job_status_tool(
             ToolArgumentError: 参数非法时抛出。
         """
 
-        normalized_job_id = _normalize_required_text(
-            tool_name="get_financial_document_preprocess_job_status",
-            arg_name="job_id",
-            value=job_id,
+        normalized_job_id = require_non_empty_text(
+            job_id,
+            empty_error=ToolArgumentError(
+                "get_financial_document_preprocess_job_status",
+                "job_id",
+                job_id,
+                "不能为空",
+            ),
         )
         snapshot = manager.get_job_snapshot(normalized_job_id)
         return _build_status_response(
@@ -553,10 +573,14 @@ def _create_cancel_process_job_tool(
             ToolArgumentError: 参数非法时抛出。
         """
 
-        normalized_job_id = _normalize_required_text(
-            tool_name="cancel_financial_document_preprocess_job",
-            arg_name="job_id",
-            value=job_id,
+        normalized_job_id = require_non_empty_text(
+            job_id,
+            empty_error=ToolArgumentError(
+                "cancel_financial_document_preprocess_job",
+                "job_id",
+                job_id,
+                "不能为空",
+            ),
         )
         cancellation_outcome, snapshot = manager.cancel_job(normalized_job_id)
         return _build_cancel_response(
@@ -572,33 +596,6 @@ def _create_cancel_process_job_tool(
         cancel_financial_document_preprocess_job,
         cancel_financial_document_preprocess_job.__tool_schema__,
     )
-
-
-def _normalize_required_text(
-    *,
-    tool_name: str,
-    arg_name: str,
-    value: Any,
-) -> str:
-    """标准化必填文本参数。
-
-    Args:
-        tool_name: 工具名。
-        arg_name: 参数名。
-        value: 输入值。
-
-    Returns:
-        去空白后的非空字符串。
-
-    Raises:
-        ToolArgumentError: 参数为空时抛出。
-    """
-
-    normalized = str(value or "").strip()
-    if not normalized:
-        raise ToolArgumentError(tool_name, arg_name, value, "不能为空")
-    return normalized
-
 
 def _normalize_form_types(form_types: Optional[list[str]]) -> Optional[list[str]]:
     """标准化表单数组。

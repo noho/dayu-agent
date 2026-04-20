@@ -50,8 +50,7 @@ from .search_models import (
     _EXPECTED_BUCKETS_BY_INTENT,
 )
 from .section_semantic import resolve_section_semantic
-from .service_helpers import _normalize_required_text
-from dayu.fins._converters import normalize_optional_text
+from dayu.fins._converters import normalize_optional_text, require_non_empty_text
 
 
 # =====================================================================
@@ -188,8 +187,14 @@ def _resolve_search_queries(
         )
 
     if has_query:
-        normalized = _normalize_required_text(
-            tool_name="search_document", arg_name="query", value=query,
+        normalized = require_non_empty_text(
+            query,
+            empty_error=ToolArgumentError(
+                "search_document",
+                "query",
+                query,
+                "Argument must not be empty",
+            ),
         )
         return [normalized]
 

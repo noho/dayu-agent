@@ -188,13 +188,12 @@ def test_service_module_does_not_reexport_split_private_helpers() -> None:
 def test_text_and_period_normalizers() -> None:
     """覆盖参数标准化分支。"""
 
-    with pytest.raises(ToolArgumentError):
-        _sh_module._normalize_required_text(tool_name="x", arg_name="a", value=None)
-    with pytest.raises(ToolArgumentError):
-        _sh_module._normalize_required_text(tool_name="x", arg_name="a", value="   ")
-
-    from dayu.fins._converters import normalize_optional_text
+    from dayu.fins._converters import normalize_optional_text, require_non_empty_text
     assert normalize_optional_text("  ") is None
+    with pytest.raises(ToolArgumentError):
+        require_non_empty_text(None, empty_error=ToolArgumentError("x", "a", None, "Argument must not be empty"))
+    with pytest.raises(ToolArgumentError):
+        require_non_empty_text("   ", empty_error=ToolArgumentError("x", "a", "   ", "Argument must not be empty"))
 
     with pytest.raises(ToolArgumentError):
         _sh_module._normalize_periods("Q1")  # type: ignore[arg-type]

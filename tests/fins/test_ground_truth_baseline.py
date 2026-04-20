@@ -8,13 +8,13 @@ from typing import Any
 
 import pytest
 
+from dayu.fins._converters import require_non_empty_text
 from dayu.fins.domain.document_models import ProcessedCreateRequest
 from dayu.fins.domain.enums import SourceKind
 from dayu.fins.ground_truth_baseline import (
     GROUND_TRUTH_REQUIRED_FILES,
     _assert_required_truth_files,
     _load_or_init_manifest,
-    _normalize_required_text,
     _upsert_manifest_sample,
     main,
     parse_args,
@@ -219,7 +219,7 @@ def test_normalize_required_text_and_required_files_errors(tmp_path: Path) -> No
     """验证必填文本与必需文件校验的异常路径。"""
 
     with pytest.raises(ValueError, match="ticker 不能为空"):
-        _normalize_required_text(name="ticker", value="  ")
+        require_non_empty_text("  ", empty_error=ValueError("ticker 不能为空"))
 
     workspace_root = tmp_path / "workspace"
     source_dir = workspace_root / "portfolio" / "AAPL" / "processed" / "fil_missing"

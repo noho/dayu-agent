@@ -379,29 +379,29 @@ def test_register_ingestion_tools_raises_when_manager_key_is_blank(
         module.register_ingestion_tools(ToolRegistry(), service_factory=lambda _t: None, manager_key="  ")  # type: ignore[arg-type]
 
 
-# ── _normalize_required_text 空值 ──
+# ── require_non_empty_text 空值 ──
 
 
 @pytest.mark.unit
-def test_normalize_required_text_raises_on_empty() -> None:
+def test_require_non_empty_text_raises_on_empty() -> None:
     """验证空值触发 ToolArgumentError。"""
 
     from dayu.engine.exceptions import ToolArgumentError
-    from dayu.fins.tools.ingestion_tools import _normalize_required_text
+    from dayu.fins._converters import require_non_empty_text
 
     with pytest.raises(ToolArgumentError):
-        _normalize_required_text(tool_name="t", arg_name="a", value="")
+        require_non_empty_text("", empty_error=ToolArgumentError("t", "a", "", "不能为空"))
 
 
 @pytest.mark.unit
-def test_normalize_required_text_raises_on_none() -> None:
+def test_require_non_empty_text_raises_on_none() -> None:
     """验证 None 值触发 ToolArgumentError。"""
 
     from dayu.engine.exceptions import ToolArgumentError
-    from dayu.fins.tools.ingestion_tools import _normalize_required_text
+    from dayu.fins._converters import require_non_empty_text
 
     with pytest.raises(ToolArgumentError):
-        _normalize_required_text(tool_name="t", arg_name="a", value=None)
+        require_non_empty_text(None, empty_error=ToolArgumentError("t", "a", None, "不能为空"))
 
 
 # ── _normalize_form_types 分支 ──
@@ -745,3 +745,13 @@ def test_normalize_optional_text_strips() -> None:
     from dayu.fins._converters import normalize_optional_text
 
     assert normalize_optional_text("  hello  ") == "hello"
+
+
+@pytest.mark.unit
+def test_require_non_empty_text_preserves_falsy_scalars() -> None:
+    """验证必填文本收口不会把 0/False 误判为空。"""
+
+    from dayu.fins._converters import require_non_empty_text
+
+    assert require_non_empty_text(0, empty_error=ValueError("bad")) == "0"
+    assert require_non_empty_text(False, empty_error=ValueError("bad")) == "False"

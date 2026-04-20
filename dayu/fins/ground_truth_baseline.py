@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from dayu.fins.domain.document_models import ProcessedHandle, now_iso8601
+from dayu.fins._converters import require_non_empty_text
 from dayu.fins.storage import FsDocumentBlobRepository, FsProcessedDocumentRepository
 
 GROUND_TRUTH_MANIFEST_SCHEMA_VERSION = "fins_ground_truth_manifest_v1.0.0"
@@ -103,9 +104,15 @@ def promote_ground_truth_sample(
         OSError: 文件读写失败时抛出。
     """
 
-    normalized_ticker = _normalize_required_text(name="ticker", value=ticker)
-    normalized_document_id = _normalize_required_text(name="document_id", value=document_id)
-    normalized_reviewer = _normalize_required_text(name="reviewed_by", value=reviewed_by)
+    normalized_ticker = require_non_empty_text(ticker, empty_error=ValueError("ticker 不能为空"))
+    normalized_document_id = require_non_empty_text(
+        document_id,
+        empty_error=ValueError("document_id 不能为空"),
+    )
+    normalized_reviewer = require_non_empty_text(
+        reviewed_by,
+        empty_error=ValueError("reviewed_by 不能为空"),
+    )
     normalized_note = str(review_note or "").strip()
 
     processed_repository = FsProcessedDocumentRepository(workspace_root)
@@ -204,27 +211,6 @@ def _format_processed_locator(source_handle: ProcessedHandle) -> str:
     """
 
     return f"processed:{source_handle.ticker}/{source_handle.document_id}"
-
-
-def _normalize_required_text(*, name: str, value: str) -> str:
-    """标准化并校验必填字符串。
-
-    Args:
-        name: 字段名。
-        value: 原始值。
-
-    Returns:
-        去首尾空白后的字符串。
-
-    Raises:
-        ValueError: 值为空时抛出。
-    """
-
-    normalized = str(value or "").strip()
-    if not normalized:
-        raise ValueError(f"{name} 不能为空")
-    return normalized
-
 
 def _assert_required_truth_files(
     *,

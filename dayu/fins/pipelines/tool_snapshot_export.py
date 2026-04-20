@@ -19,7 +19,7 @@ from io import BytesIO
 from typing import Any, Callable, Mapping, Optional
 
 from dayu.contracts.cancellation import CancelledError
-from dayu.fins._converters import normalize_optional_text
+from dayu.fins._converters import normalize_optional_text, require_non_empty_text
 from dayu.engine.processors.processor_registry import ProcessorRegistry
 from dayu.log import Log
 from dayu.fins.domain.document_models import ProcessedHandle
@@ -559,9 +559,12 @@ def export_tool_snapshot(
         ValueError: 入参不合法时抛出。
     """
 
-    normalized_ticker = _normalize_required_text(ticker)
-    normalized_document_id = _normalize_required_text(document_id)
-    normalized_expected_parser_signature = _normalize_required_text(expected_parser_signature)
+    normalized_ticker = require_non_empty_text(ticker, empty_error=ValueError("必填文本不能为空"))
+    normalized_document_id = require_non_empty_text(document_id, empty_error=ValueError("必填文本不能为空"))
+    normalized_expected_parser_signature = require_non_empty_text(
+        expected_parser_signature,
+        empty_error=ValueError("必填文本不能为空"),
+    )
     _raise_if_cancelled(
         ticker=normalized_ticker,
         document_id=normalized_document_id,
@@ -967,9 +970,12 @@ def _build_search_document_calls(
 
     calls: list[dict[str, Any]] = []
     for query_spec in search_query_specs:
-        query_id = _normalize_required_text(query_spec.get("query_id"))
-        query_text = _normalize_required_text(query_spec.get("query_text"))
-        query_intent = _normalize_required_text(query_spec.get("query_intent"))
+        query_id = require_non_empty_text(query_spec.get("query_id"), empty_error=ValueError("必填文本不能为空"))
+        query_text = require_non_empty_text(query_spec.get("query_text"), empty_error=ValueError("必填文本不能为空"))
+        query_intent = require_non_empty_text(
+            query_spec.get("query_intent"),
+            empty_error=ValueError("必填文本不能为空"),
+        )
         query_weight = float(query_spec.get("query_weight", DEFAULT_SEARCH_QUERY_WEIGHT))
         if query_weight <= 0:
             raise ValueError("search_query_specs.query_weight 必须大于 0")
@@ -1165,10 +1171,10 @@ def _build_search_query_specs(
         ValueError: 查询文本无效时抛出。
     """
 
-    normalized_pack_name = _normalize_required_text(pack_name)
+    normalized_pack_name = require_non_empty_text(pack_name, empty_error=ValueError("必填文本不能为空"))
     specs: list[dict[str, Any]] = []
     for index, raw_query in enumerate(queries, start=1):
-        query_text = _normalize_required_text(raw_query)
+        query_text = require_non_empty_text(raw_query, empty_error=ValueError("必填文本不能为空"))
         query_id = f"{normalized_pack_name}.q{index:03d}"
         query_intent = _build_query_intent(query_text=query_text, index=index)
         specs.append(
@@ -1196,7 +1202,7 @@ def _build_query_intent(*, query_text: str, index: int) -> str:
         ValueError: 参数非法时抛出。
     """
 
-    _ = _normalize_required_text(query_text)
+    _ = require_non_empty_text(query_text, empty_error=ValueError("必填文本不能为空"))
     if index <= 0:
         raise ValueError("index 必须大于 0")
     normalized = re.sub(r"[^a-z0-9]+", "_", query_text.lower()).strip("_")
@@ -1385,8 +1391,14 @@ def _build_tool_snapshot_meta(
         ValueError: 搜索词包元信息不满足契约时抛出。
     """
 
-    normalized_pack_name = _normalize_required_text(search_query_pack_name)
-    normalized_pack_version = _normalize_required_text(search_query_pack_version)
+    normalized_pack_name = require_non_empty_text(
+        search_query_pack_name,
+        empty_error=ValueError("必填文本不能为空"),
+    )
+    normalized_pack_version = require_non_empty_text(
+        search_query_pack_version,
+        empty_error=ValueError("必填文本不能为空"),
+    )
     if search_query_count < 0:
         raise ValueError("search_query_count 不能为负数")
     if search_query_count != len(search_queries):
@@ -1538,12 +1550,3 @@ def _extract_page_range(section: Mapping[str, Any]) -> Optional[list[int]]:
         return [start, end]
     return None
 
-
-
-def _normalize_required_text(value: Any) -> str:
-    """标准化必填文本。"""
-
-    normalized = normalize_optional_text(value)
-    if normalized is None:
-        raise ValueError("必填文本不能为空")
-    return normalized
