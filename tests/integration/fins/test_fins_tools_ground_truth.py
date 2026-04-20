@@ -355,12 +355,12 @@ def _resolve_workspace_root(*, repo_root: Path) -> Path:
         `workspace` 绝对路径。
 
     Raises:
-        AssertionError: 工作区目录不存在时抛出。
+        pytest.skip.Exception: 工作区目录不存在时跳过测试。
     """
 
     workspace_root = repo_root / "workspace"
     if not workspace_root.exists():
-        raise AssertionError(f"workspace 目录不存在: {workspace_root}")
+        pytest.skip(f"workspace 目录不存在，跳过 ground truth 集成测试: {workspace_root}")
     return workspace_root
 
 

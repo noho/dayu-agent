@@ -20,6 +20,7 @@
   - `tests/engine/test_web_playwright_backend.py` 负责守住 `dayu.engine.tools.web_playwright_backend` 的真源边界，包括浏览器单例、子进程 worker、资源路由与关闭/终止收口
 - `tests/fins/`
   - Fins direct operation、窄仓储、processor、tool service 测试
+  - `tests/integration/fins/test_fins_tools_ground_truth.py` 依赖仓库内 `workspace/` 的真实 source 文档样本与 `tests/fixtures/fins/ground_truth/` 基线；当 CI 或干净环境里缺少这批本地样本时，应显式 `skip`，不能把“样本未准备”误报成产品回归
   - `tests/fins/test_sec_pipeline_helpers.py` 与 `tests/fins/test_sec_rebuild_workflow.py` 共同守住 source fiscal 真源边界：download/source 层禁止从 `report_date`/`filing_date` 硬猜 fiscal 字段，尤其是 6-K / 6-K/A 不得猜 `fiscal_year/fiscal_period`，rebuild 在新推断为空时也不得继续沿用 previous_meta 中的旧猜测值
   - `tests/fins/test_fins_tools_service.py` 与 `tests/fins/test_fins_tools_service_helpers_coverage.py` 共同守住消费侧 fiscal 边界：`list_documents()` 不得再仅凭 `report_date` 为 10-Q 回填季度，也不得为其他 source 文档回填空的 `fiscal_year`；当前只允许保留表单内生且不依赖日期猜测的低风险回退（如 `10-K/20-F -> FY`）
   - `tests/fins/test_fins_runtime_tool_service.py` 还要守住 `FinsToolService` 的构造期实例不变量：runtime 返回的真实 service 必须在 `__init__` 中声明实例级缓存（如 `_meta_cache`），不能把属性存在性延后到读路径里的 `hasattr` 懒初始化
