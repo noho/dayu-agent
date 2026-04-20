@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import cast
@@ -42,6 +43,29 @@ class _MockRunRegistry:
         )
 
 
+def _wait_until(predicate: Callable[[], bool], timeout_seconds: float, interval_seconds: float = 0.01) -> bool:
+    """轮询等待条件成立。
+
+    Args:
+        predicate: 返回布尔值的条件函数。
+        timeout_seconds: 最大等待秒数。
+        interval_seconds: 轮询间隔秒数。
+
+    Returns:
+        条件是否在超时前成立。
+
+    Raises:
+        无。
+    """
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval_seconds)
+    return predicate()
+
+
 class TestCancellationBridgePolling:
     """CancellationBridge 轮询行为测试。"""
 
@@ -57,14 +81,15 @@ class TestCancellationBridgePolling:
             poll_interval=0.05,
         )
         bridge.start()
-        assert not token.is_cancelled()
+        try:
+            assert not token.is_cancelled()
 
-        # 模拟外部写入取消请求
-        mock_registry._cancel_requested_at = datetime.now(timezone.utc)
-        time.sleep(0.2)
+            # 模拟外部写入取消请求
+            mock_registry._cancel_requested_at = datetime.now(timezone.utc)
 
-        assert token.is_cancelled()
-        bridge.stop()
+            assert _wait_until(token.is_cancelled, timeout_seconds=1.0)
+        finally:
+            bridge.stop()
 
     @pytest.mark.unit
     def test_stops_on_succeeded(self) -> None:

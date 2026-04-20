@@ -219,7 +219,9 @@ push 后 PR 自动更新，CI 重新跑。最终 merge 时用 **Squash and merge
 
 - **CI 通过**：Squash merge 并删除远端分支：
   ```bash
-  gh pr merge <PR号> --squash --delete-branch
+  gh pr merge <PR号> --squash --delete-branch \
+  --subject "v0.1.2 — 提供离线安装；支持MiMo Plan海外；bug fix" \
+  --body "最终提交说明"
   ```
 
 ### 4.1 CI 分三层运行
@@ -363,7 +365,7 @@ python utils/smoke_test_offline_bundle.py \
 如果当前开发机是 Apple Silicon（`macos-arm64`），这里必须显式指定 `linux/amd64`。
 否则 Docker 默认会起 `linux/arm64` 容器，最终下载到的是 `aarch64` wheel，但文件名仍会被误标成 `linux-x64`，验证结果失真。
 
-先构建镜像：
+先构建镜像（只需构建一次）：
 
 ```bash
 docker build \
