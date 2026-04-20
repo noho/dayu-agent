@@ -8,7 +8,7 @@
 2. 工具 schema必须把字符串写在schema内，禁止使用常量定义，工具schema使用magic string默认视为合理。
 
 ## review结果
-- 写入 workspace/code-review-MMDD-HHmm.md （月份日期-小时分钟）。
+- 写入 workspace/code-review-mmdd-HHMM.md （月份日期-小时分钟）。
 - 每发现一项写入一项。
 - review结束给出按严重程度排序等完整列表。
 

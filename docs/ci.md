@@ -58,7 +58,7 @@
 ## 流程
 
 ### Step 1：全量 CI 基线
-- 创建报告：`workspace/ci_optimization_report_MMDD_HHmm.md`。
+- 创建报告：`workspace/ci_optimization_report_mmdd_HHMM.md`。
 - 本轮不新增 ticker，不执行下载。
 - 用 `CompanyMetaRepositoryProtocol.scan_company_meta_inventory()` 扫描当前工作区已有公司清单；跳过并记录隐藏目录、缺失 `meta.json`、非法目录。
 - 通过 `dayu.fins.storage` 公开仓储接口，扫描**本轮应纳入 CI 的文档全集**，作为 baseline 真源清单。
@@ -152,7 +152,7 @@
 - 不要因为 fallback 分数更高就直接切路由
 
 ## 预期产出
-1. `workspace/ci_optimization_report_MMDD_HHSS.md`
+1. `workspace/ci_optimization_report_mmdd_HHMM.md`
 2. `utils/llm_ci_process.py`
 3. `utils/llm_ci_score.py`
 4. `workspace/tmp/ci_score/baseline/*`
