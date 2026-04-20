@@ -15,10 +15,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Iterator
 
+from dayu.contracts.env_keys import FINS_PROCESSOR_PROFILE_ENV
 from dayu.log import Log
 
 MODULE = "ENGINE.PERF_UTILS"
-PROFILE_ENV_NAME = "FINS_PROCESSOR_PROFILE"
 _PROFILE_ENABLED_VALUES = {"1", "true", "yes", "on"}
 
 
@@ -35,7 +35,7 @@ def is_processor_profile_enabled() -> bool:
         RuntimeError: 环境变量读取失败时抛出。
     """
 
-    raw_value = os.getenv(PROFILE_ENV_NAME, "")
+    raw_value = os.getenv(FINS_PROCESSOR_PROFILE_ENV, "")
     normalized = str(raw_value).strip().lower()
     return normalized in _PROFILE_ENABLED_VALUES
 

@@ -23,6 +23,12 @@ from pathlib import Path
 import urllib.request
 import urllib.error
 from dayu.startup.config_file_resolver import resolve_package_assets_path, resolve_package_config_path
+from dayu.contracts.env_keys import (
+    FMP_API_KEY_ENV,
+    SEC_USER_AGENT_ENV,
+    SERPER_API_KEY_ENV,
+    TAVILY_API_KEY_ENV,
+)
 
 MODULE = "CLI.INIT"
 
@@ -138,9 +144,9 @@ _ROLE_NON_THINKING = "non_thinking"
 _ROLE_THINKING = "thinking"
 
 _OPTIONAL_SEARCH_KEYS: list[str] = [
-    "TAVILY_API_KEY",
-    "SERPER_API_KEY",
-    "FMP_API_KEY",
+    TAVILY_API_KEY_ENV,
+    SERPER_API_KEY_ENV,
+    FMP_API_KEY_ENV,
 ]
 
 _HF_MIRROR_URL = "https://hf-mirror.com"
@@ -754,6 +760,44 @@ def _prompt_huggingface_config() -> list[tuple[str, str]]:
     return results
 
 
+def _prompt_sec_user_agent() -> tuple[str, str] | None:
+    """交互式配置 SEC User-Agent。
+
+    SEC 要求所有爬虫请求在 User-Agent 中提供真实公司名称和联系邮箱，
+    格式为 ``"CompanyName admin@company.com"``。
+
+    已在环境变量中存在时自动跳过。
+
+    Returns:
+        ``(key_name, value)`` 元组；用户跳过时返回 ``None``。
+
+    Raises:
+        无。
+    """
+
+    print("\n— SEC 下载配置 —")
+
+    existing = os.environ.get(SEC_USER_AGENT_ENV)
+    if existing:
+        print(f"  {SEC_USER_AGENT_ENV} 已配置: {existing}，跳过。")
+        return None
+
+    print('  SEC 要求爬虫请求提供真实 User-Agent（含邮箱），')
+    print('  格式示例: "MyCompany admin@mycompany.com"')
+
+    try:
+        value = input(f"  {SEC_USER_AGENT_ENV}（直接回车跳过）: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+
+    if not value:
+        print("  已跳过。下载 SEC 文件时将使用通用 User-Agent（可能被限流）。")
+        return None
+
+    return SEC_USER_AGENT_ENV, value
+
+
 # --------------------------------------------------------------------------- #
 #  主入口
 # --------------------------------------------------------------------------- #
@@ -838,6 +882,15 @@ def run_init_command(args: Namespace) -> int:
             search_persist_failed = True
         display = value if key == "HF_ENDPOINT" else f"{value[:4]}***"
         print(f"✓ {key} 已配置: {display}")
+
+    # 6. SEC User-Agent
+    sec_ua = _prompt_sec_user_agent()
+    if sec_ua is not None:
+        _sec_target, sec_ok = _persist_env_var(sec_ua[0], sec_ua[1])
+        env_vars_written = True
+        if not sec_ok:
+            search_persist_failed = True
+        print(f"✓ {sec_ua[0]} 已配置: {sec_ua[1]}")
 
     if should_run_prewarm and not main_key_persist_failed:
         print("\n正在预热 CLI 运行时，请稍候...")

@@ -36,6 +36,7 @@ from requests.utils import requote_uri
 from urllib3.exceptions import ReadTimeoutError as Urllib3ReadTimeoutError
 
 from dayu.contracts.cancellation import CancellationToken
+from dayu.contracts.env_keys import SEC_USER_AGENT_ENV
 from dayu.contracts.protocols import ToolExecutionContext
 from dayu.log import Log
 from dayu.engine.processors.html_pipeline import HtmlPipelineStageError, convert_html_to_llm_markdown
@@ -108,7 +109,6 @@ _DEFAULT_BROWSER_USER_AGENT = (
     "Chrome/131.0.0.0 Safari/537.36"
 )
 _DEFAULT_SEC_USER_AGENT = "Codex Web Fetcher support@example.com"
-SEC_USER_AGENT_ENV = "SEC_USER_AGENT"
 _DEFAULT_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
 _DEFAULT_ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9,en;q=0.8"
 

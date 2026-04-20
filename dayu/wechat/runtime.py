@@ -80,18 +80,20 @@ def _direct_service_env_var_names() -> tuple[str, ...]:
         无。
     """
 
-    # 这些 provider/runtime 依赖体积较大，仅在 service 安装阶段按需导入。
-    from dayu.engine.processors.perf_utils import PROFILE_ENV_NAME
-    from dayu.engine.tools.web_search_providers import SERPER_API_KEY_ENV, TAVILY_API_KEY_ENV
-    from dayu.engine.tools.web_tools import SEC_USER_AGENT_ENV
-    from dayu.fins.resolver.fmp_company_alias_resolver import FMP_API_KEY_ENV
+    from dayu.contracts.env_keys import (
+        FMP_API_KEY_ENV,
+        FINS_PROCESSOR_PROFILE_ENV,
+        SEC_USER_AGENT_ENV,
+        SERPER_API_KEY_ENV,
+        TAVILY_API_KEY_ENV,
+    )
 
     return (
         FMP_API_KEY_ENV,
         SEC_USER_AGENT_ENV,
         SERPER_API_KEY_ENV,
         TAVILY_API_KEY_ENV,
-        PROFILE_ENV_NAME,
+        FINS_PROCESSOR_PROFILE_ENV,
     )
 
 

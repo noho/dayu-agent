@@ -20,7 +20,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
-FMP_API_KEY_ENV = "FMP_API_KEY"
+from dayu.contracts.env_keys import FMP_API_KEY_ENV
 
 
 @dataclass(frozen=True)

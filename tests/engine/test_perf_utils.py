@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+from dayu.contracts.env_keys import FINS_PROCESSOR_PROFILE_ENV
 from dayu.engine.processors.perf_utils import (
     ProcessorStageProfiler,
-    PROFILE_ENV_NAME,
     is_processor_profile_enabled,
 )
 
@@ -22,12 +22,12 @@ class TestIsProcessorProfileEnabled:
 
     def test_returns_false_when_env_not_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """未设置环境变量时返回 False。"""
-        monkeypatch.delenv(PROFILE_ENV_NAME, raising=False)
+        monkeypatch.delenv(FINS_PROCESSOR_PROFILE_ENV, raising=False)
         assert is_processor_profile_enabled() is False
 
     def test_returns_false_for_empty_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """空字符串时返回 False。"""
-        monkeypatch.setenv(PROFILE_ENV_NAME, "")
+        monkeypatch.setenv(FINS_PROCESSOR_PROFILE_ENV, "")
         assert is_processor_profile_enabled() is False
 
     @pytest.mark.parametrize("value", ["1", "true", "yes", "on"])
@@ -35,7 +35,7 @@ class TestIsProcessorProfileEnabled:
         self, monkeypatch: pytest.MonkeyPatch, value: str
     ) -> None:
         """标准启用值返回 True。"""
-        monkeypatch.setenv(PROFILE_ENV_NAME, value)
+        monkeypatch.setenv(FINS_PROCESSOR_PROFILE_ENV, value)
         assert is_processor_profile_enabled() is True
 
     @pytest.mark.parametrize("value", ["TRUE", "YES", "ON", "True", "Yes"])
@@ -43,12 +43,12 @@ class TestIsProcessorProfileEnabled:
         self, monkeypatch: pytest.MonkeyPatch, value: str
     ) -> None:
         """大写或混合大小写也应返回 True。"""
-        monkeypatch.setenv(PROFILE_ENV_NAME, value)
+        monkeypatch.setenv(FINS_PROCESSOR_PROFILE_ENV, value)
         assert is_processor_profile_enabled() is True
 
     def test_returns_true_with_whitespace(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """前后空白字符应被剥离后识别。"""
-        monkeypatch.setenv(PROFILE_ENV_NAME, "  1  ")
+        monkeypatch.setenv(FINS_PROCESSOR_PROFILE_ENV, "  1  ")
         assert is_processor_profile_enabled() is True
 
     @pytest.mark.parametrize("value", ["0", "false", "off", "no", "disabled", "2"])
@@ -56,7 +56,7 @@ class TestIsProcessorProfileEnabled:
         self, monkeypatch: pytest.MonkeyPatch, value: str
     ) -> None:
         """非启用值均返回 False。"""
-        monkeypatch.setenv(PROFILE_ENV_NAME, value)
+        monkeypatch.setenv(FINS_PROCESSOR_PROFILE_ENV, value)
         assert is_processor_profile_enabled() is False
 
 

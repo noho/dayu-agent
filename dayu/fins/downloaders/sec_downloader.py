@@ -37,6 +37,7 @@ from xml.etree import ElementTree as ET
 
 import httpx
 from dayu.workspace_paths import build_sec_throttle_dir
+from dayu.contracts.env_keys import SEC_USER_AGENT_ENV
 
 if sys.platform != "win32":
     import fcntl
@@ -59,8 +60,7 @@ BROWSE_EDGAR_TICKER_ATOM_URL = (
 )
 
 DEFAULT_SLEEP_SECONDS = 0.2
-DEFAULT_USER_AGENT = "Codex Fins Downloader support@example.com"
-SEC_USER_AGENT_ENV = "SEC_USER_AGENT"
+_UNCONFIGURED_USER_AGENT = "DayuAgent/1.0 unconfigured@example.com"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 30
 DEFAULT_MAX_RETRIES = 3
 RETRY_BACKOFF_BASE_SECONDS = 0.8
@@ -1630,6 +1630,8 @@ class SecDownloader:
     def _resolve_user_agent(self, configured_user_agent: Optional[str]) -> str:
         """解析 User-Agent。
 
+        优先级：显式传入 > 环境变量 SEC_USER_AGENT > 未配置 fallback（附警告）。
+
         Args:
             configured_user_agent: 显式传入的 User-Agent。
 
@@ -1640,8 +1642,15 @@ class SecDownloader:
             无。
         """
 
-        value = (configured_user_agent or os.environ.get(SEC_USER_AGENT_ENV) or DEFAULT_USER_AGENT).strip()
-        return value or DEFAULT_USER_AGENT
+        value = (configured_user_agent or os.environ.get(SEC_USER_AGENT_ENV) or "").strip()
+        if value:
+            return value
+        Log.warning(
+            f"SEC User-Agent 未配置。SEC 要求提供真实联系信息，否则可能限流或封禁。"
+            f"请通过环境变量 {SEC_USER_AGENT_ENV} 或 dayu-cli init 配置。",
+            module=self.MODULE,
+        )
+        return _UNCONFIGURED_USER_AGENT
 
     def _build_headers(self) -> dict[str, str]:
         """构建请求头。

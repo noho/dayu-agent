@@ -13,12 +13,10 @@ from urllib.parse import parse_qs, unquote, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from dayu.contracts.env_keys import SERPER_API_KEY_ENV, TAVILY_API_KEY_ENV
 from dayu.log import Log
 
 MODULE = "ENGINE.WEB_SEARCH"
-
-TAVILY_API_KEY_ENV = "TAVILY_API_KEY"
-SERPER_API_KEY_ENV = "SERPER_API_KEY"
 
 _SEARCH_WEB_SNIPPET_PREVIEW_CHARS = 240
 _SEARCH_WEB_NEXT_ACTION_FETCH_PAGE = "fetch_web_page"
