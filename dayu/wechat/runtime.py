@@ -12,9 +12,9 @@ from typing import Protocol
 from dayu.contracts.session import SessionSource
 from dayu.execution.options import ResolvedExecutionOptions
 from dayu.fins.service_runtime import DefaultFinsRuntime
-from dayu.host import Host, resolve_host_config
+from dayu.host import Host
 from dayu.log import Log
-from dayu.services import prepare_scene_execution_acceptance_preparer, recover_host_startup_state
+from dayu.services import prepare_host_runtime_dependencies
 from dayu.services.chat_service import ChatService
 from dayu.services.contracts import (
     ChatPendingTurnView,
@@ -25,7 +25,6 @@ from dayu.services.contracts import (
     ReplyDeliverySubmitRequest,
     ReplyDeliveryView,
 )
-from dayu.services.host_admin_service import HostAdminService
 from dayu.services.reply_delivery_service import ReplyDeliveryService
 from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
 from dayu.startup.config_file_resolver import ConfigFileResolver
@@ -33,12 +32,6 @@ from dayu.startup.config_loader import ConfigLoader
 from dayu.startup.dependencies import (
     prepare_config_file_resolver,
     prepare_config_loader,
-    prepare_default_execution_options,
-    prepare_fins_runtime,
-    prepare_model_catalog,
-    prepare_prompt_asset_store,
-    prepare_startup_paths,
-    prepare_workspace_resources,
 )
 from dayu.startup.workspace import WorkspaceResources
 from dayu.wechat.arg_parsing import (
@@ -677,57 +670,19 @@ def _prepare_wechat_host_dependencies(
         无。
     """
 
-    paths = prepare_startup_paths(
+    prepared = prepare_host_runtime_dependencies(
         workspace_root=context.workspace_root,
         config_root=context.config_root,
-    )
-    resolver = prepare_config_file_resolver(config_root=paths.config_root)
-    config_loader = prepare_config_loader(resolver=resolver)
-    prompt_asset_store = prepare_prompt_asset_store(resolver=resolver)
-    workspace = prepare_workspace_resources(
-        paths=paths,
-        config_loader=config_loader,
-        prompt_asset_store=prompt_asset_store,
-    )
-    model_catalog = prepare_model_catalog(config_loader=config_loader)
-    default_execution_options = prepare_default_execution_options(
-        workspace_root=paths.workspace_root,
-        config_loader=config_loader,
         execution_options=context.execution_options,
-    )
-    scene_execution_acceptance_preparer = prepare_scene_execution_acceptance_preparer(
-        workspace_root=paths.workspace_root,
-        default_execution_options=default_execution_options,
-        model_catalog=model_catalog,
-        prompt_asset_store=prompt_asset_store,
-    )
-    fins_runtime = prepare_fins_runtime(workspace_root=paths.workspace_root)
-    run_config = config_loader.load_run_config()
-    host_config = resolve_host_config(
-        workspace_root=paths.workspace_root,
-        run_config=run_config,
-        explicit_lane_config=None,
-    )
-    host = Host(
-        workspace=workspace,
-        model_catalog=model_catalog,
-        default_execution_options=default_execution_options,
-        host_store_path=host_config.store_path,
-        lane_config=host_config.lane_config,
-        pending_turn_resume_max_attempts=host_config.pending_turn_resume_max_attempts,
-        event_bus=None,
-    )
-    recover_host_startup_state(
-        HostAdminService(host=host),
         runtime_label="WeChat Host runtime",
         log_module=MODULE,
     )
     return (
-        workspace,
-        default_execution_options,
-        scene_execution_acceptance_preparer,
-        host,
-        fins_runtime,
+        prepared.workspace,
+        prepared.default_execution_options,
+        prepared.scene_execution_acceptance_preparer,
+        prepared.host,
+        prepared.fins_runtime,
     )
 
 

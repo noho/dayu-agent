@@ -43,8 +43,11 @@ from dayu.cli.interactive_state import (
     build_interactive_session_id,
 )
 from dayu.services.contracts import FinsSubmission
+from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
 from dayu.services.write_service import WriteService
+from dayu.startup.workspace import WorkspaceResources
 from dayu.host.protocols import HostedExecutionGatewayProtocol
+from dayu.host import Host
 from dayu.contracts.agent_types import AgentMessage, AgentTraceIdentity
 from dayu.contracts.fins import (
     DownloadCommandPayload,
@@ -71,10 +74,13 @@ from dayu.execution.runtime_config import (
     AgentRuntimeConfig as AgentRunningConfig,
     OpenAIRunnerRuntimeConfig as AsyncOpenAIRunnerRunningConfig,
 )
+from dayu.execution.options import ResolvedExecutionOptions
+from dayu.fins.service_runtime import DefaultFinsRuntime
 from dayu.startup.config_file_resolver import ConfigFileResolver
 from dayu.startup.config_loader import ConfigLoader
 from dayu.startup.prompt_assets import FilePromptAssetStore
 from dayu.fins.toolset_registrars import register_fins_read_toolset as _register_fins_read_toolset
+from dayu.services.startup_preparation import PreparedHostRuntimeDependencies
 class _CallCollector:
     """测试调用记录器。"""
 
@@ -2443,57 +2449,31 @@ def test_prepare_cli_host_dependencies_runs_unified_startup_recovery(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """CLI Host runtime 装配后应立即执行统一 startup recovery。"""
+    """CLI Host 依赖装配应委托 Service 共享启动 API。"""
 
     workspace_config = WorkspaceConfig(
         workspace_dir=tmp_path,
         output_dir=tmp_path / "output",
         config_root=tmp_path / "config",
     )
-    fake_paths = SimpleNamespace(
-        workspace_root=tmp_path,
-        config_root=tmp_path / "config",
-        output_dir=tmp_path / "output",
-    )
-    fake_workspace = object()
-    fake_model_catalog = object()
-    fake_default_execution_options = object()
-    fake_scene_preparer = object()
-    fake_fins_runtime = object()
-    fake_host = SimpleNamespace(host_marker="cli-host")
-    recover_calls: list[tuple[str, str, str]] = []
+    fake_workspace = cast(WorkspaceResources, object())
+    fake_default_execution_options = cast(ResolvedExecutionOptions, object())
+    fake_scene_preparer = cast(SceneExecutionAcceptancePreparer, object())
+    fake_fins_runtime = cast(DefaultFinsRuntime, object())
+    fake_host = cast(Host, object())
+    captured_call: dict[str, object] = {}
 
-    monkeypatch.setattr("dayu.cli.dependency_setup.prepare_startup_paths", lambda **_kwargs: fake_paths)
-    monkeypatch.setattr("dayu.cli.dependency_setup.prepare_config_file_resolver", lambda **_kwargs: object())
     monkeypatch.setattr(
-        "dayu.cli.dependency_setup.prepare_config_loader",
-        lambda **_kwargs: SimpleNamespace(load_run_config=lambda: SimpleNamespace()),
-    )
-    monkeypatch.setattr("dayu.cli.dependency_setup.prepare_prompt_asset_store", lambda **_kwargs: object())
-    monkeypatch.setattr("dayu.cli.dependency_setup.prepare_workspace_resources", lambda **_kwargs: fake_workspace)
-    monkeypatch.setattr("dayu.cli.dependency_setup.prepare_model_catalog", lambda **_kwargs: fake_model_catalog)
-    monkeypatch.setattr(
-        "dayu.cli.dependency_setup.prepare_default_execution_options",
-        lambda **_kwargs: fake_default_execution_options,
-    )
-    monkeypatch.setattr(
-        "dayu.cli.dependency_setup.prepare_scene_execution_acceptance_preparer",
-        lambda **_kwargs: fake_scene_preparer,
-    )
-    monkeypatch.setattr("dayu.cli.dependency_setup.prepare_fins_runtime", lambda **_kwargs: fake_fins_runtime)
-    monkeypatch.setattr(
-        "dayu.cli.dependency_setup.resolve_host_config",
-        lambda **_kwargs: SimpleNamespace(
-            store_path=tmp_path / "host.sqlite3",
-            lane_config={"llm_api": 1},
-            pending_turn_resume_max_attempts=3,
-        ),
-    )
-    monkeypatch.setattr("dayu.cli.dependency_setup.Host", lambda **_kwargs: fake_host)
-    monkeypatch.setattr(
-        "dayu.cli.dependency_setup.recover_host_startup_state",
-        lambda host_admin_service, *, runtime_label, log_module: recover_calls.append(
-            (host_admin_service.host.host_marker, runtime_label, log_module)
+        "dayu.cli.dependency_setup.prepare_host_runtime_dependencies",
+        lambda **kwargs: (
+            captured_call.update(kwargs)
+            or PreparedHostRuntimeDependencies(
+                workspace=fake_workspace,
+                default_execution_options=fake_default_execution_options,
+                scene_execution_acceptance_preparer=fake_scene_preparer,
+                host=fake_host,
+                fins_runtime=fake_fins_runtime,
+            )
         ),
     )
 
@@ -2509,7 +2489,13 @@ def test_prepare_cli_host_dependencies_runs_unified_startup_recovery(
         fake_host,
         fake_fins_runtime,
     )
-    assert recover_calls == [("cli-host", "CLI Host runtime", "APP.MAIN")]
+    assert captured_call == {
+        "workspace_root": workspace_config.workspace_dir,
+        "config_root": workspace_config.config_root,
+        "execution_options": None,
+        "runtime_label": "CLI Host runtime",
+        "log_module": "APP.MAIN",
+    }
 
 
 @pytest.mark.unit

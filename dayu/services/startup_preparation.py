@@ -7,13 +7,48 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from dayu.contracts.infrastructure import ModelCatalogProtocol, PromptAssetStoreProtocol
-from dayu.execution.options import ResolvedExecutionOptions
+from dayu.execution.options import ExecutionOptions, ResolvedExecutionOptions
+from dayu.fins.service_runtime import DefaultFinsRuntime
+from dayu.host import Host, resolve_host_config
 from dayu.services.conversation_policy_reader import ConversationPolicyReader
+from dayu.services.host_admin_service import HostAdminService
 from dayu.services.scene_definition_reader import SceneDefinitionReader
 from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
+from dayu.services.startup_recovery import recover_host_startup_state
+from dayu.startup.dependencies import (
+    prepare_config_file_resolver,
+    prepare_config_loader,
+    prepare_default_execution_options,
+    prepare_fins_runtime,
+    prepare_model_catalog,
+    prepare_prompt_asset_store,
+    prepare_startup_paths,
+    prepare_workspace_resources,
+)
+from dayu.startup.workspace import WorkspaceResources
+
+
+@dataclass(frozen=True)
+class PreparedHostRuntimeDependencies:
+    """共享 Host 运行时依赖集合。
+
+    Args:
+        workspace: 工作区稳定资源。
+        default_execution_options: 启动期解析后的默认执行选项。
+        scene_execution_acceptance_preparer: scene 执行接受准备器。
+        host: Host 实例。
+        fins_runtime: 财报领域运行时。
+    """
+
+    workspace: WorkspaceResources
+    default_execution_options: ResolvedExecutionOptions
+    scene_execution_acceptance_preparer: SceneExecutionAcceptancePreparer
+    host: Host
+    fins_runtime: DefaultFinsRuntime
 
 
 def prepare_scene_execution_acceptance_preparer(
@@ -49,6 +84,86 @@ def prepare_scene_execution_acceptance_preparer(
     )
 
 
+def prepare_host_runtime_dependencies(
+    *,
+    workspace_root: Path,
+    config_root: Path | None,
+    execution_options: ExecutionOptions | None,
+    runtime_label: str,
+    log_module: str,
+) -> PreparedHostRuntimeDependencies:
+    """准备 CLI / WeChat 共用的 Host 运行时稳定依赖。
+
+    Args:
+        workspace_root: 工作区根目录。
+        config_root: 可选配置根目录。
+        execution_options: 请求级执行选项。
+        runtime_label: startup recovery 的运行时标签。
+        log_module: recovery 日志模块名。
+
+    Returns:
+        已完成 Host、scene preparation 与 fins runtime 装配的共享依赖集合。
+
+    Raises:
+        无。
+    """
+
+    paths = prepare_startup_paths(
+        workspace_root=workspace_root,
+        config_root=config_root,
+    )
+    resolver = prepare_config_file_resolver(config_root=paths.config_root)
+    config_loader = prepare_config_loader(resolver=resolver)
+    prompt_asset_store = prepare_prompt_asset_store(resolver=resolver)
+    workspace = prepare_workspace_resources(
+        paths=paths,
+        config_loader=config_loader,
+        prompt_asset_store=prompt_asset_store,
+    )
+    model_catalog = prepare_model_catalog(config_loader=config_loader)
+    default_execution_options = prepare_default_execution_options(
+        workspace_root=paths.workspace_root,
+        config_loader=config_loader,
+        execution_options=execution_options,
+    )
+    scene_execution_acceptance_preparer = prepare_scene_execution_acceptance_preparer(
+        workspace_root=paths.workspace_root,
+        default_execution_options=default_execution_options,
+        model_catalog=model_catalog,
+        prompt_asset_store=prompt_asset_store,
+    )
+    fins_runtime = prepare_fins_runtime(workspace_root=paths.workspace_root)
+    run_config = config_loader.load_run_config()
+    host_config = resolve_host_config(
+        workspace_root=paths.workspace_root,
+        run_config=run_config,
+        explicit_lane_config=None,
+    )
+    host = Host(
+        workspace=workspace,
+        model_catalog=model_catalog,
+        default_execution_options=default_execution_options,
+        host_store_path=host_config.store_path,
+        lane_config=host_config.lane_config,
+        pending_turn_resume_max_attempts=host_config.pending_turn_resume_max_attempts,
+        event_bus=None,
+    )
+    recover_host_startup_state(
+        HostAdminService(host=host),
+        runtime_label=runtime_label,
+        log_module=log_module,
+    )
+    return PreparedHostRuntimeDependencies(
+        workspace=workspace,
+        default_execution_options=default_execution_options,
+        scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
+        host=host,
+        fins_runtime=fins_runtime,
+    )
+
+
 __all__ = [
+    "PreparedHostRuntimeDependencies",
+    "prepare_host_runtime_dependencies",
     "prepare_scene_execution_acceptance_preparer",
 ]

@@ -34,10 +34,9 @@ from dayu.execution.runtime_config import AgentRuntimeConfig, RunnerRuntimeConfi
 from dayu.fins.domain.enums import SourceKind
 from dayu.fins.service_runtime import DefaultFinsRuntime
 from dayu.fins.storage import FsSourceDocumentRepository
-from dayu.host import Host, resolve_host_config
+from dayu.host import Host
 from dayu.log import Log, LogLevel
-from dayu.services import prepare_scene_execution_acceptance_preparer, recover_host_startup_state, WriteRunConfig
-from dayu.services.host_admin_service import HostAdminService
+from dayu.services import prepare_host_runtime_dependencies, WriteRunConfig
 from dayu.services.chat_service import ChatService
 from dayu.services.fins_service import FinsService
 from dayu.services.prompt_service import PromptService
@@ -49,11 +48,7 @@ from dayu.startup.dependencies import (
     prepare_config_file_resolver,
     prepare_config_loader,
     prepare_default_execution_options,
-    prepare_fins_runtime,
-    prepare_model_catalog,
-    prepare_prompt_asset_store,
     prepare_startup_paths,
-    prepare_workspace_resources,
 )
 from dayu.startup.workspace import WorkspaceResources
 from dayu.workspace_paths import build_host_store_default_path, build_interactive_state_dir
@@ -500,57 +495,19 @@ def _prepare_cli_host_dependencies(
         无。
     """
 
-    paths = prepare_startup_paths(
+    prepared = prepare_host_runtime_dependencies(
         workspace_root=workspace_config.workspace_dir,
         config_root=workspace_config.config_root,
-    )
-    resolver = prepare_config_file_resolver(config_root=paths.config_root)
-    config_loader = prepare_config_loader(resolver=resolver)
-    prompt_asset_store = prepare_prompt_asset_store(resolver=resolver)
-    workspace = prepare_workspace_resources(
-        paths=paths,
-        config_loader=config_loader,
-        prompt_asset_store=prompt_asset_store,
-    )
-    model_catalog = prepare_model_catalog(config_loader=config_loader)
-    default_execution_options = prepare_default_execution_options(
-        workspace_root=paths.workspace_root,
-        config_loader=config_loader,
         execution_options=execution_options,
-    )
-    scene_execution_acceptance_preparer = prepare_scene_execution_acceptance_preparer(
-        workspace_root=paths.workspace_root,
-        default_execution_options=default_execution_options,
-        model_catalog=model_catalog,
-        prompt_asset_store=prompt_asset_store,
-    )
-    fins_runtime = prepare_fins_runtime(workspace_root=paths.workspace_root)
-    run_config = config_loader.load_run_config()
-    host_config = resolve_host_config(
-        workspace_root=paths.workspace_root,
-        run_config=run_config,
-        explicit_lane_config=None,
-    )
-    host = Host(
-        workspace=workspace,
-        model_catalog=model_catalog,
-        default_execution_options=default_execution_options,
-        host_store_path=host_config.store_path,
-        lane_config=host_config.lane_config,
-        pending_turn_resume_max_attempts=host_config.pending_turn_resume_max_attempts,
-        event_bus=None,
-    )
-    recover_host_startup_state(
-        HostAdminService(host=host),
         runtime_label="CLI Host runtime",
         log_module=MODULE,
     )
     return (
-        workspace,
-        default_execution_options,
-        scene_execution_acceptance_preparer,
-        host,
-        fins_runtime,
+        prepared.workspace,
+        prepared.default_execution_options,
+        prepared.scene_execution_acceptance_preparer,
+        prepared.host,
+        prepared.fins_runtime,
     )
 
 

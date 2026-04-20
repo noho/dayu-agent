@@ -14,7 +14,12 @@ from typing import cast
 import pytest
 
 from dayu.contracts.toolset_config import ToolsetConfigSnapshot
-from dayu.execution.options import ExecutionOptions
+from dayu.execution.options import ExecutionOptions, ResolvedExecutionOptions
+from dayu.fins.service_runtime import DefaultFinsRuntime
+from dayu.host import Host
+from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
+from dayu.services.startup_preparation import PreparedHostRuntimeDependencies
+from dayu.startup.workspace import WorkspaceResources
 from dayu.wechat.service_manager import InstalledServiceDefinition, ServiceSpec, ServiceStatus
 from dayu.wechat.state_store import WeChatDaemonState
 
@@ -1037,7 +1042,7 @@ def test_prepare_wechat_host_dependencies_runs_unified_startup_recovery(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """WeChat Host runtime 装配后应立即执行统一 startup recovery。"""
+    """WeChat Host 依赖装配应委托 Service 共享启动 API。"""
 
     context = wechat_arg_module.ResolvedWechatContext(
         workspace_root=tmp_path,
@@ -1045,55 +1050,25 @@ def test_prepare_wechat_host_dependencies_runs_unified_startup_recovery(
         state_dir=tmp_path / ".dayu" / "wechat-default",
         execution_options=ExecutionOptions(),
     )
-    fake_paths = SimpleNamespace(
-        workspace_root=tmp_path,
-        config_root=tmp_path / "config",
-        output_dir=tmp_path / "output",
-    )
-    fake_workspace = object()
-    fake_model_catalog = object()
-    fake_default_execution_options = object()
-    fake_scene_preparer = object()
-    fake_fins_runtime = object()
-    fake_host = SimpleNamespace(host_marker="wechat-host")
-    recover_calls: list[tuple[str, str, str]] = []
+    fake_workspace = cast(WorkspaceResources, object())
+    fake_default_execution_options = cast(ResolvedExecutionOptions, object())
+    fake_scene_preparer = cast(SceneExecutionAcceptancePreparer, object())
+    fake_fins_runtime = cast(DefaultFinsRuntime, object())
+    fake_host = cast(Host, object())
+    captured_call: dict[str, object] = {}
 
-    monkeypatch.setattr(wechat_runtime_module, "prepare_startup_paths", lambda **_kwargs: fake_paths)
-    monkeypatch.setattr(wechat_runtime_module, "prepare_config_file_resolver", lambda **_kwargs: object())
     monkeypatch.setattr(
         wechat_runtime_module,
-        "prepare_config_loader",
-        lambda **_kwargs: SimpleNamespace(load_run_config=lambda: SimpleNamespace()),
-    )
-    monkeypatch.setattr(wechat_runtime_module, "prepare_prompt_asset_store", lambda **_kwargs: object())
-    monkeypatch.setattr(wechat_runtime_module, "prepare_workspace_resources", lambda **_kwargs: fake_workspace)
-    monkeypatch.setattr(wechat_runtime_module, "prepare_model_catalog", lambda **_kwargs: fake_model_catalog)
-    monkeypatch.setattr(
-        wechat_runtime_module,
-        "prepare_default_execution_options",
-        lambda **_kwargs: fake_default_execution_options,
-    )
-    monkeypatch.setattr(
-        wechat_runtime_module,
-        "prepare_scene_execution_acceptance_preparer",
-        lambda **_kwargs: fake_scene_preparer,
-    )
-    monkeypatch.setattr(wechat_runtime_module, "prepare_fins_runtime", lambda **_kwargs: fake_fins_runtime)
-    monkeypatch.setattr(
-        wechat_runtime_module,
-        "resolve_host_config",
-        lambda **_kwargs: SimpleNamespace(
-            store_path=tmp_path / "host.sqlite3",
-            lane_config={"llm_api": 1},
-            pending_turn_resume_max_attempts=3,
-        ),
-    )
-    monkeypatch.setattr(wechat_runtime_module, "Host", lambda **_kwargs: fake_host)
-    monkeypatch.setattr(
-        wechat_runtime_module,
-        "recover_host_startup_state",
-        lambda host_admin_service, *, runtime_label, log_module: recover_calls.append(
-            (host_admin_service.host.host_marker, runtime_label, log_module)
+        "prepare_host_runtime_dependencies",
+        lambda **kwargs: (
+            captured_call.update(kwargs)
+            or PreparedHostRuntimeDependencies(
+                workspace=fake_workspace,
+                default_execution_options=fake_default_execution_options,
+                scene_execution_acceptance_preparer=fake_scene_preparer,
+                host=fake_host,
+                fins_runtime=fake_fins_runtime,
+            )
         ),
     )
 
@@ -1106,7 +1081,13 @@ def test_prepare_wechat_host_dependencies_runs_unified_startup_recovery(
         fake_host,
         fake_fins_runtime,
     )
-    assert recover_calls == [("wechat-host", "WeChat Host runtime", "APP.WECHAT.MAIN")]
+    assert captured_call == {
+        "workspace_root": context.workspace_root,
+        "config_root": context.config_root,
+        "execution_options": context.execution_options,
+        "runtime_label": "WeChat Host runtime",
+        "log_module": "APP.WECHAT.MAIN",
+    }
 
 
 @pytest.mark.unit

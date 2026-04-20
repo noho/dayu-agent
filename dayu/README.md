@@ -140,8 +140,8 @@ flowchart LR
   - 在启动期通过 `startup preparation` 拿稳定依赖
   - `dayu.cli` 当前固定拆成三层：`arg_parsing.py` 只负责参数定义，`main.py` 只负责顶层命令分发，`commands/` 负责各子命令执行；CLI 共享运行时装配真源继续集中在 `dependency_setup.py`
   - `dayu.wechat` 当前也固定拆成四层：`arg_parsing.py` 只负责参数定义与上下文解析，`runtime.py` 只负责 WeChat 运行时装配与 service helper，`commands/` 负责 `login / run / service` 子命令执行，`main.py` 只负责顶层分发
-  - 显式 `new Host(...)`
-  - 只向 `Host(...)` 传稳定输入，不显式构造 `SQLiteSessionRegistry`、`SQLiteRunRegistry`、`SQLiteConcurrencyGovernor`、`DefaultScenePreparer`、`DefaultHostExecutor`
+  - 调用 `dayu.services.startup_preparation` / `dayu.host.startup_preparation` 暴露的启动期 public API，收敛 `Host` 级稳定依赖
+  - 不复制 `Host` 装配链，也不显式构造 `SQLiteSessionRegistry`、`SQLiteRunRegistry`、`SQLiteConcurrencyGovernor`、`DefaultScenePreparer`、`DefaultHostExecutor`
   - 显式 `new Service(...)`
   - 宿主管理类 UI 命令也只消费窄 `Service`（如 `HostAdminService`），不在请求期直接调用 `Host` 方法
   - interactive / web / wechat 这类 UI 适配层只消费各自稳定 `ServiceProtocol` 已声明的方法，不保留 `hasattr` 兼容分支去探测旧接口；对多轮 Chat 入口，CLI interactive、Web 和 WeChat 统一只走 `submit_turn()` / `list_resumable_pending_turns()` / `resume_pending_turn()` 这组公开契约
@@ -178,9 +178,8 @@ sequenceDiagram
     participant SP as scene preparation
     participant Agent as AsyncAgent
 
-    UI->>Startup: prepare_* startup functions
-    Startup-->>UI: workspace/model/prompt/default execution options 稳定依赖
-    UI->>Host: new Host(...)
+    UI->>Startup: prepare_* startup functions + prepare_host_runtime_dependencies(...)
+    Startup-->>UI: workspace/model/prompt/default execution options/Host 稳定依赖
     UI->>Service: new PromptService(...)
     UI->>Service: submit(PromptRequest(user_text, ticker, session_id?, session_resolution_policy, execution_options))
     Service->>Host: resolve session(create_session() / touch_session())
@@ -291,7 +290,7 @@ sequenceDiagram
 
 ### 3.5 startup preparation
 
-`startup preparation` 位于 `startup/`，只服务于启动期，不进入请求期调用链。
+`startup preparation` 是启动期 public surface 的统称，当前分布在 `startup/`、`dayu.services.startup_preparation` 和 `dayu.host.startup_preparation`；它只服务于启动期，不进入请求期调用链。
 
 它负责：
 
@@ -300,7 +299,7 @@ sequenceDiagram
 - 准备 `ConfigLoader`、`PromptAssetStore`、`WorkspaceResources`、`ModelCatalog`
 - 准备默认 `ResolvedExecutionOptions`
 - 准备金融领域专用 `FinsRuntime`
-- 调用 `Service` 暴露的 startup preparation API，收敛 `SceneExecutionAcceptancePreparer`
+- 调用 `Service` 暴露的 startup preparation API，收敛 `SceneExecutionAcceptancePreparer` 与共享 Host runtime 依赖
 - 调用 `Host` 暴露的 startup preparation API，收敛 `HostStore path`、`lane config`
 - 支持 UI 先准备稳定依赖，再按命令分支惰性创建所需 `Service`
 
@@ -748,7 +747,7 @@ Host 是 Dayu 的通用托管执行层。它的价值不在于“帮 Service 调
 - 多轮会话托管能力：统一 transcript、memory、compaction 调度。
 - reply outbox 能力：把出站交付真源作为可选宿主能力托管。
 
-默认实现上，这些能力由 `Host` 内部拥有的一组子组件共同完成，例如 session registry、run registry、并发治理器、pending turn store、reply outbox store、event bus 和默认执行器；`UI` 只负责 `new Host(...)`，不负责拆开装配这些默认内部实现。
+默认实现上，这些能力由 `Host` 内部拥有的一组子组件共同完成，例如 session registry、run registry、并发治理器、pending turn store、reply outbox store、event bus 和默认执行器；`UI` 只消费启动期 public API 返回的 `Host`，不负责复制或拆开这些默认内部实现。
 
 ### 6.1 Session 能力
 
@@ -1274,9 +1273,8 @@ sequenceDiagram
     participant SP as scene preparation
     participant Agent as AsyncAgent
 
-    UI->>Startup: prepare_* startup functions
-    Startup-->>UI: workspace/model/runtime/default execution options 稳定依赖
-    UI->>Host: new Host(...)
+    UI->>Startup: prepare_* startup functions + prepare_host_runtime_dependencies(...)
+    Startup-->>UI: workspace/model/runtime/default execution options/Host 稳定依赖
     UI->>Service: new ChatService(host, scene_execution_acceptance_preparer, ...)
     UI->>Service: list_resumable_pending_turns(session_id, "interactive")
     Service->>Host: list_pending_turns(resumable_only=True)
