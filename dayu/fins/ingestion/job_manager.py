@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Literal, Optional
 
 from dayu.log import Log
+from dayu.fins._converters import int_or_zero, normalize_optional_text
 from dayu.fins.domain.document_models import now_iso8601
 
 from ..pipelines.download_events import DownloadEventType
@@ -117,8 +118,8 @@ class IngestionJobManager:
             "ticker": str(ticker).strip().upper(),
             "form_types": normalized_form_types or None,
             "form_type": " ".join(normalized_form_types) if normalized_form_types else None,
-            "filed_date_from": _normalize_optional_text(filed_date_from),
-            "filed_date_to": _normalize_optional_text(filed_date_to),
+            "filed_date_from": normalize_optional_text(filed_date_from),
+            "filed_date_to": normalize_optional_text(filed_date_to),
             "overwrite": bool(overwrite),
             "rebuild": False,
         }
@@ -388,7 +389,7 @@ class IngestionJobManager:
                         final_result=None,
                     )
                     return
-                job.progress_total = _safe_int(
+                job.progress_total = int_or_zero(
                     result.get("summary", {}).get("total") if isinstance(result.get("summary"), dict) else None
                 )
                 status, failure = _resolve_terminal_status(
@@ -578,15 +579,6 @@ def _make_request_fingerprint(*, job_type: JobType, request_payload: dict[str, A
     )
 
 
-def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
-    """标准化可选文本。"""
-
-    if value is None:
-        return None
-    normalized = str(value).strip()
-    return normalized or None
-
-
 def _coerce_optional_document_ids(value: object) -> Optional[list[str]]:
     """把请求载荷中的 document_ids 规范化为字符串列表。
 
@@ -759,7 +751,7 @@ def _build_download_result_summary(result: dict[str, Any]) -> dict[str, Any]:
     filings = result.get("filings", [])
     filing_list = filings if isinstance(filings, list) else []
     return {
-        "filings_total": _safe_int(summary.get("total")),
+        "filings_total": int_or_zero(summary.get("total")),
         "filings_completed": sum(1 for item in filing_list if str(item.get("status", "")).strip() in {"downloaded", "skipped"}),
         "filings_failed": sum(1 for item in filing_list if str(item.get("status", "")).strip() == "failed"),
         "files_downloaded": sum(int(item.get("downloaded_files", 0) or 0) for item in filing_list if isinstance(item, dict)),
@@ -772,14 +764,14 @@ def _build_process_result_summary(result: dict[str, Any]) -> dict[str, Any]:
     filing_summary = result.get("filing_summary", {}) if isinstance(result.get("filing_summary"), dict) else {}
     material_summary = result.get("material_summary", {}) if isinstance(result.get("material_summary"), dict) else {}
     return {
-        "filings_total": _safe_int(filing_summary.get("total")),
-        "filings_processed": _safe_int(filing_summary.get("processed")),
-        "filings_skipped": _safe_int(filing_summary.get("skipped")),
-        "filings_failed": _safe_int(filing_summary.get("failed")),
-        "materials_total": _safe_int(material_summary.get("total")),
-        "materials_processed": _safe_int(material_summary.get("processed")),
-        "materials_skipped": _safe_int(material_summary.get("skipped")),
-        "materials_failed": _safe_int(material_summary.get("failed")),
+        "filings_total": int_or_zero(filing_summary.get("total")),
+        "filings_processed": int_or_zero(filing_summary.get("processed")),
+        "filings_skipped": int_or_zero(filing_summary.get("skipped")),
+        "filings_failed": int_or_zero(filing_summary.get("failed")),
+        "materials_total": int_or_zero(material_summary.get("total")),
+        "materials_processed": int_or_zero(material_summary.get("processed")),
+        "materials_skipped": int_or_zero(material_summary.get("skipped")),
+        "materials_failed": int_or_zero(material_summary.get("failed")),
     }
 
 
@@ -788,18 +780,9 @@ def _resolve_process_total(result: dict[str, Any]) -> Optional[int]:
 
     filing_summary = result.get("filing_summary", {}) if isinstance(result.get("filing_summary"), dict) else {}
     material_summary = result.get("material_summary", {}) if isinstance(result.get("material_summary"), dict) else {}
-    filing_total = _safe_int(filing_summary.get("total"))
-    material_total = _safe_int(material_summary.get("total"))
+    filing_total = int_or_zero(filing_summary.get("total"))
+    material_total = int_or_zero(material_summary.get("total"))
     return filing_total + material_total
-
-
-def _safe_int(value: Any) -> int:
-    """安全转换整数。"""
-
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
 
 
 def _parse_iso8601(value: str) -> Optional[datetime]:

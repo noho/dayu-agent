@@ -5,9 +5,10 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Optional, Protocol, SupportsInt, cast, runtime_checkable
+from typing import Any, AsyncIterator, Callable, Optional, Protocol, runtime_checkable
 from threading import Lock
 
+from dayu.fins._converters import int_or_zero, optional_int
 from dayu.contracts.fins import (
     DownloadCommandPayload,
     DownloadCompanyInfo,
@@ -355,38 +356,6 @@ def _optional_text(value: object) -> str | None:
     return normalized or None
 
 
-def _optional_int(value: object) -> int | None:
-    """提取可选整数。"""
-
-    if value in (None, ""):
-        return None
-    try:
-        if isinstance(value, (int, float, str, bytes, bytearray)):
-            return int(value)
-        if hasattr(value, "__int__"):
-            return int(cast(SupportsInt, value))
-        return None
-    except (TypeError, ValueError):
-        return None
-
-
-def _int_or_zero(value: object) -> int:
-    """把任意可选标量收敛为整数。
-
-    Args:
-        value: 原始标量值。
-
-    Returns:
-        成功解析时返回对应整数；否则返回 ``0``。
-
-    Raises:
-        无。
-    """
-
-    normalized = _optional_int(value)
-    return normalized if normalized is not None else 0
-
-
 def _require_download_payload(payload: FinsCommandPayload) -> DownloadCommandPayload:
     """收窄 download 命令载荷类型。
 
@@ -598,8 +567,8 @@ def _build_download_filing_result_item(payload: dict[str, Any]) -> DownloadFilin
         form_type=_optional_text(payload.get("form_type")),
         filing_date=_optional_text(payload.get("filing_date")),
         report_date=_optional_text(payload.get("report_date")),
-        downloaded_files=_int_or_zero(payload.get("downloaded_files")),
-        skipped_files=_int_or_zero(payload.get("skipped_files")),
+        downloaded_files=int_or_zero(payload.get("downloaded_files")),
+        skipped_files=int_or_zero(payload.get("skipped_files")),
         failed_files=_build_download_failed_files(payload.get("failed_files")),
         has_xbrl=payload.get("has_xbrl") if isinstance(payload.get("has_xbrl"), bool) else None,
         reason_code=(
@@ -657,11 +626,11 @@ def _build_download_result_data(result: dict[str, Any]) -> DownloadResultData:
     summary = DownloadSummary(0, 0, 0, 0, 0)
     if isinstance(summary_raw, dict):
         summary = DownloadSummary(
-            total=_int_or_zero(summary_raw.get("total")),
-            downloaded=_int_or_zero(summary_raw.get("downloaded")),
-            skipped=_int_or_zero(summary_raw.get("skipped")),
-            failed=_int_or_zero(summary_raw.get("failed")),
-            elapsed_ms=_int_or_zero(summary_raw.get("elapsed_ms")),
+            total=int_or_zero(summary_raw.get("total")),
+            downloaded=int_or_zero(summary_raw.get("downloaded")),
+            skipped=int_or_zero(summary_raw.get("skipped")),
+            failed=int_or_zero(summary_raw.get("failed")),
+            elapsed_ms=int_or_zero(summary_raw.get("elapsed_ms")),
         )
     return DownloadResultData(
         pipeline=str(result.get("pipeline", "")).strip(),
@@ -685,14 +654,14 @@ def _build_upload_filing_result_data(result: dict[str, Any]) -> UploadFilingResu
         filing_action=str(result.get("filing_action", "")).strip(),
         files=_build_upload_file_items(result.get("files")),
         form_type=_optional_text(result.get("form_type")),
-        fiscal_year=_optional_int(result.get("fiscal_year")),
+        fiscal_year=optional_int(result.get("fiscal_year")),
         fiscal_period=_optional_text(result.get("fiscal_period")),
         amended=result.get("amended") if isinstance(result.get("amended"), bool) else None,
         company_id=_optional_text(result.get("company_id")),
         company_name=_optional_text(result.get("company_name")),
         document_id=_optional_text(result.get("document_id")),
         primary_document=_optional_text(result.get("primary_document")),
-        uploaded_files=_optional_int(result.get("uploaded_files")),
+        uploaded_files=optional_int(result.get("uploaded_files")),
         document_version=_optional_text(result.get("document_version")),
         source_fingerprint=_optional_text(result.get("source_fingerprint")),
         filing_date=_optional_text(result.get("filing_date")),
@@ -719,7 +688,7 @@ def _build_upload_material_result_data(result: dict[str, Any]) -> UploadMaterial
         document_id=_optional_text(result.get("document_id")),
         internal_document_id=_optional_text(result.get("internal_document_id")),
         primary_document=_optional_text(result.get("primary_document")),
-        uploaded_files=_optional_int(result.get("uploaded_files")),
+        uploaded_files=optional_int(result.get("uploaded_files")),
         document_version=_optional_text(result.get("document_version")),
         source_fingerprint=_optional_text(result.get("source_fingerprint")),
         filing_date=_optional_text(result.get("filing_date")),
@@ -739,7 +708,7 @@ def _build_upload_filings_from_result_data(result: dict[str, Any]) -> UploadFili
     recognized = tuple(
         UploadFilingsFromRecognizedItem(
             file=str(item.get("file", "")).strip(),
-            fiscal_year=_optional_int(item.get("fiscal_year")),
+            fiscal_year=optional_int(item.get("fiscal_year")),
             fiscal_period=_optional_text(item.get("fiscal_period")),
         )
         for item in recognized_raw
@@ -766,10 +735,10 @@ def _build_upload_filings_from_result_data(result: dict[str, Any]) -> UploadFili
         script_platform=str(result.get("script_platform", "")).strip(),
         ticker=str(result.get("ticker", "")).strip(),
         source_dir=str(result.get("source_dir", "")).strip(),
-        total_files=_int_or_zero(result.get("total_files")),
-        recognized_count=_int_or_zero(result.get("recognized_count")),
-        material_count=_int_or_zero(result.get("material_count")),
-        skipped_count=_int_or_zero(result.get("skipped_count")),
+        total_files=int_or_zero(result.get("total_files")),
+        recognized_count=int_or_zero(result.get("recognized_count")),
+        material_count=int_or_zero(result.get("material_count")),
+        skipped_count=int_or_zero(result.get("skipped_count")),
         recognized=recognized,
         material=material,
         skipped=skipped,
@@ -782,10 +751,10 @@ def _build_process_summary(payload: object) -> ProcessSummary:
     if not isinstance(payload, dict):
         return ProcessSummary(0, 0, 0, 0, False)
     return ProcessSummary(
-        total=_int_or_zero(payload.get("total")),
-        processed=_int_or_zero(payload.get("processed")),
-        skipped=_int_or_zero(payload.get("skipped")),
-        failed=_int_or_zero(payload.get("failed")),
+        total=int_or_zero(payload.get("total")),
+        processed=int_or_zero(payload.get("processed")),
+        skipped=int_or_zero(payload.get("skipped")),
+        failed=int_or_zero(payload.get("failed")),
         todo=bool(payload.get("todo", False)),
     )
 
@@ -798,11 +767,11 @@ def _build_process_document_result_item(payload: dict[str, Any]) -> ProcessDocum
         status=str(payload.get("status", "")).strip(),
         reason=_optional_text(payload.get("reason")),
         form_type=_optional_text(payload.get("form_type")),
-        fiscal_year=_optional_int(payload.get("fiscal_year")),
+        fiscal_year=optional_int(payload.get("fiscal_year")),
         quality=_optional_text(payload.get("quality")),
         has_xbrl=payload.get("has_xbrl") if isinstance(payload.get("has_xbrl"), bool) else None,
-        section_count=_optional_int(payload.get("section_count")),
-        table_count=_optional_int(payload.get("table_count")),
+        section_count=optional_int(payload.get("section_count")),
+        table_count=optional_int(payload.get("table_count")),
         skip_reason=_optional_text(payload.get("skip_reason")),
         source_kind=_optional_text(payload.get("source_kind")),
     )
@@ -849,11 +818,11 @@ def _build_process_single_result_data(result: dict[str, Any]) -> ProcessSingleRe
         ci=bool(result.get("ci", False)),
         reason=_optional_text(result.get("reason")),
         form_type=_optional_text(result.get("form_type")),
-        fiscal_year=_optional_int(result.get("fiscal_year")),
+        fiscal_year=optional_int(result.get("fiscal_year")),
         quality=_optional_text(result.get("quality")),
         has_xbrl=result.get("has_xbrl") if isinstance(result.get("has_xbrl"), bool) else None,
-        section_count=_optional_int(result.get("section_count")),
-        table_count=_optional_int(result.get("table_count")),
+        section_count=optional_int(result.get("section_count")),
+        table_count=optional_int(result.get("table_count")),
         skip_reason=_optional_text(result.get("skip_reason")),
         message=_optional_text(result.get("message")),
     )
@@ -900,8 +869,8 @@ def _build_download_progress_payload(event: DownloadEvent) -> DownloadProgressPa
         action=_optional_text(payload.get("action")),
         name=_optional_text(payload.get("name")),
         form_type=_optional_text(payload.get("form_type")),
-        file_count=_optional_int(payload.get("file_count")),
-        size=_optional_int(payload.get("size")),
+        file_count=optional_int(payload.get("file_count")),
+        size=optional_int(payload.get("size")),
         message=_optional_text(payload.get("message")),
         reason=_optional_text(payload.get("reason")) or _optional_text(payload.get("skip_reason")),
         filing_result=(
@@ -922,7 +891,7 @@ def _build_process_progress_payload(event: ProcessEvent) -> ProcessProgressPaylo
         ticker=event.ticker,
         document_id=event.document_id,
         source_kind=_optional_text(payload.get("source_kind")),
-        total_documents=_optional_int(payload.get("total_documents")),
+        total_documents=optional_int(payload.get("total_documents")),
         overwrite=payload.get("overwrite") if isinstance(payload.get("overwrite"), bool) else None,
         ci=payload.get("ci") if isinstance(payload.get("ci"), bool) else None,
         reason=_optional_text(payload.get("reason")),
@@ -944,8 +913,8 @@ def _build_upload_filing_progress_payload(event: UploadFilingEvent) -> UploadFil
         document_id=event.document_id,
         action=_optional_text(payload.get("action")),
         name=_optional_text(payload.get("name")),
-        file_count=_optional_int(payload.get("file_count")),
-        size=_optional_int(payload.get("size")),
+        file_count=optional_int(payload.get("file_count")),
+        size=optional_int(payload.get("size")),
         message=_optional_text(payload.get("message")),
         error=_optional_text(payload.get("error")),
     )
@@ -961,8 +930,8 @@ def _build_upload_material_progress_payload(event: UploadMaterialEvent) -> Uploa
         document_id=event.document_id,
         action=_optional_text(payload.get("action")),
         name=_optional_text(payload.get("name")),
-        file_count=_optional_int(payload.get("file_count")),
-        size=_optional_int(payload.get("size")),
+        file_count=optional_int(payload.get("file_count")),
+        size=optional_int(payload.get("size")),
         message=_optional_text(payload.get("message")),
         error=_optional_text(payload.get("error")),
     )

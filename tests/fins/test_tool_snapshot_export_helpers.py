@@ -214,8 +214,9 @@ def test_validate_handle_and_text_normalizers() -> None:
     assert module._extract_page_range({"page_range": [1, "2"]}) is None
     assert module._extract_page_range({"page_range": [1, 2]}) == [1, 2]
 
-    assert module._normalize_optional_text("  ") is None
-    assert module._normalize_optional_text(" x ") == "x"
+    from dayu.fins._converters import normalize_optional_text
+    assert normalize_optional_text("  ") is None
+    assert normalize_optional_text(" x ") == "x"
     with pytest.raises(ValueError, match="不能为空"):
         module._normalize_required_text("  ")
 

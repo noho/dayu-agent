@@ -43,6 +43,7 @@ if sys.platform != "win32":
     import fcntl
 
 from dayu.log import Log
+from dayu.fins._converters import normalize_optional_text, optional_int
 from dayu.fins.domain.document_models import FileObjectMeta
 
 SEC_TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -504,28 +505,6 @@ def hash_file_sha256(file_path: Path) -> str:
             sha256.update(chunk)
     return sha256.hexdigest()
 
-
-def _safe_int(raw_value: Optional[str]) -> Optional[int]:
-    """安全转整数。
-
-    Args:
-        raw_value: 原始字符串。
-
-    Returns:
-        转换后的整数或 `None`。
-
-    Raises:
-        无。
-    """
-
-    if raw_value is None:
-        return None
-    stripped = str(raw_value).strip()
-    if not stripped:
-        return None
-    if not stripped.isdigit():
-        return None
-    return int(stripped)
 
 
 def _load_sec_throttle_state(state_path: Path) -> _SecThrottleState:
@@ -1043,10 +1022,10 @@ class SecDownloader:
                     source_url=source_url,
                     http_etag=_safe_header(head_response, "ETag"),
                     http_last_modified=_safe_header(head_response, "Last-Modified"),
-                    remote_size=_safe_int(_safe_header(head_response, "Content-Length")),
+                    remote_size=optional_int(_safe_header(head_response, "Content-Length")),
                     http_status=head_response.status_code if head_response else None,
                     sec_document_type=_normalize_sec_document_type(metadata.get("type")),
-                    sec_description=_normalize_optional_text(metadata.get("description")),
+                    sec_description=normalize_optional_text(metadata.get("description")),
                 )
             )
         return descriptors
@@ -1967,23 +1946,6 @@ def _extract_sc13_section_text(
     return None
 
 
-def _normalize_optional_text(value: Any) -> Optional[str]:
-    """规范化可选文本字段。
-
-    Args:
-        value: 原始值。
-
-    Returns:
-        去空白后的字符串；空值返回 `None`。
-
-    Raises:
-        无。
-    """
-
-    normalized = str(value or "").strip()
-    return normalized or None
-
-
 def _normalize_sec_document_type(value: Any) -> Optional[str]:
     """规范化 SEC 文档类型。
 
@@ -1999,7 +1961,7 @@ def _normalize_sec_document_type(value: Any) -> Optional[str]:
         无。
     """
 
-    normalized = _normalize_optional_text(value)
+    normalized = normalize_optional_text(value)
     if normalized is None:
         return None
     upper = normalized.upper()
@@ -2033,14 +1995,14 @@ def _build_file_metadata_map(
     for item in [*index_items, *index_header_documents]:
         if not isinstance(item, dict):
             continue
-        name = _normalize_optional_text(item.get("name"))
+        name = normalize_optional_text(item.get("name"))
         if name is None:
             continue
         target = mapping.setdefault(name, {})
         document_type = _normalize_sec_document_type(item.get("type"))
         if document_type is not None:
             target["type"] = document_type
-        description = _normalize_optional_text(item.get("description"))
+        description = normalize_optional_text(item.get("description"))
         if description is not None:
             target["description"] = description
     return mapping

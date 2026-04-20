@@ -71,9 +71,9 @@ from .result_types import (
     TablesListResult,
     XbrlQueryResult,
 )
+from dayu.fins._converters import normalize_optional_text
 from .service_helpers import (
     _normalize_required_text,
-    _normalize_optional_text,
     _collect_parent_titles,
     _normalize_form_type_for_matching,
     _normalize_document_types,
@@ -153,7 +153,7 @@ def _append_unique_ticker_candidate(candidates: list[str], candidate: Optional[s
         无。
     """
 
-    normalized_candidate = _normalize_optional_text(candidate)
+    normalized_candidate = normalize_optional_text(candidate)
     if not normalized_candidate:
         return
     if normalized_candidate in candidates:
@@ -651,7 +651,7 @@ class FinsToolService:
         )
         # 保存查询词副本，供中文无结果 hint 检测使用
         original_queries = resolved_queries
-        normalized_within_ref = _normalize_optional_text(within_section_ref)
+        normalized_within_ref = normalize_optional_text(within_section_ref)
         resolved_mode = _resolve_search_mode(mode)
 
         processor = self._get_or_create_processor(
@@ -966,7 +966,7 @@ class FinsToolService:
             document_id=document_id,
             tool_name="list_tables",
         )
-        normalized_within_ref = _normalize_optional_text(within_section_ref)
+        normalized_within_ref = normalize_optional_text(within_section_ref)
 
         processor = self._get_or_create_processor(
             ticker=normalized_ticker,
@@ -1281,7 +1281,7 @@ class FinsToolService:
             )
         normalized_concepts = [
             item
-            for item in (_normalize_optional_text(concept) for concept in (concepts or []))
+            for item in (normalize_optional_text(concept) for concept in (concepts or []))
             if item is not None
         ]
 
@@ -1312,10 +1312,10 @@ class FinsToolService:
             dict[str, Any],
             query_method(
                 concepts=resolved_concepts,
-                statement_type=_normalize_optional_text(statement_type),
-                period_end=_normalize_optional_text(period_end),
+                statement_type=normalize_optional_text(statement_type),
+                period_end=normalize_optional_text(period_end),
                 fiscal_year=fiscal_year,
-                fiscal_period=_normalize_optional_text(fiscal_period),
+                fiscal_period=normalize_optional_text(fiscal_period),
                 min_value=min_value,
                 max_value=max_value,
             ),
@@ -1492,7 +1492,7 @@ class FinsToolService:
         }
         for field_name in ("internal_document_id", "accession_number"):
             raw_value = meta.get(field_name)
-            normalized_value = _normalize_optional_text(raw_value)
+            normalized_value = normalize_optional_text(raw_value)
             if not normalized_value:
                 continue
             aliases[re.sub(r"\s+", "", normalized_value).strip()] = field_name
@@ -1600,7 +1600,7 @@ class FinsToolService:
             citation 字典（值为 None 的键已移除）。
         """
         meta = self._get_document_meta_cached(ticker, document_id)
-        source_kind = _normalize_optional_text(meta.get("source_kind")) if meta else None
+        source_kind = normalize_optional_text(meta.get("source_kind")) if meta else None
         # 推断来源类型
         if source_kind == SourceKind.MATERIAL.value:
             source_type = SourceType.SUPPLEMENTARY.value
@@ -1613,17 +1613,17 @@ class FinsToolService:
 
         form_type = _normalize_form_type_for_matching(meta.get("form_type")) if meta else None
         # 美股 filing 的 accession_number 存储在 meta.json 中
-        accession_no = _normalize_optional_text(meta.get("accession_number")) if meta else None
+        accession_no = normalize_optional_text(meta.get("accession_number")) if meta else None
 
         citation = Citation(
             source_type=source_type,
             document_id=document_id,
             ticker=ticker,
             form_type=form_type,
-            filing_date=_normalize_optional_text(meta.get("filing_date")) if meta else None,
+            filing_date=normalize_optional_text(meta.get("filing_date")) if meta else None,
             accession_no=accession_no,
             fiscal_year=meta.get("fiscal_year") if meta else None,
-            fiscal_period=_normalize_optional_text(meta.get("fiscal_period")) if meta else None,
+            fiscal_period=normalize_optional_text(meta.get("fiscal_period")) if meta else None,
             item=item,
             heading=heading,
         )
@@ -1856,7 +1856,7 @@ class FinsToolService:
             source_kind=source_kind,
         )
         source_meta = self._source_repository.get_source_meta(ticker, document_id, source_kind)
-        form_type = _normalize_optional_text(source_meta.get("form_type"))
+        form_type = normalize_optional_text(source_meta.get("form_type"))
         return self._processor_registry.create_with_fallback(
             source=source,
             form_type=form_type,

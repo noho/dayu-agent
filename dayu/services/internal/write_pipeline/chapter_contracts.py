@@ -14,7 +14,6 @@ from __future__ import annotations
 import re
 import textwrap
 from dataclasses import dataclass, field
-from typing import Any
 
 import yaml
 
@@ -55,7 +54,7 @@ class PreferredLens:
     priority: str
     facets_any: list[str] = field(default_factory=list)
 
-    def to_prompt_dict(self) -> dict[str, Any]:
+    def to_prompt_dict(self) -> dict[str, object]:
         """转换为 prompt 可消费字典。
 
         Args:
@@ -115,7 +114,7 @@ class ChapterContract:
 
         return cls()
 
-    def to_prompt_fields(self) -> dict[str, Any]:
+    def to_prompt_fields(self) -> dict[str, object]:
         """转换为 prompt 输入字段。
 
         Args:
@@ -313,7 +312,7 @@ def _extract_named_comment_payload_from_body(
     return "\n".join(payload_lines).strip()
 
 
-def _load_yaml_payload(payload: str, *, block_name: str, chapter_title: str) -> dict[str, Any]:
+def _load_yaml_payload(payload: str, *, block_name: str, chapter_title: str) -> dict[str, object]:
     """解析注释块中的 YAML payload。
 
     Args:
@@ -339,7 +338,7 @@ def _load_yaml_payload(payload: str, *, block_name: str, chapter_title: str) -> 
     return parsed
 
 
-def _parse_chapter_contract_data(raw_data: Any, *, chapter_title: str) -> ChapterContract:
+def _parse_chapter_contract_data(raw_data: dict[str, object], *, chapter_title: str) -> ChapterContract:
     """校验并构造章节合同对象。
 
     Args:
@@ -353,8 +352,6 @@ def _parse_chapter_contract_data(raw_data: Any, *, chapter_title: str) -> Chapte
         ValueError: 当字段缺失、类型错误时抛出。
     """
 
-    if not isinstance(raw_data, dict):
-        raise ValueError(f"章节 {chapter_title!r} 的 CHAPTER_CONTRACT 必须解析为映射")
     _validate_chapter_contract_keys(raw_data, chapter_title=chapter_title)
     narrative_mode = _require_string(
         raw_data,
@@ -379,7 +376,7 @@ def _parse_chapter_contract_data(raw_data: Any, *, chapter_title: str) -> Chapte
     )
 
 
-def _validate_chapter_contract_keys(raw_data: dict[str, Any], *, chapter_title: str) -> None:
+def _validate_chapter_contract_keys(raw_data: dict[str, object], *, chapter_title: str) -> None:
     """校验章节合同字段集合是否为最小稳定 schema。
 
     Args:
@@ -402,7 +399,7 @@ def _validate_chapter_contract_keys(raw_data: dict[str, Any], *, chapter_title: 
         )
 
 
-def _parse_item_rule_data(raw_data: Any, *, chapter_title: str, target_heading: str) -> ItemRule:
+def _parse_item_rule_data(raw_data: dict[str, object], *, chapter_title: str, target_heading: str) -> ItemRule:
     """校验并构造条目级条件写作规则。
 
     Args:
@@ -417,8 +414,6 @@ def _parse_item_rule_data(raw_data: Any, *, chapter_title: str, target_heading: 
         ValueError: 当字段缺失、值非法或存在未知字段时抛出。
     """
 
-    if not isinstance(raw_data, dict):
-        raise ValueError(f"章节 {chapter_title!r} 的 ITEM_RULE 必须解析为映射")
     expected_keys = {"mode", "item", "when", "facets_any"}
     unexpected_keys = sorted(set(raw_data.keys()) - expected_keys)
     if unexpected_keys:
@@ -439,7 +434,7 @@ def _parse_item_rule_data(raw_data: Any, *, chapter_title: str, target_heading: 
     )
 
 
-def _require_string_list(raw_data: dict[str, Any], *, key: str, chapter_title: str) -> list[str]:
+def _require_string_list(raw_data: dict[str, object], *, key: str, chapter_title: str) -> list[str]:
     """读取并校验字符串列表字段。
 
     Args:
@@ -460,7 +455,7 @@ def _require_string_list(raw_data: dict[str, Any], *, key: str, chapter_title: s
     return [item.strip() for item in value]
 
 
-def _require_preferred_lens_list(raw_data: dict[str, Any], *, key: str, chapter_title: str) -> list[PreferredLens]:
+def _require_preferred_lens_list(raw_data: dict[str, object], *, key: str, chapter_title: str) -> list[PreferredLens]:
     """读取并校验 `preferred_lens` 对象列表字段。
 
     Args:
@@ -569,7 +564,7 @@ def _legacy_lens_group_to_facets(group_name: str, *, chapter_title: str) -> list
     return list(mapping[group_name])
 
 
-def _require_optional_string_list(raw_data: dict[str, Any], *, key: str, chapter_title: str) -> list[str]:
+def _require_optional_string_list(raw_data: dict[str, object], *, key: str, chapter_title: str) -> list[str]:
     """读取可选字符串列表字段。
 
     Args:
@@ -593,7 +588,7 @@ def _require_optional_string_list(raw_data: dict[str, Any], *, key: str, chapter
 
 
 def _require_string(
-    raw_data: dict[str, Any],
+    raw_data: dict[str, object],
     *,
     key: str,
     chapter_title: str,

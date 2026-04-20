@@ -50,7 +50,8 @@ from .search_models import (
     _EXPECTED_BUCKETS_BY_INTENT,
 )
 from .section_semantic import resolve_section_semantic
-from .service_helpers import _normalize_optional_text, _normalize_required_text
+from .service_helpers import _normalize_required_text
+from dayu.fins._converters import normalize_optional_text
 
 
 # =====================================================================
@@ -197,7 +198,7 @@ def _resolve_search_queries(
     seen: set[str] = set()
     result: list[str] = []
     for item in queries:
-        normalized = _normalize_optional_text(item)
+        normalized = normalize_optional_text(item)
         if normalized is None:
             continue
         key = normalized.lower()
@@ -717,7 +718,7 @@ def _append_search_expansion(
         RuntimeError: 追加失败时抛出。
     """
 
-    normalized_query = _normalize_optional_text(query)
+    normalized_query = normalize_optional_text(query)
     if normalized_query is None:
         return
     normalized_key = _normalize_search_query_for_key(normalized_query)
@@ -740,7 +741,7 @@ def _normalize_search_query_for_key(query: str) -> str:
         RuntimeError: 标准化失败时抛出。
     """
 
-    normalized = _normalize_optional_text(query) or ""
+    normalized = normalize_optional_text(query) or ""
     lowered = normalized.lower()
     return _SPACE_NORMALIZE_PATTERN.sub(" ", lowered).strip()
 
@@ -758,7 +759,7 @@ def _build_phrase_variant_queries(query: str) -> list[str]:
         RuntimeError: 构建失败时抛出。
     """
 
-    normalized = _normalize_optional_text(query)
+    normalized = normalize_optional_text(query)
     if normalized is None:
         return []
 

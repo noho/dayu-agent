@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 from dayu.engine.exceptions import ToolArgumentError
+from dayu.fins._converters import normalize_optional_text
 from dayu.engine.tool_contracts import DupCallSpec
 from dayu.engine.tool_registry import ToolRegistry
 from dayu.engine.tools.base import tool
@@ -181,8 +182,8 @@ def _create_start_download_job_tool(
         request_outcome, snapshot = manager.start_download_job(
             ticker=normalized_ticker,
             form_types=normalized_form_types,
-            filed_date_from=_normalize_optional_text(filed_date_from),
-            filed_date_to=_normalize_optional_text(filed_date_to),
+            filed_date_from=normalize_optional_text(filed_date_from),
+            filed_date_to=normalize_optional_text(filed_date_to),
             overwrite=bool(overwrite),
         )
         return _build_start_response(
@@ -597,25 +598,6 @@ def _normalize_required_text(
     if not normalized:
         raise ToolArgumentError(tool_name, arg_name, value, "不能为空")
     return normalized
-
-
-def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
-    """标准化可选文本参数。
-
-    Args:
-        value: 原始值。
-
-    Returns:
-        去空白后的文本；为空时返回 `None`。
-
-    Raises:
-        无。
-    """
-
-    if value is None:
-        return None
-    normalized = str(value).strip()
-    return normalized or None
 
 
 def _normalize_form_types(form_types: Optional[list[str]]) -> Optional[list[str]]:

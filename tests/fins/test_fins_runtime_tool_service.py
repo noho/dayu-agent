@@ -371,8 +371,9 @@ def test_service_runtime_helper_functions_cover_result_builders_and_event_narrow
     upload_material_progress = service_runtime_module._build_upload_material_progress_payload(upload_material_event)
 
     assert service_runtime_module._coerce_forms_input(None) is None
-    assert service_runtime_module._optional_int(bytearray(b"7")) == 7
-    assert service_runtime_module._optional_int(object()) is None
+    from dayu.fins._converters import optional_int
+    assert optional_int(bytearray(b"7")) == 7
+    assert optional_int(object()) is None
     assert download_item.failed_files[0].file_name == "x.htm"
     assert upload_material_result.material_name == "deck"
     assert upload_filings_from_result.recognized[0].file == "10k.html"

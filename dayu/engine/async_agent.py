@@ -460,8 +460,15 @@ class AsyncAgent:
         trace_recorder: Optional[ToolTraceRecorder] = None,
         **extra_payloads,
     ) -> AsyncIterator[StreamEvent]:
-        """
-        统一推理循环（供 streaming / non-streaming 复用）
+        """统一推理循环（供 streaming / non-streaming 复用）。
+
+        .. note::
+
+            本方法约 550 行，承担了 tool batch / continuation / compaction /
+            duplicate detection / force answer 全部逻辑。已知需要拆分为更小的
+            子方法（_handle_tool_batch / _handle_continuation / _handle_compaction 等），
+            但因改动面大、与 AsyncRunner 交互紧密，暂不在常规修复批次中处理。
+            参见 code-review H1。
         """
         run_id = run_id or f"run_{uuid.uuid4().hex[:8]}"
         session_id = session_id or run_id

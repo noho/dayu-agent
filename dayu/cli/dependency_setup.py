@@ -430,7 +430,7 @@ def setup_paths(args: argparse.Namespace) -> WorkspaceConfig:
 
 
 
-def load_running_config(args, paths_config: WorkspaceConfig) -> RunningConfig:
+def load_running_config(args: argparse.Namespace, paths_config: WorkspaceConfig) -> RunningConfig:
     """通过启动期依赖解析并返回默认执行选项。
 
     Args:
@@ -751,7 +751,7 @@ def setup_model_name(args: argparse.Namespace) -> ModelName:
     return ModelName(model_name=str(getattr(args, "model_name", "") or "").strip())
 
 
-def setup_write_config(args, paths_config: WorkspaceConfig, running_config: RunningConfig) -> WriteCliConfig:
+def setup_write_config(args: argparse.Namespace, paths_config: WorkspaceConfig, running_config: RunningConfig) -> WriteCliConfig:
     """构建写作模式配置。
 
     Args:
@@ -855,7 +855,7 @@ def _resolve_write_output_dir(*, workspace_dir: Path, ticker: str | None, raw_ou
     return default_output_dir
 
 
-def setup_loglevel(args):
+def setup_loglevel(args: argparse.Namespace) -> None:
     """根据命令行参数设置日志级别。
 
     Args:

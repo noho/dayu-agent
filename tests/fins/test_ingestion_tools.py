@@ -724,24 +724,24 @@ def test_build_next_step_stop_or_retry_when_failed() -> None:
 def test_normalize_optional_text_none() -> None:
     """验证 None 返回 None。"""
 
-    from dayu.fins.tools.ingestion_tools import _normalize_optional_text
+    from dayu.fins._converters import normalize_optional_text
 
-    assert _normalize_optional_text(None) is None
+    assert normalize_optional_text(None) is None
 
 
 @pytest.mark.unit
 def test_normalize_optional_text_blank() -> None:
     """验证空白字符串返回 None。"""
 
-    from dayu.fins.tools.ingestion_tools import _normalize_optional_text
+    from dayu.fins._converters import normalize_optional_text
 
-    assert _normalize_optional_text("  ") is None
+    assert normalize_optional_text("  ") is None
 
 
 @pytest.mark.unit
 def test_normalize_optional_text_strips() -> None:
     """验证去空白。"""
 
-    from dayu.fins.tools.ingestion_tools import _normalize_optional_text
+    from dayu.fins._converters import normalize_optional_text
 
-    assert _normalize_optional_text("  hello  ") == "hello"
+    assert normalize_optional_text("  hello  ") == "hello"

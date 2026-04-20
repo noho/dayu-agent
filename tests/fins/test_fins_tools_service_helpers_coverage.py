@@ -193,7 +193,8 @@ def test_text_and_period_normalizers() -> None:
     with pytest.raises(ToolArgumentError):
         _sh_module._normalize_required_text(tool_name="x", arg_name="a", value="   ")
 
-    assert _sh_module._normalize_optional_text("  ") is None
+    from dayu.fins._converters import normalize_optional_text
+    assert normalize_optional_text("  ") is None
 
     with pytest.raises(ToolArgumentError):
         _sh_module._normalize_periods("Q1")  # type: ignore[arg-type]

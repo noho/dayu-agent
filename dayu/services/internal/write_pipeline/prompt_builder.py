@@ -51,7 +51,7 @@ _DECISION_SOURCE_OF_TRUTH = "structured_prior_chapter_summaries_v1"
 _DECISION_CHAPTER_TITLE = "是否值得继续深研与待验证问题"
 
 
-def _build_prior_decision_tasks(layout: Any) -> list[ChapterTask]:
+def _build_prior_decision_tasks(layout: TemplateLayout) -> list[ChapterTask]:
     """构建第10章决策综合依赖的前置章节任务列表。
 
     约定：
@@ -276,7 +276,7 @@ class PromptBuilder:
     def build_overview_input(
         self,
         *,
-        layout: Any,
+        layout: TemplateLayout,
         chapter_results: dict[str, ChapterResult],
     ) -> str:
         """公开构建第0章概览输入。
@@ -299,7 +299,7 @@ class PromptBuilder:
         *,
         task: ChapterTask,
         company_name: str,
-        layout: Any,
+        layout: TemplateLayout,
         chapter_results: dict[str, ChapterResult],
     ) -> dict[str, Any]:
         """公开构建第10章研究决策综合输入。
@@ -492,7 +492,7 @@ class PromptBuilder:
     def _build_overview_input(
         self,
         *,
-        layout: Any,
+        layout: TemplateLayout,
         chapter_results: dict[str, ChapterResult],
     ) -> str:
         """构建第0章概览回填的前文章节结构化输入。
@@ -527,7 +527,7 @@ class PromptBuilder:
         *,
         task: ChapterTask,
         company_name: str,
-        layout: Any,
+        layout: TemplateLayout,
         chapter_results: dict[str, ChapterResult],
     ) -> dict[str, Any]:
         """构建第10章研究决策综合 prompt 的显式输入。
@@ -560,7 +560,7 @@ class PromptBuilder:
     def _build_research_decision_input(
         self,
         *,
-        layout: Any,
+        layout: TemplateLayout,
         chapter_results: dict[str, ChapterResult],
     ) -> str:
         """构建第10章的前文章节结构化输入。

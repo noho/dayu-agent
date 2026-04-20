@@ -25,7 +25,6 @@ from dayu.fins.downloaders.sec_downloader import (
     _parse_retry_after,
     _load_sec_throttle_state,
     _resolve_sec_throttle_delay,
-    _safe_int,
     _select_primary_from_index_items,
     extract_same_filing_linked_html_files,
     _format_accession_with_dash,
@@ -37,6 +36,7 @@ from dayu.fins.downloaders.sec_downloader import (
     pick_taxonomy_files,
 )
 from dayu.fins.domain.document_models import FileObjectMeta
+from dayu.fins._converters import optional_int
 
 
 class StoreStub:
@@ -121,10 +121,10 @@ def test_basic_helpers_cover_edge_cases(tmp_path: Path) -> None:
     ]
     assert pick_form_document_files(items_by_type, "6-K") == ["form6-k.htm"]
 
-    assert _safe_int(None) is None
-    assert _safe_int("") is None
-    assert _safe_int("abc") is None
-    assert _safe_int("12") == 12
+    assert optional_int(None) is None
+    assert optional_int("") is None
+    assert optional_int("abc") is None
+    assert optional_int("12") == 12
     assert _format_accession_with_dash("000116737925000017") == "0001167379-25-000017"
     assert _format_accession_with_dash("bad-accession") == "bad-accession"
 
@@ -1350,8 +1350,8 @@ def test_try_fetch_index_items_and_helper_paths(tmp_path: Path, monkeypatch: pyt
 
     assert downloader._build_headers()["User-Agent"] == "UA"
     assert downloader._build_headers()["Accept-Encoding"] == "gzip, deflate"
-    assert _safe_int("12") == 12
-    assert _safe_int("abc") is None
+    assert optional_int("12") == 12
+    assert optional_int("abc") is None
     from dayu.fins.downloaders.sec_downloader import _safe_header
 
     assert _safe_header(None, "ETag") is None

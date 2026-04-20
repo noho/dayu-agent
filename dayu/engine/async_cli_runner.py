@@ -91,9 +91,15 @@ MODULE = "ENGINE.ASYNC_CLI_RUNNER"
 
 @dataclass
 class AsyncCliRunnerRunningConfig:
+    """AsyncCliRunner 的运行时配置（空壳）。
+
+    .. note::
+
+        本 dataclass 当前无任何字段，整个 ``async_cli_runner`` 模块已标记弃用。
+        后续应随模块整体删除而清理，不做单独修复。
+        参见 code-review M23。
     """
-    AsyncCliRunner 的运行时配置
-    """
+
     pass
 
 class AsyncCliRunner:

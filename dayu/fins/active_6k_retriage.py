@@ -29,6 +29,7 @@ from dayu.fins.domain.document_models import (
     SourceFileEntry,
 )
 from dayu.fins.domain.enums import SourceKind
+from dayu.fins._converters import optional_int
 from dayu.fins.pipelines.sec_6k_rules import _classify_6k_text, _extract_head_text
 from dayu.fins.pipelines.sec_pipeline import SEC_PIPELINE_DOWNLOAD_VERSION
 from dayu.fins.storage import (
@@ -472,7 +473,7 @@ def _archive_active_filing_as_rejected(
             classification_version=SEC_PIPELINE_DOWNLOAD_VERSION,
             source_fingerprint=str(meta.get("source_fingerprint", "")),
             files=rejected_entries,
-            fiscal_year=_optional_int(meta.get("fiscal_year")),
+            fiscal_year=optional_int(meta.get("fiscal_year")),
             fiscal_period=_optional_string(meta.get("fiscal_period")),
             report_kind=_optional_string(meta.get("report_kind")),
             amended=bool(meta.get("amended", False)),
@@ -582,24 +583,6 @@ def _optional_string(value: object) -> Optional[str]:
         return None
     normalized = str(value).strip()
     return normalized or None
-
-
-def _optional_int(value: object) -> Optional[int]:
-    """把可选值安全转换为整数。
-
-    Args:
-        value: 原始值。
-
-    Returns:
-        合法整数时返回该值，否则返回 `None`。
-
-    Raises:
-        无。
-    """
-
-    if isinstance(value, int):
-        return value
-    return None
 
 
 def _optional_bool(value: object) -> Optional[bool]:

@@ -18,6 +18,7 @@ from html import unescape
 from typing import Any, Optional, cast
 
 from dayu.engine.exceptions import ToolArgumentError
+from dayu.fins._converters import normalize_optional_text
 from dayu.engine.processors.base import (
     SectionContent,
     SectionSummary,
@@ -224,20 +225,20 @@ def build_document_recency_sort_key(item: Mapping[str, Any]) -> tuple[Any, ...]:
         无。
     """
 
-    report_date = _normalize_optional_text(item.get("report_date")) or ""
-    filing_date = _normalize_optional_text(item.get("filing_date")) or ""
+    report_date = normalize_optional_text(item.get("report_date")) or ""
+    filing_date = normalize_optional_text(item.get("filing_date")) or ""
     has_explicit_date = bool(report_date or filing_date)
 
     fiscal_year = item.get("fiscal_year")
     normalized_fiscal_year = fiscal_year if isinstance(fiscal_year, int) else -1
-    normalized_fiscal_period = _normalize_optional_text(item.get("fiscal_period"))
+    normalized_fiscal_period = normalize_optional_text(item.get("fiscal_period"))
     fiscal_period_rank = _FISCAL_PERIOD_SORT_ORDER.get(normalized_fiscal_period or "", 0)
     has_fiscal_recency = normalized_fiscal_year > 0 or fiscal_period_rank > 0
     temporal_rank = 2 if has_explicit_date else 1 if has_fiscal_recency else 0
 
     primary_date = report_date or filing_date
     secondary_date = filing_date or report_date
-    document_id = _normalize_optional_text(item.get("document_id")) or ""
+    document_id = normalize_optional_text(item.get("document_id")) or ""
     return (
         temporal_rank,
         primary_date,
@@ -267,7 +268,7 @@ def resolve_document_type_for_source(*, form_type: Any, source_kind: Any) -> str
     """
 
     normalized_form_type = _normalize_form_type_for_matching(form_type)
-    normalized_source_kind = _normalize_optional_text(source_kind) or ""
+    normalized_source_kind = normalize_optional_text(source_kind) or ""
     return _resolve_document_type(normalized_form_type, normalized_source_kind)
 
 
@@ -327,26 +328,6 @@ def _normalize_required_text(*, tool_name: str, arg_name: str, value: Any) -> st
     return normalized
 
 
-def _normalize_optional_text(value: Any) -> Optional[str]:
-    """标准化可选文本参数。
-
-    Args:
-        value: 原始值。
-
-    Returns:
-        去空白字符串或 `None`。
-
-    Raises:
-        RuntimeError: 标准化失败时抛出。
-    """
-
-    if value is None:
-        return None
-    normalized = str(value).strip()
-    if not normalized:
-        return None
-    return normalized
-
 
 def _collect_parent_titles(
     section: SectionSummary,
@@ -395,11 +376,11 @@ def _normalize_form_type_for_matching(value: Any) -> Optional[str]:
         RuntimeError: 标准化失败时抛出。
     """
 
-    normalized = _normalize_optional_text(value)
+    normalized = normalize_optional_text(value)
     if normalized is None:
         return None
     normalized_form = normalize_form_type(normalized)
-    normalized_text = _normalize_optional_text(normalized_form)
+    normalized_text = normalize_optional_text(normalized_form)
     if normalized_text is None:
         return None
     return _MATERIAL_FORM_TYPE_ALIASES.get(normalized_text, normalized_text)
@@ -428,7 +409,7 @@ def _normalize_document_types(document_types: Optional[list[str]]) -> Optional[l
     result: list[str] = []
     seen: set[str] = set()
     for dt in document_types:
-        normalized = _normalize_optional_text(dt)
+        normalized = normalize_optional_text(dt)
         if normalized is None or normalized not in _VALID_DOCUMENT_TYPES:
             continue
         if normalized not in seen:
@@ -455,7 +436,7 @@ def _build_recommended_documents(documents: list[dict[str, Any]]) -> dict[str, O
         return recommendations
 
     for item in documents:
-        document_id = _normalize_optional_text(item.get("document_id"))
+        document_id = normalize_optional_text(item.get("document_id"))
         if document_id is None:
             continue
         # document_type 由调用方在过滤循环中已附加
@@ -533,7 +514,7 @@ def resolve_has_financial_data(
         return bool(has_financial_data)
 
     # 优先级 2：内部 availability 枚举
-    norm_avail = _normalize_optional_text(availability) if availability is not None else None
+    norm_avail = normalize_optional_text(availability) if availability is not None else None
     if norm_avail in ("structured_data_available", "statement_sections_available"):
         return True
     if norm_avail == "not_available":
@@ -585,19 +566,19 @@ def build_search_next_section_fields(
         section = match.get("section")
         if not isinstance(section, Mapping):
             continue
-        section_ref = _normalize_optional_text(section.get("ref"))
+        section_ref = normalize_optional_text(section.get("ref"))
         if section_ref is None:
             continue
-        matched_query = _normalize_optional_text(match.get("matched_query"))
+        matched_query = normalize_optional_text(match.get("matched_query"))
         is_exact_phrase = bool(match.get("is_exact_phrase"))
         stat = section_stats.setdefault(
             section_ref,
             {
                 "section": {
                     "ref": section_ref,
-                    "title": _normalize_optional_text(section.get("title")),
-                    "item": _normalize_optional_text(section.get("item")),
-                    "topic": _normalize_optional_text(section.get("topic")),
+                    "title": normalize_optional_text(section.get("title")),
+                    "item": normalize_optional_text(section.get("item")),
+                    "topic": normalize_optional_text(section.get("topic")),
                 },
                 "evidence_hit_count": 0,
                 "_exact_match_count": 0,
@@ -641,7 +622,7 @@ def build_search_next_section_fields(
 
     next_section_by_query: dict[str, Optional[dict[str, Any]]] = {}
     for query in queries:
-        normalized_query = _normalize_optional_text(query)
+        normalized_query = normalize_optional_text(query)
         if normalized_query is None:
             continue
         candidate_stats = query_section_stats.get(normalized_query, {})
@@ -708,10 +689,10 @@ def _normalize_section_children(raw_children: Any) -> list[dict[str, Any]]:
     for child in raw_children:
         if not isinstance(child, Mapping):
             continue
-        ref = _normalize_optional_text(child.get("ref"))
+        ref = normalize_optional_text(child.get("ref"))
         if ref is None:
             continue
-        title = _normalize_optional_text(child.get("title"))
+        title = normalize_optional_text(child.get("title"))
         normalized.append({"ref": ref, "title": title})
     return normalized
 
@@ -735,7 +716,7 @@ def _normalize_periods(periods: Optional[list[str]]) -> Optional[list[str]]:
         raise ToolArgumentError("list_documents", "fiscal_periods", periods, "Must be a string array")
     result: list[str] = []
     for period in periods:
-        normalized = _normalize_optional_text(period)
+        normalized = normalize_optional_text(period)
         if normalized is None:
             continue
         result.append(normalized)
@@ -820,11 +801,11 @@ def _infer_fiscal_period(meta: dict[str, Any]) -> Optional[str]:
         RuntimeError: 推断失败时抛出。
     """
 
-    raw_period = _normalize_optional_text(meta.get("fiscal_period"))
+    raw_period = normalize_optional_text(meta.get("fiscal_period"))
     if raw_period is not None:
         return raw_period
 
-    form_type = _normalize_optional_text(meta.get("form_type"))
+    form_type = normalize_optional_text(meta.get("form_type"))
     if form_type in {"10-K", "20-F"}:
         return "FY"
     return None
@@ -848,7 +829,7 @@ def _resolve_fiscal_year_with_fallback(raw_value: Any, inferred_year: Optional[i
         return inferred_year
     if isinstance(raw_value, int):
         return raw_value if raw_value > 0 else inferred_year
-    text = _normalize_optional_text(raw_value)
+    text = normalize_optional_text(raw_value)
     if text is None:
         return inferred_year
     try:
@@ -874,7 +855,7 @@ def _resolve_fiscal_period_with_fallback(raw_value: Any, inferred_period: Option
         RuntimeError: 解析失败时抛出。
     """
 
-    normalized = _normalize_optional_text(raw_value)
+    normalized = normalize_optional_text(raw_value)
     if normalized is not None:
         return normalized
     return inferred_period
@@ -973,7 +954,7 @@ def _build_table_data_payload(table_raw: TableContent | Mapping[str, Any]) -> di
         RuntimeError: 构建失败时抛出。
     """
 
-    raw_format = _normalize_optional_text(table_raw.get("data_format"))
+    raw_format = normalize_optional_text(table_raw.get("data_format"))
     normalized_format = (raw_format or "unknown").lower()
     raw_data = table_raw.get("data")
     raw_columns = table_raw.get("columns")
@@ -1066,7 +1047,7 @@ def _normalize_table_rows(raw_data: Any) -> list[dict[str, Any]]:
         if isinstance(row, Mapping):
             normalized_row: dict[str, Any] = {}
             for key, value in row.items():
-                normalized_key = _normalize_optional_text(key) if key is not None else None
+                normalized_key = normalize_optional_text(key) if key is not None else None
                 normalized_row[normalized_key or str(key)] = value
             normalized_rows.append(normalized_row)
             continue
@@ -1101,7 +1082,7 @@ def _normalize_table_columns(
         for column in raw_columns:
             if column is None:
                 continue
-            normalized = _normalize_optional_text(column)
+            normalized = normalize_optional_text(column)
             if normalized is None or normalized in seen:
                 continue
             seen.add(normalized)
@@ -1172,7 +1153,7 @@ def _normalize_table_type(raw_table_type: Any) -> Optional[str]:
         RuntimeError: 标准化失败时抛出。
     """
 
-    normalized = _normalize_optional_text(raw_table_type)
+    normalized = normalize_optional_text(raw_table_type)
     if normalized is None:
         return None
     lowered = normalized.lower()
@@ -1221,7 +1202,7 @@ def _normalize_taxonomy_name(taxonomy: Any) -> Optional[str]:
         RuntimeError: 标准化失败时抛出。
     """
 
-    normalized = _normalize_optional_text(taxonomy)
+    normalized = normalize_optional_text(taxonomy)
     if normalized is None:
         return None
     lowered = normalized.lower()
@@ -1246,7 +1227,7 @@ def _resolve_default_xbrl_concepts(*, form_type: Optional[str], taxonomy: Option
         RuntimeError: 解析失败时抛出。
     """
 
-    normalized_form = _normalize_optional_text(form_type)
+    normalized_form = normalize_optional_text(form_type)
     normalized_taxonomy = _normalize_taxonomy_name(taxonomy)
     if normalized_form and normalized_taxonomy:
         matched = _DEFAULT_XBRL_CONCEPTS_BY_FORM_TAXONOMY.get((normalized_form, normalized_taxonomy))
@@ -1320,7 +1301,7 @@ def _normalize_concepts_for_query(raw_concepts: Any, default_concepts: list[str]
         return list(default_concepts)
     normalized: list[str] = []
     for item in raw_concepts:
-        concept = _normalize_optional_text(item)
+        concept = normalize_optional_text(item)
         if concept is None:
             continue
         normalized.append(concept)
@@ -1517,7 +1498,7 @@ def _canonicalize_concept(concept: Any) -> str:
         RuntimeError: 标准化失败时抛出。
     """
 
-    normalized = _normalize_optional_text(concept) or ""
+    normalized = normalize_optional_text(concept) or ""
     if ":" in normalized:
         normalized = normalized.split(":")[-1]
     return normalized.strip().lower()
@@ -1562,8 +1543,8 @@ def _build_fact_selection_score(
     """
 
     numeric_score = 1 if normalized_fact.get("numeric_value") is not None else 0
-    fiscal_period_score = 1 if _normalize_optional_text(normalized_fact.get("fiscal_period")) else 0
-    statement_type_score = 1 if _normalize_optional_text(normalized_fact.get("statement_type")) else 0
+    fiscal_period_score = 1 if normalize_optional_text(normalized_fact.get("fiscal_period")) else 0
+    statement_type_score = 1 if normalize_optional_text(normalized_fact.get("statement_type")) else 0
     segment_score = 1 if _build_segment_signature(raw_fact.get("segment") or raw_fact.get("dimensions")) else 0
     precision_score = _parse_xbrl_decimals(raw_fact.get("decimals"))
     return (numeric_score, fiscal_period_score, statement_type_score, segment_score, precision_score)
@@ -1687,7 +1668,7 @@ def _extract_top_section_ref(matches: list[dict[str, Any]]) -> Optional[str]:
         section = match.get("section")
         if not isinstance(section, Mapping):
             continue
-        ref = _normalize_optional_text(section.get("ref"))
+        ref = normalize_optional_text(section.get("ref"))
         if ref:
             return ref
     return None
