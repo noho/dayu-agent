@@ -17,6 +17,9 @@ from email.parser import Parser
 from pathlib import Path
 from typing import Mapping, Sequence
 
+_SOURCE_DISTRIBUTION_SUFFIXES: tuple[str, ...] = (".tar.gz", ".zip", ".tar.bz2", ".tar.xz", ".tgz")
+_PIP_ONLY_BINARY_ALL = "--only-binary=:all:"
+
 
 def _parse_args() -> argparse.Namespace:
     """解析命令行参数。
@@ -199,7 +202,7 @@ def _write_install_script(bundle_dir: Path, *, version: str, platform_id: str) -
             "set \"ROOT=%~dp0\"\r\n"
             "if \"%PYTHON_BIN%\"==\"\" set \"PYTHON_BIN=python\"\r\n"
             "\"%PYTHON_BIN%\" -m pip install --no-index --find-links \"%ROOT%wheelhouse\" "
-            f"--constraint \"%ROOT%constraints.txt\" \"{package_spec}\"\r\n"
+            f"{_PIP_ONLY_BINARY_ALL} --constraint \"%ROOT%constraints.txt\" \"{package_spec}\"\r\n"
         )
     else:
         script_path = bundle_dir / "install.sh"
@@ -209,7 +212,7 @@ def _write_install_script(bundle_dir: Path, *, version: str, platform_id: str) -
             'ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\n'
             'PYTHON_BIN="${PYTHON_BIN:-python3}"\n'
             '"$PYTHON_BIN" -m pip install --no-index --find-links "$ROOT/wheelhouse" '
-            f'--constraint "$ROOT/constraints.txt" "{package_spec}"\n'
+            f'{_PIP_ONLY_BINARY_ALL} --constraint "$ROOT/constraints.txt" "{package_spec}"\n'
         )
     script_path.write_text(script_text, encoding="utf-8", newline="")
     if not platform_id.startswith("windows-"):
@@ -257,10 +260,64 @@ def _write_bundle_readme(bundle_dir: Path, *, package_name: str, version: str, p
    - `dayu-render --help`
 
 说明：
-- 安装脚本只会从当前目录下的 `wheelhouse/` 读取 wheel，不访问公网。
+- 安装脚本只会从当前目录下的 `wheelhouse/` 读取 wheel，不访问公网，也不会现场构建源码包。
 - 浏览器回退抓取默认依赖 Chromium；安装完成后仍需单独执行 `playwright install chromium`。
 """
     (bundle_dir / "README.txt").write_text(text, encoding="utf-8")
+
+
+def _is_source_distribution(artifact_path: Path) -> bool:
+    """判断给定文件是否为源码分发包。
+
+    参数：
+        artifact_path：待判断的归档路径。
+
+    返回值：
+        bool：若为源码分发包则返回 `True`，否则返回 `False`。
+
+    异常：
+        无。
+    """
+
+    normalized_name = artifact_path.name.lower()
+    return any(normalized_name.endswith(suffix) for suffix in _SOURCE_DISTRIBUTION_SUFFIXES)
+
+
+def _build_source_distribution_wheels(wheelhouse_dir: Path) -> None:
+    """把 wheelhouse 中的源码分发包预构建为 wheel 并删除源码归档。
+
+    参数：
+        wheelhouse_dir：wheelhouse 目录。
+
+    返回值：
+        无。
+
+    异常：
+        subprocess.CalledProcessError：`pip wheel` 构建失败时抛出。
+        OSError：删除源码归档失败时抛出。
+    """
+
+    source_distributions = tuple(
+        path
+        for path in sorted(wheelhouse_dir.iterdir())
+        if path.is_file() and _is_source_distribution(path)
+    )
+    if not source_distributions:
+        return
+    _run_command(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "wheel",
+            "--no-deps",
+            "--wheel-dir",
+            str(wheelhouse_dir),
+            *[str(path) for path in source_distributions],
+        ]
+    )
+    for source_distribution in source_distributions:
+        source_distribution.unlink()
 
 
 def _download_wheelhouse(bundle_dir: Path, *, wheel_path: Path, constraints_path: Path) -> None:
@@ -305,6 +362,7 @@ def _download_wheelhouse(bundle_dir: Path, *, wheel_path: Path, constraints_path
                 str(requirements_path),
             ]
         )
+    _build_source_distribution_wheels(wheelhouse_dir)
 
 
 def _create_archive(bundle_dir: Path, archive_path: Path) -> None:

@@ -36,6 +36,7 @@
 
 另外：
 - `tests/fixtures/` 放测试数据
+- `tests/` 根目录下的少量 `test_*.py` 用于承接项目级工具脚本与通用辅助模块的轻量回归；这类测试应优先守住稳定输入输出边界，不把临时脚本细节固化进测试
 - `tests/engine/test_docling_processor_integration.py`、`tests/fins/test_docling_upload_service_integration.py`、`tests/engine/test_web_fetch_docling_integration.py` 是问题 2 第一批真实集成测试，必须直接走真实 Docling 执行链，不允许通过 monkeypatch `DocumentConverter` 或 fake `DoclingDocument` 伪造通过
 - 仓库根 `tests/` 明确作为本地测试包维护，避免干净虚拟环境里第三方同名 `tests` 包抢占导入解析，导致 `pyright` 或测试辅助模块引用漂移到 `site-packages`
 

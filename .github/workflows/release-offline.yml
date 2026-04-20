@@ -64,6 +64,8 @@ jobs:
         include:
           - runner: macos-14
             platform_id: macos-arm64
+          - runner: macos-13
+            platform_id: macos-x64
           - runner: ubuntu-latest
             platform_id: linux-x64
           - runner: windows-latest

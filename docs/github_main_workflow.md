@@ -307,6 +307,7 @@ git push lan main
 这里有一个前提要明确：
 
 - 当前 [utils/build_offline_bundle.py](</Users/leo/workspace/dayu-agent/utils/build_offline_bundle.py>) 会基于**当前运行平台**下载 wheelhouse
+- 构建脚本会把下载到的源码分发包（sdist）预先构建成 wheel，确保离线安装阶段只消费 `wheelhouse/` 中的 wheel
 - `--platform-id` 主要用于命名、安装脚本分支和归档后缀
 - 它**不是**“一台机器交叉构建任意平台离线包”的开关
 
