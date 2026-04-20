@@ -181,7 +181,7 @@ direct operation 当前由 `FinsRuntime` 和对应 pipeline 实现。
 - `dayu/fins/pipelines/sec_6k_rules.py` — 6-K 分类、候选评分与文本规则
 - `dayu/fins/pipelines/sec_fiscal_fields.py` — fiscal year / fiscal period 推断与财务载荷
 - `dayu/fins/pipelines/sec_download_state.py` — 拒绝注册表、SEC HTTP 缓存与重建快照比较
-- `dayu/fins/pipelines/sec_download_workflow.py` — `download/_download_stream_impl` 的主流程编排
+- `dayu/fins/pipelines/sec_download_workflow.py` — `download/download_stream_impl` 的主流程编排
 - `dayu/fins/pipelines/sec_download_filing_workflow.py` — 单个 filing 下载、6-K 预筛选分支后的落盘编排
 - `dayu/fins/pipelines/sec_6k_primary_document_repair.py` — 6-K active source 主文件 reconcile；按当前 `BsSixKFormProcessor` 真源重排同 filing HTML 候选并写回最终 `primary_document`
 - `dayu/fins/pipelines/sec_download_persistence.py` — download 阶段的文件条目构建、rejected artifact 落盘与 reprocess 标记

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 class PipelineIngestionSourceProtocol(Protocol):
     """支持长事务私有实现的 pipeline 协议。"""
 
-    def _download_stream_impl(
+    def download_stream_impl(
         self,
         ticker: str,
         form_type: Optional[str] = None,
@@ -47,7 +47,7 @@ class PipelineIngestionSourceProtocol(Protocol):
 
         ...
 
-    def _process_stream_impl(
+    def process_stream_impl(
         self,
         ticker: str,
         overwrite: bool = False,
@@ -111,7 +111,7 @@ class PipelineIngestionBackend:
             RuntimeError: pipeline 执行失败时抛出。
         """
 
-        async for event in self.pipeline._download_stream_impl(
+        async for event in self.pipeline.download_stream_impl(
             ticker=ticker,
             form_type=form_type,
             start_date=start_date,
@@ -147,7 +147,7 @@ class PipelineIngestionBackend:
             RuntimeError: pipeline 执行失败时抛出。
         """
 
-        async for event in self.pipeline._process_stream_impl(
+        async for event in self.pipeline.process_stream_impl(
             ticker=ticker,
             overwrite=overwrite,
             ci=ci,

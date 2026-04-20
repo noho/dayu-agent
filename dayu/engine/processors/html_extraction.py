@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from bs4 import BeautifulSoup, Tag
 
@@ -98,13 +98,15 @@ def extract_main_content(html: str, *, url: str = "") -> ExtractedHtmlContent:
         RuntimeError: 当所有抽取路径都无法产出可用正文时抛出。
     """
 
-    candidates = [
-        extract_with_trafilatura(html, url=url),
-        extract_with_readability(html, url=url),
-        extract_with_bs_fallback(html),
+    # 逐个尝试抽取器，首个可用即返回，避免后续抽取器的无谓开销
+    extractors: list[Callable[[], Optional[ExtractedHtmlContent]]] = [
+        lambda: extract_with_trafilatura(html, url=url),
+        lambda: extract_with_readability(html, url=url),
+        lambda: extract_with_bs_fallback(html),
     ]
     last_candidate: Optional[ExtractedHtmlContent] = None
-    for candidate in candidates:
+    for extractor in extractors:
+        candidate = extractor()
         if candidate is None:
             continue
         last_candidate = candidate

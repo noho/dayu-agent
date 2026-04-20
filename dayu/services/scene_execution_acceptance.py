@@ -51,8 +51,7 @@ class AcceptedSceneExecution:
     def default_resumable(self) -> bool:
         """返回该 scene 的默认 resumable 策略。"""
 
-        conversation_definition = getattr(self.scene_definition, "conversation", None)
-        return bool(getattr(conversation_definition, "enabled", False))
+        return self.scene_definition.conversation.enabled
 
 
 @dataclass(frozen=True)

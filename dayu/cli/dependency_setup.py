@@ -9,11 +9,11 @@
 from __future__ import annotations
 
 import argparse
-import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
+from dayu.cli.arg_parsing import parse_limits_override, parse_temperature_argument
 from dayu.cli.interactive_state import (
     FileInteractiveStateStore,
     InteractiveSessionState,
@@ -28,7 +28,6 @@ from dayu.execution.options import (
     ExecutionOptionsOverridePayload,
     ResolvedExecutionOptions,
     TraceSettings,
-    normalize_temperature,
     resolve_doc_tool_limits_from_toolset_configs,
     resolve_fins_tool_limits_from_toolset_configs,
     resolve_web_tools_config_from_toolset_configs,
@@ -252,18 +251,18 @@ def _build_execution_options(args: argparse.Namespace) -> ExecutionOptions:
         SystemExit: limits JSON 非法时退出。
     """
 
-    doc_limits = _parse_limits_override(
+    doc_limits = parse_limits_override(
         getattr(args, "doc_limits_json", None),
         field_name="--doc-limits-json",
     )
-    fins_limits = _parse_limits_override(
+    fins_limits = parse_limits_override(
         getattr(args, "fins_limits_json", None),
         field_name="--fins-limits-json",
     )
 
     return ExecutionOptions(
         model_name=(raw_model_name if (raw_model_name := str(getattr(args, "model_name", "") or "").strip()) else None),
-        temperature=_parse_temperature_argument(getattr(args, "temperature", None), field_name="--temperature"),
+        temperature=parse_temperature_argument(getattr(args, "temperature", None), field_name="--temperature"),
         debug_sse=bool(getattr(args, "debug_sse", False)),
         debug_tool_delta=bool(getattr(args, "debug_tool_delta", False)),
         debug_sse_sample_rate=getattr(args, "debug_sse_sample_rate", None),
@@ -429,63 +428,6 @@ def setup_paths(args: argparse.Namespace) -> WorkspaceConfig:
     )
 
 
-def _parse_limits_override(
-    raw_json: str | None,
-    *,
-    field_name: str,
-) -> ExecutionOptionsOverridePayload | None:
-    """解析 limits 覆盖 JSON 字符串。
-
-    Args:
-        raw_json: 原始 JSON 字符串。
-        field_name: 字段名，仅用于错误提示。
-
-    Returns:
-        解析后的字典；输入为空时返回 ``None``。
-
-    Raises:
-        SystemExit: JSON 非法或不是对象时退出。
-    """
-
-    if raw_json is None:
-        return None
-    try:
-        parsed = json.loads(raw_json)
-    except json.JSONDecodeError as exc:
-        Log.error(f"{field_name} 不是合法 JSON: {exc}", module=MODULE)
-        raise SystemExit(2) from exc
-    if not isinstance(parsed, dict):
-        Log.error(f"{field_name} 必须是 JSON 对象", module=MODULE)
-        raise SystemExit(2)
-    normalized: ExecutionOptionsOverridePayload = {}
-    for key, value in parsed.items():
-        if value is None or isinstance(value, str | int | float | bool):
-            normalized[str(key)] = value
-            continue
-        Log.error(f"{field_name} 只允许 JSON 标量值，字段 {key!r} 非法", module=MODULE)
-        raise SystemExit(2)
-    return normalized
-
-
-def _parse_temperature_argument(raw_value: str | int | float | None, *, field_name: str) -> float | None:
-    """解析 CLI temperature 参数。
-
-    Args:
-        raw_value: 原始参数值。
-        field_name: 参数名，仅用于错误提示。
-
-    Returns:
-        标准化后的 temperature；未传时返回 ``None``。
-
-    Raises:
-        SystemExit: 当 temperature 非法时退出。
-    """
-
-    try:
-        return normalize_temperature(raw_value, field_name=field_name)
-    except ValueError as exc:
-        Log.error(str(exc), module=MODULE)
-        raise SystemExit(2) from exc
 
 
 def load_running_config(args, paths_config: WorkspaceConfig) -> RunningConfig:
@@ -793,16 +735,19 @@ def _build_fins_ops_service(args: argparse.Namespace) -> FinsService:
     )
 
 
-def setup_model_name(args) -> ModelName:
-    """
-    构建模型配置（从 CLI 获取）
+def setup_model_name(args: argparse.Namespace) -> ModelName:
+    """从 CLI 参数构建模型名称。
 
     Args:
-        args: 命令行参数对象
+        args: 命令行参数对象。
 
     Returns:
-        ModelConfig: 模型配置对象
+        ModelName 实例。
+
+    Raises:
+        无。
     """
+
     return ModelName(model_name=str(getattr(args, "model_name", "") or "").strip())
 
 

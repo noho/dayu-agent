@@ -17,18 +17,6 @@ from dayu.execution.options import ExecutionOptions, resolve_web_tools_config_fr
 from dayu.prompting.prompt_contribution_slots import select_prompt_contributions
 
 
-def prepare_accepted_execution_spec(
-    *,
-    accepted_execution_spec: AcceptedExecutionSpec,
-) -> AcceptedExecutionSpec:
-    """返回已接受执行规格。
-
-    该函数保留为稳定 public 入口，便于 Service 在 contract preparation 阶段统一收口。
-    """
-
-    return accepted_execution_spec
-
-
 def prepare_execution_permissions(
     *,
     accepted_execution_spec: AcceptedExecutionSpec,
@@ -41,7 +29,7 @@ def prepare_execution_permissions(
     )
     allow_private_network_url = False
     if web_tools_config is not None:
-        allow_private_network_url = bool(getattr(web_tools_config, "allow_private_network_url", False))
+        allow_private_network_url = web_tools_config.allow_private_network_url
     return ExecutionPermissions(
         web=ExecutionWebPermissions(
             allow_private_network_url=allow_private_network_url,
@@ -123,9 +111,6 @@ def prepare_execution_contract(
 ) -> ExecutionContract:
     """准备完整 ExecutionContract。"""
 
-    prepared_accepted_execution_spec = prepare_accepted_execution_spec(
-        accepted_execution_spec=accepted_execution_spec
-    )
     return ExecutionContract(
         service_name=service_name,
         scene_name=scene_name,
@@ -136,21 +121,20 @@ def prepare_execution_contract(
             resumable=resumable,
         ),
         preparation_spec=prepare_scene_preparation_spec(
-            accepted_execution_spec=prepared_accepted_execution_spec,
+            accepted_execution_spec=accepted_execution_spec,
             prompt_contributions=prompt_contributions,
             context_slots=context_slots,
             selected_toolsets=selected_toolsets,
             execution_permissions=execution_permissions,
         ),
         message_inputs=prepare_message_inputs(user_message=user_message),
-        accepted_execution_spec=prepared_accepted_execution_spec,
+        accepted_execution_spec=accepted_execution_spec,
         execution_options=execution_options,
         metadata=normalize_execution_delivery_context(metadata),
     )
 
 
 __all__ = [
-    "prepare_accepted_execution_spec",
     "prepare_execution_contract",
     "prepare_execution_permissions",
     "prepare_host_policy",

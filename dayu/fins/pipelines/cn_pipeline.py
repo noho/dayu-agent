@@ -245,7 +245,7 @@ class CnPipeline(PipelineProtocol):
         ):
             yield event
 
-    async def _download_stream_impl(
+    async def download_stream_impl(
         self,
         ticker: str,
         form_type: Optional[str] = None,
@@ -836,7 +836,7 @@ class CnPipeline(PipelineProtocol):
         ):
             yield event
 
-    async def _process_stream_impl(
+    async def process_stream_impl(
         self,
         ticker: str,
         overwrite: bool = False,

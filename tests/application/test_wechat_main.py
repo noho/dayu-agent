@@ -1102,14 +1102,15 @@ def test_wechat_main_helper_functions_cover_env_identity_parsing_and_signal_clea
     assert identity.instance_label == "default"
     assert identity.label == "com.dayu.wechat.test"
     assert identity.definition_path == (tmp_path / "com.dayu.wechat.test.launchd")
+    from dayu.cli.arg_parsing import parse_limits_override, parse_temperature_argument
     with pytest.raises(SystemExit, match="2"):
-        wechat_arg_module._parse_limits_override("{bad json}", field_name="--doc-limits-json")
+        parse_limits_override("{bad json}", field_name="--doc-limits-json")
     with pytest.raises(SystemExit, match="2"):
-        wechat_arg_module._parse_limits_override('[1, 2]', field_name="--doc-limits-json")
+        parse_limits_override('[1, 2]', field_name="--doc-limits-json")
     with pytest.raises(SystemExit, match="2"):
-        wechat_arg_module._parse_limits_override('{"nested": []}', field_name="--doc-limits-json")
+        parse_limits_override('{"nested": []}', field_name="--doc-limits-json")
     with pytest.raises(SystemExit, match="2"):
-        wechat_arg_module._parse_temperature_argument("bad", field_name="--temperature")
+        parse_temperature_argument("bad", field_name="--temperature")
     wechat_run_module._remove_daemon_signal_handlers(_Loop(), [signal.SIGINT, signal.SIGTERM])
 
     assert any("不是合法 JSON" in message for message in errors)
