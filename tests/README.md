@@ -35,6 +35,7 @@
 
 另外：
 - `tests/fixtures/` 放测试数据
+- `tests/engine/test_docling_processor_integration.py`、`tests/fins/test_docling_upload_service_integration.py`、`tests/engine/test_web_fetch_docling_integration.py` 是问题 2 第一批真实集成测试，必须直接走真实 Docling 执行链，不允许通过 monkeypatch `DocumentConverter` 或 fake `DoclingDocument` 伪造通过
 - 仓库根 `tests/` 明确作为本地测试包维护，避免干净虚拟环境里第三方同名 `tests` 包抢占导入解析，导致 `pyright` 或测试辅助模块引用漂移到 `site-packages`
 
 ## 2. 运行方式
@@ -73,6 +74,12 @@ python -m pytest tests --cov=dayu --cov-report=term --cov-branch
 当实现边界变化时，优先迁移测试，不要用生产代码兼容旧测试。
 
 例如这次主链收口后，已经删除的旧装配层、旧 runtime facade、旧能力注入链，都不应继续保留对应测试。
+
+真实 Docling/PDF 集成测试也遵守同一规则：
+
+- 必须使用固定 fixture
+- 必须走真实第三方执行链
+- 表格退化不可接受，不能只断言“返回非空字符串”
 
 ### 3.2 Service / Host / Agent 路径守护
 
