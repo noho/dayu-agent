@@ -197,6 +197,11 @@ git push -u github <feat/short-topic>
 gh pr create --fill --label full-integration
 ```
 
+或者 PR 创建后再加：
+```bash
+gh pr edit --add-label full-integration
+```
+
 `-u` 只在该分支**第一次** push 时加，后续直接 `git push`。
 
 - **CI 失败或验证发现问题**：在功能分支上继续改、commit、push，PR 自动更新，CI 重跑。
