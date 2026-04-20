@@ -1538,6 +1538,48 @@ def test_throttle_retry_on_503(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert state.cooldown_until > 0
 
 
+def test_conditional_download_reuses_shared_throttle_retry_strategy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证条件下载同样复用 SEC 限流额外重试策略。"""
+
+    call_count = 0
+    request = httpx.Request("GET", "https://example.com/archive.htm")
+
+    async def _mock_get(**kwargs: Any) -> httpx.Response:
+        nonlocal call_count
+        del kwargs
+        call_count += 1
+        if call_count <= 2:
+            return httpx.Response(503, headers={"Retry-After": "0.01"}, request=request)
+        return httpx.Response(200, content=b"payload", request=request)
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+
+    downloader = SecDownloader(workspace_root=tmp_path)
+    downloader.configure(user_agent="UA", sleep_seconds=0.0, max_retries=1)
+    downloader._client.get = _mock_get  # type: ignore[assignment]
+
+    status_code, payload = _run(
+        downloader._http_download_if_modified(
+            "https://example.com/archive.htm",
+            '"etag"',
+            "Mon, 01 Jan 2025 00:00:00 GMT",
+        )
+    )
+
+    assert status_code == 200
+    assert payload == b"payload"
+    assert call_count == 3
+    assert any(seconds >= 600.0 for seconds in sleep_calls)
+
+
 def test_rate_limit_uses_shared_state_across_instances(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
