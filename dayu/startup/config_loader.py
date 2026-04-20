@@ -7,7 +7,7 @@
 prompt 目录结构与 prompt 资产读取不再由本模块负责。
 """
 
-import json
+from copy import deepcopy
 import os
 import re
 from collections.abc import Iterable
@@ -39,7 +39,7 @@ def _env_var_replacer(match: re.Match) -> str:
     env_var = match.group(1)
     value = os.environ.get(env_var)
     if value is None:
-        Log.warn(f"环境变量 {env_var} 未设置", module=MODULE)
+        Log.warning(f"环境变量 {env_var} 未设置", module=MODULE)
         return match.group(0)  # 保持原始 {{VAR}} 格式
     return value
 
@@ -59,6 +59,62 @@ def _extract_env_var_names_from_text(content: str) -> tuple[str, ...]:
 
     found_names = {match.group(1) for match in _ENV_VAR_PATTERN.finditer(str(content or ""))}
     return tuple(sorted(found_names))
+
+
+def _collect_env_var_names_from_model_config(
+    value: ModelConfig | ModelConfigJsonValue,
+) -> tuple[str, ...]:
+    """递归收集模型配置 JSON 中引用的环境变量名。
+
+    Args:
+        value: 模型配置 JSON 值。
+
+    Returns:
+        引用到的环境变量名，按字典序去重后返回。
+
+    Raises:
+        无。
+    """
+
+    collected_names: set[str] = set()
+    _collect_env_var_names_from_model_config_value(value=value, collected_names=collected_names)
+    return tuple(sorted(collected_names))
+
+
+def _collect_env_var_names_from_model_config_value(
+    *,
+    value: ModelConfig | ModelConfigJsonValue,
+    collected_names: set[str],
+) -> None:
+    """递归遍历模型配置值并收集环境变量名。
+
+    Args:
+        value: 当前遍历到的模型配置值。
+        collected_names: 累积收集结果。
+
+    Returns:
+        无。
+
+    Raises:
+        无。
+    """
+
+    if isinstance(value, dict):
+        for child in value.values():
+            _collect_env_var_names_from_model_config_value(
+                value=cast(ModelConfig | ModelConfigJsonValue, child),
+                collected_names=collected_names,
+            )
+        return
+    if isinstance(value, list):
+        for child in value:
+            _collect_env_var_names_from_model_config_value(
+                value=cast(ModelConfig | ModelConfigJsonValue, child),
+                collected_names=collected_names,
+            )
+        return
+    if isinstance(value, str):
+        collected_names.update(_extract_env_var_names_from_text(value))
 
 
 def _should_scan_env_var_file(file_path: Path) -> bool:
@@ -157,9 +213,7 @@ class ConfigLoader:
         if isinstance(obj, list):
             return [ConfigLoader._replace_env_vars(item) for item in obj]
         if isinstance(obj, str):
-            # 匹配 {{ENV_VAR_NAME}} 格式
-            pattern = r'\{\{([A-Z_][A-Z0-9_]*)\}\}'
-            return re.sub(pattern, _env_var_replacer, obj)
+            return re.sub(_ENV_VAR_PATTERN, _env_var_replacer, obj)
         return obj
     
     def __init__(self, resolver: ConfigFileResolver):
@@ -238,7 +292,7 @@ class ConfigLoader:
         llm_models = self._llm_models_cache
         if llm_models is None:
             raise RuntimeError("llm_models.json 缓存为空")
-        return dict(llm_models)
+        return cast(dict[str, ModelConfig], deepcopy(llm_models))
     
     def load_llm_model(self, model_name: str) -> ModelConfig:
         """加载指定 LLM 模型的配置（包含环境变量替换）
@@ -377,11 +431,7 @@ class ConfigLoader:
             if raw_model_config is None:
                 missing_model_names.append(model_name)
                 continue
-            referenced_names.update(
-                _extract_env_var_names_from_text(
-                    json.dumps(raw_model_config, ensure_ascii=False, sort_keys=True)
-                )
-            )
+            referenced_names.update(_collect_env_var_names_from_model_config(raw_model_config))
 
         if missing_model_names:
             available_models = ", ".join(sorted(models.keys()))

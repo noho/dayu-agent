@@ -493,7 +493,7 @@ class AsyncAgent:
         # iteration_counter 单调递增，不受 context_overflow 回退影响，保证 iteration_id 全局唯一。
         iteration_counter = 0
         iteration_id = f"{run_id}_iteration_0"
-        # Bug #2 fix: 跨轮次累积内容，确保续写场景下 final_answer_event 包含完整内容
+        # 跨轮次累积内容，确保续写场景下 final_answer_event 包含完整内容
         accumulated_content_parts: List[str] = []
         
         while iteration < self.running_config.max_iterations:
@@ -908,7 +908,7 @@ class AsyncAgent:
                         run_id=run_id, iteration_id=iteration_id,
                     )
                     Log.warn(f"[{iteration_id}] {continuation_msg}", module=MODULE)
-                    # Bug #2 fix: 将截断的部分内容累积到跨轮缓冲
+                    # 将截断的部分内容累积到跨轮缓冲
                     if final_content:
                         accumulated_content_parts.append(final_content)
                     # 将截断的部分内容作为 assistant message

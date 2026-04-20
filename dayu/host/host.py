@@ -8,6 +8,8 @@ from typing import Any, AsyncIterator, Callable, TypeVar, cast
 
 from dayu.contracts.agent_execution import ExecutionContract, deserialize_execution_contract_snapshot
 from dayu.contracts.events import AppEvent, AppResult
+from dayu.contracts.events import PublishedRunEventProtocol
+from dayu.contracts.infrastructure import ModelCatalogProtocol, WorkspaceResourcesProtocol
 from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, ReplyOutboxSubmitRequest
 from dayu.contracts.run import RunCancelReason, RunRecord, RunState
 from dayu.contracts.session import SessionRecord, SessionSource, SessionState
@@ -41,13 +43,12 @@ from dayu.host.protocols import (
     SessionRegistryProtocol,
 )
 from dayu.log import Log
-
-MODULE = "HOST"
 from dayu.host.run_registry import SQLiteRunRegistry
 from dayu.host.scene_preparer import DefaultScenePreparer
 from dayu.host.session_registry import SQLiteSessionRegistry
-from dayu.contracts.infrastructure import ModelCatalogProtocol, WorkspaceResourcesProtocol
-from dayu.contracts.events import PublishedRunEventProtocol
+
+
+MODULE = "HOST"
 
 
 TStreamEvent = TypeVar("TStreamEvent", bound=PublishedRunEventProtocol)

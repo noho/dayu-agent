@@ -9,6 +9,7 @@ from typing import Any, cast
 
 import pytest
 
+from dayu.contracts.model_config import OpenAICompatibleModelConfig
 from dayu.startup import config_loader as module
 from dayu.startup.config_file_resolver import ConfigFileResolver, resolve_package_config_path
 
@@ -36,7 +37,7 @@ def test_env_var_replacer_warns_when_missing(monkeypatch: pytest.MonkeyPatch) ->
         captured["message"] = message
         captured["module"] = module
 
-    monkeypatch.setattr(module.Log, "warn", _fake_warn)
+    monkeypatch.setattr(module.Log, "warning", _fake_warn)
     match = re.search(r"\{\{([A-Z_][A-Z0-9_]*)\}\}", "{{MISSING_TOKEN}}")
     assert match is not None
 
@@ -280,6 +281,57 @@ def test_extract_env_var_names_and_should_scan_helpers(tmp_path: Path) -> None:
     assert module._should_scan_env_var_file(config_file) is True
     assert module._should_scan_env_var_file(readme_file) is False
     assert module._should_scan_env_var_file(pycache_file) is False
+
+
+@pytest.mark.unit
+def test_collect_env_var_names_from_model_config_recurses_nested_values() -> None:
+    """模型环境变量收集应递归遍历嵌套 dict/list，而非依赖 JSON 序列化。"""
+
+    names = module._collect_env_var_names_from_model_config(
+        cast(
+            Any,
+            {
+                "endpoint_url": "{{BASE_URL}}",
+                "headers": [
+                    {"Authorization": "Bearer {{API_KEY}}"},
+                    {"X-Tags": ["{{TAG_ONE}}", "{{TAG_TWO}}"]},
+                ],
+                "metadata": {
+                    "notes": "use {{API_KEY}} and {{BASE_URL}}",
+                },
+            },
+        )
+    )
+
+    assert names == ("API_KEY", "BASE_URL", "TAG_ONE", "TAG_TWO")
+
+
+@pytest.mark.unit
+def test_load_llm_models_returns_deep_copy_of_cached_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    """返回给调用方的模型配置副本不应污染内部缓存。"""
+
+    resolver = ConfigFileResolver(resolve_package_config_path())
+    monkeypatch.setattr(
+        resolver,
+        "read_json",
+        lambda filename, required=True: {
+            "demo_model": {
+                "runner_type": "openai_compatible",
+                "endpoint_url": "http://example.com",
+                "headers": {"Authorization": "Bearer token"},
+            }
+        },
+    )
+    loader = module.ConfigLoader(resolver)
+
+    first = loader.load_llm_models()
+    first_model = cast(OpenAICompatibleModelConfig, first["demo_model"])
+    first_model["headers"] = {"Authorization": "Bearer mutated"}
+    second = loader.load_llm_models()
+    second_model = cast(OpenAICompatibleModelConfig, second["demo_model"])
+    headers = second_model.get("headers")
+    assert headers is not None
+    assert headers["Authorization"] == "Bearer token"
 
 
 @pytest.mark.unit

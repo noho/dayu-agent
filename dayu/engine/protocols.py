@@ -1,16 +1,16 @@
 """协议定义模块 - Engine 接口契约。
 
 基于 Protocol（结构化子类型）定义 Runner 的最小能力集，
-并兼容导出跨层共享的 ToolExecutor 协议。
+并导出跨层共享的 `ToolExecutor` 协议。
 
-设计目标:
-- 解耦实现与依赖：Agent 只依赖接口
-- 易于测试：可使用 Mock Runner/Executor
-- 易扩展：支持多种 LLM 与工具实现
+设计目标：
+- 解耦实现与依赖：Agent 只依赖接口。
+- 易于测试：可使用 Mock Runner / Executor。
+- 易于扩展：支持多种 LLM Runner 与工具实现。
 
-关键协议:
-- AsyncRunner: call()/set_tools()/is_supports_tool_calling()
-- ToolExecutor: 由 dayu.contracts.protocols 提供稳定定义
+关键协议：
+- `AsyncRunner`: 约束 `call()` / `set_tools()` / `is_supports_tool_calling()`。
+- `ToolExecutor`: 由 `dayu.contracts.protocols` 提供稳定定义。
 """
 from typing import TYPE_CHECKING, AsyncIterator, List, Optional, Protocol
 
@@ -22,15 +22,13 @@ if TYPE_CHECKING:
 
 
 class AsyncRunner(Protocol):
-    """
-    异步 Runner 接口协议
-    
+    """异步 Runner 接口协议。
+
     定义 Agent 需要的异步 LLM 调用能力。
     任何实现了这些方法的类都可以作为 Agent 的 runner。
-    
-    实现示例：
-    - AsyncOpenAIRunner: OpenAI 兼容 API
-    - AsyncCliRunner: Codex CLI / GitHub Copilot CLI
+
+    当前稳定实现示例：
+    - `AsyncOpenAIRunner`: OpenAI 兼容 API。
     """
     
     def call(
