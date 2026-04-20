@@ -17,6 +17,7 @@ from dayu.host.reply_outbox_store import (
     SQLiteReplyOutboxStore,
 )
 from dayu.contracts.reply_outbox import ReplyOutboxSubmitRequest
+from dayu.wechat.runtime import _purge_tracked_session_data
 from dayu.wechat.state_store import (
     load_tracked_session_ids,
     record_tracked_session_id,
@@ -274,7 +275,6 @@ def test_purge_tracked_session_data_cleans_host_db(tmp_path: Path) -> None:
     record_tracked_session_id(state_dir, "sess_target")
 
     # 执行清理
-    from dayu.wechat.main import _purge_tracked_session_data
     _purge_tracked_session_data(workspace_root=workspace_root, state_dir=state_dir)
 
     # 验证：target 被删，other 保留
@@ -301,7 +301,6 @@ def test_purge_tracked_session_data_no_tracked_sessions(tmp_path: Path) -> None:
         AssertionError: 断言失败时抛出。
     """
 
-    from dayu.wechat.main import _purge_tracked_session_data
     # 不应抛异常
     _purge_tracked_session_data(
         workspace_root=tmp_path / "workspace",

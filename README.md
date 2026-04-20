@@ -45,7 +45,25 @@
 
 安装使用 `大愚 Agent` 前需安装Python 3.11。
 
-#### 1.1.1 下载离线安装包
+#### 1.1.1 在线安装
+
+如果你当前机器可以联网，并且接受由 `pip` 在线解析并下载第三方依赖，可以直接安装 Release 中的 wheel：
+
+命令格式：
+
+```bash
+pip install https://github.com/noho/dayu-agent/releases/download/<version>/dayu_agent-<version>-py3-none-any.whl
+```
+
+示例（替换为最新版本号）：
+
+```bash
+pip install https://github.com/noho/dayu-agent/releases/download/v0.1.2/dayu_agent-0.1.2-py3-none-any.whl
+```
+
+这种方式最轻，但安装耗时和成功率会受网络、平台和上游依赖发布状态影响。
+
+#### 1.1.2 下载离线安装包
 
 前往 GitHub Releases，下载与你平台匹配的离线安装包：
 

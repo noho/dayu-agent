@@ -226,7 +226,144 @@ git push lan main
 
 放进 cron 或者每次 PR merge 后顺手做一次都行。
 
-### 7. 发布 release tag（按需）
+### 7. PR 前做四平台安装包验证
+
+在向 GitHub 提 PR 前，除了本地 `pyright`、受影响测试和常规命令 smoke 外，还要补一轮**离线安装包验证**。
+
+当前平台矩阵与验证方式固定如下：
+
+- `macos-arm64`：在当前本机直接构建并验证
+- `macos-x64`：在 Intel macOS 宿主机验证
+- `linux-x64`：在 Docker 容器中验证
+- `windows-x64`：在 Windows x64 宿主机验证
+
+这里有一个前提要明确：
+
+- 当前 [utils/build_offline_bundle.py](</Users/leo/workspace/dayu-agent/utils/build_offline_bundle.py>) 会基于**当前运行平台**下载 wheelhouse
+- `--platform-id` 主要用于命名、安装脚本分支和归档后缀
+- 它**不是**“一台机器交叉构建任意平台离线包”的开关
+
+因此，不要在一台 `macos-arm64` 机器上强行本地构建 `windows-x64` 或 `macos-x64` 离线包；那不是当前工具链支持的验证路径。
+
+#### 通用步骤
+
+每个平台都按同一套路做：
+
+1. 构建项目 wheel
+2. 基于对应平台的 `constraints/lock-<platform>-py311.txt` 构建离线安装包
+3. 运行 [utils/smoke_test_offline_bundle.py](</Users/leo/workspace/dayu-agent/utils/smoke_test_offline_bundle.py>) 做干净虚拟环境 smoke
+
+示例中的 `dist/offline` 可以按需替换成别的输出目录。
+
+#### 7.1 `macos-arm64`（当前本机）
+
+```bash
+source .venv/bin/activate
+python -m pip install --upgrade pip build
+rm -rf dist build
+python -m build --wheel
+python utils/build_offline_bundle.py \
+  --wheel "$(ls dist/dayu_agent-*.whl | tail -n1)" \
+  --constraints constraints/lock-macos-arm64-py311.txt \
+  --platform-id macos-arm64 \
+  --output-dir dist/offline
+python utils/smoke_test_offline_bundle.py \
+  --archive "$(ls dist/offline/dayu-agent-*-macos-arm64-offline.tar.gz | tail -n1)"
+```
+
+#### 7.2 `macos-x64`
+
+在 Intel macOS 宿主机上执行与上面相同的流程，只把 constraints 和平台标识换掉：
+
+```bash
+source .venv/bin/activate
+python -m pip install --upgrade pip build
+rm -rf dist build
+python -m build --wheel
+python utils/build_offline_bundle.py \
+  --wheel "$(ls dist/dayu_agent-*.whl | tail -n1)" \
+  --constraints constraints/lock-macos-x64-py311.txt \
+  --platform-id macos-x64 \
+  --output-dir dist/offline
+python utils/smoke_test_offline_bundle.py \
+  --archive "$(ls dist/offline/dayu-agent-*-macos-x64-offline.tar.gz | tail -n1)"
+```
+
+#### 7.3 `linux-x64`（Docker）
+
+仓库内提供了 Linux 验证容器：
+
+- [docker/linux-x64-offline-verify/Dockerfile](</Users/leo/workspace/dayu-agent/docker/linux-x64-offline-verify/Dockerfile>)
+
+如果当前开发机是 Apple Silicon（`macos-arm64`），这里必须显式指定 `linux/amd64`。
+否则 Docker 默认会起 `linux/arm64` 容器，最终下载到的是 `aarch64` wheel，但文件名仍会被误标成 `linux-x64`，验证结果失真。
+
+先构建镜像：
+
+```bash
+docker build \
+  --platform linux/amd64 \
+  -f docker/linux-x64-offline-verify/Dockerfile \
+  -t dayu-linux-x64-verify .
+```
+
+再启动容器：
+
+```bash
+docker run --rm -it \
+  --platform linux/amd64 \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/tmp/home \
+  -v "$PWD:/dayu-agent" \
+  -w /dayu-agent \
+  dayu-linux-x64-verify
+```
+
+容器内执行：
+
+```bash
+rm -rf dist build
+python -m build --wheel
+python utils/build_offline_bundle.py \
+  --wheel "$(ls dist/dayu_agent-*.whl | tail -n1)" \
+  --constraints constraints/lock-linux-x64-py311.txt \
+  --platform-id linux-x64 \
+  --output-dir dist/offline
+python utils/smoke_test_offline_bundle.py \
+  --archive "$(ls dist/offline/dayu-agent-*-linux-x64-offline.tar.gz | tail -n1)"
+```
+
+#### 7.4 `windows-x64`
+
+在 Windows x64 宿主机上执行同样流程，示意如下：
+
+```powershell
+python -m pip install --upgrade pip build
+Remove-Item -Recurse -Force dist, build -ErrorAction SilentlyContinue
+python -m build --wheel
+$wheel = Get-ChildItem dist/dayu_agent-*.whl | Select-Object -Last 1
+python utils/build_offline_bundle.py `
+  --wheel $wheel.FullName `
+  --constraints constraints/lock-windows-x64-py311.txt `
+  --platform-id windows-x64 `
+  --output-dir dist/offline
+$archive = Get-ChildItem dist/offline/dayu-agent-*-windows-x64-offline.zip | Select-Object -Last 1
+python utils/smoke_test_offline_bundle.py --archive $archive.FullName
+```
+
+#### 什么时候可以放心开 PR
+
+理想情况是四个平台都先人工验证一遍，再开 PR。
+
+如果时间有限，最低建议是：
+
+- 当前开发机先验证 `macos-arm64`
+- Docker 再验证 `linux-x64`
+- `macos-x64 / windows-x64` 至少确认对应宿主机流程可跑，剩余收口交给 GitHub Actions
+
+如果 PR 的改动直接触及离线打包、安装脚本、平台差异依赖或 CLI 入口，则尽量不要跳过任何平台。
+
+### 8. 发布 release tag（按需）
 
 积累到一个阶段性版本时，发布流程已经改成：
 
@@ -236,12 +373,15 @@ git push lan main
 
 #### 产物形态
 
-当前正式发布资产不是单个远程 wheel，而是 4 个平台离线安装包：
+当前正式发布资产包括：
 
-- `dayu-agent-<version>-macos-arm64-offline.tar.gz`
-- `dayu-agent-<version>-macos-x64-offline.tar.gz`
-- `dayu-agent-<version>-linux-x64-offline.tar.gz`
-- `dayu-agent-<version>-windows-x64-offline.zip`
+- 一个在线安装用的通用 wheel：
+  - `dayu_agent-<version>-py3-none-any.whl`
+- 4 个平台离线安装包：
+  - `dayu-agent-<version>-macos-arm64-offline.tar.gz`
+  - `dayu-agent-<version>-macos-x64-offline.tar.gz`
+  - `dayu-agent-<version>-linux-x64-offline.tar.gz`
+  - `dayu-agent-<version>-windows-x64-offline.zip`
 
 这些资产由 `.github/workflows/release-offline.yml` 在 **GitHub Release 发布后** 自动生成并上传。
 
@@ -281,19 +421,17 @@ gh release create v0.2.0 \
 
 - 不需要在本地手工构建 wheel 或上传文件。
 - `gh release create` 完成后，GitHub 会触发 `Release Offline Bundles` workflow。
-- 该 workflow 会在 4 个平台上自动执行：
-  - 安装锁定依赖
-  - 构建 wheel
-  - 构建离线安装包
-  - 对离线安装包执行 smoke test
-  - 把离线安装包上传到当前 Release
+- 该 workflow 会自动执行两类发布任务：
+  - 在单独的 wheel job 中构建通用 `py3-none-any` wheel，并上传到当前 Release
+  - 在 4 个平台上分别构建离线安装包、执行 smoke test，并上传到当前 Release
 
 ##### 第 4 步：等待 Release workflow 完成
 
 到 GitHub Actions 查看 `Release Offline Bundles` 是否全部成功。
 
-只有当它全部成功后，这次 release 才算真正完成。最终 Release 页面应看到这 4 个资产：
+只有当它全部成功后，这次 release 才算真正完成。最终 Release 页面应看到这 5 个资产：
 
+- `dayu_agent-<version>-py3-none-any.whl`
 - `dayu-agent-<version>-macos-arm64-offline.tar.gz`
 - `dayu-agent-<version>-macos-x64-offline.tar.gz`
 - `dayu-agent-<version>-linux-x64-offline.tar.gz`

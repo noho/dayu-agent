@@ -9,6 +9,52 @@ permissions:
   contents: write
 
 jobs:
+  build-wheel:
+    name: build-wheel (py3.11)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install build frontend
+        run: python -m pip install --upgrade pip build
+
+      - name: Build wheel
+        run: python -m build --wheel
+
+      - name: Resolve wheel path
+        shell: bash
+        run: |
+          WHEEL_PATH="$(python - <<'PY'
+          from pathlib import Path
+          wheels = sorted(Path("dist").glob("dayu_agent-*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit(f"unexpected wheels: {wheels}")
+          print(wheels[0])
+          PY
+          )"
+          echo "WHEEL_PATH=$WHEEL_PATH" >> "$GITHUB_ENV"
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dayu-wheel
+          path: ${{ env.WHEEL_PATH }}
+
+      - name: Upload wheel release asset
+        if: github.event_name == 'release'
+        # v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          files: ${{ env.WHEEL_PATH }}
+
   build-offline:
     name: build-offline (${{ matrix.platform_id }}, py3.11)
     runs-on: ${{ matrix.runner }}
