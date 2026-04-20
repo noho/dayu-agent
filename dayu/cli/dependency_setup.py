@@ -37,8 +37,7 @@ from dayu.execution.runtime_config import AgentRuntimeConfig, RunnerRuntimeConfi
 from dayu.fins.domain.enums import SourceKind
 from dayu.fins.service_runtime import DefaultFinsRuntime
 from dayu.fins.storage import FsSourceDocumentRepository
-from dayu.host import resolve_host_config
-from dayu.host.host import Host
+from dayu.host import Host, resolve_host_config
 from dayu.log import Log, LogLevel
 from dayu.services import prepare_scene_execution_acceptance_preparer, recover_host_startup_state, WriteRunConfig
 from dayu.services.host_admin_service import HostAdminService

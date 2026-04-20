@@ -39,6 +39,8 @@ from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normaliz
 from dayu.contracts.events import AppEvent, AppEventType, AppResult, PublishedRunEventProtocol
 from dayu.contracts.run import RunCancelReason, RunRecord, RunState
 from dayu.engine.events import EventType
+from dayu.engine.tool_result import project_for_llm
+from dayu.host.conversation_store import ConversationToolUseSummary
 from dayu.log import Log
 
 TStreamEvent = TypeVar("TStreamEvent", bound=PublishedRunEventProtocol)
@@ -975,7 +977,7 @@ def _build_cancelled_error(payload: Any) -> CancelledError:
     return CancelledError("操作已被取消")
 
 
-def _build_conversation_tool_use(payload: dict[str, Any]):
+def _build_conversation_tool_use(payload: dict[str, Any]) -> ConversationToolUseSummary:
     """把 tool_call_result 事件转成 transcript 摘要对象。
 
     Args:
@@ -987,8 +989,6 @@ def _build_conversation_tool_use(payload: dict[str, Any]):
     Raises:
         无。
     """
-
-    from dayu.host.conversation_store import ConversationToolUseSummary
 
     return ConversationToolUseSummary(
         name=str(payload.get("name") or ""),
@@ -1009,8 +1009,6 @@ def _summarize_tool_result(result: Any) -> str:
     Raises:
         无。
     """
-
-    from dayu.engine.tool_result import project_for_llm
 
     projected = project_for_llm(result)
     serialized = json.dumps(projected, ensure_ascii=False, sort_keys=True)

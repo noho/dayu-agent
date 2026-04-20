@@ -62,6 +62,7 @@ class SSEParseResult:
         validation_errors: 工具调用验证失败的错误列表。
         protocol_errors: SSE 协议层错误列表（坏 UTF-8 / 坏 JSON / 非法 tool_calls 结构）。
         usage: 流式响应中捕获的 token 用量统计（需 stream_options.include_usage=true）。
+        raw_tool_call_count: 模型尝试的工具调用数（含验证失败的），用于判断是否进入工具调用分支。
     """
 
     content: str = ""
@@ -72,6 +73,7 @@ class SSEParseResult:
     validation_errors: list[str] = field(default_factory=list)
     protocol_errors: list[dict[str, Any]] = field(default_factory=list)
     usage: dict[str, Any] | None = None
+    raw_tool_call_count: int = 0
 
 
 def should_log_debug(
@@ -257,6 +259,7 @@ class SSEStreamParser:
             validation_errors=validation_errors,
             protocol_errors=list(self._protocol_errors),
             usage=self._usage,
+            raw_tool_call_count=len(self._tool_calls_buffer),
         )
 
     async def parse_stream(self, response: "ClientResponse") -> AsyncIterator[StreamEvent]:

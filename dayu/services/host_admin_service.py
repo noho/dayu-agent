@@ -93,13 +93,13 @@ def _to_session_view(record: SessionRecord) -> SessionAdminView:
     last_activity_at = record.last_activity_at
     return SessionAdminView(
         session_id=record.session_id,
-        source=record.source.value if hasattr(record.source, "value") else str(record.source),
-        state=record.state.value if hasattr(record.state, "value") else str(record.state),
-        scene_name=getattr(record, "scene_name", None),
-        created_at=created_at.isoformat() if created_at is not None and hasattr(created_at, "isoformat") else str(created_at),
+        source=record.source.value,
+        state=record.state.value,
+        scene_name=record.scene_name,
+        created_at=created_at.isoformat() if created_at is not None else str(created_at),
         last_activity_at=(
             last_activity_at.isoformat()
-            if last_activity_at is not None and hasattr(last_activity_at, "isoformat")
+            if last_activity_at is not None
             else str(last_activity_at)
         ),
     )
@@ -121,14 +121,14 @@ def _to_run_view(record: RunRecord) -> RunAdminView:
     created_at = record.created_at
     started_at = record.started_at
     completed_at = record.completed_at
-    cancel_requested_at = getattr(record, "cancel_requested_at", None)
-    cancel_requested_reason = getattr(record, "cancel_requested_reason", None)
-    cancel_reason = getattr(record, "cancel_reason", None)
+    cancel_requested_at = record.cancel_requested_at
+    cancel_requested_reason = record.cancel_requested_reason
+    cancel_reason = record.cancel_reason
     return RunAdminView(
         run_id=record.run_id,
         session_id=record.session_id,
         service_type=record.service_type,
-        state=record.state.value if hasattr(record.state, "value") else str(record.state),
+        state=record.state.value,
         cancel_requested_at=(
             cancel_requested_at.isoformat()
             if cancel_requested_at is not None
@@ -136,19 +136,19 @@ def _to_run_view(record: RunRecord) -> RunAdminView:
         ),
         cancel_requested_reason=(
             cancel_requested_reason.value
-            if cancel_requested_reason is not None and hasattr(cancel_requested_reason, "value")
-            else cancel_requested_reason
+            if cancel_requested_reason is not None
+            else None
         ),
         cancel_reason=(
             cancel_reason.value
-            if cancel_reason is not None and hasattr(cancel_reason, "value")
-            else cancel_reason
+            if cancel_reason is not None
+            else None
         ),
-        scene_name=getattr(record, "scene_name", None),
-        created_at=created_at.isoformat() if created_at is not None and hasattr(created_at, "isoformat") else str(created_at),
+        scene_name=record.scene_name,
+        created_at=created_at.isoformat() if created_at is not None else str(created_at),
         started_at=started_at.isoformat() if started_at is not None else None,
         finished_at=completed_at.isoformat() if completed_at is not None else None,
-        error_summary=getattr(record, "error_summary", None),
+        error_summary=record.error_summary,
     )
 
 

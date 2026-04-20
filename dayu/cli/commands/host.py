@@ -13,8 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
-from dayu.host import resolve_host_config
-from dayu.host.host import Host
+from dayu.host import Host, resolve_host_config
 from dayu.services.host_admin_service import HostAdminService
 from dayu.services.protocols import HostAdminServiceProtocol
 from dayu.startup.dependencies import prepare_config_file_resolver, prepare_config_loader, prepare_startup_paths

@@ -136,9 +136,11 @@ def _build_messages_from_prompt(
         可直接传给 Runner 的 messages 列表。
 
     Raises:
-        无。
+        ValueError: prompt 为空字符串时。
     """
 
+    if not prompt.strip():
+        raise ValueError("prompt 不能为空")
     messages: List[AgentMessage] = []
     normalized_system_prompt = _normalize_system_prompt(system_prompt)
     if normalized_system_prompt:
@@ -581,10 +583,9 @@ class AsyncAgent:
                     tool_name = tool_calls_data[tool_call_id]["name"]
                     tool_args = tool_calls_data[tool_call_id]["arguments"]
                     result = tool_calls_data[tool_call_id].get("result", {})
-                    get_dup_call_spec = getattr(self.tool_executor, "get_dup_call_spec", None)
-                    dup_call_spec = (
-                        cast(Optional[DupCallSpec], get_dup_call_spec(tool_name))
-                        if callable(get_dup_call_spec)
+                    dup_call_spec: DupCallSpec | None = (
+                        cast(DupCallSpec | None, self.tool_executor.get_dup_call_spec(tool_name))
+                        if self.tool_executor is not None
                         else None
                     )
                     duplicate_decision = duplicate_call_guard.evaluate(
@@ -1228,13 +1229,7 @@ class AsyncAgent:
             return []
         if not self.runner.is_supports_tool_calling():
             return []
-        get_schemas = getattr(self.tool_executor, "get_schemas", None)
-        if not callable(get_schemas):
-            return []
-        raw_schemas = get_schemas()
-        if not isinstance(raw_schemas, list):
-            return []
-        return [schema for schema in raw_schemas if isinstance(schema, dict)]
+        return self.tool_executor.get_schemas()
 # ---------- 消息压缩工具函数 ----------
 
 

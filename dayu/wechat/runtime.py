@@ -12,8 +12,7 @@ from typing import Protocol
 from dayu.contracts.session import SessionSource
 from dayu.execution.options import ResolvedExecutionOptions
 from dayu.fins.service_runtime import DefaultFinsRuntime
-from dayu.host import resolve_host_config
-from dayu.host.host import Host
+from dayu.host import Host, resolve_host_config
 from dayu.log import Log
 from dayu.services import prepare_scene_execution_acceptance_preparer, recover_host_startup_state
 from dayu.services.chat_service import ChatService
