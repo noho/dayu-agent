@@ -251,6 +251,37 @@ def load_scene_definition(
         PromptManifestError: manifest 非法时抛出。
     """
 
+    return _load_scene_definition(
+        asset_store=asset_store,
+        scene_name=scene_name,
+        inheritance_chain=(),
+    )
+
+
+def _load_scene_definition(
+    *,
+    asset_store: ScenePromptAssetStoreProtocol,
+    scene_name: str,
+    inheritance_chain: tuple[str, ...],
+) -> SceneDefinition:
+    """加载并解析指定 scene 的完整定义。
+
+    Args:
+        asset_store: scene prompt 资产仓储。
+        scene_name: scene 名称。
+        inheritance_chain: 当前递归加载中的继承链。
+
+    Returns:
+        处理继承后的 ``SceneDefinition``。
+
+    Raises:
+        PromptManifestError: manifest 非法时抛出。
+    """
+
+    if scene_name in inheritance_chain:
+        raise PromptManifestError(
+            f"scene extends 存在循环继承: {' -> '.join((*inheritance_chain, scene_name))}"
+        )
     raw_manifest = asset_store.load_scene_manifest(scene_name)
     definition = parse_scene_definition(raw_manifest)
     if not definition.extends:
@@ -262,7 +293,11 @@ def load_scene_definition(
         return normalized
     if len(definition.extends) != 1:
         raise PromptManifestError("第一版仅支持单继承 extends")
-    parent_definition = load_scene_definition(asset_store, definition.extends[0])
+    parent_definition = _load_scene_definition(
+        asset_store=asset_store,
+        scene_name=definition.extends[0],
+        inheritance_chain=(*inheritance_chain, scene_name),
+    )
     inherited_fragments = list(parent_definition.fragments)
     existing_ids = {fragment.id for fragment in inherited_fragments}
     existing_orders = {fragment.order for fragment in inherited_fragments}

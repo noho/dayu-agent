@@ -504,6 +504,60 @@ def test_child_scene_inherits_parent_conversation_mode(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+def test_scene_manifest_rejects_cyclic_extends_chain(tmp_path: Path) -> None:
+    """验证 scene extends 出现循环继承时抛出显式 manifest 错误。"""
+
+    config_dir = tmp_path / "config"
+    manifests_dir = config_dir / "prompts" / "manifests"
+    scenes_dir = config_dir / "prompts" / "scenes"
+    manifests_dir.mkdir(parents=True, exist_ok=True)
+    scenes_dir.mkdir(parents=True, exist_ok=True)
+    (scenes_dir / "a.md").write_text("A", encoding="utf-8")
+    (scenes_dir / "b.md").write_text("B", encoding="utf-8")
+    (manifests_dir / "scene_a.json").write_text(
+        """
+        {
+          "scene": "scene_a",
+          "model": {
+            "default_name": "mimo-v2-flash",
+            "allowed_names": ["mimo-v2-flash"],
+            "temperature_profile": "scene_a"
+          },
+          "version": "v1",
+          "description": "scene a",
+          "extends": ["scene_b"],
+          "fragments": [
+            {"id": "scene_a", "type": "SCENE", "path": "scenes/a.md", "order": 100}
+          ]
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (manifests_dir / "scene_b.json").write_text(
+        """
+        {
+          "scene": "scene_b",
+          "model": {
+            "default_name": "mimo-v2-flash",
+            "allowed_names": ["mimo-v2-flash"],
+            "temperature_profile": "scene_b"
+          },
+          "version": "v1",
+          "description": "scene b",
+          "extends": ["scene_a"],
+          "fragments": [
+            {"id": "scene_b", "type": "SCENE", "path": "scenes/b.md", "order": 200}
+          ]
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PromptManifestError, match="scene extends 存在循环继承: scene_a -> scene_b -> scene_a"):
+        load_scene_definition(FilePromptAssetStore(ConfigFileResolver(config_dir)), "scene_a")
+
+
+@pytest.mark.unit
 def test_scene_manifest_rejects_blank_default_model_name(tmp_path: Path) -> None:
     """验证 scene manifest 的空 model.default_name 会被拒绝。"""
 
