@@ -13,7 +13,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
-from dayu.cli.arg_parsing import parse_limits_override, parse_temperature_argument
 from dayu.cli.interactive_state import (
     FileInteractiveStateStore,
     InteractiveSessionState,
@@ -22,10 +21,9 @@ from dayu.cli.interactive_state import (
 )
 from dayu.contracts.infrastructure import ConfigLoaderProtocol, PromptAssetStoreProtocol
 from dayu.contracts.session import SessionSource
-from dayu.contracts.toolset_config import ToolsetConfigSnapshot, build_toolset_config_snapshot
+from dayu.execution.cli_execution_options import build_execution_options_from_args
 from dayu.execution.options import (
     ExecutionOptions,
-    ExecutionOptionsOverridePayload,
     ResolvedExecutionOptions,
     TraceSettings,
     resolve_doc_tool_limits_from_toolset_configs,
@@ -75,35 +73,6 @@ _COMMANDS_ALLOW_MISSING_FILINGS_DIR = frozenset(
         "upload_material",
     }
 )
-
-
-def _build_toolset_override_snapshots(
-    *,
-    doc_limits: ExecutionOptionsOverridePayload | None,
-    fins_limits: ExecutionOptionsOverridePayload | None,
-) -> tuple[ToolsetConfigSnapshot, ...]:
-    """把 CLI 解析出的 limits override 收敛为通用 toolset override 快照。
-
-    Args:
-        doc_limits: 文档工具限制 override。
-        fins_limits: 财报工具限制 override。
-
-    Returns:
-        通用 toolset override 快照序列。
-
-    Raises:
-        TypeError: 当 override 无法构造成通用快照时抛出。
-        ValueError: 当 toolset 名称非法时抛出。
-    """
-
-    snapshots: list[ToolsetConfigSnapshot] = []
-    for snapshot in (
-        build_toolset_config_snapshot("doc", doc_limits),
-        build_toolset_config_snapshot("fins", fins_limits),
-    ):
-        if snapshot is not None:
-            snapshots.append(snapshot)
-    return tuple(snapshots)
 
 
 _COMMANDS_WARN_ON_MISSING_FILINGS_DIR = frozenset(
@@ -251,39 +220,7 @@ def _build_execution_options(args: argparse.Namespace) -> ExecutionOptions:
         SystemExit: limits JSON 非法时退出。
     """
 
-    doc_limits = parse_limits_override(
-        getattr(args, "doc_limits_json", None),
-        field_name="--doc-limits-json",
-    )
-    fins_limits = parse_limits_override(
-        getattr(args, "fins_limits_json", None),
-        field_name="--fins-limits-json",
-    )
-
-    return ExecutionOptions(
-        model_name=(raw_model_name if (raw_model_name := str(getattr(args, "model_name", "") or "").strip()) else None),
-        temperature=parse_temperature_argument(getattr(args, "temperature", None), field_name="--temperature"),
-        debug_sse=bool(getattr(args, "debug_sse", False)),
-        debug_tool_delta=bool(getattr(args, "debug_tool_delta", False)),
-        debug_sse_sample_rate=getattr(args, "debug_sse_sample_rate", None),
-        debug_sse_throttle_sec=getattr(args, "debug_sse_throttle_sec", None),
-        tool_timeout_seconds=getattr(args, "tool_timeout_seconds", None),
-        max_iterations=getattr(args, "max_iterations", None),
-        fallback_mode=getattr(args, "fallback_mode", None),
-        fallback_prompt=getattr(args, "fallback_prompt", None),
-        max_consecutive_failed_tool_batches=getattr(args, "max_consecutive_failed_tool_batches", None),
-        max_duplicate_tool_calls=getattr(args, "max_duplicate_tool_calls", None),
-        duplicate_tool_hint_prompt=getattr(args, "duplicate_tool_hint_prompt", None),
-        web_provider=getattr(args, "web_provider", None),
-        trace_enabled=(True if bool(getattr(args, "enable_tool_trace", False)) else None),
-        trace_output_dir=Path(getattr(args, "tool_trace_dir")).expanduser().resolve()
-        if getattr(args, "tool_trace_dir", None)
-        else None,
-        toolset_config_overrides=_build_toolset_override_snapshots(
-            doc_limits=doc_limits,
-            fins_limits=fins_limits,
-        ),
-    )
+    return build_execution_options_from_args(args)
 
 
 def _build_interactive_state_store(workspace_dir: Path) -> FileInteractiveStateStore:

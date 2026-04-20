@@ -11,6 +11,8 @@ import argparse
 import sys
 from typing import TYPE_CHECKING, NoReturn
 
+from dayu.execution.cli_execution_options import add_execution_option_arguments
+
 if TYPE_CHECKING:
     from dayu.execution.options import ExecutionOptionsOverridePayload
 
@@ -439,69 +441,7 @@ def _add_agent_args(parser: argparse.ArgumentParser) -> None:
         无。
     """
 
-    parser.add_argument(
-        "--web-provider",
-        type=str,
-        default=None,
-        choices=["auto", "tavily", "serper", "duckduckgo"],
-        help="联网检索 provider（默认读取 run.json.web_tools_config.provider，未配置时为 auto）",
-    )
-    parser.add_argument(
-        "--temperature",
-        type=float,
-        default=None,
-        help="模型 temperature（覆盖 llm_models.runtime_hints.temperature_profiles[scene.temperature_profile].temperature）",
-    )
-    parser.add_argument("--debug-sse", action="store_true", help="开启 SSE 高频调试日志（覆盖 run.json）")
-    parser.add_argument("--debug-tool-delta", action="store_true", help="开启工具调用参数增量日志（覆盖 run.json）")
-    parser.add_argument("--debug-sse-sample-rate", type=float, help="调试日志采样率（0-1，覆盖 run.json）")
-    parser.add_argument("--debug-sse-throttle-sec", type=float, help="调试日志节流窗口秒数（覆盖 run.json）")
-    parser.add_argument("--tool-timeout-seconds", type=float, help="工具执行超时时间（秒，覆盖 run.json）")
-    parser.add_argument(
-        "--enable-tool-trace",
-        action="store_true",
-        help="启用工具调用请求/返回 JSONL 追踪（覆盖 run.json）",
-    )
-    parser.add_argument(
-        "--tool-trace-dir",
-        type=str,
-        help="工具调用追踪输出目录（可相对 workspace，覆盖 run.json）",
-    )
-    parser.add_argument("--max-iterations", type=int, help="Agent 最大迭代次数（覆盖 run.json）")
-    parser.add_argument(
-        "--fallback-mode",
-        type=str,
-        choices=["force_answer", "raise_error"],
-        help="超限处理模式（覆盖 run.json）",
-    )
-    parser.add_argument("--fallback-prompt", type=str, help="超限时补充提示（覆盖 run.json）")
-    parser.add_argument(
-        "--max-consecutive-failed-tool-batches",
-        type=int,
-        help="连续失败工具批次上限（覆盖 run.json）",
-    )
-    parser.add_argument(
-        "--max-duplicate-tool-calls",
-        type=int,
-        help="同一工具无信息增量重复调用的连续上限（覆盖 run.json）",
-    )
-    parser.add_argument(
-        "--duplicate-tool-hint-prompt",
-        type=str,
-        help="检测到重复工具调用时注入给模型的提示词（覆盖 run.json）",
-    )
-    parser.add_argument(
-        "--doc-limits-json",
-        type=str,
-        default=None,
-        help="文档工具 limits 覆盖 JSON（覆盖 run.json.doc_tool_limits）",
-    )
-    parser.add_argument(
-        "--fins-limits-json",
-        type=str,
-        default=None,
-        help="财报工具 limits 覆盖 JSON（覆盖 run.json.fins_tool_limits）",
-    )
+    add_execution_option_arguments(parser)
 
 
 def _add_thinking_args(parser: argparse.ArgumentParser) -> None:

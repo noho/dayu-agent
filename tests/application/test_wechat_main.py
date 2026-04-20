@@ -40,10 +40,24 @@ def test_build_execution_options_supports_interactive_like_overrides() -> None:
             "0.4",
             "--web-provider",
             "duckduckgo",
+            "--debug-sse",
+            "--debug-tool-delta",
+            "--debug-sse-sample-rate",
+            "0.25",
+            "--debug-sse-throttle-sec",
+            "1.5",
             "--tool-timeout-seconds",
             "12",
             "--max-iterations",
             "7",
+            "--fallback-mode",
+            "raise_error",
+            "--fallback-prompt",
+            "answer briefly",
+            "--max-duplicate-tool-calls",
+            "4",
+            "--duplicate-tool-hint-prompt",
+            "avoid repeats",
             "--enable-tool-trace",
             "--doc-limits-json",
             '{"list_files_max": 12}',
@@ -58,8 +72,16 @@ def test_build_execution_options_supports_interactive_like_overrides() -> None:
     assert options.model_name == "mimo-v2-flash"
     assert options.temperature == 0.4
     assert options.web_provider == "duckduckgo"
+    assert options.debug_sse is True
+    assert options.debug_tool_delta is True
+    assert options.debug_sse_sample_rate == 0.25
+    assert options.debug_sse_throttle_sec == 1.5
     assert options.tool_timeout_seconds == 12
     assert options.max_iterations == 7
+    assert options.fallback_mode == "raise_error"
+    assert options.fallback_prompt == "answer briefly"
+    assert options.max_duplicate_tool_calls == 4
+    assert options.duplicate_tool_hint_prompt == "avoid repeats"
     assert options.trace_enabled is True
     assert options.doc_tool_limits is None
     assert options.fins_tool_limits is None
@@ -332,6 +354,20 @@ def test_build_run_cli_arguments_includes_overrides(tmp_path: Path) -> None:
             "5",
             "--model-name",
             "deepseek-chat",
+            "--debug-sse",
+            "--debug-tool-delta",
+            "--debug-sse-sample-rate",
+            "0.5",
+            "--debug-sse-throttle-sec",
+            "2.0",
+            "--fallback-mode",
+            "raise_error",
+            "--fallback-prompt",
+            "force concise answer",
+            "--max-duplicate-tool-calls",
+            "6",
+            "--duplicate-tool-hint-prompt",
+            "use new evidence",
             "--enable-tool-trace",
             "--log-level",
             "debug",
@@ -355,6 +391,20 @@ def test_build_run_cli_arguments_includes_overrides(tmp_path: Path) -> None:
     assert "5" in cli_arguments
     assert "--model-name" in cli_arguments
     assert "deepseek-chat" in cli_arguments
+    assert "--debug-sse" in cli_arguments
+    assert "--debug-tool-delta" in cli_arguments
+    assert "--debug-sse-sample-rate" in cli_arguments
+    assert "0.5" in cli_arguments
+    assert "--debug-sse-throttle-sec" in cli_arguments
+    assert "2.0" in cli_arguments
+    assert "--fallback-mode" in cli_arguments
+    assert "raise_error" in cli_arguments
+    assert "--fallback-prompt" in cli_arguments
+    assert "force concise answer" in cli_arguments
+    assert "--max-duplicate-tool-calls" in cli_arguments
+    assert "6" in cli_arguments
+    assert "--duplicate-tool-hint-prompt" in cli_arguments
+    assert "use new evidence" in cli_arguments
     assert "--enable-tool-trace" in cli_arguments
     assert "--log-level" in cli_arguments
 
@@ -376,8 +426,16 @@ def test_build_run_cli_arguments_persists_non_default_context_delivery_max_attem
         model_name=None,
         temperature=None,
         web_provider=None,
+        debug_sse=False,
+        debug_tool_delta=False,
+        debug_sse_sample_rate=None,
+        debug_sse_throttle_sec=None,
         tool_timeout_seconds=None,
         max_iterations=None,
+        fallback_mode=None,
+        fallback_prompt=None,
+        max_duplicate_tool_calls=None,
+        duplicate_tool_hint_prompt=None,
         enable_tool_trace=False,
         tool_trace_dir=None,
         doc_limits_json=None,

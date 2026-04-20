@@ -9,6 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
+from dayu.execution.cli_execution_options import (
+    add_execution_option_arguments,
+    build_execution_options_from_args,
+)
 from dayu.log import Log, LogLevel
 from dayu.workspace_paths import DEFAULT_WECHAT_INSTANCE_LABEL, build_wechat_state_dir
 
@@ -91,20 +95,7 @@ def _add_agent_args(parser: argparse.ArgumentParser) -> None:
     """
 
     parser.add_argument("--model-name", default=None, help="覆盖 wechat scene 的模型配置名称")
-    parser.add_argument("--temperature", default=None, help="覆盖模型 temperature")
-    parser.add_argument("--web-provider", default=None, help="覆盖联网 provider")
-    parser.add_argument("--tool-timeout-seconds", type=float, default=None, help="覆盖 tool timeout（秒）")
-    parser.add_argument("--max-iterations", type=int, default=None, help="覆盖 Agent 最大迭代次数")
-    parser.add_argument(
-        "--max-consecutive-failed-tool-batches",
-        type=int,
-        default=None,
-        help="覆盖连续失败工具批次上限",
-    )
-    parser.add_argument("--enable-tool-trace", action="store_true", default=False, help="显式开启 tool trace")
-    parser.add_argument("--tool-trace-dir", default=None, help="覆盖 tool trace 输出目录")
-    parser.add_argument("--doc-limits-json", default=None, help="文档工具 limits 的 JSON 覆盖")
-    parser.add_argument("--fins-limits-json", default=None, help="财报工具 limits 的 JSON 覆盖")
+    add_execution_option_arguments(parser)
 
 
 def _parse_wechat_label_argument(raw_label: str) -> str:
@@ -308,32 +299,7 @@ def _build_execution_options(args: argparse.Namespace) -> "ExecutionOptions":
         SystemExit: 当工具 limits 或 temperature 参数非法时抛出。
     """
 
-    from dayu.cli.arg_parsing import parse_limits_override, parse_temperature_argument
-    from dayu.contracts.toolset_config import ToolsetConfigSnapshot, build_toolset_config_snapshot
-    from dayu.execution.options import ExecutionOptions
-
-    doc_limits = parse_limits_override(getattr(args, "doc_limits_json", None), field_name="--doc-limits-json")
-    fins_limits = parse_limits_override(getattr(args, "fins_limits_json", None), field_name="--fins-limits-json")
-    toolset_config_overrides: list[ToolsetConfigSnapshot] = []
-    for snapshot in (
-        build_toolset_config_snapshot("doc", doc_limits),
-        build_toolset_config_snapshot("fins", fins_limits),
-    ):
-        if snapshot is not None:
-            toolset_config_overrides.append(snapshot)
-    return ExecutionOptions(
-        model_name=(raw_model_name if (raw_model_name := str(getattr(args, "model_name", "") or "").strip()) else None),
-        temperature=parse_temperature_argument(getattr(args, "temperature", None), field_name="--temperature"),
-        tool_timeout_seconds=getattr(args, "tool_timeout_seconds", None),
-        max_iterations=getattr(args, "max_iterations", None),
-        max_consecutive_failed_tool_batches=getattr(args, "max_consecutive_failed_tool_batches", None),
-        web_provider=getattr(args, "web_provider", None),
-        trace_enabled=(True if bool(getattr(args, "enable_tool_trace", False)) else None),
-        trace_output_dir=Path(getattr(args, "tool_trace_dir")).expanduser().resolve()
-        if getattr(args, "tool_trace_dir", None)
-        else None,
-        toolset_config_overrides=tuple(toolset_config_overrides),
-    )
+    return build_execution_options_from_args(args)
 
 
 def _resolve_workspace_root(raw_base: str) -> Path:

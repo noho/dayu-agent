@@ -284,8 +284,17 @@ dayu-wechat <command> [参数]
 | `--model-name` | `run` `service install` | 指定模型配置名称 |
 | `--temperature` | `run` `service install` | 覆盖模型 temperature |
 | `--web-provider` | `run` `service install` | 指定联网检索 provider |
+| `--debug-sse` | `run` `service install` | 开启 SSE 高频调试日志 |
+| `--debug-tool-delta` | `run` `service install` | 开启工具调用参数增量日志 |
+| `--debug-sse-sample-rate` | `run` `service install` | 设置 SSE 调试日志采样率 |
+| `--debug-sse-throttle-sec` | `run` `service install` | 设置 SSE 调试日志节流窗口 |
 | `--tool-timeout-seconds` | `run` `service install` | 覆盖工具超时 |
 | `--max-iterations` | `run` `service install` | 覆盖 Agent 最大迭代次数 |
+| `--fallback-mode` | `run` `service install` | 覆盖超限处理模式 |
+| `--fallback-prompt` | `run` `service install` | 覆盖超限补充提示 |
+| `--max-consecutive-failed-tool-batches` | `run` `service install` | 覆盖连续失败工具批次上限 |
+| `--max-duplicate-tool-calls` | `run` `service install` | 覆盖重复工具调用连续上限 |
+| `--duplicate-tool-hint-prompt` | `run` `service install` | 覆盖重复工具调用提示词 |
 | `--enable-tool-trace` | `run` `service install` | 开启工具调用追踪 |
 | `--tool-trace-dir` | `run` `service install` | 指定 trace 输出目录 |
 | `--doc-limits-json` | `run` `service install` | 覆盖文档工具 limits |
@@ -492,8 +501,8 @@ dayu-cli interactive --verbose
 | 命令 | 关键参数 | 说明 |
 |------|------|------|
 | `login` | `--label` `--relogin` `--qrcode-timeout-sec` | 建立或刷新登录态 |
-| `run` | `--model-name` `--temperature` `--enable-tool-trace` | 在当前终端以前台方式运行 |
-| `service install` | `--label` `--model-name` | 安装后台服务 |
+| `run` | `--model-name` `--temperature` `--web-provider` `--debug-sse` `--fallback-mode` `--enable-tool-trace` | 在当前终端以前台方式运行 |
+| `service install` | `--label` `--model-name` `--temperature` `--web-provider` `--debug-sse` `--fallback-mode` `--enable-tool-trace` | 安装后台服务 |
 | `service start` | `--label` | 启动后台服务 |
 | `service restart` | `--label` | 重启后台服务 |
 | `service stop` | `--label` | 停止后台服务 |

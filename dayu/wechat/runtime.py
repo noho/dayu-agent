@@ -547,12 +547,30 @@ def _append_agent_override_arguments(args: argparse.Namespace, cli_arguments: li
     _append_optional_argument(cli_arguments, "--model-name", getattr(args, "model_name", None))
     _append_optional_argument(cli_arguments, "--temperature", getattr(args, "temperature", None))
     _append_optional_argument(cli_arguments, "--web-provider", getattr(args, "web_provider", None))
+    if bool(getattr(args, "debug_sse", False)):
+        cli_arguments.append("--debug-sse")
+    if bool(getattr(args, "debug_tool_delta", False)):
+        cli_arguments.append("--debug-tool-delta")
+    _append_optional_argument(cli_arguments, "--debug-sse-sample-rate", getattr(args, "debug_sse_sample_rate", None))
+    _append_optional_argument(cli_arguments, "--debug-sse-throttle-sec", getattr(args, "debug_sse_throttle_sec", None))
     _append_optional_argument(cli_arguments, "--tool-timeout-seconds", getattr(args, "tool_timeout_seconds", None))
     _append_optional_argument(cli_arguments, "--max-iterations", getattr(args, "max_iterations", None))
+    _append_optional_argument(cli_arguments, "--fallback-mode", getattr(args, "fallback_mode", None))
+    _append_optional_argument(cli_arguments, "--fallback-prompt", getattr(args, "fallback_prompt", None))
     _append_optional_argument(
         cli_arguments,
         "--max-consecutive-failed-tool-batches",
         getattr(args, "max_consecutive_failed_tool_batches", None),
+    )
+    _append_optional_argument(
+        cli_arguments,
+        "--max-duplicate-tool-calls",
+        getattr(args, "max_duplicate_tool_calls", None),
+    )
+    _append_optional_argument(
+        cli_arguments,
+        "--duplicate-tool-hint-prompt",
+        getattr(args, "duplicate_tool_hint_prompt", None),
     )
     if bool(getattr(args, "enable_tool_trace", False)):
         cli_arguments.append("--enable-tool-trace")
