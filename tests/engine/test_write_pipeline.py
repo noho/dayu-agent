@@ -2278,6 +2278,24 @@ def test_build_chapter_prompt_inputs_only_passes_item_rules_when_enabled(tmp_pat
 
 
 @pytest.mark.unit
+def test_prompt_builder_facet_catalog_does_not_alias_external_mutation(tmp_path: Path) -> None:
+    """验证 PromptBuilder 会复制 facet 状态，避免外部继续修改内部快照。"""
+
+    runner = _build_runner(tmp_path)
+    primary_facets = ["平台互联网"]
+    runner._prompter.set_company_facets(CompanyFacetProfile(primary_facets=primary_facets))
+    external_catalog = {"business_model_candidates": [], "constraint_candidates": []}
+    runner._prompter.set_company_facet_catalog(external_catalog)
+    primary_facets.append("硬件/消费电子")
+    external_catalog["business_model_candidates"].append("平台互联网")
+    company_facets, facet_catalog = runner._prompter._get_company_facet_state_snapshot()
+
+    assert company_facets is not None
+    assert company_facets.primary_facets == ["平台互联网"]
+    assert facet_catalog == {"business_model_candidates": [], "constraint_candidates": []}
+
+
+@pytest.mark.unit
 def test_build_research_decision_input_uses_prior_chapter_summaries_and_audit_status(tmp_path: Path) -> None:
     """验证第10章输入只使用前文章节结构化摘要，并附带审计状态摘要。"""
 

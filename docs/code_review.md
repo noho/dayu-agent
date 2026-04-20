@@ -9,7 +9,7 @@
 
 ## review结果
 - 写入 workspace/code-review-mmdd-HHMM.md （月份日期-小时分钟）。
-- 每发现一项写入一项。
+- 每发现一项编号后写入一项。
 - review结束给出按严重程度排序等完整列表。
 
 ## 检查项

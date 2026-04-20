@@ -220,26 +220,26 @@ class TestContextBudgetState:
         state.current_prompt_tokens = 90000
         assert state.is_over_hard_limit
 
-    def test_update_usage(self) -> None:
-        """update_usage 正确累计用量。"""
+    def test_record_usage(self) -> None:
+        """record_usage 正确累计用量。"""
         state = ContextBudgetState(max_context_tokens=131072)
-        state.update_usage({"prompt_tokens": 5000, "completion_tokens": 1000})
+        state.record_usage({"prompt_tokens": 5000, "completion_tokens": 1000})
         assert state.current_prompt_tokens == 5000
         assert state.latest_completion_tokens == 1000
         assert state.total_prompt_tokens == 5000
         assert state.total_completion_tokens == 1000
         assert state.iteration_count == 1
 
-        state.update_usage({"prompt_tokens": 8000, "completion_tokens": 2000})
+        state.record_usage({"prompt_tokens": 8000, "completion_tokens": 2000})
         assert state.current_prompt_tokens == 8000
         assert state.total_prompt_tokens == 13000
         assert state.total_completion_tokens == 3000
         assert state.iteration_count == 2
 
-    def test_update_usage_missing_fields(self) -> None:
+    def test_record_usage_missing_fields(self) -> None:
         """usage 缺少字段时默认为 0。"""
         state = ContextBudgetState()
-        state.update_usage({})
+        state.record_usage({})
         assert state.current_prompt_tokens == 0
         assert state.iteration_count == 1
 
@@ -1201,7 +1201,7 @@ class TestCapToolResultsForBudget:
         )
         state.current_prompt_tokens = 10000
         state.latest_completion_tokens = 500
-        pairs = [
+        pairs: list[tuple[dict[str, object], str]] = [
             ({"id": "c1"}, "small result"),
             ({"id": "c2"}, "another small result"),
         ]
@@ -1219,7 +1219,7 @@ class TestCapToolResultsForBudget:
         state.latest_completion_tokens = 500
         large_result = "x" * 50000  # 50K chars，远超预算
         small_result = "y" * 100
-        pairs = [
+        pairs: list[tuple[dict[str, object], str]] = [
             ({"id": "c1"}, large_result),
             ({"id": "c2"}, small_result),
         ]
@@ -1243,7 +1243,7 @@ class TestCapToolResultsForBudget:
         small_a = "a" * 100
         small_b = "b" * 500
         large_c = "c" * 200000
-        pairs = [
+        pairs: list[tuple[dict[str, object], str]] = [
             ({"id": "c1"}, large_c),    # 大结果放前面
             ({"id": "c2"}, small_a),
             ({"id": "c3"}, small_b),
@@ -1268,7 +1268,7 @@ class TestCapToolResultsForBudget:
         )
         state.current_prompt_tokens = 70000
         state.latest_completion_tokens = 500
-        pairs = [
+        pairs: list[tuple[dict[str, object], str]] = [
             ({"id": "c1"}, ""),
             ({"id": "c2"}, "small"),
         ]
@@ -1286,7 +1286,7 @@ class TestCapToolResultsForBudget:
         state.current_prompt_tokens = 80000
         state.latest_completion_tokens = 500
         large_result = "z" * 50000
-        pairs = [({"id": "c1"}, large_result)]
+        pairs: list[tuple[dict[str, object], str]] = [({"id": "c1"}, large_result)]
         result, capped = ToolResultBudgetCapper.cap_results_for_budget(pairs, state)
         assert capped
         # 截断后保留至少 4000 chars（_MIN_RESULT_CHARS）

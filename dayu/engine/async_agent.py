@@ -633,7 +633,7 @@ class AsyncAgent:
                     # 更新预算状态
                     usage = done_event_summary.get("usage")
                     if usage and isinstance(usage, dict):
-                        budget_state.update_usage(usage)
+                        budget_state.record_usage(usage)
                         if trace_recorder is not None:
                             trace_recorder.record_iteration_usage(
                                 iteration_id=iteration_id,
@@ -765,7 +765,7 @@ class AsyncAgent:
                 messages.append(assistant_message)
                 
                 # Pass 1: 序列化所有工具结果
-                serialized_pairs: List[Tuple[Dict, str]] = []
+                serialized_pairs: list[tuple[dict[str, object], str]] = []
                 for tc in ordered_tool_calls:
                     tool_result = tc.get("result")
                     if tool_result is None:
@@ -812,9 +812,10 @@ class AsyncAgent:
                 for tc, result_str in serialized_pairs:
                     if not result_str:
                         continue
+                    tool_call_id = str(tc["id"])
                     messages.append(
                         build_tool_chat_message(
-                            tool_call_id=tc["id"],
+                            tool_call_id=tool_call_id,
                             content=result_str,
                         )
                     )

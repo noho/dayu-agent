@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Mapping
 
 CHARS_PER_TOKEN = 4
 """字符到 token 的保守换算比例。"""
@@ -31,6 +31,35 @@ PREDICTIVE_OVERHEAD_TOKENS = 4096
 tokenizer 对中文/特殊字符的膨胀余量（实测结构开销在 2k-3k token，
 取 4096 留出安全裕度）。
 """
+
+
+def _coerce_usage_token_count(raw_value: object) -> int:
+    """把 usage 字段中的原始 token 值收敛为整数。
+
+    Args:
+        raw_value: usage 字段中的原始值。
+
+    Returns:
+        合法的整数 token 数；无法解析时返回 0。
+
+    Raises:
+        无。
+    """
+
+    if raw_value is None:
+        return 0
+    if isinstance(raw_value, bool):
+        return int(raw_value)
+    if isinstance(raw_value, int):
+        return raw_value
+    if isinstance(raw_value, float):
+        return int(raw_value)
+    if isinstance(raw_value, str):
+        normalized_value = raw_value.strip()
+        if not normalized_value:
+            return 0
+        return int(normalized_value)
+    return 0
 
 
 @dataclass
@@ -153,22 +182,7 @@ class ContextBudgetState:
 
         return self.is_budget_enabled and self.current_prompt_tokens >= self.hard_limit_tokens
 
-    def update_usage(self, usage: Dict[str, Any]) -> None:
-        """从 usage 字典更新预算状态。
-
-        Args:
-            usage: 标准 usage 字典。
-
-        Returns:
-            无。
-
-        Raises:
-            无。
-        """
-
-        self.record_usage(usage)
-
-    def record_usage(self, usage: Dict[str, Any]) -> None:
+    def record_usage(self, usage: Mapping[str, object]) -> None:
         """根据 Runner usage 更新预算状态。
 
         Args:
@@ -181,8 +195,8 @@ class ContextBudgetState:
             无。
         """
 
-        prompt_tokens = int(usage.get("prompt_tokens") or 0)
-        completion_tokens = int(usage.get("completion_tokens") or 0)
+        prompt_tokens = _coerce_usage_token_count(usage.get("prompt_tokens"))
+        completion_tokens = _coerce_usage_token_count(usage.get("completion_tokens"))
         self.current_prompt_tokens = prompt_tokens
         self.latest_completion_tokens = completion_tokens
         self.total_prompt_tokens += prompt_tokens
@@ -242,9 +256,9 @@ class ToolResultBudgetCapper:
     @classmethod
     def cap_results_for_budget(
         cls,
-        serialized_pairs: List[Tuple[Dict[str, Any], str]],
+        serialized_pairs: list[tuple[dict[str, object], str]],
         budget_state: ContextBudgetState,
-    ) -> Tuple[List[Tuple[Dict[str, Any], str]], bool]:
+    ) -> tuple[list[tuple[dict[str, object], str]], bool]:
         """按上下文预算截断过大的工具结果。
 
         Args:
@@ -266,7 +280,7 @@ class ToolResultBudgetCapper:
         )
         available_chars = available_tokens * CHARS_PER_TOKEN
 
-        indexed_sizes: List[Tuple[int, int]] = [
+        indexed_sizes: list[tuple[int, int]] = [
             (index, len(result_str))
             for index, (_, result_str) in enumerate(serialized_pairs)
             if result_str
@@ -289,7 +303,7 @@ class ToolResultBudgetCapper:
             remaining_count -= 1
 
         capped = False
-        new_pairs: List[Tuple[Dict[str, Any], str]] = []
+        new_pairs: list[tuple[dict[str, object], str]] = []
         for index, (tool_call, result_str) in enumerate(serialized_pairs):
             if index in caps and len(result_str) > caps[index]:
                 result_str = cls.truncate_result_str(result_str, caps[index])

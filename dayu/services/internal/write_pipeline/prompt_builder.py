@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import asdict
-from typing import Any, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from dayu.contracts.infrastructure import WorkspaceResourcesProtocol
 from dayu.services.internal.write_pipeline.artifact_store import (
@@ -49,6 +49,47 @@ _DECISION_SOURCE_OF_TRUTH = "structured_prior_chapter_summaries_v1"
 
 
 _DECISION_CHAPTER_TITLE = "是否值得继续深研与待验证问题"
+
+
+def _clone_company_facet_profile(company_facets: CompanyFacetProfile | None) -> CompanyFacetProfile | None:
+    """复制公司级 facet 归因结果，避免共享可变列表引用。
+
+    Args:
+        company_facets: 原始 facet 归因结果。
+
+    Returns:
+        可安全跨线程读取的 facet 副本；当输入为空时返回 ``None``。
+
+    Raises:
+        无。
+    """
+
+    if company_facets is None:
+        return None
+    return CompanyFacetProfile(
+        primary_facets=list(company_facets.primary_facets),
+        cross_cutting_facets=list(company_facets.cross_cutting_facets),
+        confidence_notes=company_facets.confidence_notes,
+    )
+
+
+def _clone_company_facet_catalog(company_facet_catalog: Mapping[str, Sequence[str]]) -> dict[str, list[str]]:
+    """复制 facet 候选目录，避免外部继续修改内部状态。
+
+    Args:
+        company_facet_catalog: 原始 facet 候选目录。
+
+    Returns:
+        键和值列表均已复制的新字典。
+
+    Raises:
+        无。
+    """
+
+    return {
+        key: [str(item) for item in values]
+        for key, values in company_facet_catalog.items()
+    }
 
 
 def _build_prior_decision_tasks(layout: TemplateLayout) -> list[ChapterTask]:
@@ -123,6 +164,7 @@ class PromptBuilder:
         self._store = store
         self._task_prompt_cache: dict[str, tuple[str, TaskPromptContract]] = {}
         self._task_prompt_cache_lock = threading.Lock()
+        self._company_facet_state_lock = threading.Lock()
         self._company_facets: CompanyFacetProfile | None = None
         self._company_facet_catalog: dict[str, list[str]] = {}
 
@@ -139,7 +181,8 @@ class PromptBuilder:
             无。
         """
 
-        self._company_facets = company_facets
+        with self._company_facet_state_lock:
+            self._company_facets = _clone_company_facet_profile(company_facets)
 
     def set_company_facet_catalog(self, company_facet_catalog: dict[str, list[str]]) -> None:
         """设置当前模板声明的 facet 候选目录。
@@ -154,7 +197,27 @@ class PromptBuilder:
             无。
         """
 
-        self._company_facet_catalog = dict(company_facet_catalog)
+        with self._company_facet_state_lock:
+            self._company_facet_catalog = _clone_company_facet_catalog(company_facet_catalog)
+
+    def _get_company_facet_state_snapshot(self) -> tuple[CompanyFacetProfile | None, dict[str, list[str]]]:
+        """获取当前 facet 状态的一致性快照。
+
+        Args:
+            无。
+
+        Returns:
+            `(company_facets, company_facet_catalog)` 的深拷贝快照。
+
+        Raises:
+            无。
+        """
+
+        with self._company_facet_state_lock:
+            return (
+                _clone_company_facet_profile(self._company_facets),
+                _clone_company_facet_catalog(self._company_facet_catalog),
+            )
 
     def build_chapter_prompt_inputs(
         self,
@@ -363,21 +426,22 @@ class PromptBuilder:
             无。
         """
 
+        company_facets, company_facet_catalog = self._get_company_facet_state_snapshot()
         filtered_contract = filter_chapter_contract_by_facets(
             task.chapter_contract,
-            self._company_facets,
-            self._company_facet_catalog,
+            company_facets,
+            company_facet_catalog,
         )
         filtered_item_rules = filter_item_rules_by_facets(
             task.item_rules,
-            self._company_facets,
-            self._company_facet_catalog,
+            company_facets,
+            company_facet_catalog,
         )
         prompt_inputs: dict[str, Any] = {
             "chapter": task.title,
             "company": company_name,
             "ticker": self._write_config.ticker,
-            "company_facets_summary": render_company_facets_for_prompt(self._company_facets),
+            "company_facets_summary": render_company_facets_for_prompt(company_facets),
             "report_goal": task.report_goal,
             "audience_profile": task.audience_profile,
             "chapter_goal": task.chapter_goal,
@@ -677,4 +741,3 @@ class PromptBuilder:
         """
 
         return str(result.process_state.get("final_stage") or "") == "fast_written"
-
