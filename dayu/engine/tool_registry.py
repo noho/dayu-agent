@@ -18,7 +18,7 @@ from .tool_contracts import DupCallSpec, ToolFunctionSchema, ToolSchema, ToolTru
 from .tool_errors import ToolBusinessError
 from .tool_result import build_error, build_success, is_tool_success
 from .truncation_manager import TruncationManager
-from dayu.engine.cancellation import CancelledError
+from dayu.contracts.cancellation import CancelledError
 
 MODULE = "ENGINE.TOOL_REGISTRY"
 

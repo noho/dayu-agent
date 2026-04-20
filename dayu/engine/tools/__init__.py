@@ -22,7 +22,7 @@ Tools - 内置工具集与工具开发工具
 from ..tool_contracts import ToolSchema, ToolFunctionSchema, ToolTruncateSpec
 from .base import tool, build_tool_schema
 from .web_tools import register_web_tools
-from .web_limits import WebToolsConfig
+from dayu.execution.web_limits import WebToolsConfig
 from .web_recovery import (
     RECOVERY_CONTRACT_VERSION,
     ALLOWED_NEXT_ACTIONS,

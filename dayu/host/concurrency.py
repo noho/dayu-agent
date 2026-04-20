@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from datetime import datetime, timezone
+
 from typing import Any
 
 from dayu.host.host_store import HostStore
@@ -25,10 +25,7 @@ DEFAULT_LANE_CONFIG: dict[str, int] = {
 _POLL_INTERVAL = 0.1
 
 
-def _now_utc() -> datetime:
-    """返回当前 UTC 时间。"""
-
-    return datetime.now(timezone.utc)
+from dayu.host._datetime_utils import now_utc as _now_utc
 
 
 class SQLiteConcurrencyGovernor(ConcurrencyGovernorProtocol):

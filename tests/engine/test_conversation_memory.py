@@ -20,8 +20,8 @@ from dayu.contracts.prompt_assets import SceneManifestAsset, TaskPromptContractA
 from dayu.contracts.toolset_config import ToolsetConfigSnapshot, build_toolset_config_snapshot
 from dayu.engine.events import EventType, StreamEvent
 from dayu.engine.tool_registry import ToolRegistry
-from dayu.engine.tools.doc_limits import DocToolLimits
-from dayu.engine.tools.web_limits import WebToolsConfig
+from dayu.execution.doc_limits import DocToolLimits
+from dayu.execution.web_limits import WebToolsConfig
 from dayu.fins.tools.fins_limits import FinsToolLimits
 from dayu.execution.runtime_config import AgentRuntimeConfig, OpenAIRunnerRuntimeConfig
 from dayu.execution.options import (

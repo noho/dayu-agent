@@ -21,7 +21,7 @@ from dayu.engine import (
     tool_calls_batch_done,
 )
 from dayu.engine.async_agent import AgentRunningConfig
-from dayu.engine.cancellation import CancelledError, CancellationToken
+from dayu.contracts.cancellation import CancelledError, CancellationToken
 from dayu.engine.events import reasoning_delta
 from dayu.engine.tool_contracts import DupCallSpec
 

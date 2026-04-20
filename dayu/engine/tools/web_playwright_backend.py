@@ -22,7 +22,7 @@ import requests
 from dayu.contracts.cancellation import CancellationToken
 
 from dayu.log import Log
-from dayu.engine.cancellation import CancelledError
+from dayu.contracts.cancellation import CancelledError
 
 MODULE = "ENGINE.WEB_PLAYWRIGHT"
 

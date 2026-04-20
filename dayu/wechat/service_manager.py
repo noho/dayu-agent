@@ -590,22 +590,6 @@ def uninstall_service(*, label: str, definition_path: Path, backend: ServiceBack
     raise ValueError(f"未知 service backend: {backend}")
 
 
-def build_launchd_service_label(state_dir: Path) -> str:
-    """兼容旧接口，按状态目录生成 launchd service label。
-
-    Args:
-        state_dir: WeChat 状态目录。
-
-    Returns:
-        稳定的 launchd service label。
-
-    Raises:
-        ValueError: 当状态目录为空时抛出。
-    """
-
-    return build_service_label(state_dir)
-
-
 def resolve_launch_agent_plist_path(label: str) -> Path:
     """解析 LaunchAgent plist 文件路径。
 
@@ -1372,7 +1356,6 @@ __all__ = [
     "ServiceStatus",
     "build_service_label",
     "build_service_spec",
-    "build_launchd_service_label",
     "build_launchd_service_spec",
     "build_systemd_service_spec",
     "describe_service_backend",

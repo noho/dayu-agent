@@ -14,8 +14,8 @@ from dayu.contracts.agent_execution import (
     AcceptedToolConfigSpec,
 )
 from dayu.contracts.toolset_config import build_toolset_config_snapshot
-from dayu.engine.tools.doc_limits import DocToolLimits
-from dayu.engine.tools.web_limits import WebToolsConfig
+from dayu.execution.doc_limits import DocToolLimits
+from dayu.execution.web_limits import WebToolsConfig
 from dayu.execution.options import (
     ConversationMemorySettings,
     TraceSettings,

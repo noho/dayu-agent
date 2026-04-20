@@ -698,9 +698,6 @@ def test_service_manager_generic_wrappers_dispatch_launchd_backend(
         lambda **kwargs: calls.append(("uninstall", kwargs["label"])) or True,
     )
 
-    assert service_manager.build_launchd_service_label(tmp_path / ".wechat") == service_manager.build_service_label(
-        tmp_path / ".wechat"
-    )
     assert service_manager.resolve_service_definition_path(spec.label, backend="launchd") == definition_path
     assert (
         service_manager.build_service_spec(

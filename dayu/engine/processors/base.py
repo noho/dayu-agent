@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Any, NotRequired, Optional, Protocol, TypedDict
 
 from .source import Source
@@ -55,7 +56,7 @@ class TableContent(TypedDict):
     table_ref: str
     caption: str | None
     data_format: str
-    data: Any
+    data: Sequence[Mapping[str, object]] | str
     columns: list[str] | None
     row_count: int
     col_count: int
@@ -190,7 +191,7 @@ def build_table_content(
     table_ref: str,
     caption: Optional[str],
     data_format: str,
-    data: Any,
+    data: Sequence[Mapping[str, object]] | str,
     columns: Optional[list[str]],
     row_count: int,
     col_count: int,

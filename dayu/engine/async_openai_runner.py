@@ -104,7 +104,7 @@ from dataclasses import dataclass
 
 from dayu.contracts.agent_types import AgentMessage
 from dayu.contracts.protocols import ToolExecutionContext
-from dayu.engine.cancellation import CancelledError as EngineCancelledError, CancellationToken
+from dayu.contracts.cancellation import CancelledError as EngineCancelledError, CancellationToken
 
 # 可选依赖，导入失败不立即报错
 aiohttp: ModuleType | None

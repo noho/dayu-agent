@@ -15,7 +15,7 @@ from dayu.contracts.model_config import (
     ensure_runner_type_enabled,
 )
 from dayu.engine.async_openai_runner import AsyncOpenAIRunner, AsyncOpenAIRunnerRunningConfig
-from dayu.engine.cancellation import CancellationToken
+from dayu.contracts.cancellation import CancellationToken
 from dayu.engine.protocols import AsyncRunner
 
 

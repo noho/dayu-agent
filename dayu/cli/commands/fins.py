@@ -29,7 +29,7 @@ from dayu.contracts.fins import (
     UploadFilingsFromCommandPayload,
     UploadMaterialCommandPayload,
 )
-from dayu.fins.command_helpers import coerce_document_ids_input, prepare_cli_args
+from dayu.fins.cli import _coerce_document_ids_input as coerce_document_ids_input, _prepare_cli_args as prepare_cli_args
 from dayu.log import Log
 from dayu.presenters import format_fins_cli_result
 from dayu.services.contracts import FinsSubmitRequest

@@ -34,7 +34,7 @@ from .events import (
     tool_call_delta,
     tool_call_start,
 )
-from .cancellation import CancelledError as EngineCancelledError, CancellationToken
+from dayu.contracts.cancellation import CancelledError as EngineCancelledError, CancellationToken
 from dayu.log import Log
 
 if TYPE_CHECKING:

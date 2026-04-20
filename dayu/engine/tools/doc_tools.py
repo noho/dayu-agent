@@ -32,7 +32,7 @@ from ..exceptions import ToolArgumentError, FileAccessError
 from dayu.log import Log
 from ..tool_contracts import ToolTruncateSpec
 from .base import tool
-from .doc_limits import DocToolLimits
+from dayu.execution.doc_limits import DocToolLimits
 
 MODULE = "ENGINE.DOC_TOOLS"
 

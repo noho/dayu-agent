@@ -480,7 +480,59 @@ def test_cancel_session_runs_returns_cancelled_ids() -> None:
 
 
 @pytest.mark.unit
-def test_subscribe_session_events_wraps_event_bus() -> None:
+def test_close_session_cleans_outbox_and_pending_turns() -> None:
+    """close_session 应清理该 session 的 reply outbox 和 pending turns。"""
+
+    from dayu.contracts.reply_outbox import ReplyOutboxSubmitRequest
+    from dayu.host.pending_turn_store import (
+        InMemoryPendingConversationTurnStore,
+        PendingConversationTurnState,
+    )
+    from dayu.host.reply_outbox_store import InMemoryReplyOutboxStore
+
+    pending_store = InMemoryPendingConversationTurnStore()
+    outbox_store = InMemoryReplyOutboxStore()
+
+    session_registry = _FakeSessionRegistry()
+    run_registry = _FakeRunRegistry()
+    event_bus = AsyncQueueEventBus(run_registry=run_registry)  # type: ignore[arg-type]
+    host = Host(
+        executor=SimpleNamespace(),  # type: ignore[arg-type]
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=run_registry,  # type: ignore[arg-type]
+        concurrency_governor=_FakeGovernor(),  # type: ignore[arg-type]
+        event_bus=event_bus,
+        pending_turn_store=pending_store,
+        reply_outbox_store=outbox_store,
+    )
+
+    # 模拟 session_1 有一条 outbox 记录
+    outbox_store.submit_reply(ReplyOutboxSubmitRequest(
+        delivery_key="dk_1",
+        session_id="session_1",
+        scene_name="test_scene",
+        source_run_id="run_1",
+        reply_content="hello",
+    ))
+    assert len(outbox_store.list_replies(session_id="session_1")) == 1
+
+    # 模拟 session_1 有一条 pending turn
+    pending_store.upsert_pending_turn(
+        session_id="session_1",
+        scene_name="test_scene",
+        user_text="test question",
+        source_run_id="run_1",
+        resumable=False,
+        state=PendingConversationTurnState.ACCEPTED_BY_HOST,
+    )
+    assert pending_store.get_session_pending_turn(session_id="session_1", scene_name="test_scene") is not None
+
+    service = HostAdminService(host=host)
+    service.close_session("session_1")
+
+    # 验证 outbox 和 pending turns 已清理
+    assert len(outbox_store.list_replies(session_id="session_1")) == 0
+    assert pending_store.get_session_pending_turn(session_id="session_1", scene_name="test_scene") is None
     """subscribe_session_events 应把 Host event bus 包装成事件流。"""
 
     service, event_bus = _build_service()

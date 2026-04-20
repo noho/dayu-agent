@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from dayu.host.host_store import HostStore
@@ -20,24 +20,7 @@ from dayu.process_liveness import is_pid_alive
 MODULE = "HOST.RUN_REGISTRY"
 
 
-def _now_utc() -> datetime:
-    """返回当前 UTC 时间。"""
-
-    return datetime.now(timezone.utc)
-
-
-def _serialize_dt(dt: datetime) -> str:
-    """将 datetime 序列化为 ISO 8601 字符串。"""
-
-    return dt.isoformat()
-
-
-def _parse_dt_optional(text: str | None) -> datetime | None:
-    """将 ISO 8601 字符串解析为 datetime，None 输入返回 None。"""
-
-    if text is None:
-        return None
-    return datetime.fromisoformat(text)
+from dayu.host._datetime_utils import now_utc as _now_utc, parse_dt_optional as _parse_dt_optional, serialize_dt as _serialize_dt
 
 
 def _row_to_record(row: dict[str, Any]) -> RunRecord:

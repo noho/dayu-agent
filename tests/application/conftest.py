@@ -19,7 +19,7 @@ from dayu.host.pending_turn_store import (
     PendingConversationTurnState,
 )
 from dayu.host.prepared_turn import PreparedAgentTurnSnapshot
-from dayu.engine.cancellation import CancellationToken
+from dayu.contracts.cancellation import CancellationToken
 
 
 TStreamEvent = TypeVar("TStreamEvent")

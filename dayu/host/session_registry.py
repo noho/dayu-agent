@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Any
 
 from dayu.host.host_store import HostStore
@@ -18,22 +18,7 @@ from dayu.log import Log
 MODULE = "HOST.SESSION_REGISTRY"
 
 
-def _now_utc() -> datetime:
-    """返回当前 UTC 时间。"""
-
-    return datetime.now(timezone.utc)
-
-
-def _serialize_dt(dt: datetime) -> str:
-    """将 datetime 序列化为 ISO 8601 字符串。"""
-
-    return dt.isoformat()
-
-
-def _parse_dt(text: str) -> datetime:
-    """将 ISO 8601 字符串解析为 datetime。"""
-
-    return datetime.fromisoformat(text)
+from dayu.host._datetime_utils import now_utc as _now_utc, parse_dt as _parse_dt, serialize_dt as _serialize_dt
 
 
 def _row_to_record(row: dict[str, Any]) -> SessionRecord:

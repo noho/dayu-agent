@@ -15,7 +15,7 @@ import requests
 from urllib3.exceptions import MaxRetryError, ReadTimeoutError as Urllib3ReadTimeoutError
 
 from dayu.contracts.protocols import ToolExecutionContext
-from dayu.engine.cancellation import CancelledError, CancellationToken
+from dayu.contracts.cancellation import CancelledError, CancellationToken
 from dayu.engine.processors.html_pipeline import HtmlPipelineStageError
 from dayu.engine.tool_errors import ToolBusinessError
 from dayu.engine.tool_registry import ToolRegistry

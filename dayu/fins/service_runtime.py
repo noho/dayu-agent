@@ -48,13 +48,13 @@ from dayu.contracts.fins import (
     UploadMaterialResultData,
 )
 from dayu.engine.processors.processor_registry import ProcessorRegistry
-from dayu.fins.command_helpers import (
-    coerce_document_ids_input,
-    coerce_forms_input,
-    generate_upload_filings_script,
-    prepare_cli_args,
-    validate_upload_filing_args,
-    validate_upload_material_args,
+from dayu.fins.cli import (
+    _coerce_document_ids_input as coerce_document_ids_input,
+    _coerce_forms_input as coerce_forms_input,
+    _generate_upload_filings_script as generate_upload_filings_script,
+    _prepare_cli_args as prepare_cli_args,
+    _validate_upload_filing_args as validate_upload_filing_args,
+    _validate_upload_material_args as validate_upload_material_args,
 )
 from dayu.fins.ingestion.process_events import ProcessEvent
 from dayu.fins.ingestion.factory import (

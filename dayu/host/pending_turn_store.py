@@ -11,7 +11,7 @@ import json
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -23,52 +23,7 @@ from dayu.contracts.execution_metadata import (
 from dayu.host.host_store import HostStore
 
 
-def _now_utc() -> datetime:
-    """返回当前 UTC 时间。
-
-    Args:
-        无。
-
-    Returns:
-        当前 UTC 时间。
-
-    Raises:
-        无。
-    """
-
-    return datetime.now(timezone.utc)
-
-
-def _serialize_dt(value: datetime) -> str:
-    """将时间戳序列化为 ISO 文本。
-
-    Args:
-        value: 待序列化时间。
-
-    Returns:
-        ISO 8601 文本。
-
-    Raises:
-        无。
-    """
-
-    return value.isoformat()
-
-
-def _parse_dt(value: str) -> datetime:
-    """将 ISO 文本解析为时间戳。
-
-    Args:
-        value: ISO 8601 文本。
-
-    Returns:
-        解析后的时间戳。
-
-    Raises:
-        ValueError: 文本非法时抛出。
-    """
-
-    return datetime.fromisoformat(value)
+from dayu.host._datetime_utils import now_utc as _now_utc, parse_dt as _parse_dt, serialize_dt as _serialize_dt
 
 
 def _normalize_metadata(metadata: ExecutionDeliveryContext | None) -> ExecutionDeliveryContext:

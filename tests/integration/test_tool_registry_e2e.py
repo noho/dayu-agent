@@ -15,7 +15,7 @@ import pytest
 
 from dayu.engine.exceptions import FileAccessError
 from dayu.engine.tool_registry import ToolRegistry
-from dayu.engine.tools.doc_limits import DocToolLimits
+from dayu.execution.doc_limits import DocToolLimits
 from dayu.engine.tools.doc_tools import register_doc_tools
 from dayu.prompting.prompt_renderer import load_prompt
 

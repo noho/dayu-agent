@@ -31,7 +31,7 @@ from dayu.host.executor import DefaultHostExecutor
 from dayu.host.prepared_turn import PreparedAgentTurnSnapshot, PreparedConversationSessionSnapshot
 from dayu.host.scene_preparer import PreparedAgentExecution
 from dayu.contracts.events import AppEvent, AppEventType
-from dayu.engine.cancellation import CancelledError
+from dayu.contracts.cancellation import CancelledError
 from dayu.engine.events import EventType, StreamEvent
 from dayu.host.pending_turn_store import PendingConversationTurnState
 from dayu.log import Log

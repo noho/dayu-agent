@@ -59,7 +59,7 @@ from .tool_result import (
     is_tool_success,
     project_for_llm,
 )
-from .cancellation import CancellationToken
+from dayu.contracts.cancellation import CancellationToken
 from .tool_trace import ToolTraceRecorder, ToolTraceRecorderFactory
 
 DEFAULT_FALLBACK_PROMPT = (

@@ -20,7 +20,7 @@ import dayu.host.scene_preparer as scene_preparer_module
 from dayu.host.scene_preparer import DefaultScenePreparer, PreparedSceneState, _resolve_enabled_toolsets
 from dayu.contracts.agent_execution import AgentCreateArgs
 from dayu.engine.async_agent import AgentRunningConfig
-from dayu.engine.cancellation import CancellationToken
+from dayu.contracts.cancellation import CancellationToken
 from dayu.engine.async_openai_runner import AsyncOpenAIRunner
 from dayu.execution.runtime_config import AgentRuntimeConfig, FallbackMode, OpenAIRunnerRuntimeConfig
 from dayu.execution.options import (

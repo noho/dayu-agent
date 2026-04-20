@@ -12,7 +12,7 @@ import pytest
 from dayu.host.cancellation_bridge import CancellationBridge
 from dayu.host.protocols import RunRegistryProtocol
 from dayu.contracts.run import RunRecord, RunState
-from dayu.engine.cancellation import CancellationToken
+from dayu.contracts.cancellation import CancellationToken
 
 
 @dataclass

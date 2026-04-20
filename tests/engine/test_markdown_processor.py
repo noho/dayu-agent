@@ -118,6 +118,7 @@ def test_markdown_processor_section_table_and_search_flow(tmp_path: Path) -> Non
     table_content = processor.read_table("t_0001")
     assert table_content["data_format"] == "records"
     assert table_content["columns"] == ["项目", "金额"]
+    assert isinstance(table_content["data"], list)
     assert table_content["data"][0]["项目"] == "Revenue"
 
     hits = processor.search("波动", within_ref="s_0002")

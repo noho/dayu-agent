@@ -462,6 +462,11 @@ class Host:
         if session is None:
             raise KeyError(f"session 不存在: {session_id}")
         cancelled_ids = self.cancel_session_runs(session_id)
+        # 清理该 session 关联的待交付回复和待处理对话轮次，
+        # 在 runs 已取消但 session 尚未 close 的窗口内执行，
+        # 避免产生孤儿数据。
+        self._reply_outbox_store.delete_by_session_id(session_id)
+        self._pending_turn_store.delete_by_session_id(session_id)
         self._session_registry.close_session(session_id)
         updated = self.get_session(session_id)
         if updated is None:

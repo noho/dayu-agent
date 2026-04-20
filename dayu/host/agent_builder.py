@@ -16,7 +16,7 @@ from dayu.contracts.model_config import (
     ensure_runner_type_enabled,
 )
 from dayu.engine.async_agent import AgentRunningConfig, AsyncAgent
-from dayu.engine.cancellation import CancellationToken
+from dayu.contracts.cancellation import CancellationToken
 from dayu.engine.protocols import AsyncRunner, ToolExecutor
 from dayu.engine.runner_factory import create_runner
 from dayu.engine.tool_trace import ToolTraceRecorderFactory

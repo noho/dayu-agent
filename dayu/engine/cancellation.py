@@ -1,12 +1,10 @@
-"""兼容导出：协作式取消原语及异步取消辅助函数。"""
+"""协作式取消辅助函数。"""
 
 from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
 from typing import Any
-
-from dayu.contracts.cancellation import CancelledError, CancellationToken
 
 
 def resolve_cancellation_waiter(waiter: asyncio.Future[None]) -> None:
@@ -36,4 +34,4 @@ async def cancel_task_and_wait(task: asyncio.Future[Any]) -> None:
         await task
 
 
-__all__ = ["CancellationToken", "CancelledError", "cancel_task_and_wait", "resolve_cancellation_waiter"]
+__all__ = ["cancel_task_and_wait", "resolve_cancellation_waiter"]

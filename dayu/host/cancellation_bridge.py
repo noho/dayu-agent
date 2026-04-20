@@ -9,7 +9,7 @@ import threading
 from typing import TYPE_CHECKING
 
 from dayu.contracts.run import TERMINAL_STATES, RunState
-from dayu.engine.cancellation import CancellationToken
+from dayu.contracts.cancellation import CancellationToken
 
 if TYPE_CHECKING:
     from dayu.host.protocols import RunRegistryProtocol

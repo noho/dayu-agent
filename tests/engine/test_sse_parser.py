@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, AsyncIterator, Dict, List
 import pytest
 
 from dayu.engine.async_openai_runner import AsyncOpenAIRunnerRunningConfig
-from dayu.engine.cancellation import CancelledError as EngineCancelledError, CancellationToken
+from dayu.contracts.cancellation import CancelledError as EngineCancelledError, CancellationToken
 from dayu.engine.events import EventType, StreamEvent
 from dayu.log import Log
 from dayu.engine.sse_parser import SSEStreamParser

@@ -11,7 +11,7 @@ import pytest
 
 from dayu.engine import async_openai_runner as aor
 from dayu.contracts.protocols import ToolExecutionContext, ToolExecutionContextMapping
-from dayu.engine.cancellation import CancelledError as EngineCancelledError, CancellationToken
+from dayu.contracts.cancellation import CancelledError as EngineCancelledError, CancellationToken
 from dayu.engine.events import EventType, StreamEvent
 
 

@@ -14,29 +14,14 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+
 
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
 from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, ReplyOutboxSubmitRequest
 from dayu.host.host_store import HostStore
 
 
-def _now_utc() -> datetime:
-    """返回当前 UTC 时间。"""
-
-    return datetime.now(timezone.utc)
-
-
-def _serialize_dt(value: datetime) -> str:
-    """将时间戳序列化为 ISO 文本。"""
-
-    return value.isoformat()
-
-
-def _parse_dt(value: str) -> datetime:
-    """将 ISO 文本解析为时间戳。"""
-
-    return datetime.fromisoformat(value)
+from dayu.host._datetime_utils import now_utc as _now_utc, parse_dt as _parse_dt, serialize_dt as _serialize_dt
 
 
 def _normalize_text(value: str, *, field_name: str) -> str:

@@ -16,7 +16,7 @@ from dayu.contracts.protocols import ToolExecutionContext
 from dayu.contracts.protocols import ToolExecutor
 from dayu.engine import async_openai_runner as aor
 from dayu.engine.sse_parser import should_log_debug
-from dayu.engine.cancellation import CancelledError
+from dayu.contracts.cancellation import CancelledError
 from dayu.engine.events import EventType, StreamEvent
 
 if TYPE_CHECKING:
