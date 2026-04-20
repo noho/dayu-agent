@@ -377,15 +377,23 @@ docker build \
 再启动容器：
 
 ```bash
+mkdir -p "$HOME/.cache/dayu-agent/linux-x64-offline-verify/pip"
 docker run --rm -it \
   --platform linux/amd64 \
   --user "$(id -u):$(id -g)" \
   -e HOME=/tmp/home \
+  -v "$HOME/.cache/dayu-agent/linux-x64-offline-verify/pip:/tmp/pip-cache" \
   -v "$PWD:/dayu-agent" \
   -w /dayu-agent \
   dayu-linux-x64-verify \
-  /bin/sh -lc 'mkdir -p "$HOME" && exec /bin/bash'
+  /bin/sh -lc 'mkdir -p "$HOME" "$PIP_CACHE_DIR" && exec /bin/bash'
 ```
+
+说明：
+
+- 首次执行 `python utils/build_offline_bundle.py` 仍可能下载很久；这是正常的，因为需要把完整 Linux wheelhouse 拉到本机缓存。
+- 只要继续复用同一个宿主机缓存目录 `~/.cache/dayu-agent/linux-x64-offline-verify/pip`，后续再次构建同平台、同 Python 版本、且依赖集合高度重叠的离线包时，`pip download` 会优先复用已缓存的 wheel 与 HTTP 元数据，通常会明显更快。
+- 如果你删掉这个缓存目录、切换到另一台机器、修改锁定文件导致依赖版本大幅变化，或者上游只提供 sdist 需要重新构建，那么下载时间仍可能重新变长。
 
 容器内执行：
 

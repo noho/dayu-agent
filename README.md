@@ -68,9 +68,12 @@ pip install https://github.com/noho/dayu-agent/releases/download/v0.1.2/dayu_age
 前往 GitHub Releases，下载与你平台匹配的离线安装包：
 
 - `dayu-agent-<version>-macos-arm64-offline.tar.gz`
-- `dayu-agent-<version>-macos-x64-offline.tar.gz`
 - `dayu-agent-<version>-linux-x64-offline.tar.gz`
 - `dayu-agent-<version>-windows-x64-offline.zip`
+
+说明：
+- 当前 GitHub Release 默认提供 3 个离线安装包：`macos-arm64`、`linux-x64`、`windows-x64`。
+- `macos-x64` 离线安装包这次不随 Release 发布，请使用在线安装。
 
 macOS / Linux 示例：
 
