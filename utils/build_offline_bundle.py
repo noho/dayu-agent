@@ -160,17 +160,15 @@ def _flatten_constraints_text(constraints_path: Path) -> str:
         for raw_line in resolved_path.read_text(encoding="utf-8").splitlines():
             stripped = raw_line.strip()
             if not stripped:
-                expanded_lines.append(raw_line)
                 continue
             if stripped.startswith("#"):
-                expanded_lines.append(raw_line)
                 continue
             if stripped.startswith("-c ") or stripped.startswith("--constraint "):
                 _, include_value = stripped.split(maxsplit=1)
                 include_path = (resolved_path.parent / include_value).resolve()
                 expanded_lines.extend(_expand(include_path))
                 continue
-            expanded_lines.append(raw_line)
+            expanded_lines.append(stripped)
         visited.remove(resolved_path)
         return expanded_lines
 

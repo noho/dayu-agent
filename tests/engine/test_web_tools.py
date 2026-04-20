@@ -1795,7 +1795,10 @@ def test_fetch_and_convert_content_pdf_convert_error(monkeypatch: pytest.MonkeyP
             _ = source
             raise ValueError("convert failed")
 
-    monkeypatch.setattr("docling.document_converter.DocumentConverter", _FailingConverter)
+    monkeypatch.setattr(
+        "dayu.engine.tools.web_fetch_orchestrator.build_docling_pdf_converter",
+        lambda **_kwargs: _FailingConverter(),
+    )
 
     with pytest.raises(RuntimeError, match="Docling 转换失败"):
         _fetch_and_convert_content("https://example.com/report.pdf", timeout_seconds=3.0, session=fake_session)
@@ -1844,7 +1847,10 @@ def test_fetch_and_convert_content_pdf_success(monkeypatch: pytest.MonkeyPatch) 
             _ = source
             return _FakeConvertResult("# My Title\n\nBody")
 
-    monkeypatch.setattr("docling.document_converter.DocumentConverter", _InlineFakeConverter)
+    monkeypatch.setattr(
+        "dayu.engine.tools.web_fetch_orchestrator.build_docling_pdf_converter",
+        lambda **_kwargs: _InlineFakeConverter(),
+    )
 
     result = _fetch_and_convert_content("https://example.com/report.pdf", timeout_seconds=3.0, session=fake_session)
 

@@ -20,8 +20,9 @@ import uuid
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Protocol, cast
+from typing import Any, Callable, Literal, Optional
 
+from dayu.docling_runtime import build_docling_pdf_converter
 from dayu.fins.domain.document_models import (
     SourceHandle,
     SourceDocumentStateChangeRequest,
@@ -31,9 +32,6 @@ from dayu.fins.domain.document_models import (
 from dayu.fins.domain.enums import SourceKind
 from dayu.fins.storage import DocumentBlobRepositoryProtocol, SourceDocumentRepositoryProtocol
 from dayu.log import Log
-
-if TYPE_CHECKING:
-    from docling.datamodel.pipeline_options import TableFormerMode
 
 SUPPORTED_UPLOAD_SUFFIXES = frozenset(
     {
@@ -91,14 +89,6 @@ class _PendingFileAsset:
     sha256: str
     size: int
     source: str
-
-
-class _DoclingTableStructureOptionsProtocol(Protocol):
-    """Docling 表格结构选项最小协议。"""
-
-    mode: TableFormerMode
-    do_cell_matching: bool
-
 
 class DoclingUploadService:
     """Docling 上传服务。"""
@@ -549,55 +539,19 @@ def _convert_file_with_docling(file_path: Path) -> dict[str, Any]:
     """
 
     try:
-        from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
-        from docling.document_converter import DocumentConverter, PdfFormatOption
-    except ImportError as exc:  # pragma: no cover - 依赖缺失保护
-        raise RuntimeError("Docling 未安装，无法执行上传转换") from exc
-
-    pipeline_options = PdfPipelineOptions()
-    # PDF 高保真配置：OCR + 表格结构 + ACCURATE 模式 + 单元格匹配。
-    pipeline_options.do_ocr = True
-    pipeline_options.do_table_structure = True
-    _configure_docling_table_structure_options(
-        cast(_DoclingTableStructureOptionsProtocol, pipeline_options.table_structure_options),
-        table_mode=TableFormerMode.ACCURATE,
-    )
-
-    converter = DocumentConverter(
-        format_options={
-            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
-        }
-    )
+        converter = build_docling_pdf_converter(
+            do_ocr=True,
+            do_table_structure=True,
+            table_mode="accurate",
+            do_cell_matching=True,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Docling 转换器初始化失败: {exc}") from exc
     try:
         result = converter.convert(file_path)
     except Exception as exc:  # pragma: no cover - 第三方异常兜底
         raise RuntimeError(f"Docling 转换失败: {file_path.name}") from exc
     return result.document.export_to_dict()
-
-
-def _configure_docling_table_structure_options(
-    options: _DoclingTableStructureOptionsProtocol,
-    *,
-    table_mode: TableFormerMode,
-) -> None:
-    """配置 Docling 表格结构选项。
-
-    Args:
-        options: 表格结构选项对象。
-        table_mode: 表格结构识别模式。
-
-    Returns:
-        无。
-
-    Raises:
-        无。
-    """
-
-    options.mode = table_mode
-    options.do_cell_matching = True
-
-
 def _validate_source_files(files: list[Path]) -> list[Path]:
     """校验上传文件列表。
 
