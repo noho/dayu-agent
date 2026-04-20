@@ -1802,29 +1802,6 @@ def _safe_header(response: Optional[httpx.Response], key: str) -> Optional[str]:
     return response.headers.get(key)
 
 
-def _read_response_bytes(response: Any) -> bytes:
-    """读取响应体为 bytes。
-
-    Args:
-        response: Response 对象。
-
-    Returns:
-        响应体字节。
-
-    Raises:
-        RuntimeError: 读取响应体失败时抛出。
-    """
-
-    try:
-        chunks: list[bytes] = []
-        for chunk in response.iter_content(chunk_size=1024 * 64):
-            if chunk:
-                chunks.append(chunk)
-        return b"".join(chunks)
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError("读取响应体失败") from exc
-
-
 def _to_binary_stream(payload: bytes) -> BinaryIO:
     """将 bytes 包装为可读二进制流。
 

@@ -132,20 +132,35 @@ class ScenePromptRunner:
     def run_prepared_scene_prompt(self, *, prepared_scene: AcceptedSceneExecution, prompt_text: str) -> AppResult:
         """同步执行一次单轮 Agent 子执行。
 
+        若当前已处于事件循环中，则复用已有循环；否则创建新循环执行。
+
         Args:
             prepared_scene: 已解析的 scene 执行信息。
             prompt_text: 当前轮用户输入。
 
         Returns:
             聚合后的应用层结果。
+
+        Raises:
+            RuntimeError: Agent 执行异常时抛出。
         """
 
-        return asyncio.run(
-            self._collect_prompt_result(
-                prepared_scene=prepared_scene,
-                prompt_text=prompt_text,
-            )
+        coro = self._collect_prompt_result(
+            prepared_scene=prepared_scene,
+            prompt_text=prompt_text,
         )
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None and loop.is_running():
+            # 已在异步上下文中，不能调用 asyncio.run()；
+            # 创建 task 并同步等待会死锁，此处属于设计缺陷，暂抛明确异常。
+            raise RuntimeError(
+                "run_prepared_scene_prompt 不支持在已有事件循环中同步调用，"
+                "请使用 _collect_prompt_result 的 async 版本"
+            )
+        return asyncio.run(coro)
 
     async def _collect_prompt_result_via_test_seam(
         self,

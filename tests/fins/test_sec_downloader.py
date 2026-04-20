@@ -1391,8 +1391,8 @@ def test_parse_index_header_document_entries_from_escaped_payload() -> None:
     ]
 
 
-def test_read_response_bytes_and_parse_atom_error() -> None:
-    """验证响应读取异常与 browse-edgar XML 解析异常。
+def test_parse_browse_edgar_atom_error() -> None:
+    """验证 browse-edgar XML 解析异常。
 
     Args:
         无。
@@ -1404,27 +1404,6 @@ def test_read_response_bytes_and_parse_atom_error() -> None:
         AssertionError: 断言失败时抛出。
     """
 
-    class _GoodResponse:
-        """测试正常响应对象。"""
-
-        def iter_content(self, chunk_size: int) -> Any:
-            del chunk_size
-            yield b"a"
-            yield b""
-            yield b"b"
-
-    class _BadResponse:
-        """测试异常响应对象。"""
-
-        def iter_content(self, chunk_size: int) -> Any:
-            del chunk_size
-            raise RuntimeError("bad stream")
-
-    from dayu.fins.downloaders.sec_downloader import _read_response_bytes
-
-    assert _read_response_bytes(_GoodResponse()) == b"ab"
-    with pytest.raises(RuntimeError, match="读取响应体失败"):
-        _read_response_bytes(_BadResponse())
     with pytest.raises(RuntimeError, match="browse-edgar XML 解析失败"):
         _parse_browse_edgar_atom(b"<feed>")
 

@@ -154,14 +154,16 @@ class FinsService(FinsServiceProtocol):
         """执行同步财报命令。"""
 
         result = self.fins_runtime.execute(command, cancel_checker=cancel_checker)
-        assert isinstance(result, FinsResult)
+        if not isinstance(result, FinsResult):
+            raise TypeError(f"同步执行应返回 FinsResult，实际得到 {type(result).__name__}")
         return result
 
     async def _execute_command_stream(self, command: FinsCommand) -> AsyncIterator[FinsEvent]:
         """执行流式财报命令。"""
 
         result = self.fins_runtime.execute(command)
-        assert not isinstance(result, FinsResult)
+        if isinstance(result, FinsResult):
+            raise TypeError(f"流式执行不应返回 FinsResult，应为 AsyncIterator")
         async for event in result:
             yield event
 

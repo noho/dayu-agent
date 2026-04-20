@@ -620,27 +620,6 @@ def _require_string(
     return value.strip()
 
 
-def _find_next_heading_after_position(chapter_content: str, *, start_index: int) -> str:
-    """查找给定位置后的下一个 Markdown 标题。
-
-    Args:
-        chapter_content: 章节完整原文。
-        start_index: 起始字符位置。
-
-    Returns:
-        标题文本；若找不到则返回空字符串。
-
-    Raises:
-        无。
-    """
-
-    trailing_text = chapter_content[start_index:]
-    match = _HEADING_PATTERN.search(trailing_text)
-    if match is None:
-        return ""
-    return match.group(2).strip()
-
-
 def _find_previous_heading_before_position(chapter_content: str, *, end_index: int) -> str:
     """查找给定位置前的最近一个 Markdown 标题。
 

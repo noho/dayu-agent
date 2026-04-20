@@ -211,8 +211,6 @@ class FileWeChatStateStore:
         raw = json.loads(self._state_file.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("WeChat 状态文件必须是 JSON 对象")
-        session_map = raw.get("session_map")
-        normalized_session_map = session_map if isinstance(session_map, dict) else {}
         return WeChatDaemonState(
             base_url=str(raw.get("base_url") or DEFAULT_ILINK_BASE_URL),
             bot_token=str(raw.get("bot_token") or "").strip() or None,
