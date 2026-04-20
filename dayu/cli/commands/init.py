@@ -94,26 +94,41 @@ _PREWARM_MODULES: tuple[str, ...] = (
 def _detect_shell_profile() -> tuple[Path, bool]:
     """检测当前用户的 shell profile 路径。
 
+    优先依据 ``SHELL`` 推断 profile 类型；若 ``SHELL`` 缺失，则回退到
+    当前 ``HOME`` 下已有的 profile 文件。只有在明确识别为 ``fish`` / ``nu``
+    这类不兼容 ``export KEY=value`` 语法的 shell 时，才返回不兼容标记。
+
     Returns:
         ``(profile_path, is_export_compatible)`` 元组。
-        ``is_export_compatible`` 为 ``True`` 表示该 shell 使用 ``export KEY=value`` 语法（bash/zsh）。
-        为 ``False`` 表示该 shell（如 fish）不兼容 ``export`` 语法，
-        仍返回 ``~/.profile`` 但调用方需要警告用户手动配置。
+        ``is_export_compatible`` 为 ``True`` 表示可以安全写入
+        ``export KEY=value`` 形式的 profile 文件。
+        为 ``False`` 表示 shell 明确不兼容该语法，调用方应提示用户手动配置。
 
     Raises:
         无。
     """
 
-    shell = os.environ.get("SHELL", "")
+    shell = os.environ.get("SHELL", "").lower()
     home = Path.home()
+    zshrc = home / ".zshrc"
+    bashrc = home / ".bashrc"
+    bash_profile = home / ".bash_profile"
+    profile = home / ".profile"
+
     if "zsh" in shell:
-        return home / ".zshrc", True
+        return zshrc, True
     if "bash" in shell:
-        bashrc = home / ".bashrc"
-        bash_profile = home / ".bash_profile"
         return (bash_profile if bash_profile.exists() else bashrc), True
-    # fish、nu 等 shell 不兼容 export 语法
-    return home / ".profile", False
+    if "fish" in shell or "nushell" in shell or shell.endswith("/nu"):
+        return profile, False
+
+    if zshrc.exists():
+        return zshrc, True
+    if bash_profile.exists():
+        return bash_profile, True
+    if bashrc.exists():
+        return bashrc, True
+    return profile, True
 
 
 def _write_env_to_shell_profile(key: str, value: str, profile: Path) -> bool:
@@ -207,7 +222,10 @@ def _persist_env_var(key: str, value: str) -> tuple[str, bool]:
     if not is_compatible:
         return str(profile), False
 
-    _write_env_to_shell_profile(key, value, profile)
+    try:
+        _write_env_to_shell_profile(key, value, profile)
+    except OSError:
+        return str(profile), False
     return str(profile), True
 
 

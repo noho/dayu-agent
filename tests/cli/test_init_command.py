@@ -67,12 +67,37 @@ class TestDetectShellProfile:
         assert profile == tmp_path / ".bash_profile"
         assert compatible is True
 
-    def test_unknown_shell_returns_incompatible(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """未知 shell（如 fish）返回 ~/.profile，兼容标记为 False。"""
+    def test_fish_shell_returns_incompatible(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """明确识别为 fish 时返回 ~/.profile，兼容标记为 False。"""
         monkeypatch.setenv("SHELL", "/bin/fish")
         profile, compatible = _detect_shell_profile()
         assert profile == Path.home() / ".profile"
         assert compatible is False
+
+    def test_missing_shell_falls_back_to_existing_bashrc(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """SHELL 缺失时，回退到 HOME 下现有 .bashrc。"""
+        monkeypatch.delenv("SHELL", raising=False)
+        (tmp_path / ".bashrc").touch()
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        profile, compatible = _detect_shell_profile()
+        assert profile == tmp_path / ".bashrc"
+        assert compatible is True
+
+    def test_missing_shell_without_known_profile_uses_profile(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """SHELL 缺失且无现有 profile 时，回退到 ~/.profile 并视为兼容。"""
+        monkeypatch.delenv("SHELL", raising=False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        profile, compatible = _detect_shell_profile()
+        assert profile == tmp_path / ".profile"
+        assert compatible is True
 
 
 # --------------------------------------------------------------------------- #
@@ -728,13 +753,29 @@ class TestPersistEnvVar:
         assert target == "setx"
 
     def test_non_compatible_shell(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """非兼容 shell（如 fish）返回 False。"""
+        """明确识别为不兼容 shell 时返回 False。"""
         monkeypatch.setattr("dayu.cli.commands.init.platform.system", lambda: "Linux")
         monkeypatch.setattr(
             "dayu.cli.commands.init._detect_shell_profile",
             lambda: (Path.home() / ".profile", False),
         )
         target, ok = _persist_env_var("MY_KEY", "val")
+        assert ok is False
+
+    def test_write_profile_failure_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """profile 文件写入失败时返回 False，而不是依赖 SHELL 误判。"""
+        monkeypatch.setattr("dayu.cli.commands.init.platform.system", lambda: "Linux")
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._detect_shell_profile",
+            lambda: (Path.home() / ".profile", True),
+        )
+
+        def _raise_os_error(_key: str, _value: str, _profile: Path) -> bool:
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr("dayu.cli.commands.init._write_env_to_shell_profile", _raise_os_error)
+        target, ok = _persist_env_var("MY_KEY", "val")
+        assert target.endswith(".profile")
         assert ok is False
 
     def test_sets_process_env(self, monkeypatch: pytest.MonkeyPatch) -> None:

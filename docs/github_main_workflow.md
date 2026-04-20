@@ -316,7 +316,8 @@ docker run --rm -it \
   -e HOME=/tmp/home \
   -v "$PWD:/dayu-agent" \
   -w /dayu-agent \
-  dayu-linux-x64-verify
+  dayu-linux-x64-verify \
+  /bin/sh -lc 'mkdir -p "$HOME" && exec /bin/bash'
 ```
 
 容器内执行：
