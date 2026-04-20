@@ -19,8 +19,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from dayu.engine.processors.source import Source
-
 
 DocumentMeta = dict[str, Any]
 """文档元数据字典类型别名。"""

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+from dayu.engine.processors.source import Source
 from dayu.fins.domain.document_models import (
     DocumentHandle,
     DocumentMeta,
@@ -17,7 +18,6 @@ from dayu.fins.domain.document_models import (
     MaterialDeleteRequest,
     MaterialRestoreRequest,
     MaterialUpdateRequest,
-    Source,
     SourceDocumentStateChangeRequest,
     SourceDocumentUpsertRequest,
     SourceHandle,

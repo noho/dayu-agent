@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, BinaryIO, Callable, Literal, Optional, Protocol, cast
 
+from dayu.engine.processors.source import Source
 from dayu.engine.tool_registry import ToolRegistry
 from dayu.fins.domain.document_models import (
     CompanyMeta,
@@ -24,7 +25,6 @@ from dayu.fins.domain.document_models import (
     ProcessedDeleteRequest,
     ProcessedHandle,
     ProcessedUpdateRequest,
-    Source,
     SourceDocumentStateChangeRequest,
     SourceDocumentUpsertRequest,
     SourceHandle,

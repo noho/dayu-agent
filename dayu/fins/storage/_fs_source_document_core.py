@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from dayu.engine.processors.source import Source
 from dayu.fins.domain.document_models import (
     DocumentHandle,
     DocumentMeta,
@@ -20,7 +21,6 @@ from dayu.fins.domain.document_models import (
     MaterialManifestItem,
     MaterialRestoreRequest,
     MaterialUpdateRequest,
-    Source,
     SourceDocumentUpsertRequest,
     SourceHandle,
     now_iso8601,

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import BinaryIO, Optional, Protocol
 
+from dayu.engine.processors.source import Source
 from dayu.fins.domain.document_models import (
     BatchToken,
     CompanyMeta,
@@ -29,7 +30,6 @@ from dayu.fins.domain.document_models import (
     RejectedFilingArtifact,
     RejectedFilingArtifactUpsertRequest,
     ProcessedUpdateRequest,
-    Source,
     SourceDocumentStateChangeRequest,
     SourceDocumentUpsertRequest,
     SourceHandle,
