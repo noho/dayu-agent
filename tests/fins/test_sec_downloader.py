@@ -18,6 +18,7 @@ from dayu.fins.downloaders.sec_downloader import (
     RemoteFileDescriptor,
     Sc13PartyRoles,
     SecDownloader,
+    _await_if_needed,
     _parse_browse_edgar_atom,
     _parse_browse_edgar_href,
     _parse_index_header_document_entries,
@@ -127,6 +128,19 @@ def test_basic_helpers_cover_edge_cases(tmp_path: Path) -> None:
     assert optional_int("12") == 12
     assert _format_accession_with_dash("000116737925000017") == "0001167379-25-000017"
     assert _format_accession_with_dash("bad-accession") == "bad-accession"
+
+
+def test_await_if_needed_ignores_non_awaitable_dunder_await_marker() -> None:
+    """验证 `_await_if_needed` 不会把伪 `__await__` 属性误判为可等待对象。"""
+
+    class FakeAwaitMarker:
+        """暴露伪 `__await__` 属性但并非 awaitable 的对象。"""
+
+        __await__ = None
+
+    marker = FakeAwaitMarker()
+
+    assert _run(_await_if_needed(marker)) is marker
 
 
 def test_extract_same_filing_linked_html_files_filters_to_same_archive_html() -> None:

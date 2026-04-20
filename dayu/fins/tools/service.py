@@ -540,15 +540,11 @@ class FinsToolService:
         parent_ref = section_raw.get("parent_ref")
         parent_title = None
         if parent_ref:
-            # 尝试从 processor 获取 parent section 标题
+            # 直接走处理器的 O(1) 标题查询，避免为父标题再扫一遍全量 sections。
             try:
-                all_sections = processor.list_sections()
-                ref_map = {s.get("ref"): s for s in all_sections}
-                parent_sec = ref_map.get(parent_ref)
-                if parent_sec:
-                    parent_title = parent_sec.get("title")
+                parent_title = processor.get_section_title(str(parent_ref))
             except Exception:
-                pass
+                parent_title = None
 
         item_number, canonical_title, topic = resolve_section_semantic(
             title=title,

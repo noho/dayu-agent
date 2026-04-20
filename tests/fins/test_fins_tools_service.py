@@ -3313,23 +3313,12 @@ def test_read_section_inherits_item_and_topic_from_parent_title() -> None:
     class ParentSemanticProcessor(BasicProcessor):
         """返回父子章节结构的处理器。"""
 
-        def list_sections(self) -> list[dict[str, Any]]:
+        def get_section_title(self, ref: str) -> Optional[str]:
             """返回父章节标题，供子章节继承语义。"""
 
-            return [
-                {
-                    "ref": "sec_parent",
-                    "title": "Item 7. Management's Discussion and Analysis",
-                    "level": 1,
-                    "parent_ref": None,
-                },
-                {
-                    "ref": "sec_child",
-                    "title": "Overview",
-                    "level": 2,
-                    "parent_ref": "sec_parent",
-                },
-            ]
+            if ref == "sec_parent":
+                return "Item 7. Management's Discussion and Analysis"
+            return None
 
         def read_section(self, ref: str) -> dict[str, Any]:
             """返回无法自解析 item 的子章节。"""
@@ -3365,6 +3354,70 @@ def test_read_section_inherits_item_and_topic_from_parent_title() -> None:
     assert result["topic"] == SectionType.MDA.value
     assert result["citation"]["item"] == "Item 7"
     assert result["citation"]["heading"] == "Overview"
+
+
+@pytest.mark.unit
+def test_read_section_uses_get_section_title_without_listing_sections() -> None:
+    """验证 read_section 获取父标题时优先走 `get_section_title()` 轻量接口。"""
+
+    @dataclass
+    class ParentTitleProcessor(BasicProcessor):
+        """为父标题查询提供最小实现的处理器。"""
+
+        list_sections_called: int = 0
+
+        def list_sections(self) -> list[dict[str, Any]]:
+            """若被调用，记录调用次数以防止回退到全量扫描。"""
+
+            self.list_sections_called += 1
+            raise AssertionError("read_section 不应为父标题再次调用 list_sections")
+
+        def get_section_title(self, ref: str) -> Optional[str]:
+            """按 ref 返回父章节标题。"""
+
+            if ref == "sec_parent":
+                return "Item 7. Management's Discussion and Analysis"
+            return None
+
+        def read_section(self, ref: str) -> dict[str, Any]:
+            """返回带父章节引用的子章节。"""
+
+            return {
+                "ref": ref,
+                "title": "Overview",
+                "parent_ref": "sec_parent",
+                "content": "discussion overview",
+                "tables": [],
+                "contains_full_text": False,
+            }
+
+    class ParentTitleRegistry:
+        """返回固定 `ParentTitleProcessor` 的注册表桩。"""
+
+        def __init__(self) -> None:
+            """初始化处理器实例。"""
+
+            self.processor = ParentTitleProcessor(document_id="fil_1")
+
+        def create(self, source: Source, **kwargs: Any) -> Any:
+            """创建处理器。"""
+
+            del source, kwargs
+            return self.processor
+
+        def create_with_fallback(self, source: Source, **kwargs: Any) -> Any:
+            """兼容统一回退接口并复用 create。"""
+
+            return self.create(source, **kwargs)
+
+    registry = ParentTitleRegistry()
+    service = FinsToolService(repository=FakeRepository(), processor_registry=registry)
+
+    result = service.read_section(ticker="AAPL", document_id="fil_1", ref="sec_child")
+
+    assert result["item"] == "Item 7"
+    assert result["citation"]["item"] == "Item 7"
+    assert registry.processor.list_sections_called == 0
 
 
 @pytest.mark.unit

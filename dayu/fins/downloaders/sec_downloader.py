@@ -21,6 +21,7 @@ import asyncio
 import contextlib
 import hashlib
 import html
+import inspect
 import json
 import os
 import posixpath
@@ -31,7 +32,7 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path
-from typing import Any, AsyncIterator, BinaryIO, Callable, Literal, Optional
+from typing import Any, AsyncIterator, Awaitable, BinaryIO, Callable, Literal, Optional, TypeVar, cast, overload
 from urllib.parse import urlparse
 from xml.etree import ElementTree as ET
 
@@ -80,6 +81,7 @@ _SEC_THROTTLE_RECOVERY_SECONDS = 600.0
 _SEC_THROTTLE_MAX_RETRIES = 3
 _ETAG_WEAK_PREFIX = "W/"
 _ETAG_GZIP_SUFFIX = "-gzip"
+_AwaitedValueT = TypeVar("_AwaitedValueT")
 
 
 @dataclass(frozen=True)
@@ -1806,7 +1808,17 @@ def _to_binary_stream(payload: bytes) -> BinaryIO:
     return BytesIO(payload)
 
 
-async def _await_if_needed(value: Any) -> Any:
+@overload
+async def _await_if_needed(value: Awaitable[_AwaitedValueT]) -> _AwaitedValueT:
+    """按需等待可等待对象（awaitable 重载）。"""
+
+
+@overload
+async def _await_if_needed(value: _AwaitedValueT) -> _AwaitedValueT:
+    """按需等待可等待对象（普通值重载）。"""
+
+
+async def _await_if_needed(value: Awaitable[_AwaitedValueT] | _AwaitedValueT) -> _AwaitedValueT:
     """按需等待可等待对象。
 
     Args:
@@ -1819,9 +1831,9 @@ async def _await_if_needed(value: Any) -> Any:
         RuntimeError: 可等待对象执行失败时抛出。
     """
 
-    if hasattr(value, "__await__"):
-        return await value
-    return value
+    if inspect.isawaitable(value):
+        return await cast(Awaitable[_AwaitedValueT], value)
+    return cast(_AwaitedValueT, value)
 
 
 def _parse_sc13_party_roles_from_index_headers(payload: bytes) -> Optional[Sc13PartyRoles]:
