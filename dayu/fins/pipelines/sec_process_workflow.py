@@ -9,7 +9,7 @@ from dayu.log import Log
 from dayu.engine.processors.processor_registry import ProcessorRegistry
 from dayu.fins.domain.enums import SourceKind
 from dayu.fins.ingestion.process_events import ProcessEvent, ProcessEventType
-from dayu.fins.resolver.market_resolver import MarketResolver
+from dayu.fins.ticker_normalization import normalize_ticker
 from dayu.fins.storage import ProcessedDocumentRepositoryProtocol, SourceDocumentRepositoryProtocol
 
 from .processing_helpers import (
@@ -46,12 +46,6 @@ class SecProcessWorkflowHost(Protocol):
     @property
     def MODULE(self) -> str:
         """返回日志模块名。"""
-
-        ...
-
-    @property
-    def _resolver_cls(self) -> type[MarketResolver]:
-        """返回市场解析器类型。"""
 
         ...
 
@@ -166,7 +160,7 @@ def run_process_single_document(
         ValueError: 市场类型非法时抛出。
     """
 
-    profile = host._resolver_cls.resolve(ticker)
+    profile = normalize_ticker(ticker)
     if profile.market != "US":
         raise ValueError(f"SecPipeline 仅支持 US，当前 market={profile.market}")
     normalized_ticker = host._downloader.normalize_ticker(ticker)
@@ -325,7 +319,7 @@ async def run_process_stream_impl(
         RuntimeError: 单文档处理失败时向上传递异常并转为 failed 事件。
     """
 
-    profile = host._resolver_cls.resolve(ticker)
+    profile = normalize_ticker(ticker)
     if profile.market != "US":
         raise ValueError(f"SecPipeline 仅支持 US，当前 market={profile.market}")
     normalized_ticker = host._downloader.normalize_ticker(ticker)

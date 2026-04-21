@@ -14,7 +14,7 @@ from dayu.engine.processors.processor_registry import ProcessorRegistry
 from dayu.fins.ingestion.process_events import ProcessEvent, ProcessEventType
 from dayu.fins.ingestion.service import FinsIngestionService
 from dayu.fins.pipelines.download_events import DownloadEvent, DownloadEventType
-from dayu.fins.resolver.market_resolver import MarketProfile
+from dayu.fins.ticker_normalization import NormalizedTicker
 from dayu.fins.storage import (
     CompanyMetaRepositoryProtocol,
     DocumentBlobRepositoryProtocol,
@@ -186,10 +186,10 @@ def test_build_ingestion_service_factory_routes_us_market_to_sec_pipeline(
 
     captured: dict[str, Any] = {}
 
-    def _fake_resolve(ticker: str) -> MarketProfile:
+    def _fake_resolve(ticker: str) -> NormalizedTicker:
         """返回固定 US 市场画像。"""
 
-        return MarketProfile(ticker=ticker.upper(), market="US")
+        return NormalizedTicker(canonical=ticker.upper(), market="US", exchange=None, raw=ticker)
 
     class _SecPipelineSpy(_PipelineSpy):
         """SecPipeline 替身。"""
@@ -207,7 +207,7 @@ def test_build_ingestion_service_factory_routes_us_market_to_sec_pipeline(
             captured["processor_registry"] = self.processor_registry
             super().__post_init__()
 
-    monkeypatch.setattr(module.MarketResolver, "resolve", _fake_resolve)
+    monkeypatch.setattr(module, "normalize_ticker", _fake_resolve)
     monkeypatch.setattr(module, "SecPipeline", _SecPipelineSpy)
 
     repository_args = _build_repository_args()
@@ -246,10 +246,10 @@ def test_build_ingestion_service_factory_routes_cn_and_hk_to_cn_pipeline(
 
     captured: dict[str, Any] = {}
 
-    def _fake_resolve(ticker: str) -> MarketProfile:
+    def _fake_resolve(ticker: str) -> NormalizedTicker:
         """返回固定市场画像。"""
 
-        return MarketProfile(ticker=ticker.upper(), market=market)  # type: ignore[arg-type]
+        return NormalizedTicker(canonical=ticker.upper(), market=cast(Any, market), exchange=None, raw=ticker)
 
     class _CnPipelineSpy(_PipelineSpy):
         """CnPipeline 替身。"""
@@ -266,7 +266,7 @@ def test_build_ingestion_service_factory_routes_cn_and_hk_to_cn_pipeline(
             captured["processor_registry"] = self.processor_registry
             super().__post_init__()
 
-    monkeypatch.setattr(module.MarketResolver, "resolve", _fake_resolve)
+    monkeypatch.setattr(module, "normalize_ticker", _fake_resolve)
     monkeypatch.setattr(module, "CnPipeline", _CnPipelineSpy)
 
     repository_args = _build_repository_args()
@@ -299,9 +299,9 @@ def test_build_ingestion_service_factory_rejects_unsupported_market(
     """验证未知市场会显式报错。"""
 
     monkeypatch.setattr(
-        module.MarketResolver,
-        "resolve",
-        lambda ticker: SimpleNamespace(ticker=ticker.upper(), market="JP"),
+        module,
+        "normalize_ticker",
+        lambda ticker: cast(Any, SimpleNamespace(canonical=ticker.upper(), market="JP", exchange=None, raw=ticker)),
     )
 
     factory = module.build_ingestion_service_factory(

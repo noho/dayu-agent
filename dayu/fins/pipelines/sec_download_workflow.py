@@ -10,7 +10,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional, Protocol, 
 from dayu.fins.domain.enums import SourceKind
 from dayu.fins.ingestion.process_events import ProcessEvent
 from dayu.fins.pipelines.download_events import DownloadEvent, DownloadEventType
-from dayu.fins.resolver.market_resolver import MarketResolver
+from dayu.fins.ticker_normalization import normalize_ticker
 from dayu.fins.storage import FilingMaintenanceRepositoryProtocol, SourceDocumentRepositoryProtocol
 from dayu.log import Log
 
@@ -45,12 +45,6 @@ class SecDownloadWorkflowHost(Protocol):
     @property
     def MODULE(self) -> str:
         """返回日志模块名。"""
-
-        ...
-
-    @property
-    def _resolver_cls(self) -> type[MarketResolver]:
-        """返回市场解析器类型。"""
 
         ...
 
@@ -274,7 +268,7 @@ async def run_download_stream_impl(
         RuntimeError: 下载执行失败时抛出。
     """
 
-    profile = host._resolver_cls.resolve(ticker)
+    profile = normalize_ticker(ticker)
     if profile.market != "US":
         raise ValueError(f"SecPipeline 仅支持 US，当前 market={profile.market}")
     normalized_ticker = host._downloader.normalize_ticker(ticker)

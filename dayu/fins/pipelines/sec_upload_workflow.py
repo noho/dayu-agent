@@ -18,7 +18,7 @@ from dayu.fins.pipelines.docling_upload_service import (
 )
 from dayu.fins.pipelines.upload_filing_events import UploadFilingEvent, UploadFilingEventType
 from dayu.fins.pipelines.upload_material_events import UploadMaterialEvent, UploadMaterialEventType
-from dayu.fins.resolver.market_resolver import MarketResolver
+from dayu.fins.ticker_normalization import normalize_ticker
 from dayu.fins.storage import CompanyMetaRepositoryProtocol, SourceDocumentRepositoryProtocol
 
 from .upload_company_meta import upsert_company_meta_for_upload
@@ -33,12 +33,6 @@ from .upload_progress_helpers import (
 
 class SecUploadWorkflowHost(Protocol):
     """Sec upload 工作流所需的最小宿主边界。"""
-
-    @property
-    def _resolver_cls(self) -> type[MarketResolver]:
-        """返回市场解析器类型。"""
-
-        ...
 
     @property
     def _downloader(self) -> SecDownloader:
@@ -348,7 +342,7 @@ async def run_upload_material_stream(
         RuntimeError: 上传执行失败时抛出。
     """
 
-    profile = host._resolver_cls.resolve(ticker)
+    profile = normalize_ticker(ticker)
     if profile.market != "US":
         raise ValueError(f"SecPipeline 仅支持 US，当前 market={profile.market}")
     normalized_ticker = host._downloader.normalize_ticker(ticker)

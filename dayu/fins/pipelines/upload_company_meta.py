@@ -13,7 +13,7 @@ from typing import Optional
 
 from dayu.log import Log
 from dayu.fins.domain.document_models import CompanyMeta, now_iso8601
-from dayu.fins.resolver.market_resolver import MarketResolver
+from dayu.fins.ticker_normalization import normalize_ticker
 from dayu.fins.storage import CompanyMetaRepositoryProtocol
 
 UPLOAD_ACTIONS_REQUIRING_COMPANY_META = frozenset({"create", "update"})
@@ -69,16 +69,16 @@ def upsert_company_meta_for_upload(
         value=company_name,
         option_name="--company-name",
     )
-    profile = MarketResolver.resolve(ticker)
+    profile = normalize_ticker(ticker)
     normalized_ticker_aliases = _normalize_ticker_aliases(
-        canonical_ticker=profile.ticker,
+        canonical_ticker=profile.canonical,
         ticker_aliases=ticker_aliases,
     )
     repository.upsert_company_meta(
         CompanyMeta(
             company_id=normalized_company_id,
             company_name=normalized_company_name,
-            ticker=profile.ticker,
+            ticker=profile.canonical,
             market=profile.market,
             resolver_version=RESOLVER_VERSION,
             updated_at=now_iso8601(),

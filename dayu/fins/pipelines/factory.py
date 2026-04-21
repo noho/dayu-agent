@@ -11,7 +11,7 @@ from dayu.fins.processors.registry import (
     build_bs_experiment_registry,
     build_fins_processor_registry,
 )
-from dayu.fins.resolver.market_resolver import MarketProfile
+from dayu.fins.ticker_normalization import NormalizedTicker
 from dayu.fins.storage import (
     CompanyMetaRepositoryProtocol,
     DocumentBlobRepositoryProtocol,
@@ -49,8 +49,8 @@ def _build_registry_for_hint(processor_hint: Optional[str]) -> ProcessorRegistry
     return build_fins_processor_registry()
 
 
-def get_pipeline_from_market_profile(
-    market_profile: MarketProfile,
+def get_pipeline_from_normalized_ticker(
+    normalized_ticker: NormalizedTicker,
     workspace_root: Path,
     processor_hint: Optional[str] = None,
     company_repository: CompanyMetaRepositoryProtocol | None = None,
@@ -60,10 +60,10 @@ def get_pipeline_from_market_profile(
     filing_maintenance_repository: FilingMaintenanceRepositoryProtocol | None = None,
     processor_registry: ProcessorRegistry | None = None,
 ) -> PipelineProtocol:
-    """根据 ``MarketProfile`` 构建对应 Pipeline。
+    """根据 ``NormalizedTicker`` 构建对应 Pipeline。
 
     Args:
-        market_profile: 市场画像。
+        normalized_ticker: 规范化 ticker。
         workspace_root: 工作区根目录。
         processor_hint: 可选处理器路线提示（``"bs"`` 使用 BeautifulSoup 路线）。
         company_repository: 可选共享公司元数据仓储实例。
@@ -81,11 +81,11 @@ def get_pipeline_from_market_profile(
     """
 
     Log.debug(
-        f"准备创建 pipeline: market={market_profile.market}",
+        f"准备创建 pipeline: market={normalized_ticker.market}",
         module=MODULE,
     )
     registry = processor_registry if processor_registry is not None else _build_registry_for_hint(processor_hint)
-    if market_profile.market == "US":
+    if normalized_ticker.market == "US":
         return SecPipeline(
             workspace_root=workspace_root,
             processor_registry=registry,
@@ -95,7 +95,7 @@ def get_pipeline_from_market_profile(
             blob_repository=blob_repository,
             filing_maintenance_repository=filing_maintenance_repository,
         )
-    if market_profile.market in {"HK", "CN"}:
+    if normalized_ticker.market in {"HK", "CN"}:
         return CnPipeline(
             workspace_root=workspace_root,
             processor_registry=registry,
@@ -104,4 +104,4 @@ def get_pipeline_from_market_profile(
             processed_repository=processed_repository,
             blob_repository=blob_repository,
         )
-    raise ValueError(f"不支持的 market: {market_profile.market}")
+    raise ValueError(f"不支持的 market: {normalized_ticker.market}")

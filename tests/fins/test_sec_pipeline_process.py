@@ -14,19 +14,8 @@ from dayu.fins.domain.document_models import FilingCreateRequest
 from dayu.fins.domain.enums import SourceKind
 from dayu.fins.pipelines.sec_pipeline import SecPipeline
 from dayu.fins.processors.registry import build_fins_processor_registry
-from dayu.fins.resolver.market_resolver import MarketProfile, MarketResolver
 from tests.fins.storage_testkit import build_storage_core
 from dayu.fins.storage.local_file_store import LocalFileStore
-
-
-class FakeResolver(MarketResolver):
-    """用于测试的市场解析器。"""
-
-    @classmethod
-    def resolve(cls, ticker: str) -> MarketProfile:
-        """返回固定 US 市场画像。"""
-
-        return MarketProfile(ticker=ticker, market="US")
 
 
 def _portfolio_root(repository: object) -> Path:
@@ -101,7 +90,6 @@ def test_process_filing_batch(
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=build_fins_processor_registry(),
     )
     with caplog.at_level(logging.INFO):
@@ -147,7 +135,6 @@ def test_process_batch_can_limit_to_requested_document_ids(tmp_path: Path) -> No
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=build_fins_processor_registry(),
     )
 
@@ -185,7 +172,6 @@ def test_process_filing_ci_exports_full_snapshot_files(tmp_path: Path) -> None:
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=build_fins_processor_registry(),
     )
 
@@ -248,7 +234,6 @@ def test_process_filing_ci_rebuilds_snapshot_meta_on_version_skip(tmp_path: Path
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=build_fins_processor_registry(),
     )
 

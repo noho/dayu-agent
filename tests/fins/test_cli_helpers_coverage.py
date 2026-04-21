@@ -17,7 +17,7 @@ from dayu.fins.pipelines.base import PipelineProtocol
 from dayu.fins.pipelines.download_events import DownloadEvent, DownloadEventType
 from dayu.fins.pipelines.upload_filing_events import UploadFilingEvent, UploadFilingEventType
 from dayu.fins.pipelines.upload_material_events import UploadMaterialEvent, UploadMaterialEventType
-from dayu.fins.resolver.market_resolver import MarketProfile
+from dayu.fins.ticker_normalization import NormalizedTicker
 
 
 class _PipelineStub(PipelineProtocol):
@@ -296,13 +296,13 @@ class _PipelineStub(PipelineProtocol):
 def test_build_pipeline_for_ticker_delegates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """覆盖 ticker 解析日志与 pipeline 工厂调用路径。"""
 
-    monkeypatch.setattr(module.MarketResolver, "resolve", lambda ticker: MarketProfile(ticker=ticker, market="US"))
+    monkeypatch.setattr(module, "normalize_ticker", lambda ticker: NormalizedTicker(canonical=ticker, market="US", exchange=None, raw=ticker))
     monkeypatch.setattr(module.Log, "debug", lambda *args, **kwargs: None)
-    monkeypatch.setattr(module, "get_pipeline_from_market_profile", lambda **kwargs: {"pipeline": "ok", **kwargs})
+    monkeypatch.setattr(module, "get_pipeline_from_normalized_ticker", lambda **kwargs: {"pipeline": "ok", **kwargs})
 
     result = cast(Any, module._build_pipeline_for_ticker("AAPL", tmp_path))
     assert result["pipeline"] == "ok"
-    assert result["market_profile"].ticker == "AAPL"
+    assert result["normalized_ticker"].canonical == "AAPL"
 
 
 @pytest.mark.unit

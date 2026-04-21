@@ -26,7 +26,6 @@ from dayu.engine.processors.source import Source
 from dayu.fins.domain.document_models import MaterialCreateRequest
 from dayu.fins.domain.enums import SourceKind
 from dayu.fins.pipelines.sec_pipeline import SecPipeline
-from dayu.fins.resolver.market_resolver import MarketProfile, MarketResolver
 from dayu.fins.storage.local_file_store import LocalFileStore
 from tests.fins.storage_testkit import build_storage_core
 
@@ -44,26 +43,6 @@ def _repository(repository: _MaterialRepositoryLike) -> _MaterialRepositoryLike:
     """显式收窄 build_storage_core 返回的仓储类型。"""
 
     return repository
-
-
-class FakeResolver(MarketResolver):
-    """测试用市场解析器。"""
-
-    @classmethod
-    def resolve(cls, ticker: str) -> MarketProfile:
-        """返回固定 US 画像。
-
-        Args:
-            ticker: 股票代码。
-
-        Returns:
-            市场画像。
-
-        Raises:
-            RuntimeError: 解析失败时抛出。
-        """
-
-        return MarketProfile(ticker=ticker, market="US")
 
 
 class FakeJsonProcessor:
@@ -362,7 +341,6 @@ def test_sec_pipeline_process_material_processed_and_version_skip(tmp_path: Path
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=_build_registry(),
     )
 
@@ -405,7 +383,6 @@ def test_sec_pipeline_process_marks_material_failed_when_source_missing(tmp_path
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=_build_registry(),
     )
 

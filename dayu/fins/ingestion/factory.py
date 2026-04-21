@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from dayu.engine.processors.processor_registry import ProcessorRegistry
-from dayu.fins.resolver.market_resolver import MarketResolver
+from dayu.fins.ticker_normalization import normalize_ticker
 from dayu.fins.storage import (
     CompanyMetaRepositoryProtocol,
     DocumentBlobRepositoryProtocol,
@@ -68,7 +68,7 @@ def build_ingestion_service_factory(
     def factory(ticker: str) -> FinsIngestionService:
         """按 ticker 创建共享长事务服务。"""
 
-        market_profile = MarketResolver.resolve(ticker)
+        market_profile = normalize_ticker(ticker)
         if market_profile.market == "US":
             pipeline = SecPipeline(
                 workspace_root=workspace_root,

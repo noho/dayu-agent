@@ -17,7 +17,7 @@ from dayu.fins.ingestion.job_manager import (
     IngestionJobManager,
     get_or_create_ingestion_job_manager,
 )
-from dayu.fins.resolver.market_resolver import MarketResolver
+from dayu.fins.ticker_normalization import normalize_ticker
 from dayu.fins.ingestion.service import FinsIngestionService
 
 MODULE = "FINS.INGESTION_TOOLS"
@@ -176,7 +176,7 @@ def _create_start_download_job_tool(
                 "不能为空",
             ),
         )
-        market_profile = MarketResolver.resolve(normalized_ticker)
+        market_profile = normalize_ticker(normalized_ticker)
         if market_profile.market not in _SUPPORTED_DOWNLOAD_MARKETS:
             return _build_not_implemented_start_response(
                 ticker=normalized_ticker,

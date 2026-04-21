@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from dayu.engine.tool_registry import ToolRegistry
-from dayu.fins.resolver.market_resolver import MarketProfile
+from dayu.fins.ticker_normalization import NormalizedTicker
 from dayu.fins.tools import register_fins_ingestion_tools
 
 
@@ -239,9 +239,9 @@ def test_start_download_job_tool_returns_not_implemented_for_non_us_ticker(
     from dayu.fins.tools import ingestion_tools as module
 
     monkeypatch.setattr(
-        module.MarketResolver,
-        "resolve",
-        lambda ticker: MarketProfile(ticker=ticker.upper(), market="CN"),
+        module,
+        "normalize_ticker",
+        lambda ticker: NormalizedTicker(canonical=ticker.upper(), market="CN", exchange=None, raw=ticker),
     )
 
     response = _execute_tool(

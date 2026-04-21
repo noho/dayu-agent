@@ -40,22 +40,11 @@ from dayu.fins.pipelines.sec_download_state import (
 from dayu.fins.pipelines.sec_filing_collection import FilingRecord
 from dayu.fins.pipelines.sec_pipeline import SecPipeline
 from dayu.fins.processors.registry import build_fins_processor_registry
-from dayu.fins.resolver.market_resolver import MarketResolver
-from dayu.fins.resolver.market_resolver import MarketProfile
 
 
 # ---------------------------------------------------------------------------
 # 测试用桩
 # ---------------------------------------------------------------------------
-
-
-class _FakeResolver(MarketResolver):
-    """测试用市场解析器。"""
-
-    @classmethod
-    def resolve(cls, ticker: str) -> MarketProfile:
-        """返回固定 US 画像。"""
-        return MarketProfile(ticker=ticker, market="US")
 
 
 class _StubRepository:
@@ -72,7 +61,6 @@ def _make_pipeline(tmp_path: Path) -> SecPipeline:
     """创建最小 SecPipeline 用于方法测试。"""
     return SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=_FakeResolver,
         processor_registry=build_fins_processor_registry(),
     )
 

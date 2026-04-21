@@ -565,7 +565,7 @@ def test_execute_uses_runtime_repository_and_processor_registry(
 
     def _fake_factory(
         *,
-        market_profile: Any,
+        normalized_ticker: Any,
         workspace_root: Path,
         company_repository: Any = None,
         source_repository: Any = None,
@@ -575,7 +575,7 @@ def test_execute_uses_runtime_repository_and_processor_registry(
         processor_registry: Any = None,
         **_kwargs: Any,
     ) -> Any:
-        captured["market"] = market_profile.market
+        captured["market"] = normalized_ticker.market
         captured["workspace_root"] = workspace_root
         captured["company_repository"] = company_repository
         captured["source_repository"] = source_repository
@@ -585,7 +585,7 @@ def test_execute_uses_runtime_repository_and_processor_registry(
         captured["processor_registry"] = processor_registry
         return _FakePipeline()
 
-    monkeypatch.setattr("dayu.fins.service_runtime.get_pipeline_from_market_profile", _fake_factory)
+    monkeypatch.setattr("dayu.fins.service_runtime.get_pipeline_from_normalized_ticker", _fake_factory)
 
     result = _require_sync_result(
         runtime.execute(
@@ -702,13 +702,13 @@ def test_execute_download_uses_normalized_namespace_values(
 
     def _fake_factory(
         *,
-        market_profile: Any,
+        normalized_ticker: Any,
         **_kwargs: Any,
     ) -> Any:
-        captured["pipeline_ticker"] = market_profile.ticker
+        captured["pipeline_ticker"] = normalized_ticker.canonical
         return _FakePipeline()
 
-    monkeypatch.setattr("dayu.fins.service_runtime.get_pipeline_from_market_profile", _fake_factory)
+    monkeypatch.setattr("dayu.fins.service_runtime.get_pipeline_from_normalized_ticker", _fake_factory)
 
     result = _require_sync_result(
         runtime.execute(
@@ -776,13 +776,13 @@ def test_execute_upload_filing_uses_normalized_namespace_values(
 
     def _fake_factory(
         *,
-        market_profile: Any,
+        normalized_ticker: Any,
         **_kwargs: Any,
     ) -> Any:
-        captured["pipeline_ticker"] = market_profile.ticker
+        captured["pipeline_ticker"] = normalized_ticker.canonical
         return _FakePipeline()
 
-    monkeypatch.setattr("dayu.fins.service_runtime.get_pipeline_from_market_profile", _fake_factory)
+    monkeypatch.setattr("dayu.fins.service_runtime.get_pipeline_from_normalized_ticker", _fake_factory)
     monkeypatch.setattr(
         "dayu.fins.cli_support.infer_company_aliases_from_fmp",
         lambda _ticker: (_ for _ in ()).throw(RuntimeError("should not be required for preserved payload data")),
@@ -864,7 +864,7 @@ def test_execute_upload_filing_stream_accepts_file_uploaded_progress_event(
     def _fake_factory(**_kwargs: Any) -> Any:
         return _FakePipeline()
 
-    monkeypatch.setattr("dayu.fins.service_runtime.get_pipeline_from_market_profile", _fake_factory)
+    monkeypatch.setattr("dayu.fins.service_runtime.get_pipeline_from_normalized_ticker", _fake_factory)
 
     async def _collect() -> list[Any]:
         stream = _require_stream_result(runtime.execute(

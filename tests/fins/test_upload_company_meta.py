@@ -10,7 +10,7 @@ import pytest
 
 from dayu.fins.pipelines import upload_company_meta as module
 from dayu.fins.domain.document_models import CompanyMeta, CompanyMetaInventoryEntry
-from dayu.fins.resolver.market_resolver import MarketProfile
+from dayu.fins.ticker_normalization import NormalizedTicker
 
 
 @dataclass
@@ -111,9 +111,9 @@ def test_upsert_company_meta_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
     repo = _RepositoryStub()
     monkeypatch.setattr(
-        module.MarketResolver,
-        "resolve",
-        lambda ticker: MarketProfile(ticker=ticker.strip().upper(), market="US"),
+        module,
+        "normalize_ticker",
+        lambda ticker: NormalizedTicker(canonical=ticker.strip().upper(), market="US", exchange=None, raw=ticker),
     )
     monkeypatch.setattr(module, "now_iso8601", lambda: "2026-03-02T00:00:00+00:00")
 

@@ -24,32 +24,11 @@ from dayu.fins.domain.document_models import DocumentQuery, FilingCreateRequest
 from dayu.fins.domain.enums import SourceKind
 from dayu.fins.pipelines.sec_pipeline import SecPipeline
 from dayu.fins.processors.registry import build_fins_processor_registry
-from dayu.fins.resolver.market_resolver import MarketProfile, MarketResolver
 from dayu.fins.score_sec_ci import find_form_dirs
 from dayu.fins.storage import FsProcessedDocumentRepository
 from dayu.fins.storage._fs_storage_core import FsStorageCore
 from tests.fins.storage_testkit import build_storage_core
 from dayu.fins.storage.local_file_store import LocalFileStore
-
-
-class FakeResolver(MarketResolver):
-    """用于测试的市场解析器。"""
-
-    @classmethod
-    def resolve(cls, ticker: str) -> MarketProfile:
-        """返回固定 US 市场画像。
-
-        Args:
-            ticker: 股票代码。
-
-        Returns:
-            US 市场画像。
-
-        Raises:
-            无。
-        """
-
-        return MarketProfile(ticker=ticker, market="US")
 
 
 def _prepare_filing(
@@ -695,7 +674,6 @@ def test_sec_pipeline_requires_explicit_processor_registry(tmp_path: Path) -> No
     with pytest.raises(ValueError, match="processor_registry 必须由调用方显式传入"):
         SecPipeline(
             workspace_root=tmp_path,
-            resolver_cls=FakeResolver,
             processor_registry=cast(ProcessorRegistry, None),
         )
 
@@ -725,7 +703,6 @@ def test_process_filing_creates_processed(tmp_path: Path) -> None:
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=build_fins_processor_registry(),
     )
     result = pipeline.process_filing("AAPL", "fil_0001")
@@ -762,7 +739,6 @@ def test_process_filing_honors_cancel_checker_before_export(tmp_path: Path) -> N
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=build_fins_processor_registry(),
     )
 
@@ -803,7 +779,6 @@ def test_process_filing_skips_incomplete(tmp_path: Path) -> None:
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=build_fins_processor_registry(),
     )
     result = pipeline.process_filing("AAPL", "fil_0002")
@@ -840,7 +815,6 @@ def test_process_filing_uses_processor_parser_version(tmp_path: Path) -> None:
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=registry,
     )
     result = pipeline.process_filing("AAPL", "fil_0003")
@@ -881,7 +855,6 @@ def test_process_filing_fallback_to_next_candidate_when_primary_fails(tmp_path: 
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=registry,
     )
     result = pipeline.process_filing("AAPL", "fil_0004")
@@ -919,7 +892,6 @@ def test_process_filing_raises_when_no_processor_available(tmp_path: Path) -> No
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=ProcessorRegistry(),
     )
     with pytest.raises(RuntimeError, match="未找到可用处理器"):
@@ -954,7 +926,6 @@ def test_process_filing_raises_when_processor_missing_parser_version(tmp_path: P
     registry.register(cast(type[DocumentProcessor], NoVersionProcessor), name="no_version", priority=10)
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=registry,
     )
     with pytest.raises(RuntimeError, match="PARSER_VERSION"):
@@ -989,7 +960,6 @@ def test_process_filing_marks_full_quality_with_xbrl(tmp_path: Path) -> None:
     registry.register(FakeSecProcessorWithXbrl10Q, name="sec_processor", priority=10)
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=registry,
     )
     result = pipeline.process_filing("AAPL", "fil_0007")
@@ -1030,7 +1000,6 @@ def test_process_filing_marks_partial_quality_without_xbrl(tmp_path: Path) -> No
     registry.register(FakeSecProcessorWithoutXbrl, name="sec_processor", priority=10)
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=registry,
     )
     result = pipeline.process_filing("AAPL", "fil_0008")
@@ -1071,7 +1040,6 @@ def test_process_filing_handles_6k_without_xbrl_fiscal_signals(tmp_path: Path) -
     registry.register(FakeSecProcessorWithoutXbrl6K, name="sec_processor", priority=10)
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=registry,
     )
     result = pipeline.process_filing("TCOM", "fil_6k_0001")
@@ -1113,7 +1081,6 @@ def test_process_filing_skips_financial_extraction_for_8k_sc13_and_marks_partial
     registry.register(FakeSecProcessorSkipFinancial, name="sec_processor", priority=10)
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=registry,
     )
     result = pipeline.process_filing("AAPL", "fil_0010")
@@ -1157,7 +1124,6 @@ def test_process_filing_def14a_routes_to_special_processor_and_marks_partial(tmp
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=build_fins_processor_registry(),
     )
     result = pipeline.process_filing("AAPL", "fil_def14a")
@@ -1198,7 +1164,6 @@ def test_process_filing_sanitizes_fiscal_period_for_10q(tmp_path: Path) -> None:
     registry.register(FakeSecProcessorWithXbrl10Q, name="sec_processor", priority=10)
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         processor_registry=registry,
     )
     result = pipeline.process_filing("AAPL", "fil_0009")

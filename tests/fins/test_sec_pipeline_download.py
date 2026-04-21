@@ -27,27 +27,6 @@ from dayu.fins.pipelines.sec_pipeline import (
 )
 from dayu.fins.pipelines.sec_sc13_filtering import SC13_FORMS as _SC13_FORMS, SC13_RETRY_MAX as _SC13_RETRY_MAX
 from dayu.engine.processors.processor_registry import ProcessorRegistry
-from dayu.fins.resolver.market_resolver import MarketProfile, MarketResolver
-
-
-class FakeResolver:
-    """用于测试的市场解析器。"""
-
-    @classmethod
-    def resolve(cls, ticker: str) -> MarketProfile:
-        """返回固定 US 市场画像。
-
-        Args:
-            ticker: 股票代码。
-
-        Returns:
-            US 市场画像。
-
-        Raises:
-            无。
-        """
-
-        return MarketProfile(ticker=ticker, market="US")
 
 
 class StubDownloader:
@@ -392,12 +371,6 @@ class RebuildOnlyDownloader:
         raise AssertionError("rebuild 模式不应调用 fetch_submissions")
 
 
-def _as_market_resolver_cls(resolver_cls: type[FakeResolver]) -> type[MarketResolver]:
-    """把测试 resolver 类型显式收窄到生产签名。"""
-
-    return cast(type[MarketResolver], resolver_cls)
-
-
 def _as_sec_downloader(downloader: object) -> SecDownloader:
     """把测试 downloader 显式收窄到生产签名。"""
 
@@ -408,7 +381,6 @@ def SecPipeline(
     *,
     workspace_root: Path,
     processor_registry: ProcessorRegistry,
-    resolver_cls: type[FakeResolver] = FakeResolver,
     downloader: object | None = None,
 ) -> sec_pipeline.SecPipeline:
     """构造测试用 SecPipeline，并在装配边界收窄 stub 类型。"""
@@ -416,7 +388,6 @@ def SecPipeline(
     return _SecPipeline(
         workspace_root=workspace_root,
         processor_registry=processor_registry,
-        resolver_cls=_as_market_resolver_cls(resolver_cls),
         downloader=None if downloader is None else _as_sec_downloader(downloader),
     )
 
@@ -529,7 +500,6 @@ def test_sec_pipeline_download_writes_meta_and_manifest(tmp_path: Path) -> None:
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -572,7 +542,6 @@ def test_sec_pipeline_download_merges_cli_aliases_with_sec_aliases(tmp_path: Pat
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -683,7 +652,6 @@ def test_sec_pipeline_rebuild_local_meta_manifest_without_redownload(tmp_path: P
     downloader = RebuildOnlyDownloader()
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -751,7 +719,6 @@ def test_sec_pipeline_download_prefers_dei_fiscal_when_available(
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -802,7 +769,6 @@ def test_sec_pipeline_skip_when_meta_matches(tmp_path: Path) -> None:
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -864,7 +830,6 @@ def test_sec_pipeline_skip_with_etag_gzip_variant_without_re_download(tmp_path: 
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -923,7 +888,6 @@ def test_sec_pipeline_marks_filing_skipped_when_all_files_not_modified(tmp_path:
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -967,7 +931,6 @@ def test_sec_pipeline_failed_filing_does_not_write_meta(tmp_path: Path) -> None:
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -1040,7 +1003,6 @@ def test_sec_pipeline_remote_change_marks_reprocess(tmp_path: Path) -> None:
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -1094,7 +1056,6 @@ def test_sec_pipeline_download_parses_year_month_date_inputs(tmp_path: Path) -> 
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -1152,7 +1113,6 @@ def test_sec_pipeline_download_resolves_foreign_issuer_from_submissions(tmp_path
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -1224,7 +1184,6 @@ def test_sec_pipeline_filters_6k_excluded(tmp_path: Path) -> None:
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -1311,7 +1270,6 @@ def test_sec_pipeline_keeps_6k_results_release(tmp_path: Path) -> None:
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -1360,7 +1318,6 @@ def test_sec_pipeline_keeps_primary_only_6k_results_release(tmp_path: Path) -> N
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -1438,7 +1395,6 @@ def test_sec_pipeline_promotes_positive_6k_exhibit_when_cover_is_excluded(tmp_pa
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -1542,7 +1498,6 @@ def test_sec_pipeline_repairs_cover_primary_when_attachment_has_core_statements(
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -1630,7 +1585,6 @@ def test_sec_pipeline_keeps_provisional_primary_when_reconcile_raises(
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -1692,7 +1646,6 @@ def test_sec_pipeline_warns_missing_sc13(tmp_path: Path) -> None:
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -1739,7 +1692,6 @@ def test_sec_pipeline_sc13_direction_filters_gs_like_records(tmp_path: Path) -> 
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -1810,7 +1762,6 @@ def test_sec_pipeline_sc13_direction_keeps_aapl_like_records(tmp_path: Path) -> 
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -1889,7 +1840,6 @@ def test_sec_pipeline_supplements_sc13_from_browse(tmp_path: Path) -> None:
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -1963,7 +1913,6 @@ def test_sec_pipeline_sc13_keeps_latest_per_filer(tmp_path: Path) -> None:
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -2043,7 +1992,6 @@ def test_sc13_no_retry_when_found_in_initial_window(tmp_path: Path) -> None:
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -2099,7 +2047,6 @@ def test_sc13_retry_expands_window_and_finds_filing(tmp_path: Path) -> None:
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )
@@ -2156,7 +2103,6 @@ def test_sc13_retry_warns_after_max_retries(tmp_path: Path) -> None:
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=downloader,
         processor_registry=build_fins_processor_registry(),
     )

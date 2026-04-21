@@ -40,7 +40,7 @@ from dayu.fins.downloaders.sec_downloader import (
     accession_to_no_dash,
     build_source_fingerprint,
 )
-from dayu.fins.resolver.market_resolver import MarketResolver
+from dayu.fins.ticker_normalization import NormalizedTicker, normalize_ticker
 from dayu.fins.domain.enums import SourceKind
 from dayu.fins.storage import (
     CompanyMetaRepositoryProtocol,
@@ -293,7 +293,6 @@ class SecPipeline(PipelineProtocol):
         *,
         processor_registry: ProcessorRegistry,
         workspace_root: Optional[Path] = None,
-        resolver_cls: type[MarketResolver] = MarketResolver,
         downloader: Optional[SecDownloader] = None,
         company_repository: CompanyMetaRepositoryProtocol | None = None,
         source_repository: SourceDocumentRepositoryProtocol | None = None,
@@ -308,7 +307,6 @@ class SecPipeline(PipelineProtocol):
 
         Args:
             workspace_root: 工作区根目录。
-            resolver_cls: 市场解析器类型。
             downloader: 可选下载器实例。
             company_repository: 可选公司元数据仓储实例。
             source_repository: 可选源文档仓储实例。
@@ -330,7 +328,6 @@ class SecPipeline(PipelineProtocol):
         if processor_registry is None:
             raise ValueError("processor_registry 必须由调用方显式传入")
         self._workspace_root = (workspace_root or Path.cwd()).resolve()
-        self._resolver_cls = resolver_cls
         self._downloader = downloader or SecDownloader(
             workspace_root=self._workspace_root,
         )

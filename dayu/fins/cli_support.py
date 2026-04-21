@@ -65,11 +65,11 @@ from typing import Any, AsyncIterator, Optional
 from dayu.log import Log, LogLevel
 
 from .ingestion.process_events import ProcessEvent
-from .pipelines import PipelineProtocol, get_pipeline_from_market_profile
+from .pipelines import PipelineProtocol, get_pipeline_from_normalized_ticker
 from .pipelines.download_events import DownloadEvent
 from .pipelines.upload_filing_events import UploadFilingEvent
 from .pipelines.upload_material_events import UploadMaterialEvent
-from .resolver.market_resolver import MarketResolver
+from dayu.fins.ticker_normalization import normalize_ticker
 from .ticker_normalization import try_normalize_ticker
 from .resolver.fmp_company_alias_resolver import (
     FmpAliasInferenceError,
@@ -912,14 +912,14 @@ def _build_pipeline_for_ticker(
         ValueError: ticker 不合法时抛出。
     """
 
-    market_profile = MarketResolver.resolve(ticker)
+    normalized_ticker = normalize_ticker(ticker)
     Log.debug(
-        f"ticker 解析完成: ticker={market_profile.ticker} "
-        f"market={market_profile.market}",
+        f"ticker 解析完成: ticker={normalized_ticker.canonical} "
+        f"market={normalized_ticker.market}",
         module=MODULE,
     )
-    return get_pipeline_from_market_profile(
-        market_profile=market_profile,
+    return get_pipeline_from_normalized_ticker(
+        normalized_ticker=normalized_ticker,
         workspace_root=workspace_root,
     )
 

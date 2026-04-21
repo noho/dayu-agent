@@ -13,18 +13,7 @@ from dayu.fins.downloaders.sec_downloader import DownloaderEvent, RemoteFileDesc
 from dayu.fins.pipelines.download_events import DownloadEvent
 from dayu.fins.pipelines.sec_pipeline import SEC_PIPELINE_DOWNLOAD_VERSION, SecPipeline
 from dayu.fins.processors.registry import build_fins_processor_registry
-from dayu.fins.resolver.market_resolver import MarketProfile, MarketResolver
 from dayu.fins.storage.fs_source_document_repository import FsSourceDocumentRepository
-
-
-class FakeResolver(MarketResolver):
-    """用于测试的市场解析器。"""
-
-    @classmethod
-    def resolve(cls, ticker: str) -> MarketProfile:
-        """返回固定 US 市场画像。"""
-
-        return MarketProfile(ticker=ticker, market="US")
 
 
 class StreamStubDownloader(SecDownloader):
@@ -233,7 +222,6 @@ def test_download_stream_emits_ordered_events(tmp_path: Path) -> None:
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=StreamStubDownloader(),
         processor_registry=build_fins_processor_registry(),
     )
@@ -256,7 +244,6 @@ def test_download_sync_wrapper_aggregates_stream_result(tmp_path: Path) -> None:
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=StreamStubDownloader(),
         processor_registry=build_fins_processor_registry(),
     )
@@ -285,7 +272,6 @@ def test_download_stream_filing_skip_event_exposes_reason_fields(tmp_path: Path)
     )
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=StreamStubDownloader(),
         processor_registry=build_fins_processor_registry(),
     )
@@ -306,7 +292,6 @@ def test_download_stream_resolves_has_xbrl_via_source_repository(tmp_path: Path)
     source_repository = _SpySourceRepository(tmp_path)
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=FakeResolver,
         downloader=StreamXbrlStubDownloader(),
         source_repository=source_repository,
         processor_registry=build_fins_processor_registry(),

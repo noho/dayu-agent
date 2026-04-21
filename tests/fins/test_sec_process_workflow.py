@@ -3,38 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Literal, Optional, cast
+from typing import Callable, Optional, cast
 
 import pytest
 
 from dayu.fins.domain.enums import SourceKind
 from dayu.fins.ingestion.process_events import ProcessEventType
 from dayu.fins.pipelines import sec_process_workflow as workflow_module
-from dayu.fins.resolver.market_resolver import MarketProfile, MarketResolver
 from dayu.engine.processors.processor_registry import ProcessorRegistry
 from dayu.fins.storage import ProcessedDocumentRepositoryProtocol, SourceDocumentRepositoryProtocol
-
-
-class _FakeResolver(MarketResolver):
-    """测试用市场解析器。"""
-
-    market: Literal["US"] = "US"
-
-    @classmethod
-    def resolve(cls, ticker: str) -> MarketProfile:
-        """返回固定市场画像。
-
-        Args:
-            ticker: 股票代码。
-
-        Returns:
-            测试用市场画像。
-
-        Raises:
-            无。
-        """
-
-        return MarketProfile(ticker=ticker, market=cls.market)
 
 
 class _FakeDownloader:
@@ -168,7 +145,6 @@ class _FakeWorkflowHost:
     built_results: list[dict[str, object]] = field(default_factory=list)
 
     MODULE = "TEST.SEC_PROCESS"
-    _resolver_cls = _FakeResolver
     _downloader = _FakeDownloader()
     _processor_registry = cast(ProcessorRegistry, object())
 

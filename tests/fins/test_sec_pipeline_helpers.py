@@ -29,28 +29,7 @@ from dayu.fins.pipelines import sec_upload_workflow as _sec_upload_workflow
 from dayu.fins.pipelines import processed_snapshot_helpers as _processed_snapshot_helpers
 from dayu.fins.pipelines.sec_pipeline import SecPipeline
 from dayu.fins.processors.registry import build_fins_processor_registry
-from dayu.fins.resolver.market_resolver import MarketProfile, MarketResolver
 from tests.fins.storage_testkit import build_fs_storage_test_context, build_storage_core
-
-
-class _FakeResolver(MarketResolver):
-    """测试用市场解析器。"""
-
-    @classmethod
-    def resolve(cls, ticker: str) -> MarketProfile:
-        """返回固定 US 画像。
-
-        Args:
-            ticker: 股票代码。
-
-        Returns:
-            市场画像。
-
-        Raises:
-            无。
-        """
-
-        return MarketProfile(ticker=ticker, market="US")
 
 
 class _NoFinancialProcessor:
@@ -1648,7 +1627,6 @@ def test_pipeline_internal_form_windows(tmp_path: Path) -> None:
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=_FakeResolver,
         processor_registry=build_fins_processor_registry(),
     )
 
@@ -1897,7 +1875,6 @@ def test_filter_filings_and_collect_filenums_from_history(tmp_path: Path) -> Non
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=_FakeResolver,
         downloader=_HistoryDownloader(),  # type: ignore[arg-type]
         processor_registry=build_fins_processor_registry(),
     )
@@ -1935,7 +1912,6 @@ def test_filter_filings_keeps_latest_sc13_per_filer(tmp_path: Path) -> None:
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=_FakeResolver,
         downloader=_HistoryDownloader(),  # type: ignore[arg-type]
         processor_registry=build_fins_processor_registry(),
     )
@@ -1980,7 +1956,6 @@ def test_filter_sc13_by_direction_keeps_only_subject_ticker(tmp_path: Path) -> N
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=_FakeResolver,
         downloader=_Sc13DirectionDownloader(),  # type: ignore[arg-type]
         processor_registry=build_fins_processor_registry(),
     )
@@ -2043,7 +2018,6 @@ def test_extend_with_browse_edgar_sc13_covers_error_and_skip_paths(tmp_path: Pat
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=_FakeResolver,
         downloader=_BrowseDownloader(),  # type: ignore[arg-type]
         processor_registry=build_fins_processor_registry(),
     )
@@ -2081,7 +2055,6 @@ def test_precheck_6k_filter_error_paths(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=_FakeResolver,
         downloader=_PrecheckDownloader(),  # type: ignore[arg-type]
         processor_registry=build_fins_processor_registry(),
     )
@@ -2211,7 +2184,6 @@ def test_precheck_6k_filter_promotes_positive_candidate_even_when_primary_is_exc
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=_FakeResolver,
         downloader=_ConflictDownloader(),  # type: ignore[arg-type]
         processor_registry=build_fins_processor_registry(),
     )
@@ -2272,7 +2244,6 @@ def test_precheck_6k_filter_excludes_when_primary_is_excluded_and_no_positive_ca
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=_FakeResolver,
         downloader=_ConflictDownloader(),  # type: ignore[arg-type]
         processor_registry=build_fins_processor_registry(),
     )
@@ -2332,7 +2303,6 @@ def test_precheck_6k_filter_keeps_positive_primary_without_exhibit_or_xbrl(
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=_FakeResolver,
         downloader=_PrimaryOnlyDownloader(),  # type: ignore[arg-type]
         processor_registry=build_fins_processor_registry(),
     )
@@ -2384,7 +2354,6 @@ def test_precheck_6k_filter_promotes_positive_non_primary_candidate(
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=_FakeResolver,
         downloader=_CandidateDownloader(),  # type: ignore[arg-type]
         processor_registry=build_fins_processor_registry(),
     )
@@ -2459,7 +2428,6 @@ def test_precheck_6k_filter_keeps_positive_primary_when_exhibits_mislead(
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=_FakeResolver,
         downloader=_PrimaryDownloader(),  # type: ignore[arg-type]
         processor_registry=build_fins_processor_registry(),
     )
@@ -2522,7 +2490,6 @@ def test_meta_skip_and_file_entries_helpers(tmp_path: Path) -> None:
 
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=_FakeResolver,
         processor_registry=build_fins_processor_registry(),
     )
     assert pipeline._safe_get_processed_meta("AAA", "fil_1") is None
@@ -2636,7 +2603,6 @@ def test_safe_get_filing_source_meta_reads_active_batch_staging(tmp_path: Path) 
 
         pipeline = SecPipeline(
             workspace_root=tmp_path,
-            resolver_cls=_FakeResolver,
             company_repository=context.company_repository,
             source_repository=context.source_repository,
             processed_repository=context.processed_repository,

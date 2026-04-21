@@ -63,12 +63,12 @@ from dayu.fins.ingestion.factory import (
     build_ingestion_manager_key,
     build_ingestion_service_factory,
 )
-from dayu.fins.pipelines import PipelineProtocol, get_pipeline_from_market_profile
+from dayu.fins.pipelines import PipelineProtocol, get_pipeline_from_normalized_ticker
 from dayu.fins.pipelines.download_events import DownloadEvent
 from dayu.fins.pipelines.upload_filing_events import UploadFilingEvent
 from dayu.fins.pipelines.upload_material_events import UploadMaterialEvent
 from dayu.fins.processors.registry import build_fins_processor_registry
-from dayu.fins.resolver.market_resolver import MarketResolver
+from dayu.fins.ticker_normalization import normalize_ticker
 from dayu.fins.storage import (
     CompanyMetaRepositoryProtocol,
     DocumentBlobRepositoryProtocol,
@@ -179,9 +179,9 @@ def _build_pipeline(
 ) -> PipelineProtocol:
     """按 ticker 构建 pipeline。"""
 
-    market_profile = MarketResolver.resolve(ticker)
-    return get_pipeline_from_market_profile(
-        market_profile=market_profile,
+    normalized_ticker = normalize_ticker(ticker)
+    return get_pipeline_from_normalized_ticker(
+        normalized_ticker=normalized_ticker,
         workspace_root=workspace_root,
         company_repository=company_repository,
         source_repository=source_repository,

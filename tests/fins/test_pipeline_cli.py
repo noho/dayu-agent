@@ -14,14 +14,14 @@ from dayu.log import Log, LogLevel
 from dayu.fins.domain.document_models import CompanyMeta
 from dayu.fins.downloaders.sec_downloader import RemoteFileDescriptor, SecDownloader
 from dayu.fins.ingestion.process_events import ProcessEvent, ProcessEventType
-from dayu.fins.pipelines import CnPipeline, SecPipeline, get_pipeline_from_market_profile
+from dayu.fins.pipelines import CnPipeline, SecPipeline, get_pipeline_from_normalized_ticker
 from dayu.fins.pipelines.base import PipelineProtocol
 from dayu.fins.pipelines.download_events import DownloadEvent, DownloadEventType
 from dayu.fins.pipelines.upload_filing_events import UploadFilingEvent, UploadFilingEventType
 from dayu.fins.pipelines.upload_material_events import UploadMaterialEvent, UploadMaterialEventType
 from dayu.fins.processors.registry import build_fins_processor_registry
 from dayu.fins.resolver.fmp_company_alias_resolver import FmpAliasInferenceResult
-from dayu.fins.resolver.market_resolver import MarketProfile, MarketResolver
+from dayu.fins.ticker_normalization import NormalizedTicker
 
 
 class FakePipeline(PipelineProtocol):
@@ -800,26 +800,6 @@ class FakePipelineWithUploadFileEvents(FakePipeline):
         )
 
 
-class FakeResolver:
-    """用于测试 SecPipeline.download 的解析器桩。"""
-
-    @classmethod
-    def resolve(cls, ticker: str) -> MarketProfile:
-        """返回固定 US 市场画像。
-
-        Args:
-            ticker: 股票代码。
-
-        Returns:
-            US 市场画像。
-
-        Raises:
-            无。
-        """
-
-        return MarketProfile(ticker=ticker, market="US")
-
-
 class DummyDownloader:
     """用于测试 SecPipeline.download 的下载器桩。"""
 
@@ -1109,9 +1089,9 @@ def test_factory_returns_sec_pipeline_for_us_market(tmp_path: Path) -> None:
         AssertionError: 断言失败时抛出。
     """
 
-    profile = MarketProfile(ticker="AAPL", market="US")
-    pipeline = get_pipeline_from_market_profile(
-        market_profile=profile,
+    normalized = NormalizedTicker(canonical="AAPL", market="US", exchange=None, raw="AAPL")
+    pipeline = get_pipeline_from_normalized_ticker(
+        normalized_ticker=normalized,
         workspace_root=tmp_path,
     )
     assert isinstance(pipeline, SecPipeline)
@@ -1130,9 +1110,9 @@ def test_factory_returns_cn_pipeline_for_cn_market(tmp_path: Path) -> None:
         AssertionError: 断言失败时抛出。
     """
 
-    profile = MarketProfile(ticker="000333", market="CN")
-    pipeline = get_pipeline_from_market_profile(
-        market_profile=profile,
+    normalized = NormalizedTicker(canonical="000333", market="CN", exchange="SZSE", raw="000333")
+    pipeline = get_pipeline_from_normalized_ticker(
+        normalized_ticker=normalized,
         workspace_root=tmp_path,
     )
     assert isinstance(pipeline, CnPipeline)
@@ -1151,12 +1131,12 @@ def test_factory_raises_for_unsupported_market(tmp_path: Path) -> None:
         AssertionError: 断言失败时抛出。
     """
 
-    profile = MarketProfile(ticker="ABC", market="US")
+    normalized = NormalizedTicker(canonical="ABC", market="US", exchange=None, raw="ABC")
     # 通过动态赋值模拟异常市场，验证工厂兜底分支。
-    object.__setattr__(profile, "market", "JP")
+    object.__setattr__(normalized, "market", "JP")
     with pytest.raises(ValueError, match="不支持的 market"):
-        get_pipeline_from_market_profile(
-            market_profile=profile,
+        get_pipeline_from_normalized_ticker(
+            normalized_ticker=normalized,
             workspace_root=tmp_path,
         )
 
@@ -1177,7 +1157,6 @@ def test_sec_pipeline_download_calls_sec_downloader(tmp_path: Path) -> None:
     dummy_downloader = DummyDownloader()
     pipeline = SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=cast(type[MarketResolver], FakeResolver),
         downloader=cast(SecDownloader, dummy_downloader),
         processor_registry=build_fins_processor_registry(),
     )

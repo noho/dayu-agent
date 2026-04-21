@@ -41,22 +41,12 @@ from dayu.fins.pipelines.sec_sc13_filtering import (
     filter_sc13_by_direction as _filter_sc13_by_direction_impl,
 )
 from dayu.fins.processors.registry import build_fins_processor_registry
-from dayu.fins.resolver.market_resolver import MarketResolver
-from dayu.fins.resolver.market_resolver import MarketProfile
 from tests.fins.storage_testkit import build_fs_storage_test_context
 
 
 # ---------------------------------------------------------------------------
 # 测试用桩
 # ---------------------------------------------------------------------------
-
-class _FakeResolver(MarketResolver):
-    """测试用市场解析器。"""
-
-    @classmethod
-    def resolve(cls, ticker: str) -> MarketProfile:
-        """返回固定 US 画像。"""
-        return MarketProfile(ticker=ticker, market="US")
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +229,6 @@ def _make_pipeline(tmp_path: Path) -> SecPipeline:
     """创建最小 SecPipeline 用于方法测试。"""
     return SecPipeline(
         workspace_root=tmp_path,
-        resolver_cls=_FakeResolver,
         processor_registry=build_fins_processor_registry(),
     )
 
