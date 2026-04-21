@@ -15,6 +15,7 @@ from dayu.cli.dependency_setup import (
     setup_loglevel,
     setup_paths,
 )
+from dayu.contracts.session import SessionSource
 from dayu.cli.interactive_ui import interactive
 from dayu.log import Log
 from dayu.services.host_admin_service import HostAdminService
@@ -24,7 +25,7 @@ from dayu.workspace_paths import build_interactive_state_dir
 
 MODULE = "APP.INTERACTIVE"
 _INTERACTIVE_SCENE_NAME = "interactive"
-_CLI_SESSION_SOURCE = "cli"
+_CLI_SESSION_SOURCE = SessionSource.CLI.value
 _ACTIVE_SESSION_STATE = "active"
 _RESTORED_TURN_LIMIT = 1
 _RESTORED_MESSAGE_MAX_CHARS = 1200
@@ -75,8 +76,7 @@ def run_interactive_command(args: argparse.Namespace) -> int:
         execution_options,
     )
     Log.info(
-        "使用模型: "
-        f"{json.dumps(interactive_model, ensure_ascii=False, sort_keys=True)}",
+        "使用模型: " f"{json.dumps(interactive_model, ensure_ascii=False, sort_keys=True)}",
         module=MODULE,
     )
     Log.info("进入交互模式... 按 Ctrl+D 发送 prompt... 按 Enter 换行... 按两次 Ctrl+D 退出...", module=MODULE)

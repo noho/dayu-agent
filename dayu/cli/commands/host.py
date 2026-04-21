@@ -14,7 +14,6 @@ from pathlib import Path
 import unicodedata
 from typing import Protocol
 
-from dayu.host.conversation_store import FileConversationStore
 from dayu.host import Host, resolve_host_config
 from dayu.services.host_admin_service import HostAdminService
 from dayu.services.protocols import HostAdminServiceProtocol
@@ -23,8 +22,6 @@ from dayu.startup.config_file_resolver import ConfigFileResolver
 from dayu.startup.config_loader import ConfigLoader
 from dayu.startup.paths import StartupPaths
 from dayu.startup.paths import resolve_startup_paths
-from dayu.workspace_paths import build_conversation_store_dir
-
 
 _SESSION_ID_COLUMN_WIDTH = 36
 _SESSION_SOURCE_COLUMN_WIDTH = 10
@@ -112,7 +109,6 @@ def _build_host_runtime(args: argparse.Namespace) -> HostCliRuntime:
         lane_config=host_config.lane_config,
         pending_turn_resume_max_attempts=host_config.pending_turn_resume_max_attempts,
         event_bus=None,
-        conversation_store=FileConversationStore(build_conversation_store_dir(paths.workspace_root)),
     )
     return HostCliRuntime(
         paths=paths,
@@ -214,9 +210,7 @@ def _run_interactive_sessions_command(
         无。
     """
 
-    sessions = service.list_interactive_sessions(
-        state=None if bool(getattr(args, "show_all", False)) else "active"
-    )
+    sessions = service.list_interactive_sessions(state=None if bool(getattr(args, "show_all", False)) else "active")
     if not sessions:
         print("无 interactive 会话记录")
         return 0
