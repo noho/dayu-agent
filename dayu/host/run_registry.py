@@ -387,6 +387,7 @@ class SQLiteRunRegistry(RunRegistryProtocol):
             set_parts.append("error_summary = ?")
             params.append(error_summary)
         elif target_state != RunState.FAILED:
+            # 终态离开 FAILED 时统一清空 error_summary，包括 owner 修复 orphan failure 的成功收口。
             set_parts.append("error_summary = NULL")
         if cancel_requested_at is not None:
             set_parts.append("cancel_requested_at = ?")

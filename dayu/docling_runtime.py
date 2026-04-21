@@ -35,6 +35,7 @@ _TABLE_MODE_ACCURATE = "accurate"
 _TABLE_MODE_FAST = "fast"
 _MODULE = __name__
 _TResult = TypeVar("_TResult")
+# Protocol 返回值需要协变，才能让更具体的转换结果回调安全替换更宽的调用点。
 _TResultCovariant = TypeVar("_TResultCovariant", covariant=True)
 
 
