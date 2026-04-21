@@ -834,6 +834,48 @@ git worktree list
 git tag --list 'run/*'
 ```
 
+### J. 自己的 PR 还没 merge，这时来了别人的 PR
+
+这个场景只处理一种需求：**你想先在本地验证"对方 PR + 我的 PR"合在一起会不会炸**。
+
+这不是正式开发流程的一部分，更不是让你把对方 PR merge 进自己的 `feat/xxx`。正确姿势是：**在独立 `worktree` 里做一次临时集成验证，验证完直接丢掉。**
+
+```bash
+# 1. 先保证自己当前分支的修改已经提交或 stash
+git status
+
+# 2. 基于自己的功能分支创建一个临时集成分支，并开独立 worktree
+git switch feat/xxx
+git worktree add -b integration/pr-123 ../dayu-agent-prs/pr-123-integration feat/xxx
+
+# 3. 在独立目录拉下对方 PR
+cd ../dayu-agent-prs/pr-123-integration
+git fetch github pull/123/head:pr-123
+
+# 4. 把对方 PR 临时 merge 进来做集成验证
+git merge --no-ff pr-123
+
+# 5. 跑测试 / 做验证
+git status
+
+# 6. 验证完直接删掉整个 worktree 和临时分支，不把这次 merge 带回正式分支
+cd -
+git worktree remove ../dayu-agent-prs/pr-123-integration
+git branch -D integration/pr-123
+```
+
+几点说明：
+
+- 这个 `merge` 只是为了本地验证，不是正式历史的一部分。
+- 正式流程仍然是：谁先 merge 到 `main`，另一个人后续基于最新 `main` 做 `rebase`，见[场景 A](#a-远端-main-有别人合进来的提交)。
+- 用独立 `worktree` 的目的，是把这次临时集成验证和你正式开发中的 `feat/xxx` 隔离开。
+
+不要做的事：
+
+- 不要把对方 PR `merge` 进自己的功能分支，只为了"顺手一起带上"。
+- 不要从自己的功能分支再开一个分支去承接对方 PR，制造 PR 依赖链。
+- 不要在未提交修改的工作区直接做这类本地集成验证，容易把两边改动搅在一起。
+
 ---
 
 ## 五、反模式（都别做）
