@@ -1,0 +1,58 @@
+name: Build and smoke test offline bundle
+description: Build the project wheel, build a platform offline bundle, and run the smoke test.
+
+inputs:
+  constraints-path:
+    description: Path to the locked constraints file.
+    required: true
+  platform-id:
+    description: Platform identifier used by the offline bundle builder.
+    required: true
+  output-dir:
+    description: Output directory for generated offline bundles.
+    required: false
+    default: dist/offline
+
+outputs:
+  wheel_path:
+    description: Generated wheel path.
+    value: ${{ steps.resolve_wheel.outputs.wheel_path }}
+  bundle_path:
+    description: Generated offline bundle path.
+    value: ${{ steps.build_offline_bundle.outputs.bundle_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build wheel
+      shell: bash
+      run: python -m pip wheel --no-deps --wheel-dir dist .
+
+    - name: Resolve wheel path
+      id: resolve_wheel
+      shell: bash
+      run: |
+        WHEEL_PATH="$(python - <<'PY'
+        from pathlib import Path
+        wheels = sorted(Path("dist").glob("dayu_agent-*.whl"))
+        if len(wheels) != 1:
+            raise SystemExit(f"unexpected wheels: {wheels}")
+        print(wheels[0])
+        PY
+        )"
+        echo "wheel_path=$WHEEL_PATH" >> "$GITHUB_OUTPUT"
+
+    - name: Build offline bundle
+      id: build_offline_bundle
+      shell: bash
+      run: |
+        BUNDLE_PATH="$(python utils/build_offline_bundle.py \
+          --wheel "${{ steps.resolve_wheel.outputs.wheel_path }}" \
+          --constraints "${{ inputs.constraints-path }}" \
+          --platform-id "${{ inputs.platform-id }}" \
+          --output-dir "${{ inputs.output-dir }}")"
+        echo "bundle_path=$BUNDLE_PATH" >> "$GITHUB_OUTPUT"
+
+    - name: Smoke test offline bundle
+      shell: bash
+      run: python utils/smoke_test_offline_bundle.py --archive "${{ steps.build_offline_bundle.outputs.bundle_path }}"

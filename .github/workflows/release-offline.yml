@@ -55,21 +55,9 @@ jobs:
         with:
           files: ${{ env.WHEEL_PATH }}
 
-  build-offline:
-    name: build-offline (${{ matrix.platform_id }}, py3.11)
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-14
-            platform_id: macos-arm64
-          - runner: macos-13
-            platform_id: macos-x64
-          - runner: ubuntu-latest
-            platform_id: linux-x64
-          - runner: windows-latest
-            platform_id: windows-x64
+  build-offline-linux-x64:
+    name: build-offline linux-x64 (py3.11)
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -82,46 +70,143 @@ jobs:
           cache: pip
 
       - name: Install locked dependencies
-        shell: bash
-        run: |
-          python -m pip install --upgrade pip
-          CONSTRAINTS="constraints/lock-${{ matrix.platform_id }}-py311.txt"
-          pip install -e ".[test,dev,browser]" -c "$CONSTRAINTS"
+        uses: ./.github/actions/install-locked-env
+        with:
+          constraints-path: constraints/lock-linux-x64-py311.txt
 
-      - name: Build wheel
-        run: python -m pip wheel --no-deps --wheel-dir dist .
-
-      - name: Build offline bundle
-        shell: bash
-        run: |
-          CONSTRAINTS="constraints/lock-${{ matrix.platform_id }}-py311.txt"
-          WHEEL_PATH="$(python - <<'PY'
-          from pathlib import Path
-          wheels = sorted(Path("dist").glob("dayu_agent-*.whl"))
-          if len(wheels) != 1:
-              raise SystemExit(f"unexpected wheels: {wheels}")
-          print(wheels[0])
-          PY
-          )"
-          BUNDLE_PATH="$(python utils/build_offline_bundle.py \
-            --wheel "$WHEEL_PATH" \
-            --constraints "$CONSTRAINTS" \
-            --platform-id "${{ matrix.platform_id }}" \
-            --output-dir dist/offline)"
-          echo "BUNDLE_PATH=$BUNDLE_PATH" >> "$GITHUB_ENV"
-
-      - name: Smoke test offline bundle
-        run: python utils/smoke_test_offline_bundle.py --archive "${{ env.BUNDLE_PATH }}"
+      - name: Build and smoke test offline bundle
+        id: build_offline_bundle
+        uses: ./.github/actions/build-and-smoke-offline-bundle
+        with:
+          constraints-path: constraints/lock-linux-x64-py311.txt
+          platform-id: linux-x64
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: offline-${{ matrix.platform_id }}
-          path: ${{ env.BUNDLE_PATH }}
+          name: offline-linux-x64
+          path: ${{ steps.build_offline_bundle.outputs.bundle_path }}
 
       - name: Upload release asset
         if: github.event_name == 'release'
         # v2
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
-          files: ${{ env.BUNDLE_PATH }}
+          files: ${{ steps.build_offline_bundle.outputs.bundle_path }}
+
+  build-offline-windows-x64:
+    name: build-offline windows-x64 (py3.11)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install locked dependencies
+        uses: ./.github/actions/install-locked-env
+        with:
+          constraints-path: constraints/lock-windows-x64-py311.txt
+
+      - name: Build and smoke test offline bundle
+        id: build_offline_bundle
+        uses: ./.github/actions/build-and-smoke-offline-bundle
+        with:
+          constraints-path: constraints/lock-windows-x64-py311.txt
+          platform-id: windows-x64
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-windows-x64
+          path: ${{ steps.build_offline_bundle.outputs.bundle_path }}
+
+      - name: Upload release asset
+        if: github.event_name == 'release'
+        # v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          files: ${{ steps.build_offline_bundle.outputs.bundle_path }}
+
+  build-offline-macos-arm64:
+    name: build-offline macos-arm64 (py3.11)
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install locked dependencies
+        uses: ./.github/actions/install-locked-env
+        with:
+          constraints-path: constraints/lock-macos-arm64-py311.txt
+
+      - name: Build and smoke test offline bundle
+        id: build_offline_bundle
+        uses: ./.github/actions/build-and-smoke-offline-bundle
+        with:
+          constraints-path: constraints/lock-macos-arm64-py311.txt
+          platform-id: macos-arm64
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-macos-arm64
+          path: ${{ steps.build_offline_bundle.outputs.bundle_path }}
+
+      - name: Upload release asset
+        if: github.event_name == 'release'
+        # v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          files: ${{ steps.build_offline_bundle.outputs.bundle_path }}
+
+  build-offline-macos-x64:
+    name: build-offline macos-x64 (py3.11)
+    runs-on: macos-13
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install locked dependencies
+        uses: ./.github/actions/install-locked-env
+        with:
+          constraints-path: constraints/lock-macos-x64-py311.txt
+
+      - name: Build and smoke test offline bundle
+        id: build_offline_bundle
+        uses: ./.github/actions/build-and-smoke-offline-bundle
+        with:
+          constraints-path: constraints/lock-macos-x64-py311.txt
+          platform-id: macos-x64
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-macos-x64
+          path: ${{ steps.build_offline_bundle.outputs.bundle_path }}
+
+      - name: Upload release asset
+        if: github.event_name == 'release'
+        # v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          files: ${{ steps.build_offline_bundle.outputs.bundle_path }}

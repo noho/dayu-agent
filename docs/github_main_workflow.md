@@ -244,10 +244,14 @@ push 后 PR 自动更新，CI 重新跑。最终 merge 时用 **Squash and merge
      - 给 PR 加 label：`full-integration`
    - 内容：
      - Ubuntu 下完整 `integration` 测试层
-     - PR 可执行的平台完整验证矩阵：
+     - PR 可执行的平台完整验证：
        - `linux-x64`
        - `windows-x64`
        - `macos-arm64`
+     - GitHub Checks 中固定展示为三个显式任务：
+       - `full-platform-validation linux-x64 (py3.11)`
+       - `full-platform-validation windows-x64 (py3.11)`
+       - `full-platform-validation macos-arm64 (py3.11)`
      - `macos-x64` 不在 PR 层阻塞，避免长期排队占用反馈时间
 
 3. `主线 / 定时 / 手工完整验证`
@@ -270,12 +274,91 @@ push 后 PR 自动更新，CI 重新跑。最终 merge 时用 **Squash and merge
 - `workflow_dispatch(run_full_matrix=true, include_macos_x64=true)`
 - `release` 正式发布工作流
 
+`release` 工作流中的离线包构建也固定展开为四个显式任务：
+
+- `build-offline linux-x64 (py3.11)`
+- `build-offline windows-x64 (py3.11)`
+- `build-offline macos-arm64 (py3.11)`
+- `build-offline macos-x64 (py3.11)`
+
 这三层的设计原则是：
 
 - 主链 CI 必须包含少量真实集成 smoke
 - 更慢的真实集成测试与完整平台矩阵分层运行
 - 稀缺 runner（当前是 `macos-x64`）不放进日常阻塞层，只在手工完整验证和正式发布层收口
 - 发布前完整验证仍以 Release workflow 为准
+
+#### 当前触发对照
+
+1. 普通 PR
+   - 触发 workflow：`CI`
+   - 会跑：
+     - `pr-required min-compat (ubuntu-latest, py3.11)`
+       - 用最低支持依赖安装项目
+       - 跑 `pyright`
+       - 跑快速测试链：`pytest -m "not integration and not slow and not e2e"`
+     - `pr-required lock-smoke (linux-x64, py3.11)`
+       - 用 `constraints/lock-linux-x64-py311.txt` 安装锁定环境
+       - 跑最小真实 Docling 集成 smoke
+       - 构建 wheel
+       - 构建 `linux-x64` 离线包
+       - 对离线包做 smoke test
+   - 不会跑：
+     - `extended integration (ubuntu-latest, py3.11)`
+     - `full-platform-validation linux-x64 (py3.11)`
+     - `full-platform-validation windows-x64 (py3.11)`
+     - `full-platform-validation macos-arm64 (py3.11)`
+     - `full-platform-validation macos-x64 (py3.11)`
+
+2. PR 加 label `full-integration`
+   - 触发 workflow：`CI`
+   - 会跑普通 PR 的全部 job，并额外跑：
+     - `extended integration (ubuntu-latest, py3.11)`
+       - 用 `linux-x64` 锁定环境
+       - 跑完整 `integration and not e2e`
+     - `full-platform-validation linux-x64 (py3.11)`
+     - `full-platform-validation windows-x64 (py3.11)`
+     - `full-platform-validation macos-arm64 (py3.11)`
+       - 这三个平台完整验证 job 都会：
+         - 用各自平台的锁定依赖安装项目
+         - 跑 `pyright`
+         - 跑完整 `pytest -q --timeout=60`
+         - 构建 wheel
+         - 构建对应平台离线包
+         - 对离线包做 smoke test
+   - 仍不会跑：
+     - `full-platform-validation macos-x64 (py3.11)`
+
+3. `push main`
+   - 触发 workflow：`CI`
+   - 会跑：
+     - `pr-required min-compat (ubuntu-latest, py3.11)`
+     - `pr-required lock-smoke (linux-x64, py3.11)`
+     - `extended integration (ubuntu-latest, py3.11)`
+     - `full-platform-validation linux-x64 (py3.11)`
+     - `full-platform-validation windows-x64 (py3.11)`
+     - `full-platform-validation macos-arm64 (py3.11)`
+   - 不会跑：
+     - `full-platform-validation macos-x64 (py3.11)`
+
+4. `release`
+   - 触发 workflow：`Release Offline Bundles`
+   - 会跑：
+     - `build-wheel (py3.11)`
+       - 构建项目 wheel
+       - 上传 workflow artifact
+       - 发布到 GitHub Release asset
+     - `build-offline linux-x64 (py3.11)`
+     - `build-offline windows-x64 (py3.11)`
+     - `build-offline macos-arm64 (py3.11)`
+     - `build-offline macos-x64 (py3.11)`
+       - 这四个离线构建 job 都会：
+         - 用对应平台锁定依赖安装项目
+         - 构建 wheel
+         - 构建对应平台离线包
+         - 对离线包做 smoke test
+         - 上传 workflow artifact
+         - 发布到 GitHub Release asset
 
 ### 5. PR merge 后本地同步
 

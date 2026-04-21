@@ -1,0 +1,16 @@
+name: Install locked environment
+description: Install the project with a platform-specific locked constraints file.
+
+inputs:
+  constraints-path:
+    description: Path to the locked constraints file.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install locked dependencies
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[test,dev,browser]" -c "${{ inputs.constraints-path }}"
