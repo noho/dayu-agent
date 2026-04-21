@@ -336,6 +336,28 @@ class FsSourceDocumentRepository(SourceDocumentRepositoryProtocol):
             return
         self._repository_set.core.delete_material(_build_material_delete_request(req))
 
+    def reset_source_document(
+        self,
+        ticker: str,
+        document_id: str,
+        source_kind: SourceKind,
+    ) -> None:
+        """重置单个源文档的完整存储。
+
+        Args:
+            ticker: 股票代码。
+            document_id: 文档 ID。
+            source_kind: 来源类型。
+
+        Returns:
+            无。
+
+        Raises:
+            OSError: 重置底层存储失败时抛出。
+        """
+
+        self._repository_set.core.reset_source_document(ticker, document_id, source_kind)
+
     def restore_source_document(self, req: SourceDocumentStateChangeRequest) -> DocumentHandle:
         """恢复逻辑删除的源文档。"""
 

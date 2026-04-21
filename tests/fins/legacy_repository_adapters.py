@@ -228,6 +228,29 @@ class _LegacySourceRepositoryAdapter:
 
         raise NotImplementedError("测试适配器未实现 delete_source_document")
 
+    def reset_source_document(
+        self,
+        ticker: str,
+        document_id: str,
+        source_kind: SourceKind,
+    ) -> None:
+        """测试适配器不负责重置单文档存储。
+
+        Args:
+            ticker: 股票代码。
+            document_id: 文档 ID。
+            source_kind: 来源类型。
+
+        Returns:
+            无。
+
+        Raises:
+            NotImplementedError: 测试适配器未实现该写路径时抛出。
+        """
+
+        del ticker, document_id, source_kind
+        raise NotImplementedError("测试适配器未实现 reset_source_document")
+
     def restore_source_document(self, req: SourceDocumentStateChangeRequest) -> DocumentHandle:
         """测试适配器不负责写路径。"""
 

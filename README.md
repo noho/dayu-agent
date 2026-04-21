@@ -384,16 +384,15 @@ dayu-cli download --ticker BABA,9988,9988.HK --infer
 
 | 命令 | 关键参数 | 说明 |
 |------|------|------|
-| `upload_filing` | `--ticker` `--action` `--files` `--fiscal-year` `--fiscal-period` | 上传单份财报 |
+| `upload_filing` | `--ticker` `--files` `--fiscal-year` `--fiscal-period` | 上传单份财报；`--action` 可选，默认按 document_id 自动判定 |
 | `upload_filings_from` | `--ticker` `--from` | 扫描目录并生成批量上传脚本 |
-| `upload_material` | `--ticker` `--action` `--forms` `--material-name` `--files` | 上传补充材料，如电话会、演示材料 |
+| `upload_material` | `--ticker` `--forms` `--material-name` `--files` | 上传补充材料；`--action` 可选，`--fiscal-year/--fiscal-period` 可选并参与稳定 document_id 生成 |
 
 命令示例：
 
 ```bash
 dayu-cli upload_filing \
   --ticker 0300 \
-  --action create \
   --files ./tmp/美的2025Q1.pdf \
   --fiscal-year 2025 \
   --fiscal-period Q1 \
@@ -410,7 +409,6 @@ dayu-cli upload_filings_from \
 
 dayu-cli upload_filing \
   --ticker BABA,9988 \
-  --action create \
   --files ./tmp/alibaba_2025_q1.pdf \
   --fiscal-year 2025 \
   --fiscal-period Q1 \
@@ -419,21 +417,23 @@ dayu-cli upload_filing \
 
 dayu-cli upload_material \
   --ticker AAPL \
-  --action create \
   --forms EARNINGS_CALL \
   --material-name deck \
   --files ./tmp/deck.pdf
 ```
 
 命令说明：
-- `--action` 用来说明你这次是新增、修改还是删除文件：`create` 表示新增，`update` 表示更新已有文件，`delete` 表示删除已有文件；不确定时，新增文件通常用 `create`。
+- `upload_filing` 和 `upload_material` 的 `--action` 现在都可省略；省略时会先按稳定 `document_id` 查工作区：不存在则 `create`，存在则 `update`，若文件指纹未变化则直接 `skip`。自动判定只覆盖 `create/update`；若要删除，必须显式传 `--action delete`。
 - `upload_filing` 适合单份补录；每个 `ticker` 第一次上传财报时才需要 `--company-id` 和 `--company-name`。若显式传 `--infer`，则在工作区缺少公司级 `meta.json` 时可省略 `--company-name`，由 FMP 推断后补齐；若同时传了 `--company-name`，则以你显式传入的值为准；若 infer 失败且仍缺 `--company-name`，命令会直接失败。
+- `upload_material` 的稳定 `document_id` 默认由 `form_type + material_name` 生成；若显式提供 `--fiscal-year/--fiscal-period`，它们也会参与 ID 生成。material 场景下 `document_id` 与 `internal_document_id` 恒等；显式传 `--document-id/--internal-document-id` 时，必须与这套稳定规则一致。
 - `upload_filings_from` 不直接上传文件，而是先生成一份适配当前运行平台的可执行脚本；macOS / Linux 默认生成 `.sh`，Windows 默认生成 `.cmd`。
 - `upload_filings_from` 未传 `--output` 时，默认把脚本写到 `--base` 指向的 workspace 根目录，文件名为 `upload_filings_{ticker}.sh` / `.cmd`。
 - `upload_filings_from --infer` 只会在脚本生成阶段调用一次 FMP，并把“显式 CSV alias + infer alias”的合并结果，以及最终公司名直接 bake 到脚本正文；脚本头部的重生成命令仍会保留原始 `--ticker` 输入和 `--infer`。
 - 使用 `--infer` 功能需要申请FMP_API_KEY。
 - 生成脚本头部会附带一条注释形式的 `python -m dayu.cli upload_filings_from ...` 重跑命令；脚本正文里的批量上传命令也统一使用 `python -m dayu.cli`，这样在源码工作区里执行时不会依赖外部 `dayu-cli` entrypoint。
+- `upload_filings_from` 默认不会在脚本正文里写死 `--action`，这样每条命令都会在执行时按当前工作区状态自动判定 `create/update/skip`；只有你显式传了 `--action`，生成脚本才会固定动作。
 - 生成脚本中的每条上传命令都会透传脚本调用时的额外参数；macOS / Linux 使用 `"$@"`，Windows 使用 `%*`，因此可直接执行 `./upload_filings_xxx.sh --overwrite` 之类的批量覆盖调用。
+- `upload_filing --overwrite` 和 `upload_material --overwrite` 会先重置当前 `document_id` 的源文档存储，再完整重建该文档；不会像 SEC download 的 ticker 级 overwrite 那样清空同 ticker 下的其他文档。
 - `upload_filing` 和 `upload_material` 在首次实际写入时会自动创建 `workspace/portfolio/{ticker}` 下的源文档目录；`upload_filings_from` 只生成批量上传脚本，不直接写入源文档。
 
 ### 3.3 单次问答：`prompt`

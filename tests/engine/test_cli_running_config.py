@@ -4021,6 +4021,8 @@ def test_build_fins_command_allows_upload_material_delete_without_files(tmp_path
             material_name="Deck",
             document_id="mat_1",
             internal_document_id=None,
+            fiscal_year=None,
+            fiscal_period=None,
             filing_date=None,
             report_date=None,
             company_id="1",

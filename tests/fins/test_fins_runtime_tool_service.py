@@ -784,7 +784,7 @@ def test_execute_upload_filing_uses_normalized_namespace_values(
 
     monkeypatch.setattr("dayu.fins.service_runtime.get_pipeline_from_market_profile", _fake_factory)
     monkeypatch.setattr(
-        "dayu.fins.cli.infer_company_aliases_from_fmp",
+        "dayu.fins.cli_support.infer_company_aliases_from_fmp",
         lambda _ticker: (_ for _ in ()).throw(RuntimeError("should not be required for preserved payload data")),
     )
 

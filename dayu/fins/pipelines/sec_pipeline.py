@@ -1353,7 +1353,7 @@ class SecPipeline(PipelineProtocol):
     def upload_filing(
         self,
         ticker: str,
-        action: str,
+        action: Optional[str],
         files: list[Path],
         fiscal_year: int,
         fiscal_period: str,
@@ -1369,7 +1369,7 @@ class SecPipeline(PipelineProtocol):
 
         Args:
             ticker: 股票代码。
-            action: 动作类型。
+            action: 可选动作类型；为空时自动判定。
             files: 上传文件列表。
             fiscal_year: 财年。
             fiscal_period: 财季或年度标识。
@@ -1411,7 +1411,7 @@ class SecPipeline(PipelineProtocol):
     async def upload_filing_stream(
         self,
         ticker: str,
-        action: str,
+        action: Optional[str],
         files: list[Path],
         fiscal_year: int,
         fiscal_period: str,
@@ -1427,7 +1427,7 @@ class SecPipeline(PipelineProtocol):
 
         Args:
             ticker: 股票代码。
-            action: 动作类型。
+            action: 可选动作类型；为空时自动判定。
             files: 上传文件列表。
             fiscal_year: 财年。
             fiscal_period: 财季或年度标识。
@@ -1466,12 +1466,14 @@ class SecPipeline(PipelineProtocol):
     def upload_material(
         self,
         ticker: str,
-        action: str,
+        action: Optional[str],
         form_type: str,
         material_name: str,
         files: Optional[list[Path]] = None,
         document_id: Optional[str] = None,
         internal_document_id: Optional[str] = None,
+        fiscal_year: Optional[int] = None,
+        fiscal_period: Optional[str] = None,
         filing_date: Optional[str] = None,
         report_date: Optional[str] = None,
         company_id: Optional[str] = None,
@@ -1483,12 +1485,14 @@ class SecPipeline(PipelineProtocol):
 
         Args:
             ticker: 股票代码。
-            action: 动作类型。
+            action: 可选动作类型；为空时自动判定。
             form_type: 材料类型。
             material_name: 材料名称。
             files: 可选上传文件列表。
             document_id: 可选文档 ID。
             internal_document_id: 可选内部文档 ID。
+            fiscal_year: 可选财年；提供时参与稳定 document_id 生成。
+            fiscal_period: 可选财期；提供时参与稳定 document_id 生成。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
             company_id: 公司 ID。
@@ -1513,6 +1517,8 @@ class SecPipeline(PipelineProtocol):
                     files=files,
                     document_id=document_id,
                     internal_document_id=internal_document_id,
+                    fiscal_year=fiscal_year,
+                    fiscal_period=fiscal_period,
                     filing_date=filing_date,
                     report_date=report_date,
                     company_id=company_id,
@@ -1527,12 +1533,14 @@ class SecPipeline(PipelineProtocol):
     async def upload_material_stream(
         self,
         ticker: str,
-        action: str,
+        action: Optional[str],
         form_type: str,
         material_name: str,
         files: Optional[list[Path]] = None,
         document_id: Optional[str] = None,
         internal_document_id: Optional[str] = None,
+        fiscal_year: Optional[int] = None,
+        fiscal_period: Optional[str] = None,
         filing_date: Optional[str] = None,
         report_date: Optional[str] = None,
         company_id: Optional[str] = None,
@@ -1544,12 +1552,14 @@ class SecPipeline(PipelineProtocol):
 
         Args:
             ticker: 股票代码。
-            action: 动作类型。
+            action: 可选动作类型；为空时自动判定。
             form_type: 材料类型。
             material_name: 材料名称。
             files: 可选上传文件列表。
             document_id: 可选文档 ID。
             internal_document_id: 可选内部文档 ID。
+            fiscal_year: 可选财年；提供时参与稳定 document_id 生成。
+            fiscal_period: 可选财期；提供时参与稳定 document_id 生成。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
             company_id: 公司 ID。
@@ -1573,6 +1583,8 @@ class SecPipeline(PipelineProtocol):
             files=files,
             document_id=document_id,
             internal_document_id=internal_document_id,
+            fiscal_year=fiscal_year,
+            fiscal_period=fiscal_period,
             filing_date=filing_date,
             report_date=report_date,
             company_id=company_id,

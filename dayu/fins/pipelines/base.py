@@ -91,7 +91,7 @@ class PipelineProtocol(Protocol):
     def upload_filing(
         self,
         ticker: str,
-        action: str,
+        action: Optional[str],
         files: list[Path],
         fiscal_year: int,
         fiscal_period: str,
@@ -107,7 +107,7 @@ class PipelineProtocol(Protocol):
 
         Args:
             ticker: 股票代码。
-            action: 动作类型（create/update/delete）。
+            action: 可选动作类型（create/update/delete）；为空时自动判定。
             files: 上传文件列表。
             fiscal_year: 财年。
             fiscal_period: 财季或年度标识（Q1/Q2/Q3/Q4/FY/H1）。
@@ -131,7 +131,7 @@ class PipelineProtocol(Protocol):
     def upload_filing_stream(
         self,
         ticker: str,
-        action: str,
+        action: Optional[str],
         files: list[Path],
         fiscal_year: int,
         fiscal_period: str,
@@ -147,7 +147,7 @@ class PipelineProtocol(Protocol):
 
         Args:
             ticker: 股票代码。
-            action: 动作类型（create/update/delete）。
+            action: 可选动作类型（create/update/delete）；为空时自动判定。
             files: 上传文件列表。
             fiscal_year: 财年。
             fiscal_period: 财季或年度标识（Q1/Q2/Q3/Q4/FY/H1）。
@@ -171,12 +171,14 @@ class PipelineProtocol(Protocol):
     def upload_material(
         self,
         ticker: str,
-        action: str,
+        action: Optional[str],
         form_type: str,
         material_name: str,
         files: Optional[list[Path]] = None,
         document_id: Optional[str] = None,
         internal_document_id: Optional[str] = None,
+        fiscal_year: Optional[int] = None,
+        fiscal_period: Optional[str] = None,
         filing_date: Optional[str] = None,
         report_date: Optional[str] = None,
         company_id: Optional[str] = None,
@@ -188,12 +190,14 @@ class PipelineProtocol(Protocol):
 
         Args:
             ticker: 股票代码。
-            action: 动作类型（create/update/delete）。
+            action: 可选动作类型（create/update/delete）；为空时自动判定。
             form_type: 材料类型。
             material_name: 材料名称。
             files: 上传文件列表（create/update 需要）。
             document_id: 可选文档 ID（update/delete 需要）。
             internal_document_id: 可选内部文档 ID（update/delete 可用）。
+            fiscal_year: 可选财年；提供时参与稳定 document_id 生成。
+            fiscal_period: 可选财期；提供时参与稳定 document_id 生成。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
             company_id: 公司 ID（create/update 必填）。
@@ -213,12 +217,14 @@ class PipelineProtocol(Protocol):
     def upload_material_stream(
         self,
         ticker: str,
-        action: str,
+        action: Optional[str],
         form_type: str,
         material_name: str,
         files: Optional[list[Path]] = None,
         document_id: Optional[str] = None,
         internal_document_id: Optional[str] = None,
+        fiscal_year: Optional[int] = None,
+        fiscal_period: Optional[str] = None,
         filing_date: Optional[str] = None,
         report_date: Optional[str] = None,
         company_id: Optional[str] = None,
@@ -230,12 +236,14 @@ class PipelineProtocol(Protocol):
 
         Args:
             ticker: 股票代码。
-            action: 动作类型（create/update/delete）。
+            action: 可选动作类型（create/update/delete）；为空时自动判定。
             form_type: 材料类型。
             material_name: 材料名称。
             files: 上传文件列表（create/update 需要）。
             document_id: 可选文档 ID（update/delete 需要）。
             internal_document_id: 可选内部文档 ID（update/delete 可用）。
+            fiscal_year: 可选财年；提供时参与稳定 document_id 生成。
+            fiscal_period: 可选财期；提供时参与稳定 document_id 生成。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
             company_id: 公司 ID（create/update 必填）。

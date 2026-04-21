@@ -29,7 +29,10 @@ from dayu.contracts.fins import (
     UploadFilingsFromCommandPayload,
     UploadMaterialCommandPayload,
 )
-from dayu.fins.cli import _coerce_document_ids_input as coerce_document_ids_input, _prepare_cli_args as prepare_cli_args
+from dayu.fins.cli_support import (
+    _coerce_document_ids_input as coerce_document_ids_input,
+    _prepare_cli_args as prepare_cli_args,
+)
 from dayu.log import Log
 from dayu.presenters import format_fins_cli_result
 from dayu.services.contracts import FinsSubmitRequest
@@ -71,7 +74,7 @@ def _build_fins_command(args: argparse.Namespace) -> FinsCommand:
             ticker=str(args.ticker),
             files=tuple(Path(file_path) for file_path in (args.files or ())),
             fiscal_year=int(args.fiscal_year),
-            action=str(args.action),
+            action=str(args.action) if args.action is not None else None,
             fiscal_period=str(args.fiscal_period),
             amended=bool(args.amended),
             filing_date=args.filing_date,
@@ -86,7 +89,7 @@ def _build_fins_command(args: argparse.Namespace) -> FinsCommand:
         payload = UploadFilingsFromCommandPayload(
             ticker=str(args.ticker),
             source_dir=Path(args.source_dir),
-            action=str(args.action),
+            action=str(args.action) if args.action is not None else None,
             output_script=Path(args.output_script) if args.output_script else None,
             recursive=bool(args.recursive),
             amended=bool(args.amended),
@@ -107,11 +110,13 @@ def _build_fins_command(args: argparse.Namespace) -> FinsCommand:
         payload = UploadMaterialCommandPayload(
             ticker=str(args.ticker),
             files=tuple(Path(file_path) for file_path in (args.files or ())),
-            action=str(args.action),
+            action=str(args.action) if args.action is not None else None,
             form_type=str(args.form_type),
             material_name=str(args.material_name),
             document_id=args.document_id,
             internal_document_id=args.internal_document_id,
+            fiscal_year=args.fiscal_year,
+            fiscal_period=args.fiscal_period,
             filing_date=args.filing_date,
             report_date=args.report_date,
             company_id=args.company_id,

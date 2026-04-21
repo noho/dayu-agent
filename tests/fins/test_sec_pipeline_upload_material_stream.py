@@ -77,3 +77,59 @@ async def test_upload_material_stream_uploads_docling_files(tmp_path: Path) -> N
     assert company_meta.ticker_aliases == ["AAPL", "APC"]
     meta = pipeline._source_repository.get_source_meta("AAPL", result["document_id"], SourceKind.MATERIAL)  # type: ignore[attr-defined]
     assert str(meta["primary_document"]).endswith("_docling.json")
+
+
+@pytest.mark.asyncio
+async def test_upload_material_stream_auto_action_and_overwrite_reset(tmp_path: Path) -> None:
+    """验证 SecPipeline material 上传会自动解析动作并在 overwrite 时重置单文档。"""
+
+    pipeline = SecPipeline(
+        workspace_root=tmp_path,
+        processor_registry=build_fins_processor_registry(),
+    )
+    pipeline._upload_service._convert_with_docling = lambda path: {  # type: ignore[attr-defined]
+        "name": path.name,
+        "format": "docling",
+    }
+    old_file = tmp_path / "deck_old.pdf"
+    new_file = tmp_path / "deck_new.pdf"
+    old_file.write_text("old material", encoding="utf-8")
+    new_file.write_text("new material", encoding="utf-8")
+
+    create_events = [
+        event
+        async for event in pipeline.upload_material_stream(
+            ticker="AAPL",
+            action=None,
+            form_type="MATERIAL_OTHER",
+            material_name="Deck",
+            files=[old_file],
+            company_id="320193",
+            company_name="Apple Inc.",
+            overwrite=False,
+        )
+    ]
+    create_result = create_events[-1].payload["result"]
+    assert create_result["material_action"] == "create"
+
+    overwrite_events = [
+        event
+        async for event in pipeline.upload_material_stream(
+            ticker="AAPL",
+            action=None,
+            form_type="MATERIAL_OTHER",
+            material_name="Deck",
+            files=[new_file],
+            company_id="320193",
+            company_name="Apple Inc.",
+            overwrite=True,
+        )
+    ]
+    overwrite_result = overwrite_events[-1].payload["result"]
+    assert overwrite_result["status"] == "ok"
+    assert overwrite_result["material_action"] == "update"
+    assert overwrite_result["document_id"] == create_result["document_id"]
+
+    handle = pipeline._source_repository.get_source_handle("AAPL", overwrite_result["document_id"], SourceKind.MATERIAL)  # type: ignore[attr-defined]
+    file_names = sorted(meta.uri.split("/")[-1] for meta in pipeline._blob_repository.list_files(handle))  # type: ignore[attr-defined]
+    assert file_names == ["deck_new.pdf", "deck_new_docling.json"]

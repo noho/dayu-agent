@@ -49,7 +49,7 @@ from dayu.contracts.fins import (
     UploadMaterialResultData,
 )
 from dayu.engine.processors.processor_registry import ProcessorRegistry
-from dayu.fins.cli import (
+from dayu.fins.cli_support import (
     _coerce_document_ids_input as coerce_document_ids_input,
     _coerce_forms_input as coerce_forms_input,
     _generate_upload_filings_script as generate_upload_filings_script,
@@ -263,6 +263,8 @@ def _build_upload_material_namespace(payload: UploadMaterialCommandPayload, work
         files=[str(path) for path in payload.files],
         document_id=payload.document_id,
         internal_document_id=payload.internal_document_id,
+        fiscal_year=payload.fiscal_year,
+        fiscal_period=payload.fiscal_period,
         filing_date=payload.filing_date,
         report_date=payload.report_date,
         company_id=payload.company_id,
@@ -683,6 +685,8 @@ def _build_upload_material_result_data(result: dict[str, Any]) -> UploadMaterial
         files=_build_upload_file_items(result.get("files")),
         form_type=_optional_text(result.get("form_type")),
         material_name=_optional_text(result.get("material_name")),
+        fiscal_year=optional_int(result.get("fiscal_year")),
+        fiscal_period=_optional_text(result.get("fiscal_period")),
         company_id=_optional_text(result.get("company_id")),
         company_name=_optional_text(result.get("company_name")),
         document_id=_optional_text(result.get("document_id")),
@@ -1284,6 +1288,8 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
                 files=list(typed_payload.files),
                 document_id=namespace.document_id,
                 internal_document_id=namespace.internal_document_id,
+                fiscal_year=namespace.fiscal_year,
+                fiscal_period=namespace.fiscal_period,
                 filing_date=namespace.filing_date,
                 report_date=namespace.report_date,
                 company_id=namespace.company_id,
@@ -1397,6 +1403,8 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
                 files=list(typed_payload.files),
                 document_id=namespace.document_id,
                 internal_document_id=namespace.internal_document_id,
+                fiscal_year=namespace.fiscal_year,
+                fiscal_period=namespace.fiscal_period,
                 filing_date=namespace.filing_date,
                 report_date=namespace.report_date,
                 company_id=namespace.company_id,

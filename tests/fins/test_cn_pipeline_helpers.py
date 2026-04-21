@@ -294,86 +294,13 @@ async def test_upload_filing_stream_emits_upload_failed_when_execute_upload_erro
 
 
 @pytest.mark.asyncio
-async def test_upload_material_stream_covers_update_id_resolution_branches(tmp_path: Path) -> None:
-    """验证 upload_material_stream 的 update ID 映射分支。
-
-    Args:
-        tmp_path: pytest 临时目录。
-
-    Returns:
-        无。
-
-    Raises:
-        AssertionError: 断言失败时抛出。
-    """
+async def test_upload_material_stream_rejects_mismatched_explicit_ids(tmp_path: Path) -> None:
+    """验证 upload_material_stream 会拒绝与稳定 ID 不一致的显式 document_id。"""
 
     pipeline = CnPipeline(workspace_root=tmp_path, processor_registry=build_fins_processor_registry())
 
-    called_args: dict[str, Any] = {}
-
-    def _resolve_document_id_by_internal(**kwargs: Any) -> str:
-        """按 internal_document_id 解析 document_id。
-
-        Args:
-            **kwargs: 查询参数。
-
-        Returns:
-            映射后的 document_id。
-
-        Raises:
-            RuntimeError: 查询失败时抛出。
-        """
-
-        del kwargs
-        return "mat_mapped_001"
-
-    def _execute_upload(**kwargs: Any) -> Any:
-        """记录入参与返回成功结果。
-
-        Args:
-            **kwargs: 上传参数。
-
-        Returns:
-            上传结果对象。
-
-        Raises:
-            RuntimeError: 上传失败时抛出。
-        """
-
-        called_args.clear()
-        called_args.update(kwargs)
-        return SimpleNamespace(status="uploaded", payload={}, file_events=[])
-
-    pipeline._upload_service.resolve_document_id_by_internal = _resolve_document_id_by_internal  # type: ignore[attr-defined]
-    pipeline._upload_service.execute_upload = _execute_upload  # type: ignore[attr-defined]
-
-    mapped_events = [
-        event
-        async for event in pipeline.upload_material_stream(
-            ticker="000001",
-            action="update",
-            form_type="MATERIAL_OTHER",
-            material_name="Deck",
-            files=None,
-            document_id=None,
-            internal_document_id="cn_internal_1",
-            filing_date="2025-01-01",
-            report_date="2024-12-31",
-            company_id="000001",
-            company_name="平安银行",
-            overwrite=False,
-        )
-    ]
-    assert mapped_events[-1].event_type == "upload_completed"
-    assert mapped_events[-1].document_id == "mat_mapped_001"
-
-    pipeline._safe_get_document_meta = (  # type: ignore[assignment]
-        lambda ticker, document_id, source_kind: {"internal_document_id": "cn_internal_2"}
-    )
-
-    direct_events = [
-        event
-        async for event in pipeline.upload_material_stream(
+    with pytest.raises(ValueError, match="显式 --document-id"):
+        async for _ in pipeline.upload_material_stream(
             ticker="000001",
             action="update",
             form_type="MATERIAL_OTHER",
@@ -386,10 +313,51 @@ async def test_upload_material_stream_covers_update_id_resolution_branches(tmp_p
             company_id="000001",
             company_name="平安银行",
             overwrite=False,
+        ):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_upload_material_stream_passes_stable_ids_and_auto_action(tmp_path: Path) -> None:
+    """验证 upload_material_stream 会把稳定 ID 与自动解析动作传给上传服务。"""
+
+    pipeline = CnPipeline(workspace_root=tmp_path, processor_registry=build_fins_processor_registry())
+
+    called_args: dict[str, Any] = {}
+
+    def _execute_upload(**kwargs: Any) -> Any:
+        """记录上传调用并返回固定成功结果。"""
+
+        called_args.clear()
+        called_args.update(kwargs)
+        return SimpleNamespace(status="uploaded", payload={}, file_events=[])
+
+    pipeline._upload_service.execute_upload = _execute_upload  # type: ignore[attr-defined]
+    pipeline._safe_get_document_meta = (  # type: ignore[assignment]
+        lambda ticker, document_id, source_kind: {"document_id": document_id}
+    )
+
+    events = [
+        event
+        async for event in pipeline.upload_material_stream(
+            ticker="000001",
+            action=None,
+            form_type="MATERIAL_OTHER",
+            material_name="Deck",
+            files=[],
+            fiscal_year=2025,
+            fiscal_period="q1",
+            filing_date="2025-01-01",
+            report_date="2024-12-31",
+            company_id="000001",
+            company_name="平安银行",
+            overwrite=False,
         )
     ]
-    assert direct_events[-1].event_type == "upload_completed"
-    assert called_args["internal_document_id"] == "cn_internal_2"
+    assert events[-1].event_type == "upload_completed"
+    assert called_args["action"] == "update"
+    assert str(called_args["document_id"]).startswith("mat_")
+    assert called_args["document_id"] == called_args["internal_document_id"]
 
 
 @pytest.mark.unit

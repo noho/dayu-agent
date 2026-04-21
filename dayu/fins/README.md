@@ -46,6 +46,11 @@ UI
 - `process_filing`
 - `process_material`
 
+当前上传链路还固定遵守三条实现边界：
+- `upload_filing` 的 `document_id` 继续由财年/财期规则稳定生成，不跟文件内容绑定。
+- `upload_material` 的 `document_id` 由 `form_type + material_name + fiscal_year? + fiscal_period?` 稳定生成；当前 material 场景下 `document_id` 与 `internal_document_id` 恒等，显式传入时也只能与这套规则一致，不能覆盖它。
+- `upload_filing` / `upload_material` 未显式传 `action` 时统一按 source meta 自动解析 `create/update`；删除动作必须显式传入 `delete`。相同 `source_fingerprint` 直接 `skip`；`overwrite` 只重置当前 `document_id`，不会做 ticker 级清空。
+
 ## 2. 设计意图
 
 ### 2.1 为什么文档读取统一经过 FinsToolService
@@ -191,7 +196,7 @@ direct operation 当前由 `FinsRuntime` 和对应 pipeline 实现。
 - `dayu/fins/pipelines/sec_sc13_filtering.py` — SC13 的方向过滤、browse-edgar 补拉、空结果回溯重试与同 filer 去重
 - `dayu/fins/pipelines/sec_rebuild_workflow.py` — rebuild 模式的本地过滤条件、单 filing canonical meta 重建与 replace-source-meta 覆盖
 - `dayu/fins/pipelines/sec_process_workflow.py` — process/process_filing/process_material 的单文档决策与批量工作流编排
-- `dayu/fins/pipelines/sec_upload_workflow.py` — upload_filing/upload_material 的事件编排与结果收口
+- `dayu/fins/pipelines/sec_upload_workflow.py` — upload_filing/upload_material 的事件编排、稳定上传身份、自动动作解析与单文档 overwrite reset 收口
 
 当前 source fiscal 字段还需要守住一条稳定边界：source/download/rebuild/list 四条链路都不能仅凭 `report_date` 或 `filing_date` 编造 fiscal 事实。`6-K` 与 `6-K/A` 在没有同源 fiscal 证据时都不得再猜 `fiscal_year/fiscal_period`；`10-Q` 也不得在 `list_documents()` 阶段仅凭 `report_date` 推断季度；其他表单同样不得在消费侧把空的 `fiscal_year` 从日期回填出来。当前仅保留表单内生、且不依赖日期猜测的低风险回退，例如 `10-K/20-F -> FY`。`download --rebuild` 走同一套真源，并且会清理历史上遗留在 source meta / manifest 中的 6-K / 6-K/A 猜测值。这个修复只影响 fiscal 字段，不改变 6-K 现有的 `document_type` 返回语义。
 

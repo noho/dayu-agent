@@ -33,6 +33,9 @@ from .docling_upload_service import (
     build_material_ids,
     derive_report_kind,
     normalize_cn_fiscal_period,
+    reset_upload_target_for_overwrite,
+    resolve_upload_action,
+    validate_material_upload_ids,
 )
 from .processing_helpers import (
     filter_requested_document_ids as _filter_requested_document_ids_common,
@@ -307,7 +310,7 @@ class CnPipeline(PipelineProtocol):
     def upload_filing(
         self,
         ticker: str,
-        action: str,
+        action: Optional[str],
         files: list[Path],
         fiscal_year: int,
         fiscal_period: str,
@@ -323,7 +326,7 @@ class CnPipeline(PipelineProtocol):
 
         Args:
             ticker: 股票代码。
-            action: 动作类型（create/update/delete）。
+            action: 可选动作类型（create/update/delete）；为空时自动判定。
             files: 上传文件列表（create/update 需要）。
             fiscal_year: 财年。
             fiscal_period: 财季或年度标识。
@@ -365,7 +368,7 @@ class CnPipeline(PipelineProtocol):
     async def upload_filing_stream(
         self,
         ticker: str,
-        action: str,
+        action: Optional[str],
         files: list[Path],
         fiscal_year: int,
         fiscal_period: str,
@@ -381,7 +384,7 @@ class CnPipeline(PipelineProtocol):
 
         Args:
             ticker: 股票代码。
-            action: 动作类型（create/update/delete）。
+            action: 可选动作类型（create/update/delete）；为空时自动判定。
             files: 上传文件列表（create/update 需要）。
             fiscal_year: 财年。
             fiscal_period: 财季或年度标识。
@@ -401,14 +404,32 @@ class CnPipeline(PipelineProtocol):
         """
 
         normalized_ticker = _normalize_ticker(ticker)
-        normalized_action = action.strip().lower()
+        normalized_period = normalize_cn_fiscal_period(fiscal_period)
+        form_type = normalized_period
+        requested_action = str(action or "").strip().lower() or None
+        document_id, internal_document_id = build_cn_filing_ids(
+            ticker=normalized_ticker,
+            form_type=form_type,
+            fiscal_year=fiscal_year,
+            fiscal_period=normalized_period,
+            amended=amended,
+        )
+        previous_meta = self._safe_get_document_meta(
+            normalized_ticker,
+            document_id,
+            SourceKind.FILING,
+        )
+        resolved_action = resolve_upload_action(action, previous_meta)
         yield UploadFilingEvent(
             event_type=UploadFilingEventType.UPLOAD_STARTED,
             ticker=normalized_ticker,
+            document_id=document_id,
             payload={
-                "action": normalized_action,
+                "action": resolved_action,
+                "requested_action": requested_action,
+                "resolved_action": resolved_action,
                 "fiscal_year": fiscal_year,
-                "fiscal_period": fiscal_period,
+                "fiscal_period": normalized_period,
                 "amended": amended,
                 "filing_date": filing_date,
                 "report_date": report_date,
@@ -419,25 +440,24 @@ class CnPipeline(PipelineProtocol):
                 "file_count": len(files or []),
             },
         )
-        document_id: Optional[str] = None
         try:
             upsert_company_meta_for_upload(
                 repository=self._company_repository,
                 ticker=normalized_ticker,
-                action=normalized_action,
+                action=resolved_action,
                 company_id=company_id,
                 company_name=company_name,
                 ticker_aliases=ticker_aliases,
             )
-            normalized_period = normalize_cn_fiscal_period(fiscal_period)
-            form_type = normalized_period
             normalized_company_id = str(company_id or normalized_ticker).strip() or normalized_ticker
-            document_id, internal_document_id = build_cn_filing_ids(
+            reset_upload_target_for_overwrite(
+                source_repository=self._source_repository,
                 ticker=normalized_ticker,
-                form_type=form_type,
-                fiscal_year=fiscal_year,
-                fiscal_period=normalized_period,
-                amended=amended,
+                document_id=document_id,
+                source_kind=SourceKind.FILING,
+                action=resolved_action,
+                overwrite=overwrite,
+                previous_meta=previous_meta,
             )
             for file_event in _build_original_file_uploaded_events(files or []):
                 yield UploadFilingEvent(
@@ -456,7 +476,7 @@ class CnPipeline(PipelineProtocol):
             upload_result = self._upload_service.execute_upload(
                 ticker=normalized_ticker,
                 source_kind=SourceKind.FILING,
-                action=normalized_action,
+                action=resolved_action,
                 document_id=document_id,
                 internal_document_id=internal_document_id,
                 form_type=form_type,
@@ -485,7 +505,9 @@ class CnPipeline(PipelineProtocol):
             final_result = self._build_result(
                 action="upload_filing",
                 ticker=normalized_ticker,
-                filing_action=normalized_action,
+                filing_action=resolved_action,
+                requested_action=requested_action,
+                resolved_action=resolved_action,
                 files=[str(path) for path in files],
                 fiscal_year=fiscal_year,
                 fiscal_period=normalized_period,
@@ -508,7 +530,9 @@ class CnPipeline(PipelineProtocol):
             failed_result = self._build_result(
                 action="upload_filing",
                 ticker=normalized_ticker,
-                filing_action=normalized_action,
+                filing_action=resolved_action,
+                requested_action=requested_action,
+                resolved_action=resolved_action,
                 files=[str(path) for path in files],
                 fiscal_year=fiscal_year,
                 fiscal_period=fiscal_period,
@@ -532,12 +556,14 @@ class CnPipeline(PipelineProtocol):
     def upload_material(
         self,
         ticker: str,
-        action: str,
+        action: Optional[str],
         form_type: str,
         material_name: str,
         files: Optional[list[Path]] = None,
         document_id: Optional[str] = None,
         internal_document_id: Optional[str] = None,
+        fiscal_year: Optional[int] = None,
+        fiscal_period: Optional[str] = None,
         filing_date: Optional[str] = None,
         report_date: Optional[str] = None,
         company_id: Optional[str] = None,
@@ -549,12 +575,14 @@ class CnPipeline(PipelineProtocol):
 
         Args:
             ticker: 股票代码。
-            action: 动作类型（create/update/delete）。
+            action: 可选动作类型（create/update/delete）；为空时自动判定。
             form_type: 材料类型。
             material_name: 材料名称。
             files: 可选上传文件列表。
             document_id: 可选文档 ID。
             internal_document_id: 可选内部文档 ID。
+            fiscal_year: 可选财年；提供时参与稳定 document_id 生成。
+            fiscal_period: 可选财期；提供时参与稳定 document_id 生成。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
             company_id: 公司 ID（create/update 必填）。
@@ -579,6 +607,8 @@ class CnPipeline(PipelineProtocol):
                     files=files,
                     document_id=document_id,
                     internal_document_id=internal_document_id,
+                    fiscal_year=fiscal_year,
+                    fiscal_period=fiscal_period,
                     filing_date=filing_date,
                     report_date=report_date,
                     company_id=company_id,
@@ -593,12 +623,14 @@ class CnPipeline(PipelineProtocol):
     async def upload_material_stream(
         self,
         ticker: str,
-        action: str,
+        action: Optional[str],
         form_type: str,
         material_name: str,
         files: Optional[list[Path]] = None,
         document_id: Optional[str] = None,
         internal_document_id: Optional[str] = None,
+        fiscal_year: Optional[int] = None,
+        fiscal_period: Optional[str] = None,
         filing_date: Optional[str] = None,
         report_date: Optional[str] = None,
         company_id: Optional[str] = None,
@@ -610,12 +642,14 @@ class CnPipeline(PipelineProtocol):
 
         Args:
             ticker: 股票代码。
-            action: 动作类型（create/update/delete）。
+            action: 可选动作类型（create/update/delete）；为空时自动判定。
             form_type: 材料类型。
             material_name: 材料名称。
             files: 可选上传文件列表。
             document_id: 可选文档 ID。
             internal_document_id: 可选内部文档 ID。
+            fiscal_year: 可选财年；提供时参与稳定 document_id 生成。
+            fiscal_period: 可选财期；提供时参与稳定 document_id 生成。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
             company_id: 公司 ID（create/update 必填）。
@@ -632,16 +666,39 @@ class CnPipeline(PipelineProtocol):
 
         file_list = files or []
         normalized_ticker = _normalize_ticker(ticker)
-        normalized_action = action.strip().lower()
+        normalized_fiscal_period = str(fiscal_period or "").strip().upper() or None
+        stable_document_id, stable_internal_document_id = build_material_ids(
+            form_type=form_type,
+            material_name=material_name,
+            fiscal_year=fiscal_year,
+            fiscal_period=normalized_fiscal_period,
+        )
+        resolved_document_id, resolved_internal_id = validate_material_upload_ids(
+            stable_document_id=stable_document_id,
+            stable_internal_document_id=stable_internal_document_id,
+            document_id=document_id,
+            internal_document_id=internal_document_id,
+        )
+        previous_meta = self._safe_get_document_meta(
+            normalized_ticker,
+            resolved_document_id,
+            SourceKind.MATERIAL,
+        )
+        requested_action = str(action or "").strip().lower() or None
+        resolved_action = resolve_upload_action(action, previous_meta)
         yield UploadMaterialEvent(
             event_type=UploadMaterialEventType.UPLOAD_STARTED,
             ticker=normalized_ticker,
-            document_id=document_id,
+            document_id=resolved_document_id,
             payload={
-                "action": normalized_action,
+                "action": resolved_action,
+                "requested_action": requested_action,
+                "resolved_action": resolved_action,
                 "form_type": form_type,
                 "material_name": material_name,
-                "internal_document_id": internal_document_id,
+                "internal_document_id": resolved_internal_id,
+                "fiscal_year": fiscal_year,
+                "fiscal_period": normalized_fiscal_period,
                 "filing_date": filing_date,
                 "report_date": report_date,
                 "company_id": company_id,
@@ -651,46 +708,25 @@ class CnPipeline(PipelineProtocol):
                 "file_count": len(file_list),
             },
         )
-        resolved_document_id: Optional[str] = document_id
         try:
             upsert_company_meta_for_upload(
                 repository=self._company_repository,
                 ticker=normalized_ticker,
-                action=normalized_action,
+                action=resolved_action,
                 company_id=company_id,
                 company_name=company_name,
                 ticker_aliases=ticker_aliases,
             )
             normalized_company_id = str(company_id or normalized_ticker).strip() or normalized_ticker
-            resolved_document_id, resolved_internal_id = build_material_ids(
-                action=normalized_action,
-                document_id=document_id,
-                internal_document_id=internal_document_id,
+            reset_upload_target_for_overwrite(
+                source_repository=self._source_repository,
+                ticker=normalized_ticker,
+                document_id=resolved_document_id,
+                source_kind=SourceKind.MATERIAL,
+                action=resolved_action,
+                overwrite=overwrite,
+                previous_meta=previous_meta,
             )
-            if normalized_action in {"update", "delete"} and not document_id and internal_document_id:
-                mapped_document_id = self._upload_service.resolve_document_id_by_internal(
-                    ticker=normalized_ticker,
-                    source_kind=SourceKind.MATERIAL,
-                    internal_document_id=internal_document_id,
-                )
-                if mapped_document_id is not None:
-                    resolved_document_id = mapped_document_id
-            if (
-                normalized_action in {"update", "delete"}
-                and resolved_internal_id
-                and resolved_document_id
-                and document_id
-                and not internal_document_id
-            ):
-                source_meta = self._safe_get_document_meta(
-                    normalized_ticker,
-                    resolved_document_id,
-                    SourceKind.MATERIAL,
-                )
-                if source_meta is not None:
-                    resolved_internal_id = (
-                        str(source_meta.get("internal_document_id", "")).strip() or resolved_internal_id
-                    )
             for file_event in _build_original_file_uploaded_events(file_list):
                 yield UploadMaterialEvent(
                     event_type=_map_upload_file_event_to_material_event_type(file_event),
@@ -708,7 +744,7 @@ class CnPipeline(PipelineProtocol):
             upload_result = self._upload_service.execute_upload(
                 ticker=normalized_ticker,
                 source_kind=SourceKind.MATERIAL,
-                action=normalized_action,
+                action=resolved_action,
                 document_id=resolved_document_id,
                 internal_document_id=resolved_internal_id,
                 form_type=form_type,
@@ -718,6 +754,8 @@ class CnPipeline(PipelineProtocol):
                     "company_id": normalized_company_id,
                     "ingest_method": "upload",
                     "material_name": material_name,
+                    "fiscal_year": fiscal_year,
+                    "fiscal_period": normalized_fiscal_period,
                     "filing_date": filing_date,
                     "report_date": report_date,
                 },
@@ -734,10 +772,14 @@ class CnPipeline(PipelineProtocol):
             final_result = self._build_result(
                 action="upload_material",
                 ticker=normalized_ticker,
-                material_action=normalized_action,
+                material_action=resolved_action,
+                requested_action=requested_action,
+                resolved_action=resolved_action,
                 form_type=form_type,
                 material_name=material_name,
                 files=[str(path) for path in file_list],
+                fiscal_year=fiscal_year,
+                fiscal_period=normalized_fiscal_period,
                 filing_date=filing_date,
                 report_date=report_date,
                 company_id=company_id,
@@ -756,12 +798,16 @@ class CnPipeline(PipelineProtocol):
             failed_result = self._build_result(
                 action="upload_material",
                 ticker=normalized_ticker,
-                material_action=normalized_action,
+                material_action=resolved_action,
+                requested_action=requested_action,
+                resolved_action=resolved_action,
                 form_type=form_type,
                 material_name=material_name,
                 files=[str(path) for path in file_list],
                 document_id=resolved_document_id,
-                internal_document_id=internal_document_id,
+                internal_document_id=resolved_internal_id,
+                fiscal_year=fiscal_year,
+                fiscal_period=normalized_fiscal_period,
                 filing_date=filing_date,
                 report_date=report_date,
                 company_id=company_id,

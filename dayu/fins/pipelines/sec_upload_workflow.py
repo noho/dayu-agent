@@ -7,11 +7,19 @@ from typing import Any, AsyncIterator, Optional, Protocol
 
 from dayu.fins.domain.enums import SourceKind
 from dayu.fins.downloaders.sec_downloader import SecDownloader
-from dayu.fins.pipelines.docling_upload_service import DoclingUploadService, build_material_ids
+from dayu.fins.pipelines.docling_upload_service import (
+    DoclingUploadService,
+    build_sec_filing_ids,
+    build_material_ids,
+    derive_report_kind,
+    reset_upload_target_for_overwrite,
+    resolve_upload_action,
+    validate_material_upload_ids,
+)
 from dayu.fins.pipelines.upload_filing_events import UploadFilingEvent, UploadFilingEventType
 from dayu.fins.pipelines.upload_material_events import UploadMaterialEvent, UploadMaterialEventType
 from dayu.fins.resolver.market_resolver import MarketResolver
-from dayu.fins.storage import CompanyMetaRepositoryProtocol
+from dayu.fins.storage import CompanyMetaRepositoryProtocol, SourceDocumentRepositoryProtocol
 
 from .upload_company_meta import upsert_company_meta_for_upload
 from .upload_progress_helpers import (
@@ -47,6 +55,12 @@ class SecUploadWorkflowHost(Protocol):
     @property
     def _upload_service(self) -> DoclingUploadService:
         """返回上传服务。"""
+
+        ...
+
+    @property
+    def _source_repository(self) -> SourceDocumentRepositoryProtocol:
+        """返回源文档仓储。"""
 
         ...
 
@@ -100,7 +114,7 @@ async def run_upload_filing_stream(
     host: SecUploadWorkflowHost,
     *,
     ticker: str,
-    action: str,
+    action: Optional[str],
     files: list[Path],
     fiscal_year: int,
     fiscal_period: str,
@@ -117,7 +131,7 @@ async def run_upload_filing_stream(
     Args:
         host: `SecPipeline` facade 暴露出的最小宿主边界。
         ticker: 股票代码。
-        action: 动作类型。
+        action: 可选动作类型；为空时自动判定。
         files: 上传文件列表。
         fiscal_year: 财年。
         fiscal_period: 财期。
@@ -136,15 +150,32 @@ async def run_upload_filing_stream(
         RuntimeError: 上传执行失败时抛出。
     """
 
-    normalized_action = action.strip().lower()
+    requested_action = str(action or "").strip().lower() or None
     normalized_ticker = host._downloader.normalize_ticker(ticker)
+    normalized_period = str(fiscal_period).strip().upper()
+    filing_form_type = normalized_period
+    document_id, internal_document_id = build_sec_filing_ids(
+        ticker=normalized_ticker,
+        fiscal_year=fiscal_year,
+        fiscal_period=normalized_period,
+        amended=amended,
+    )
+    previous_meta = host._safe_get_document_meta(
+        normalized_ticker,
+        document_id,
+        SourceKind.FILING,
+    )
+    normalized_action = resolve_upload_action(action, previous_meta)
     yield UploadFilingEvent(
         event_type=UploadFilingEventType.UPLOAD_STARTED,
         ticker=normalized_ticker,
+        document_id=document_id,
         payload={
             "action": normalized_action,
+            "requested_action": requested_action,
+            "resolved_action": normalized_action,
             "fiscal_year": fiscal_year,
-            "fiscal_period": fiscal_period,
+            "fiscal_period": normalized_period,
             "amended": amended,
             "filing_date": filing_date,
             "report_date": report_date,
@@ -164,13 +195,68 @@ async def run_upload_filing_stream(
             company_name=company_name,
             ticker_aliases=ticker_aliases,
         )
+        normalized_company_id = str(company_id or normalized_ticker).strip() or normalized_ticker
+        reset_upload_target_for_overwrite(
+            source_repository=host._source_repository,
+            ticker=normalized_ticker,
+            document_id=document_id,
+            source_kind=SourceKind.FILING,
+            action=normalized_action,
+            overwrite=overwrite,
+            previous_meta=previous_meta,
+        )
+        for file_event in _build_original_file_uploaded_events(files):
+            yield UploadFilingEvent(
+                event_type=_map_upload_file_event_to_filing_event_type(file_event),
+                ticker=normalized_ticker,
+                document_id=document_id,
+                payload={"name": file_event.name, **file_event.payload},
+            )
+        for file_event in _build_conversion_started_events(files):
+            yield UploadFilingEvent(
+                event_type=_map_upload_file_event_to_filing_event_type(file_event),
+                ticker=normalized_ticker,
+                document_id=document_id,
+                payload={"name": file_event.name, **file_event.payload},
+            )
+        upload_result = host._upload_service.execute_upload(
+            ticker=normalized_ticker,
+            source_kind=SourceKind.FILING,
+            action=normalized_action,
+            document_id=document_id,
+            internal_document_id=internal_document_id,
+            form_type=filing_form_type,
+            files=files,
+            overwrite=overwrite,
+            meta={
+                "company_id": normalized_company_id,
+                "ingest_method": "upload",
+                "fiscal_year": fiscal_year,
+                "fiscal_period": normalized_period,
+                "report_kind": derive_report_kind(normalized_period),
+                "filing_date": filing_date,
+                "report_date": report_date,
+                "amended": amended,
+            },
+        )
+        for file_event in upload_result.file_events:
+            if not _should_emit_upload_file_event(file_event):
+                continue
+            yield UploadFilingEvent(
+                event_type=_map_upload_file_event_to_filing_event_type(file_event),
+                ticker=normalized_ticker,
+                document_id=document_id,
+                payload={"name": file_event.name, **file_event.payload},
+            )
         result = host._build_result(
             action="upload_filing",
             ticker=normalized_ticker,
             filing_action=normalized_action,
+            requested_action=requested_action,
+            resolved_action=normalized_action,
             files=[str(path) for path in files],
             fiscal_year=fiscal_year,
-            fiscal_period=fiscal_period,
+            fiscal_period=normalized_period,
             amended=amended,
             filing_date=filing_date,
             report_date=report_date,
@@ -178,12 +264,13 @@ async def run_upload_filing_stream(
             company_name=company_name,
             ticker_aliases=ticker_aliases,
             overwrite=overwrite,
-            status="not_implemented",
-            message="SecPipeline.upload_filing_stream 尚未实现",
+            **upload_result.payload,
+            status=_resolve_upload_status(upload_result.status),
         )
         yield UploadFilingEvent(
             event_type=UploadFilingEventType.UPLOAD_COMPLETED,
             ticker=normalized_ticker,
+            document_id=document_id,
             payload={"result": result},
         )
     except Exception as exc:
@@ -191,9 +278,11 @@ async def run_upload_filing_stream(
             action="upload_filing",
             ticker=normalized_ticker,
             filing_action=normalized_action,
+            requested_action=requested_action,
+            resolved_action=normalized_action,
             files=[str(path) for path in files],
             fiscal_year=fiscal_year,
-            fiscal_period=fiscal_period,
+            fiscal_period=normalized_period,
             amended=amended,
             filing_date=filing_date,
             report_date=report_date,
@@ -207,6 +296,7 @@ async def run_upload_filing_stream(
         yield UploadFilingEvent(
             event_type=UploadFilingEventType.UPLOAD_FAILED,
             ticker=normalized_ticker,
+            document_id=document_id,
             payload={"error": str(exc), "result": failed_result},
         )
 
@@ -215,12 +305,14 @@ async def run_upload_material_stream(
     host: SecUploadWorkflowHost,
     *,
     ticker: str,
-    action: str,
+    action: Optional[str],
     form_type: str,
     material_name: str,
     files: Optional[list[Path]] = None,
     document_id: Optional[str] = None,
     internal_document_id: Optional[str] = None,
+    fiscal_year: Optional[int] = None,
+    fiscal_period: Optional[str] = None,
     filing_date: Optional[str] = None,
     report_date: Optional[str] = None,
     company_id: Optional[str] = None,
@@ -233,12 +325,14 @@ async def run_upload_material_stream(
     Args:
         host: `SecPipeline` facade 暴露出的最小宿主边界。
         ticker: 股票代码。
-        action: 动作类型。
+        action: 可选动作类型；为空时自动判定。
         form_type: 材料类型。
         material_name: 材料名称。
         files: 文件列表。
         document_id: 可选文档 ID。
         internal_document_id: 可选内部文档 ID。
+        fiscal_year: 可选财年；提供时参与稳定 document_id 生成。
+        fiscal_period: 可选财期；提供时参与稳定 document_id 生成。
         filing_date: 可选 filing 日期。
         report_date: 可选 report 日期。
         company_id: 公司 ID。
@@ -258,17 +352,40 @@ async def run_upload_material_stream(
     if profile.market != "US":
         raise ValueError(f"SecPipeline 仅支持 US，当前 market={profile.market}")
     normalized_ticker = host._downloader.normalize_ticker(ticker)
-    normalized_action = action.strip().lower()
     file_list = files or []
+    normalized_fiscal_period = str(fiscal_period or "").strip().upper() or None
+    stable_document_id, stable_internal_document_id = build_material_ids(
+        form_type=form_type,
+        material_name=material_name,
+        fiscal_year=fiscal_year,
+        fiscal_period=normalized_fiscal_period,
+    )
+    resolved_document_id, resolved_internal_id = validate_material_upload_ids(
+        stable_document_id=stable_document_id,
+        stable_internal_document_id=stable_internal_document_id,
+        document_id=document_id,
+        internal_document_id=internal_document_id,
+    )
+    previous_meta = host._safe_get_document_meta(
+        normalized_ticker,
+        resolved_document_id,
+        SourceKind.MATERIAL,
+    )
+    requested_action = str(action or "").strip().lower() or None
+    normalized_action = resolve_upload_action(action, previous_meta)
     yield UploadMaterialEvent(
         event_type=UploadMaterialEventType.UPLOAD_STARTED,
         ticker=normalized_ticker,
-        document_id=document_id,
+        document_id=resolved_document_id,
         payload={
             "action": normalized_action,
+            "requested_action": requested_action,
+            "resolved_action": normalized_action,
             "form_type": form_type,
             "material_name": material_name,
-            "internal_document_id": internal_document_id,
+            "internal_document_id": resolved_internal_id,
+            "fiscal_year": fiscal_year,
+            "fiscal_period": normalized_fiscal_period,
             "filing_date": filing_date,
             "report_date": report_date,
             "company_id": company_id,
@@ -278,7 +395,6 @@ async def run_upload_material_stream(
             "file_count": len(file_list),
         },
     )
-    resolved_document_id: Optional[str] = document_id
     try:
         upsert_company_meta_for_upload(
             repository=host._company_repository,
@@ -289,35 +405,15 @@ async def run_upload_material_stream(
             ticker_aliases=ticker_aliases,
         )
         normalized_company_id = str(company_id or normalized_ticker).strip() or normalized_ticker
-        resolved_document_id, resolved_internal_id = build_material_ids(
+        reset_upload_target_for_overwrite(
+            source_repository=host._source_repository,
+            ticker=normalized_ticker,
+            document_id=resolved_document_id,
+            source_kind=SourceKind.MATERIAL,
             action=normalized_action,
-            document_id=document_id,
-            internal_document_id=internal_document_id,
+            overwrite=overwrite,
+            previous_meta=previous_meta,
         )
-        if normalized_action in {"update", "delete"} and not document_id and internal_document_id:
-            mapped_document_id = host._upload_service.resolve_document_id_by_internal(
-                ticker=normalized_ticker,
-                source_kind=SourceKind.MATERIAL,
-                internal_document_id=internal_document_id,
-            )
-            if mapped_document_id is not None:
-                resolved_document_id = mapped_document_id
-        if (
-            normalized_action in {"update", "delete"}
-            and resolved_internal_id
-            and resolved_document_id
-            and document_id
-            and not internal_document_id
-        ):
-            source_meta = host._safe_get_document_meta(
-                normalized_ticker,
-                resolved_document_id,
-                SourceKind.MATERIAL,
-            )
-            if source_meta is not None:
-                resolved_internal_id = (
-                    str(source_meta.get("internal_document_id", "")).strip() or resolved_internal_id
-                )
         for file_event in _build_original_file_uploaded_events(file_list):
             yield UploadMaterialEvent(
                 event_type=_map_upload_file_event_to_material_event_type(file_event),
@@ -345,6 +441,8 @@ async def run_upload_material_stream(
                 "company_id": normalized_company_id,
                 "ingest_method": "upload",
                 "material_name": material_name,
+                "fiscal_year": fiscal_year,
+                "fiscal_period": normalized_fiscal_period,
                 "filing_date": filing_date,
                 "report_date": report_date,
             },
@@ -362,9 +460,13 @@ async def run_upload_material_stream(
             action="upload_material",
             ticker=normalized_ticker,
             material_action=normalized_action,
+            requested_action=requested_action,
+            resolved_action=normalized_action,
             form_type=form_type,
             material_name=material_name,
             files=[str(path) for path in file_list],
+            fiscal_year=fiscal_year,
+            fiscal_period=normalized_fiscal_period,
             filing_date=filing_date,
             report_date=report_date,
             company_id=company_id,
@@ -384,11 +486,15 @@ async def run_upload_material_stream(
             action="upload_material",
             ticker=normalized_ticker,
             material_action=normalized_action,
+            requested_action=requested_action,
+            resolved_action=normalized_action,
             form_type=form_type,
             material_name=material_name,
             files=[str(path) for path in file_list],
             document_id=resolved_document_id,
-            internal_document_id=internal_document_id,
+            internal_document_id=resolved_internal_id,
+            fiscal_year=fiscal_year,
+            fiscal_period=normalized_fiscal_period,
             filing_date=filing_date,
             report_date=report_date,
             company_id=company_id,

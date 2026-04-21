@@ -23,9 +23,12 @@ from dayu.fins.pipelines.docling_upload_service import (
     _resolve_upsert_mode,
     _validate_source_files,
     build_cn_filing_ids,
+    build_sec_filing_ids,
     build_material_ids,
     derive_report_kind,
     normalize_cn_fiscal_period,
+    resolve_upload_action,
+    validate_material_upload_ids,
 )
 from tests.fins.storage_testkit import FsStorageTestContext, build_fs_storage_test_context
 
@@ -452,6 +455,7 @@ def test_resolve_helpers_cover_edge_branches() -> None:
     assert _resolve_upsert_mode("create", None, False) == "create"
     assert _resolve_upsert_mode("create", {"x": 1}, True) == "update"
     assert _resolve_upsert_mode("update", {"x": 1}, False) == "update"
+    assert _resolve_upsert_mode("update", None, True) == "create"
     with pytest.raises(FileNotFoundError, match="更新目标不存在"):
         _resolve_upsert_mode("update", None, False)
     with pytest.raises(FileExistsError, match="创建目标已存在"):
@@ -470,8 +474,8 @@ def test_resolve_helpers_cover_edge_branches() -> None:
     assert derive_report_kind("Q2") == "quarterly"
 
 
-def test_build_material_and_cn_filing_ids() -> None:
-    """验证材料 ID 与 CN filing ID 的生成/校验逻辑。
+def test_build_material_and_filing_ids() -> None:
+    """验证材料 ID、CN filing ID 与 SEC filing ID 的生成逻辑。
 
     Args:
         无。
@@ -484,23 +488,36 @@ def test_build_material_and_cn_filing_ids() -> None:
     """
 
     create_doc, create_internal = build_material_ids(
-        action="create",
-        document_id=None,
-        internal_document_id=None,
+        form_type="MATERIAL_OTHER",
+        material_name="Deck",
+        fiscal_year=None,
+        fiscal_period=None,
     )
     assert create_doc.startswith("mat_")
     assert create_doc == create_internal
-    with pytest.raises(ValueError, match="materials create 要求 document_id 与 internal_document_id 一致"):
-        build_material_ids(action="create", document_id="mat_a", internal_document_id="mat_b")
-    with pytest.raises(ValueError, match="update/delete 必须提供"):
-        build_material_ids(action="update", document_id=None, internal_document_id=None)
+    with pytest.raises(ValueError, match="form_type 不能为空"):
+        build_material_ids(
+            form_type=" ",
+            material_name="Deck",
+            fiscal_year=None,
+            fiscal_period=None,
+        )
+    with pytest.raises(ValueError, match="material_name 不能为空"):
+        build_material_ids(
+            form_type="MATERIAL_OTHER",
+            material_name=" ",
+            fiscal_year=None,
+            fiscal_period=None,
+        )
     upd_doc, upd_internal = build_material_ids(
-        action="update",
-        document_id="mat_x",
-        internal_document_id=None,
+        form_type="MATERIAL_OTHER",
+        material_name="Deck",
+        fiscal_year=2025,
+        fiscal_period="q1",
     )
-    assert upd_doc == "mat_x"
-    assert upd_internal == "mat_x"
+    assert upd_doc.startswith("mat_")
+    assert upd_doc == upd_internal
+    assert upd_doc != create_doc
 
     doc_id, internal_id = build_cn_filing_ids(
         ticker="aapl",
@@ -511,6 +528,15 @@ def test_build_material_and_cn_filing_ids() -> None:
     )
     assert internal_id.startswith("cn_")
     assert doc_id == f"fil_{internal_id}"
+    sec_doc_id, sec_internal_id = build_sec_filing_ids(
+        ticker="aapl",
+        fiscal_year=2025,
+        fiscal_period="q1",
+        amended=False,
+    )
+    assert sec_internal_id.startswith("sec_")
+    assert sec_doc_id == f"fil_{sec_internal_id}"
+    assert sec_doc_id != doc_id
     with pytest.raises(ValueError, match="form_type 不能为空"):
         build_cn_filing_ids(
             ticker="AAPL",
@@ -519,6 +545,44 @@ def test_build_material_and_cn_filing_ids() -> None:
             fiscal_period="Q1",
             amended=False,
         )
+    with pytest.raises(ValueError, match="fiscal_period 不能为空"):
+        build_sec_filing_ids(
+            ticker="AAPL",
+            fiscal_year=2025,
+            fiscal_period=" ",
+            amended=False,
+        )
+
+
+def test_resolve_upload_action_and_validate_material_ids() -> None:
+    """验证自动动作解析与 material 显式 ID 一致性校验。"""
+
+    assert resolve_upload_action(None, None) == "create"
+    assert resolve_upload_action(None, {"document_id": "mat_x"}) == "update"
+    assert resolve_upload_action("delete", {"document_id": "mat_x"}) == "delete"
+
+    with pytest.raises(ValueError, match="显式 --document-id"):
+        validate_material_upload_ids(
+            stable_document_id="mat_stable",
+            stable_internal_document_id="mat_stable",
+            document_id="mat_other",
+            internal_document_id=None,
+        )
+    with pytest.raises(ValueError, match="显式 --internal-document-id"):
+        validate_material_upload_ids(
+            stable_document_id="mat_stable",
+            stable_internal_document_id="mat_stable",
+            document_id=None,
+            internal_document_id="mat_other",
+        )
+    resolved_document_id, resolved_internal_document_id = validate_material_upload_ids(
+        stable_document_id="mat_stable",
+        stable_internal_document_id="mat_stable",
+        document_id="mat_stable",
+        internal_document_id="mat_stable",
+    )
+    assert resolved_document_id == "mat_stable"
+    assert resolved_internal_document_id == "mat_stable"
 
 
 def test_build_upload_source_fingerprint_is_stable_for_order() -> None:

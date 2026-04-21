@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from typing import Any, Optional
 
 from dayu.engine.processors.source import Source
@@ -238,6 +239,34 @@ class _FsSourceDocumentMixin(_FsStorageInfra):
             False,
         )
 
+    def reset_source_document(
+        self,
+        ticker: str,
+        document_id: str,
+        source_kind: SourceKind,
+    ) -> None:
+        """重置单个源文档的完整存储。
+
+        Args:
+            ticker: 股票代码。
+            document_id: 文档 ID。
+            source_kind: 来源类型。
+
+        Returns:
+            无。
+
+        Raises:
+            OSError: 删除目录或 manifest 失败时抛出。
+        """
+
+        self._execute_with_auto_batch(
+            ticker,
+            self._reset_source_document_impl,
+            ticker,
+            document_id,
+            source_kind,
+        )
+
     # ========== 查询 ==========
 
     def get_document_meta(self, ticker: str, document_id: str) -> DocumentMeta:
@@ -471,6 +500,41 @@ class _FsSourceDocumentMixin(_FsStorageInfra):
         if not filing_dir.is_dir():
             raise NotADirectoryError(f"filing 路径不是目录: {filing_dir}")
         return has_xbrl_instance(filing_dir)
+
+    def _reset_source_document_impl(
+        self,
+        ticker: str,
+        document_id: str,
+        source_kind: SourceKind,
+    ) -> None:
+        """执行单文档重置（内部实现）。
+
+        Args:
+            ticker: 股票代码。
+            document_id: 文档 ID。
+            source_kind: 来源类型。
+
+        Returns:
+            无。
+
+        Raises:
+            OSError: 删除目录或 manifest 失败时抛出。
+        """
+
+        normalized_ticker = _normalize_ticker(ticker)
+        normalized_source_kind = _normalize_source_kind(source_kind)
+        document_dir = self._source_root(normalized_ticker, normalized_source_kind) / document_id
+        if document_dir.exists():
+            if document_dir.is_dir():
+                shutil.rmtree(document_dir)
+            else:
+                document_dir.unlink(missing_ok=True)
+        if normalized_source_kind == SourceKind.FILING:
+            manifest_path = self._filing_manifest_path(normalized_ticker)
+        else:
+            manifest_path = self._material_manifest_path(normalized_ticker)
+        if manifest_path.exists():
+            self._remove_manifest_item(manifest_path, normalized_ticker, document_id)
 
     # ========== handle & 文件访问 ==========
 

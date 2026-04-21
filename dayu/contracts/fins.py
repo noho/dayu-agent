@@ -85,7 +85,7 @@ class UploadFilingCommandPayload:
     ticker: str
     files: tuple[Path, ...]
     fiscal_year: int
-    action: str = "create"
+    action: str | None = None
     fiscal_period: str = ""
     amended: bool = False
     filing_date: str | None = None
@@ -103,7 +103,7 @@ class UploadFilingsFromCommandPayload:
 
     ticker: str
     source_dir: Path
-    action: str = "create"
+    action: str | None = None
     output_script: Path | None = None
     recursive: bool = False
     amended: bool = False
@@ -127,11 +127,13 @@ class UploadMaterialCommandPayload:
 
     ticker: str
     files: tuple[Path, ...]
-    action: str = "create"
+    action: str | None = None
     form_type: str = ""
     material_name: str = ""
     document_id: str | None = None
     internal_document_id: str | None = None
+    fiscal_year: int | None = None
+    fiscal_period: str | None = None
     filing_date: str | None = None
     report_date: str | None = None
     company_id: str | None = None
@@ -308,6 +310,8 @@ class UploadMaterialResultData:
     files: tuple[UploadFileResultItem, ...] = ()
     form_type: str | None = None
     material_name: str | None = None
+    fiscal_year: int | None = None
+    fiscal_period: str | None = None
     company_id: str | None = None
     company_name: str | None = None
     document_id: str | None = None

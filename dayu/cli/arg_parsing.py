@@ -316,9 +316,9 @@ def _add_fins_upload_filing_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--action",
         dest="action",
-        default="create",
+        default=None,
         choices=["create", "update", "delete"],
-        help="财报动作类型（默认 create）",
+        help="财报动作类型（默认仅自动判定 create/update；delete 必须显式传入）",
     )
     parser.add_argument("--files", nargs="+", default=None, help="上传文件列表")
     parser.add_argument("--fiscal-year", dest="fiscal_year", type=int, required=True, help="财年")
@@ -347,12 +347,30 @@ def _add_fins_upload_material_args(parser: argparse.ArgumentParser) -> None:
         required=True,
         help_text="股票代码；支持 CSV，如 BABA,9988,9988.HK，其中第一个值为 canonical ticker",
     )
-    parser.add_argument("--action", dest="action", required=True, choices=["create", "update", "delete"], help="材料动作类型")
+    parser.add_argument(
+        "--action",
+        dest="action",
+        default=None,
+        choices=["create", "update", "delete"],
+        help="材料动作类型（默认仅自动判定 create/update；delete 必须显式传入）",
+    )
     parser.add_argument("--forms", dest="form_type", required=True, help="材料 form_type")
     parser.add_argument("--material-name", dest="material_name", required=True, help="材料名称")
     parser.add_argument("--files", nargs="+", default=None, help="上传文件列表")
-    parser.add_argument("--document-id", dest="document_id", default=None, help="文档 ID")
-    parser.add_argument("--internal-document-id", dest="internal_document_id", default=None, help="内部文档 ID")
+    parser.add_argument(
+        "--document-id",
+        dest="document_id",
+        default=None,
+        help="文档 ID；若传入则必须与按 form_type/material_name/fiscal 生成的稳定 ID 一致",
+    )
+    parser.add_argument(
+        "--internal-document-id",
+        dest="internal_document_id",
+        default=None,
+        help="内部文档 ID；material 场景下与 document_id 恒等，若传入则必须与稳定 ID 一致",
+    )
+    parser.add_argument("--fiscal-year", dest="fiscal_year", type=int, default=None, help="可选财年")
+    parser.add_argument("--fiscal-period", dest="fiscal_period", default=None, help="可选财期")
     _add_date_args(
         parser,
         filing_date_help="可选披露日期",
@@ -377,7 +395,13 @@ def _add_fins_upload_filings_from_args(parser: argparse.ArgumentParser) -> None:
         help_text="股票代码；支持 CSV，如 BABA,9988,9988.HK，其中第一个值为 canonical ticker",
     )
     parser.add_argument("--from", dest="source_dir", required=True, help="待扫描文件目录")
-    parser.add_argument("--action", dest="action", default="create", choices=["create", "update"], help="生成脚本中的上传动作（默认 create）")
+    parser.add_argument(
+        "--action",
+        dest="action",
+        default=None,
+        choices=["create", "update"],
+        help="可选生成脚本中的固定上传动作（默认留空，执行时自动判定）",
+    )
     parser.add_argument("--output", dest="output_script", default=None, help="输出脚本路径，默认写到 --base 指向的 workspace 根目录下")
     parser.add_argument("--recursive", action="store_true", help="是否递归扫描子目录")
     parser.add_argument("--amended", action="store_true", help="生成命令时附加 --amended")

@@ -108,6 +108,27 @@ class SourceDocumentRepositoryProtocol(Protocol):
         """逻辑删除源文档。"""
         ...
 
+    def reset_source_document(
+        self,
+        ticker: str,
+        document_id: str,
+        source_kind: SourceKind,
+    ) -> None:
+        """重置单个源文档的完整存储。
+
+        Args:
+            ticker: 股票代码。
+            document_id: 文档 ID。
+            source_kind: 来源类型。
+
+        Returns:
+            无。
+
+        Raises:
+            OSError: 重置底层存储失败时抛出。
+        """
+        ...
+
     def restore_source_document(self, req: SourceDocumentStateChangeRequest) -> DocumentHandle:
         """恢复逻辑删除的源文档。"""
         ...
