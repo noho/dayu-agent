@@ -560,7 +560,7 @@ def test_windows_script_helpers(tmp_path: Path) -> None:
 
     assert text.startswith("@echo off")
     assert "REM dayu-cli upload_filings_from --ticker AAPL" in text
-    assert "upload_filing --ticker AAPL" in text
+    assert "upload_filing --ticker AAPL %*" in text
 
 
 @pytest.mark.unit

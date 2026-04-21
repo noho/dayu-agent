@@ -47,7 +47,7 @@
 
 #### 1.1.1 在线安装
 
-如果你当前机器可以联网，并且接受由 `pip` 在线解析并下载第三方依赖，可以直接安装 Release 中的 wheel：
+如果你当前机器可以联网，可以直接安装通过 `pip` 命令安装：
 
 命令格式：
 
@@ -58,40 +58,55 @@ pip install https://github.com/noho/dayu-agent/releases/download/<version>/dayu_
 示例（替换为最新版本号）：
 
 ```bash
-pip install https://github.com/noho/dayu-agent/releases/download/v0.1.2/dayu_agent-0.1.2-py3-none-any.whl
+pip install https://github.com/noho/dayu-agent/releases/download/v0.1.3/dayu_agent-0.1.3-py3-none-any.whl
 ```
 
 这种方式最轻，但安装耗时和成功率会受网络、平台和上游依赖发布状态影响。
 
-#### 1.1.2 下载离线安装包
+#### 1.1.2 离线安装
 
 前往 GitHub Releases，下载与你平台匹配的离线安装包：
 
-- `dayu-agent-<version>-macos-arm64-offline.tar.gz`
-- `dayu-agent-<version>-macos-x64-offline.tar.gz`
-- `dayu-agent-<version>-linux-x64-offline.tar.gz`
-- `dayu-agent-<version>-windows-x64-offline.zip`
+- Mac ARM芯片：`dayu-agent-<version>-macos-arm64-offline.tar.gz`
+- Mac Intel芯片：`dayu-agent-<version>-macos-x64-offline.tar.gz`
+- Linux：`dayu-agent-<version>-linux-x64-offline.tar.gz`
+- Windows：`dayu-agent-<version>-windows-x64-offline.zip`
 
-说明：
-- 当前 GitHub Release 默认提供 4 个离线安装包：`macos-arm64`、`macos-x64`、`linux-x64`、`windows-x64`。
 
 macOS / Linux 示例：
 
 ```bash
-tar -xzf dayu-agent-0.1.2-macos-arm64-offline.tar.gz
-cd dayu-agent-0.1.2-macos-arm64-offline
+tar -xzf dayu-agent-0.1.3-macos-arm64-offline.tar.gz
+cd dayu-agent-0.1.3-macos-arm64-offline
 ./install.sh
 ```
 
 Windows PowerShell 示例：
 
 ```powershell
-Expand-Archive .\dayu-agent-0.1.2-windows-x64-offline.zip -DestinationPath .
-cd .\dayu-agent-0.1.2-windows-x64-offline
+Expand-Archive .\dayu-agent-0.1.3-windows-x64-offline.zip -DestinationPath .
+cd .\dayu-agent-0.1.3-windows-x64-offline
 .\install.cmd
 ```
+#### 1.1.3 clone 源代码安装
 
-安装完成后，还需要执行一次：
+源代码clone到本地后，运行：
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[test,dev,browser]" -c constraints/lock-macos-arm64-py311.txt
+```
+
+说明：
+
+- macOS Intel 开发环境改用 `constraints/lock-macos-x64-py311.txt`
+- Linux 开发环境改用 `constraints/lock-linux-x64-py311.txt`
+- Windows 开发环境改用 `constraints/lock-windows-x64-py311.txt`
+
+#### 1.1.4 安装额外依赖
+
+安装完成后，还需要执行一次：  
 
 ```bash
 playwright install chromium
@@ -418,6 +433,7 @@ dayu-cli upload_material \
 - `upload_filings_from --infer` 只会在脚本生成阶段调用一次 FMP，并把“显式 CSV alias + infer alias”的合并结果，以及最终公司名直接 bake 到脚本正文；脚本头部的重生成命令仍会保留原始 `--ticker` 输入和 `--infer`。
 - 使用 `--infer` 功能需要申请FMP_API_KEY。
 - 生成脚本头部会附带一条注释形式的 `dayu-cli upload_filings_from ...` 重跑命令，后续有新文件时可直接复制粘贴再次生成。
+- 生成脚本中的每条上传命令都会透传脚本调用时的额外参数；macOS / Linux 使用 `"$@"`，Windows 使用 `%*`，因此可直接执行 `./upload_filings_xxx.sh --overwrite` 之类的批量覆盖调用。
 - `upload_filing` 和 `upload_material` 在首次实际写入时会自动创建 `workspace/portfolio/{ticker}` 下的源文档目录；`upload_filings_from` 只生成批量上传脚本，不直接写入源文档。
 
 ### 3.3 单次问答：`prompt`

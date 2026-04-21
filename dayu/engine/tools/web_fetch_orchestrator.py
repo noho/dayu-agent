@@ -16,7 +16,10 @@ from urllib.parse import urljoin, urlparse
 import requests
 from requests.structures import CaseInsensitiveDict
 from dayu.contracts.cancellation import CancellationToken
-from dayu.docling_runtime import build_docling_pdf_converter
+from dayu.docling_runtime import (
+    DoclingRuntimeInitializationError,
+    run_docling_pdf_conversion,
+)
 from bs4 import BeautifulSoup
 
 from dayu.engine.processors.html_pipeline import HtmlPipelineResult, HtmlPipelineStageError
@@ -709,16 +712,15 @@ def _docling_convert_to_markdown(raw_bytes: bytes, stream_name: str) -> tuple[st
 
     stream = DocumentStream(name=stream_name, stream=BytesIO(raw_bytes))
     try:
-        converter = build_docling_pdf_converter(
+        result = run_docling_pdf_conversion(
+            lambda converter: converter.convert(stream),
             do_ocr=True,
             do_table_structure=True,
             table_mode="accurate",
             do_cell_matching=True,
         )
-    except Exception as exc:
-        raise RuntimeError(f"Docling 转换器初始化失败: {exc}") from exc
-    try:
-        result = converter.convert(stream)
+    except DoclingRuntimeInitializationError:
+        raise
     except Exception as exc:
         raise RuntimeError(f"Docling 转换失败: {exc}") from exc
 

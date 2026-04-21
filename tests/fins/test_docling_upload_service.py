@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import builtins
-import sys
-import types
 from pathlib import Path
 from typing import Any, cast
 
@@ -619,51 +617,27 @@ def test_convert_file_with_docling_conversion_failed(
     sample_file = tmp_path / "sample.pdf"
     sample_file.write_text("x", encoding="utf-8")
 
-    module_docling = types.ModuleType("docling")
-    module_datamodel = types.ModuleType("docling.datamodel")
-    module_base_models = types.ModuleType("docling.datamodel.base_models")
-    module_pipeline_options = types.ModuleType("docling.datamodel.pipeline_options")
-    module_converter = types.ModuleType("docling.document_converter")
+    def _raise_convert_failure(*args: Any, **kwargs: Any) -> Any:
+        """模拟统一 Docling 运行时在转换阶段抛错。
 
-    class _InputFormat:
-        PDF = "pdf"
+        Args:
+            *args: 位置参数。
+            **kwargs: 关键字参数。
 
-    class _TableFormerMode:
-        ACCURATE = "accurate"
+        Returns:
+            无。
 
-    class _TableOptions:
-        def __init__(self) -> None:
-            self.mode = None
-            self.do_cell_matching = False
+        Raises:
+            RuntimeError: 固定抛出。
+        """
 
-    class _PdfPipelineOptions:
-        def __init__(self) -> None:
-            self.do_ocr = False
-            self.do_table_structure = False
-            self.table_structure_options = _TableOptions()
+        _ = (args, kwargs)
+        raise RuntimeError("convert boom")
 
-    class _PdfFormatOption:
-        def __init__(self, pipeline_options: _PdfPipelineOptions) -> None:
-            self.pipeline_options = pipeline_options
-
-    class _DocumentConverter:
-        def __init__(self, format_options: dict[str, Any]) -> None:
-            self.format_options = format_options
-
-        def convert(self, _: Path) -> Any:
-            raise RuntimeError("convert boom")
-
-    cast(Any, module_base_models).InputFormat = _InputFormat
-    cast(Any, module_pipeline_options).PdfPipelineOptions = _PdfPipelineOptions
-    cast(Any, module_pipeline_options).TableFormerMode = _TableFormerMode
-    cast(Any, module_converter).DocumentConverter = _DocumentConverter
-    cast(Any, module_converter).PdfFormatOption = _PdfFormatOption
-
-    monkeypatch.setitem(sys.modules, "docling", module_docling)
-    monkeypatch.setitem(sys.modules, "docling.datamodel", module_datamodel)
-    monkeypatch.setitem(sys.modules, "docling.datamodel.base_models", module_base_models)
-    monkeypatch.setitem(sys.modules, "docling.datamodel.pipeline_options", module_pipeline_options)
-    monkeypatch.setitem(sys.modules, "docling.document_converter", module_converter)
+    monkeypatch.setattr(
+        "dayu.fins.pipelines.docling_upload_service.run_docling_pdf_conversion",
+        _raise_convert_failure,
+    )
 
     with pytest.raises(RuntimeError, match="Docling 转换失败"):
         _convert_file_with_docling(sample_file)

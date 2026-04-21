@@ -120,6 +120,8 @@ from .storage.fs_company_meta_repository import FsCompanyMetaRepository
 
 MODULE = "FINS.CLI"
 _TICKER_CSV_COMMANDS = frozenset({"download", "upload_filing", "upload_material", "upload_filings_from"})
+_UPLOAD_SCRIPT_UNIX_PASSTHROUGH_ARGS = '"$@"'
+_UPLOAD_SCRIPT_WINDOWS_PASSTHROUGH_ARGS = "%*"
 
 
 @dataclass(frozen=True)
@@ -1999,7 +2001,13 @@ def _write_upload_script(
         regenerate_command=regenerate_command,
     )
     if commands:
-        lines.extend(commands)
+        lines.extend(
+            _append_upload_script_passthrough_args(
+                command=command,
+                script_platform=script_platform,
+            )
+            for command in commands
+        )
     else:
         if script_platform == "windows":
             lines.append("echo 没有识别到可上传的文件")
@@ -2009,6 +2017,25 @@ def _write_upload_script(
     output_script.write_text("\n".join(lines) + "\n", encoding="utf-8")
     if script_platform != "windows":
         output_script.chmod(0o755)
+
+
+def _append_upload_script_passthrough_args(*, command: str, script_platform: str) -> str:
+    """为批量上传脚本中的单条命令追加调用时透传参数。
+
+    Args:
+        command: 已拼装完成的单条命令。
+        script_platform: 脚本平台标识。
+
+    Returns:
+        追加透传参数后的命令字符串。
+
+    Raises:
+        无。
+    """
+
+    if script_platform == "windows":
+        return f"{command} {_UPLOAD_SCRIPT_WINDOWS_PASSTHROUGH_ARGS}"
+    return f"{command} {_UPLOAD_SCRIPT_UNIX_PASSTHROUGH_ARGS}"
 
 
 def _configure_logging(

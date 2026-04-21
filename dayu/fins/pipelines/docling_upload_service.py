@@ -22,7 +22,10 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
-from dayu.docling_runtime import build_docling_pdf_converter
+from dayu.docling_runtime import (
+    DoclingRuntimeInitializationError,
+    run_docling_pdf_conversion,
+)
 from dayu.fins.domain.document_models import (
     SourceHandle,
     SourceDocumentStateChangeRequest,
@@ -539,19 +542,20 @@ def _convert_file_with_docling(file_path: Path) -> dict[str, Any]:
     """
 
     try:
-        converter = build_docling_pdf_converter(
+        result = run_docling_pdf_conversion(
+            lambda converter: converter.convert(file_path),
             do_ocr=True,
             do_table_structure=True,
             table_mode="accurate",
             do_cell_matching=True,
         )
-    except Exception as exc:
-        raise RuntimeError(f"Docling 转换器初始化失败: {exc}") from exc
-    try:
-        result = converter.convert(file_path)
+    except DoclingRuntimeInitializationError:
+        raise
     except Exception as exc:  # pragma: no cover - 第三方异常兜底
         raise RuntimeError(f"Docling 转换失败: {file_path.name}") from exc
     return result.document.export_to_dict()
+
+
 def _validate_source_files(files: list[Path]) -> list[Path]:
     """校验上传文件列表。
 

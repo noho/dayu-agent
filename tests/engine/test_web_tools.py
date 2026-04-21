@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins
+from collections.abc import Callable
 from pathlib import Path
 from queue import Empty
 import socket
@@ -1776,28 +1777,36 @@ def test_fetch_and_convert_content_pdf_convert_error(monkeypatch: pytest.MonkeyP
         ),
     )
 
-    class _FailingConverter:
-        """模拟抛错的 Docling 转换器。"""
+    def _raise_convert_failure(
+        convert_operation: Callable[..., _FakeConvertResult],
+        *,
+        do_ocr: bool,
+        do_table_structure: bool,
+        table_mode: str,
+        do_cell_matching: bool,
+    ) -> _FakeConvertResult:
+        """模拟统一 Docling 运行时抛出转换失败。
 
-        def convert(self, source: object) -> _FakeConvertResult:
-            """直接抛出异常。
+        Args:
+            convert_operation: 转换回调。
+            do_ocr: OCR 开关。
+            do_table_structure: 表格结构开关。
+            table_mode: 表格模式。
+            do_cell_matching: 单元格匹配开关。
 
-            Args:
-                source: 输入对象。
+        Returns:
+            无。
 
-            Returns:
-                无。
+        Raises:
+            ValueError: 固定抛出。
+        """
 
-            Raises:
-                ValueError: 固定抛出转换错误。
-            """
-
-            _ = source
-            raise ValueError("convert failed")
+        _ = (convert_operation, do_ocr, do_table_structure, table_mode, do_cell_matching)
+        raise ValueError("convert failed")
 
     monkeypatch.setattr(
-        "dayu.engine.tools.web_fetch_orchestrator.build_docling_pdf_converter",
-        lambda **_kwargs: _FailingConverter(),
+        "dayu.engine.tools.web_fetch_orchestrator.run_docling_pdf_conversion",
+        _raise_convert_failure,
     )
 
     with pytest.raises(RuntimeError, match="Docling 转换失败"):
@@ -1828,28 +1837,36 @@ def test_fetch_and_convert_content_pdf_success(monkeypatch: pytest.MonkeyPatch) 
         ),
     )
 
-    class _InlineFakeConverter:
-        """按测试用例返回固定 Markdown 的转换器。"""
+    def _return_success(
+        convert_operation: Callable[..., _FakeConvertResult],
+        *,
+        do_ocr: bool,
+        do_table_structure: bool,
+        table_mode: str,
+        do_cell_matching: bool,
+    ) -> _FakeConvertResult:
+        """模拟统一 Docling 运行时返回成功结果。
 
-        def convert(self, source: object) -> _FakeConvertResult:
-            """转换为固定结果。
+        Args:
+            convert_operation: 转换回调。
+            do_ocr: OCR 开关。
+            do_table_structure: 表格结构开关。
+            table_mode: 表格模式。
+            do_cell_matching: 单元格匹配开关。
 
-            Args:
-                source: 输入对象。
+        Returns:
+            模拟转换结果。
 
-            Returns:
-                模拟转换结果。
+        Raises:
+            无。
+        """
 
-            Raises:
-                无。
-            """
-
-            _ = source
-            return _FakeConvertResult("# My Title\n\nBody")
+        _ = (convert_operation, do_ocr, do_table_structure, table_mode, do_cell_matching)
+        return _FakeConvertResult("# My Title\n\nBody")
 
     monkeypatch.setattr(
-        "dayu.engine.tools.web_fetch_orchestrator.build_docling_pdf_converter",
-        lambda **_kwargs: _InlineFakeConverter(),
+        "dayu.engine.tools.web_fetch_orchestrator.run_docling_pdf_conversion",
+        _return_success,
     )
 
     result = _fetch_and_convert_content("https://example.com/report.pdf", timeout_seconds=3.0, session=fake_session)

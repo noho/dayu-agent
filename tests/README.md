@@ -82,8 +82,8 @@ python -m pytest tests --cov=dayu --cov-report=term --cov-branch
 - 必须使用固定 fixture
 - 必须走真实第三方执行链
 - 表格退化不可接受，不能只断言“返回非空字符串”
-- 当前 Dayu 为避免 Apple Silicon 上 Docling 自动选择 MPS 触发 OOM，默认在 macOS 上把 PDF 转换固定到 CPU；若需要显式验证其他设备，可通过环境变量 `DAYU_DOCLING_DEVICE=auto|cpu|cuda|mps|xpu` 覆盖
-- 与此对应，unit test 若只想隔离 Docling 转换结果，应 patch `build_docling_pdf_converter()` 这类项目内真源 seam，不要继续直接 patch 第三方 `DocumentConverter` 类
+- 当前 Dayu 已将 upload / web tool 等 Docling PDF 转换入口统一收口到 `dayu.docling_runtime`；默认设备为 `auto`，若 `auto` 转换阶段失败则统一回退到 `cpu` 重试一次；若需要显式验证其他设备，可通过环境变量 `DAYU_DOCLING_DEVICE=auto|cpu|cuda|mps|xpu` 覆盖
+- 与此对应，unit test 若只想隔离 Docling 转换结果，应优先 patch `run_docling_pdf_conversion()` 这类项目内真源 seam；若只测装配参数，再 patch `build_docling_pdf_converter()`，不要继续直接 patch 第三方 `DocumentConverter` 类
 
 ### 3.2 Service / Host / Agent 路径守护
 

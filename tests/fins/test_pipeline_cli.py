@@ -1732,6 +1732,7 @@ def test_dispatch_upload_filings_from_generates_script(
     assert "--action create" in script_text
     assert "\n".join(command_lines).count("--company-id 000333") == 1
     assert "\n".join(command_lines).count("--company-name") == 1
+    assert all(line.endswith('"$@"') for line in command_lines)
     assert "# dayu-cli upload_filings_from" in script_text
 
 
