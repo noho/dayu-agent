@@ -128,12 +128,12 @@ async def test_upload_filing_stream_uploads_files_with_docling(tmp_path: Path) -
 
     assert len(events) == 5
     assert events[0].event_type == UploadFilingEventType.UPLOAD_STARTED
-    assert events[1].event_type == UploadFilingEventType.FILE_UPLOADED
+    assert events[1].event_type == UploadFilingEventType.CONVERSION_STARTED
     assert events[1].payload["name"] == "sample.pdf"
-    assert events[1].payload["source"] == "original"
-    assert events[2].event_type == UploadFilingEventType.CONVERSION_STARTED
+    assert events[1].payload["message"] == "正在 convert"
+    assert events[2].event_type == UploadFilingEventType.FILE_UPLOADED
     assert events[2].payload["name"] == "sample.pdf"
-    assert events[2].payload["message"] == "正在 convert"
+    assert events[2].payload["source"] == "original"
     assert events[3].event_type == UploadFilingEventType.FILE_UPLOADED
     assert events[3].payload["name"] == "sample_docling.json"
     assert events[3].payload["source"] == "docling"
@@ -192,12 +192,12 @@ async def test_upload_material_stream_uploads_files_with_docling(tmp_path: Path)
 
     assert len(events) == 5
     assert events[0].event_type == UploadMaterialEventType.UPLOAD_STARTED
-    assert events[1].event_type == UploadMaterialEventType.FILE_UPLOADED
+    assert events[1].event_type == UploadMaterialEventType.CONVERSION_STARTED
     assert events[1].payload["name"] == "material.pdf"
-    assert events[1].payload["source"] == "original"
-    assert events[2].event_type == UploadMaterialEventType.CONVERSION_STARTED
+    assert events[1].payload["message"] == "正在 convert"
+    assert events[2].event_type == UploadMaterialEventType.FILE_UPLOADED
     assert events[2].payload["name"] == "material.pdf"
-    assert events[2].payload["message"] == "正在 convert"
+    assert events[2].payload["source"] == "original"
     assert events[3].event_type == UploadMaterialEventType.FILE_UPLOADED
     assert events[3].payload["name"] == "material_docling.json"
     assert events[3].payload["source"] == "docling"
@@ -261,6 +261,11 @@ async def test_upload_filing_stream_auto_resolves_create_update_skip(tmp_path: P
     assert skip_result["status"] == "skipped"
     assert skip_result["filing_action"] == "update"
     assert skip_result["skip_reason"] == "already_uploaded"
+    assert [event.event_type.value for event in skip_events] == [
+        "upload_started",
+        "file_skipped",
+        "upload_completed",
+    ]
 
     sample_file.write_text("demo-v2", encoding="utf-8")
     update_events = [

@@ -57,11 +57,11 @@ async def test_upload_filing_stream_uploads_docling_files(tmp_path: Path) -> Non
 
     assert len(events) == 5
     assert events[0].event_type == UploadFilingEventType.UPLOAD_STARTED
-    assert events[1].event_type == UploadFilingEventType.FILE_UPLOADED
+    assert events[1].event_type == UploadFilingEventType.CONVERSION_STARTED
     assert events[1].payload["name"] == "filing.pdf"
-    assert events[1].payload["source"] == "original"
-    assert events[2].event_type == UploadFilingEventType.CONVERSION_STARTED
+    assert events[2].event_type == UploadFilingEventType.FILE_UPLOADED
     assert events[2].payload["name"] == "filing.pdf"
+    assert events[2].payload["source"] == "original"
     assert events[3].event_type == UploadFilingEventType.FILE_UPLOADED
     assert events[3].payload["name"] == "filing_docling.json"
     assert events[4].event_type == UploadFilingEventType.UPLOAD_COMPLETED
@@ -120,6 +120,28 @@ async def test_upload_filing_stream_auto_action_and_overwrite_reset(tmp_path: Pa
     ]
     create_result = create_events[-1].payload["result"]
     assert create_result["filing_action"] == "create"
+
+    skip_events = [
+        event
+        async for event in pipeline.upload_filing_stream(
+            ticker="AAPL",
+            action=None,
+            files=[old_file],
+            fiscal_year=2025,
+            fiscal_period="Q1",
+            company_id="320193",
+            company_name="Apple Inc.",
+            overwrite=False,
+        )
+    ]
+    skip_result = skip_events[-1].payload["result"]
+    assert skip_result["status"] == "skipped"
+    assert skip_result["filing_action"] == "update"
+    assert [event.event_type.value for event in skip_events] == [
+        "upload_started",
+        "file_skipped",
+        "upload_completed",
+    ]
 
     overwrite_events = [
         event

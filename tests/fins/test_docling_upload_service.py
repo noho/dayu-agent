@@ -118,7 +118,8 @@ def test_execute_upload_create_material_success(tmp_path: Path) -> None:
 
     assert result.status == "uploaded"
     assert result.document_id == "mat_demo"
-    assert len(result.file_events) == 2
+    assert len(result.file_events) == 3
+    assert result.file_events[0].event_type == "conversion_started"
     meta = context.source_repository.get_source_meta("AAPL", "mat_demo", SourceKind.MATERIAL)
     assert str(meta["primary_document"]).endswith("_docling.json")
     assert len(meta["files"]) == 2
@@ -167,6 +168,74 @@ def test_execute_upload_create_material_skip_when_fingerprint_same(tmp_path: Pat
     assert first_result.status == "uploaded"
     assert second_result.status == "skipped"
     assert all(event.event_type == "file_skipped" for event in second_result.file_events)
+
+
+def test_execute_upload_skip_does_not_run_docling_again_for_same_source_file(tmp_path: Path) -> None:
+    """验证相同原始文件再次上传时，会在 convert 前直接跳过。
+
+    Args:
+        tmp_path: 临时目录。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    convert_calls: list[str] = []
+
+    def _counting_convert(path: Path) -> dict[str, str]:
+        """记录 Docling convert 调用次数。
+
+        Args:
+            path: 输入文件路径。
+
+        Returns:
+            固定转换结果。
+
+        Raises:
+            无。
+        """
+
+        convert_calls.append(path.name)
+        return {"name": path.name, "source": "docling"}
+
+    context = build_fs_storage_test_context(tmp_path)
+    service = DoclingUploadService(
+        source_repository=context.source_repository,
+        blob_repository=context.blob_repository,
+        convert_with_docling=_counting_convert,
+    )
+    sample_file = tmp_path / "deck.pdf"
+    sample_file.write_text("hello", encoding="utf-8")
+
+    first_result = service.execute_upload(
+        ticker="AAPL",
+        source_kind=SourceKind.MATERIAL,
+        action="create",
+        document_id="mat_demo",
+        internal_document_id="mat_demo",
+        form_type="MATERIAL_OTHER",
+        files=[sample_file],
+        overwrite=False,
+        meta={"material_name": "Deck", "ingest_method": "upload"},
+    )
+    second_result = service.execute_upload(
+        ticker="AAPL",
+        source_kind=SourceKind.MATERIAL,
+        action="create",
+        document_id="mat_demo",
+        internal_document_id="mat_demo",
+        form_type="MATERIAL_OTHER",
+        files=[sample_file],
+        overwrite=False,
+        meta={"material_name": "Deck", "ingest_method": "upload"},
+    )
+
+    assert first_result.status == "uploaded"
+    assert second_result.status == "skipped"
+    assert convert_calls == ["deck.pdf"]
 
 
 def test_execute_upload_delete_material(tmp_path: Path) -> None:

@@ -56,12 +56,12 @@ async def test_upload_material_stream_uploads_docling_files(tmp_path: Path) -> N
 
     assert len(events) == 5
     assert events[0].event_type == UploadMaterialEventType.UPLOAD_STARTED
-    assert events[1].event_type == UploadMaterialEventType.FILE_UPLOADED
+    assert events[1].event_type == UploadMaterialEventType.CONVERSION_STARTED
     assert events[1].payload["name"] == "material.pdf"
-    assert events[1].payload["source"] == "original"
-    assert events[2].event_type == UploadMaterialEventType.CONVERSION_STARTED
+    assert events[1].payload["message"] == "正在 convert"
+    assert events[2].event_type == UploadMaterialEventType.FILE_UPLOADED
     assert events[2].payload["name"] == "material.pdf"
-    assert events[2].payload["message"] == "正在 convert"
+    assert events[2].payload["source"] == "original"
     assert events[3].event_type == UploadMaterialEventType.FILE_UPLOADED
     assert events[3].payload["name"] == "material_docling.json"
     assert events[3].payload["source"] == "docling"

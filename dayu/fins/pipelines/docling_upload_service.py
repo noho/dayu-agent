@@ -196,8 +196,8 @@ class DoclingUploadService:
         if normalized_action == "update" and previous_meta is None and not overwrite:
             raise FileNotFoundError(f"Document not found for update: {document_id}")
 
-        pending_assets = self._build_pending_assets(validated_files)
-        source_fingerprint = _build_upload_source_fingerprint(pending_assets)
+        original_assets = self._build_original_assets(validated_files)
+        source_fingerprint = _build_upload_source_fingerprint(original_assets)
         if _can_skip_upload(previous_meta, source_fingerprint, overwrite):
             Log.info(
                 f"文档已存在且未变更，跳过上传: ticker={normalized_ticker} document_id={document_id}",
@@ -216,8 +216,9 @@ class DoclingUploadService:
                 },
             )
 
+        pending_assets, conversion_events = self._build_pending_assets(validated_files, original_assets)
         stored_entries: list[dict[str, Any]] = []
-        file_events: list[UploadFileEventPayload] = []
+        file_events: list[UploadFileEventPayload] = list(conversion_events)
         handle = SourceHandle(
             ticker=normalized_ticker,
             document_id=document_id,
@@ -393,17 +394,18 @@ class DoclingUploadService:
             )
         )
 
-    def _build_pending_assets(self, files: list[Path]) -> list[_PendingFileAsset]:
-        """构建待上传资产列表。
+    def _build_original_assets(self, files: list[Path]) -> list[_PendingFileAsset]:
+        """构建原始上传文件资产列表。
 
         Args:
             files: 源文件列表。
 
         Returns:
-            待上传资产列表（含原始文件与 docling 文件）。
+            仅包含原始上传文件的资产列表。
 
         Raises:
-            RuntimeError: Docling 转换失败时抛出。
+            FileNotFoundError: 源文件不存在时抛出。
+            OSError: 源文件读取失败时抛出。
         """
 
         assets: list[_PendingFileAsset] = []
@@ -421,6 +423,39 @@ class DoclingUploadService:
                     source="original",
                 )
             )
+        return assets
+
+    def _build_pending_assets(
+        self,
+        files: list[Path],
+        original_assets: list[_PendingFileAsset],
+    ) -> tuple[list[_PendingFileAsset], list[UploadFileEventPayload]]:
+        """构建待上传资产列表与转换阶段事件。
+
+        Args:
+            files: 源文件列表。
+            original_assets: 已读取完成的原始文件资产列表。
+
+        Returns:
+            `(待上传资产列表, 转换阶段事件列表)` 二元组。
+
+        Raises:
+            RuntimeError: Docling 转换失败时抛出。
+        """
+
+        assets = list(original_assets)
+        conversion_events: list[UploadFileEventPayload] = []
+        for file_path in files:
+            conversion_events.append(
+                UploadFileEventPayload(
+                    event_type="conversion_started",
+                    name=file_path.name,
+                    payload={
+                        "source": "docling",
+                        "message": "正在 convert",
+                    },
+                )
+            )
             docling_payload = self._convert_with_docling(file_path)
             docling_data = json.dumps(docling_payload, ensure_ascii=False, indent=2).encode("utf-8")
             docling_name = f"{file_path.stem}{DOCLING_FILE_SUFFIX}"
@@ -435,7 +470,7 @@ class DoclingUploadService:
                     source="docling",
                 )
             )
-        return assets
+        return assets, conversion_events
 
     def _build_upsert_meta(
         self,

@@ -23,11 +23,8 @@ from dayu.fins.storage import CompanyMetaRepositoryProtocol, SourceDocumentRepos
 
 from .upload_company_meta import upsert_company_meta_for_upload
 from .upload_progress_helpers import (
-    build_conversion_started_events as _build_conversion_started_events,
-    build_original_file_uploaded_events as _build_original_file_uploaded_events,
     map_upload_file_event_to_filing_event_type as _map_upload_file_event_to_filing_event_type,
     map_upload_file_event_to_material_event_type as _map_upload_file_event_to_material_event_type,
-    should_emit_upload_file_event as _should_emit_upload_file_event,
 )
 
 
@@ -199,20 +196,6 @@ async def run_upload_filing_stream(
             overwrite=overwrite,
             previous_meta=previous_meta,
         )
-        for file_event in _build_original_file_uploaded_events(files):
-            yield UploadFilingEvent(
-                event_type=_map_upload_file_event_to_filing_event_type(file_event),
-                ticker=normalized_ticker,
-                document_id=document_id,
-                payload={"name": file_event.name, **file_event.payload},
-            )
-        for file_event in _build_conversion_started_events(files):
-            yield UploadFilingEvent(
-                event_type=_map_upload_file_event_to_filing_event_type(file_event),
-                ticker=normalized_ticker,
-                document_id=document_id,
-                payload={"name": file_event.name, **file_event.payload},
-            )
         upload_result = host._upload_service.execute_upload(
             ticker=normalized_ticker,
             source_kind=SourceKind.FILING,
@@ -234,8 +217,6 @@ async def run_upload_filing_stream(
             },
         )
         for file_event in upload_result.file_events:
-            if not _should_emit_upload_file_event(file_event):
-                continue
             yield UploadFilingEvent(
                 event_type=_map_upload_file_event_to_filing_event_type(file_event),
                 ticker=normalized_ticker,
@@ -408,20 +389,6 @@ async def run_upload_material_stream(
             overwrite=overwrite,
             previous_meta=previous_meta,
         )
-        for file_event in _build_original_file_uploaded_events(file_list):
-            yield UploadMaterialEvent(
-                event_type=_map_upload_file_event_to_material_event_type(file_event),
-                ticker=normalized_ticker,
-                document_id=resolved_document_id,
-                payload={"name": file_event.name, **file_event.payload},
-            )
-        for file_event in _build_conversion_started_events(file_list):
-            yield UploadMaterialEvent(
-                event_type=_map_upload_file_event_to_material_event_type(file_event),
-                ticker=normalized_ticker,
-                document_id=resolved_document_id,
-                payload={"name": file_event.name, **file_event.payload},
-            )
         upload_result = host._upload_service.execute_upload(
             ticker=normalized_ticker,
             source_kind=SourceKind.MATERIAL,
@@ -442,8 +409,6 @@ async def run_upload_material_stream(
             },
         )
         for file_event in upload_result.file_events:
-            if not _should_emit_upload_file_event(file_event):
-                continue
             yield UploadMaterialEvent(
                 event_type=_map_upload_file_event_to_material_event_type(file_event),
                 ticker=normalized_ticker,

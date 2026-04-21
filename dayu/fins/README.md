@@ -49,7 +49,7 @@ UI
 当前上传链路还固定遵守三条实现边界：
 - `upload_filing` 的 `document_id` 继续由财年/财期规则稳定生成，不跟文件内容绑定。
 - `upload_material` 的 `document_id` 由 `form_type + material_name + fiscal_year? + fiscal_period?` 稳定生成；当前 material 场景下 `document_id` 与 `internal_document_id` 恒等，显式传入时也只能与这套规则一致，不能覆盖它。
-- `upload_filing` / `upload_material` 未显式传 `action` 时统一按 source meta 自动解析 `create/update`；删除动作必须显式传入 `delete`。相同 `source_fingerprint` 直接 `skip`；`overwrite` 只重置当前 `document_id`，不会做 ticker 级清空。
+- `upload_filing` / `upload_material` 未显式传 `action` 时统一按 source meta 自动解析 `create/update`；删除动作必须显式传入 `delete`。相同原始上传文件指纹会在 Docling convert 前直接 `skip`；`overwrite` 只重置当前 `document_id`，不会做 ticker 级清空。
 
 ## 2. 设计意图
 

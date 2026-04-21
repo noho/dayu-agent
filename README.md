@@ -424,7 +424,7 @@ dayu-cli upload_material \
 ```
 
 命令说明：
-- `upload_filing` 和 `upload_material` 的 `--action` 现在都可省略；省略时会先按稳定 `document_id` 查工作区：不存在则 `create`，存在则 `update`，若文件指纹未变化则直接 `skip`。自动判定只覆盖 `create/update`；若要删除，必须显式传 `--action delete`。
+- `upload_filing` 和 `upload_material` 的 `--action` 现在都可省略；省略时会先按稳定 `document_id` 查工作区：不存在则 `create`，存在则 `update`，若原始上传文件指纹未变化则会在 Docling convert 前直接 `skip`。自动判定只覆盖 `create/update`；若要删除，必须显式传 `--action delete`。
 - `upload_filing` 适合单份补录；每个 `ticker` 第一次上传财报时才需要 `--company-id` 和 `--company-name`。若显式传 `--infer`，则在工作区缺少公司级 `meta.json` 时可省略 `--company-name`，由 FMP 推断后补齐；若同时传了 `--company-name`，则以你显式传入的值为准；若 infer 失败且仍缺 `--company-name`，命令会直接失败。
 - `upload_material` 的稳定 `document_id` 默认由 `form_type + material_name` 生成；若显式提供 `--fiscal-year/--fiscal-period`，它们也会参与 ID 生成。material 场景下 `document_id` 与 `internal_document_id` 恒等；显式传 `--document-id/--internal-document-id` 时，必须与这套稳定规则一致。
 - `upload_filings_from` 不直接上传文件，而是先生成一份适配当前运行平台的可执行脚本；macOS / Linux 默认生成 `.sh`，Windows 默认生成 `.cmd`。
