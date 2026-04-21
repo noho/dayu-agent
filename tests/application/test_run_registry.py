@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -10,7 +11,7 @@ import pytest
 from dayu.host.host_store import HostStore
 from dayu.host.pending_turn_store import PendingConversationTurnState, SQLitePendingConversationTurnStore
 from dayu.host.run_registry import SQLiteRunRegistry
-from dayu.contracts.run import RunCancelReason, RunState
+from dayu.contracts.run import ORPHAN_RUN_ERROR_SUMMARY, RunCancelReason, RunState
 from dayu.log import Log
 
 
@@ -94,6 +95,20 @@ class TestRunStateTransitions:
         completed = registry.complete_run(run.run_id)
         assert completed.state == RunState.SUCCEEDED
         assert completed.completed_at is not None
+
+    @pytest.mark.unit
+    def test_complete_run_allows_owned_orphan_recovery(self, registry: SQLiteRunRegistry) -> None:
+        """当前 owner 可把误判为 orphan 的失败 run 修复为成功。"""
+
+        run = registry.register_run(service_type="test")
+        registry.start_run(run.run_id)
+        registry.fail_run(run.run_id, error_summary=ORPHAN_RUN_ERROR_SUMMARY)
+
+        recovered = registry.complete_run(run.run_id)
+
+        assert recovered.state == RunState.SUCCEEDED
+        assert recovered.completed_at is not None
+        assert recovered.error_summary is None
 
     @pytest.mark.unit
     def test_fail_run(self, registry: SQLiteRunRegistry) -> None:
@@ -312,8 +327,13 @@ class TestCleanupOrphanRuns:
         # 篡改 owner_pid 为一个不存在的 PID
         conn = registry._host_store.get_connection()
         conn.execute(
-            "UPDATE runs SET owner_pid = ? WHERE run_id = ?",
-            (999999, run.run_id),
+            "UPDATE runs SET owner_pid = ?, started_at = ?, created_at = ? WHERE run_id = ?",
+            (
+                999999,
+                (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+                (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+                run.run_id,
+            ),
         )
         conn.commit()
 
@@ -324,6 +344,27 @@ class TestCleanupOrphanRuns:
         assert updated is not None
         assert updated.state == RunState.FAILED
         assert "orphan" in (updated.error_summary or "")
+
+    @pytest.mark.unit
+    def test_cleanup_recent_dead_pid_run_is_deferred(self, registry: SQLiteRunRegistry) -> None:
+        """启动恢复不会立即清理刚开始执行的 dead-pid run。"""
+
+        run = registry.register_run(service_type="test")
+        registry.start_run(run.run_id)
+
+        conn = registry._host_store.get_connection()
+        conn.execute(
+            "UPDATE runs SET owner_pid = ? WHERE run_id = ?",
+            (999999, run.run_id),
+        )
+        conn.commit()
+
+        orphans = registry.cleanup_orphan_runs()
+        updated = registry.get_run(run.run_id)
+
+        assert orphans == []
+        assert updated is not None
+        assert updated.state == RunState.RUNNING
 
     @pytest.mark.unit
     def test_cleanup_orphan_run_keeps_pending_turn_truth_source(self, tmp_path: Path) -> None:
@@ -345,7 +386,11 @@ class TestCleanupOrphanRuns:
         )
 
         conn = host_store.get_connection()
-        conn.execute("UPDATE runs SET owner_pid = ? WHERE run_id = ?", (999999, run.run_id))
+        old_time = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        conn.execute(
+            "UPDATE runs SET owner_pid = ?, started_at = ?, created_at = ? WHERE run_id = ?",
+            (999999, old_time, old_time, run.run_id),
+        )
         conn.commit()
 
         orphan_ids = registry.cleanup_orphan_runs()

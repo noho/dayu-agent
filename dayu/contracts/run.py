@@ -12,6 +12,9 @@ from enum import Enum
 from typing import Any
 
 
+ORPHAN_RUN_ERROR_SUMMARY = "orphan: owner process terminated"
+
+
 class RunState(str, Enum):
     """Run 状态枚举。
 

@@ -8,16 +8,24 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from dayu.host.host_store import HostStore
 from dayu.host.protocols import RunRegistryProtocol
-from dayu.contracts.run import ACTIVE_STATES, RunCancelReason, RunRecord, RunState, is_valid_transition
+from dayu.contracts.run import (
+    ACTIVE_STATES,
+    ORPHAN_RUN_ERROR_SUMMARY,
+    RunCancelReason,
+    RunRecord,
+    RunState,
+    is_valid_transition,
+)
 from dayu.log import Log
 from dayu.process_liveness import is_pid_alive
 
 MODULE = "HOST.RUN_REGISTRY"
+_ORPHAN_CLEANUP_MIN_RUN_AGE = timedelta(minutes=10)
 
 
 from dayu.host._datetime_utils import now_utc as _now_utc, parse_dt_optional as _parse_dt_optional, serialize_dt as _serialize_dt
@@ -262,31 +270,48 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         """清理 owner_pid 已死亡的活跃 run，标记为 FAILED。"""
 
         active_runs = self.list_active_runs()
-        orphan_ids: list[str] = []
+        candidate_orphan_ids: list[str] = []
+        now = _now_utc()
         for run in active_runs:
+            reference_time = run.started_at or run.created_at
+            if now - reference_time < _ORPHAN_CLEANUP_MIN_RUN_AGE:
+                continue
             if not is_pid_alive(run.owner_pid):
-                orphan_ids.append(run.run_id)
+                candidate_orphan_ids.append(run.run_id)
 
-        if orphan_ids:
-            now_str = _serialize_dt(_now_utc())
+        if candidate_orphan_ids:
+            now_str = _serialize_dt(now)
             conn = self._host_store.get_connection()
-            for oid in orphan_ids:
-                conn.execute(
+            active_values = tuple(state.value for state in ACTIVE_STATES)
+            placeholders = ",".join("?" for _ in active_values)
+            orphan_ids: list[str] = []
+            for oid in candidate_orphan_ids:
+                cursor = conn.execute(
                     """
                     UPDATE runs SET state = ?, completed_at = ?,
                            error_summary = ?
                     WHERE run_id = ?
-                    """,
-                    (RunState.FAILED.value, now_str,
-                     "orphan: owner process terminated", oid),
+                      AND state IN ({placeholders})
+                    """.format(placeholders=placeholders),
+                    (
+                        RunState.FAILED.value,
+                        now_str,
+                        ORPHAN_RUN_ERROR_SUMMARY,
+                        oid,
+                        *active_values,
+                    ),
                 )
+                if cursor.rowcount > 0:
+                    orphan_ids.append(oid)
             conn.commit()
-            Log.info(
-                f"清理 orphan runs: count={len(orphan_ids)}, run_ids={','.join(orphan_ids)}",
-                module=MODULE,
-            )
+            if orphan_ids:
+                Log.info(
+                    f"清理 orphan runs: count={len(orphan_ids)}, run_ids={','.join(orphan_ids)}",
+                    module=MODULE,
+                )
+            return orphan_ids
 
-        return orphan_ids
+        return []
 
     def _transition(
         self,
@@ -330,9 +355,23 @@ class SQLiteRunRegistry(RunRegistryProtocol):
 
         current_state = RunState(row["state"])
         if not is_valid_transition(current_state, target_state):
-            raise ValueError(
-                f"非法状态转换: {current_state.value} -> {target_state.value} (run_id={run_id})"
-            )
+            if (
+                current_state == RunState.FAILED
+                and target_state == RunState.SUCCEEDED
+                and int(row["owner_pid"]) == os.getpid()
+                and str(row["error_summary"] or "").strip() == ORPHAN_RUN_ERROR_SUMMARY
+            ):
+                Log.warn(
+                    (
+                        "检测到当前 owner 修复被误判为 orphan 的 run，"
+                        f"允许恢复成功终态: run_id={run_id}"
+                    ),
+                    module=MODULE,
+                )
+            else:
+                raise ValueError(
+                    f"非法状态转换: {current_state.value} -> {target_state.value} (run_id={run_id})"
+                )
 
         # 构造 SET 子句
         set_parts = ["state = ?"]
@@ -347,6 +386,8 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         if error_summary is not None:
             set_parts.append("error_summary = ?")
             params.append(error_summary)
+        elif target_state != RunState.FAILED:
+            set_parts.append("error_summary = NULL")
         if cancel_requested_at is not None:
             set_parts.append("cancel_requested_at = ?")
             params.append(_serialize_dt(cancel_requested_at))

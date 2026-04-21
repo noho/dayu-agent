@@ -37,7 +37,7 @@ from dayu.contracts.agent_execution import AgentInput, ExecutionContract
 from dayu.contracts.cancellation import CancelledError, CancellationToken
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
 from dayu.contracts.events import AppEvent, AppEventType, AppResult, PublishedRunEventProtocol
-from dayu.contracts.run import RunCancelReason, RunRecord, RunState
+from dayu.contracts.run import ORPHAN_RUN_ERROR_SUMMARY, RunCancelReason, RunRecord, RunState
 from dayu.engine.events import EventType
 from dayu.engine.tool_result import project_for_llm
 from dayu.host.conversation_store import ConversationToolUseSummary
@@ -170,14 +170,21 @@ class DefaultHostExecutor(HostExecutorProtocol):
             if self._is_cancelled(run_id=run.run_id, token=context.cancellation_token):
                 self._finalize_cancelled(run.run_id)
                 return
-            self.run_registry.complete_run(run.run_id)
+            settled_run = self._complete_run_preserving_terminal_state(run_id=run.run_id)
+            if settled_run.state == RunState.CANCELLED:
+                return
+            if settled_run.state == RunState.FAILED:
+                raise RuntimeError(self._describe_external_terminal_failure(settled_run))
         except CancelledError:
             self._finalize_cancelled(run.run_id)
         except Exception as exc:
             if self._is_cancelled(run_id=run.run_id, token=context.cancellation_token):
                 self._finalize_cancelled(run.run_id)
                 return
-            self.run_registry.fail_run(run.run_id, error_summary=self._summarize_error(exc, spec.error_summary_limit))
+            self._fail_run_preserving_original_exception(
+                run_id=run.run_id,
+                error_summary=self._summarize_error(exc, spec.error_summary_limit),
+            )
             raise
         finally:
             self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permit=permit)
@@ -202,14 +209,21 @@ class DefaultHostExecutor(HostExecutorProtocol):
             result = operation(context)
             if self._is_cancelled(run_id=run.run_id, token=context.cancellation_token):
                 return self._finish_sync_cancelled_run(run_id=run.run_id, on_cancel=on_cancel)
-            self.run_registry.complete_run(run.run_id)
+            settled_run = self._complete_run_preserving_terminal_state(run_id=run.run_id)
+            if settled_run.state == RunState.CANCELLED:
+                return self._finish_sync_cancelled_run(run_id=run.run_id, on_cancel=on_cancel)
+            if settled_run.state == RunState.FAILED:
+                raise RuntimeError(self._describe_external_terminal_failure(settled_run))
             return result
         except CancelledError:
             return self._finish_sync_cancelled_run(run_id=run.run_id, on_cancel=on_cancel)
         except Exception as exc:
             if self._is_cancelled(run_id=run.run_id, token=context.cancellation_token):
                 return self._finish_sync_cancelled_run(run_id=run.run_id, on_cancel=on_cancel)
-            self.run_registry.fail_run(run.run_id, error_summary=self._summarize_error(exc, spec.error_summary_limit))
+            self._fail_run_preserving_original_exception(
+                run_id=run.run_id,
+                error_summary=self._summarize_error(exc, spec.error_summary_limit),
+            )
             raise
         finally:
             self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permit=permit)
@@ -597,6 +611,87 @@ class DefaultHostExecutor(HostExecutorProtocol):
         if self.event_bus is None:
             return
         self.event_bus.publish(run_id, event)
+
+    def _complete_run_preserving_terminal_state(self, *, run_id: str) -> RunRecord:
+        """将运行收敛到成功态，并容忍外部已写入的终态。
+
+        Args:
+            run_id: 目标 run ID。
+
+        Returns:
+            当前最终 run 记录。
+
+        Raises:
+            ValueError: run 状态既非成功可修复，也不是已知外部终态时抛出。
+        """
+
+        try:
+            return self.run_registry.complete_run(run_id)
+        except ValueError:
+            run = self.run_registry.get_run(run_id)
+            if run is None or not run.is_terminal():
+                raise
+            Log.warn(
+                f"[{run_id}] run 已被外部收敛到终态，跳过重复 complete: state={run.state.value}",
+                module=MODULE,
+            )
+            return run
+
+    def _fail_run_preserving_original_exception(
+        self,
+        *,
+        run_id: str,
+        error_summary: str | None,
+    ) -> RunRecord | None:
+        """将运行标记为失败，但不让重复终态写入掩盖原始异常。
+
+        Args:
+            run_id: 目标 run ID。
+            error_summary: 失败摘要。
+
+        Returns:
+            更新后的 run；若 run 已不存在则返回 `None`。
+
+        Raises:
+            ValueError: run 仍处于未知非法状态时抛出。
+        """
+
+        try:
+            return self.run_registry.fail_run(run_id, error_summary=error_summary)
+        except ValueError:
+            run = self.run_registry.get_run(run_id)
+            if run is None or not run.is_terminal():
+                raise
+            Log.warn(
+                f"[{run_id}] run 已被外部收敛到终态，保留原始异常: state={run.state.value}",
+                module=MODULE,
+            )
+            return run
+
+    def _describe_external_terminal_failure(self, run: RunRecord) -> str:
+        """格式化外部已落失败终态的错误描述。
+
+        Args:
+            run: 已收敛为失败态的 run。
+
+        Returns:
+            用户可读错误描述。
+
+        Raises:
+            无。
+        """
+
+        if (
+            run.error_summary == ORPHAN_RUN_ERROR_SUMMARY
+            and run.owner_pid > 0
+        ):
+            return (
+                "run 已在外部被标记为 orphan failure；"
+                f"run_id={run.run_id} owner_pid={run.owner_pid}"
+            )
+        if run.error_summary:
+            return f"run 已在外部失败收口: run_id={run.run_id} error={run.error_summary}"
+        return f"run 已在外部失败收口: run_id={run.run_id}"
 
     def _publish_cancelled_app_event(self, *, run_id: str, run: RunRecord | None) -> AppEvent:
         """构造并发布应用层取消事件。

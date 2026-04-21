@@ -251,8 +251,8 @@ push 后 PR 自动更新，CI 重新跑。最终 merge 时用 **Squash and merge
      - `macos-x64` 不在 PR 层阻塞，避免长期排队占用反馈时间
 
 3. `主线 / 定时 / 手工完整验证`
-   - `push main`：自动跑扩展层与主线默认平台完整验证
-   - `schedule`：每日定时跑扩展层与主线默认平台完整验证
+   - `push main`：自动跑扩展层与主线默认平台完整验证（`macos-x64` 不在 PR 层阻塞）
+   - `schedule`：每日定时跑扩展层与主线默认平台完整验证（`macos-x64` 不在 PR 层阻塞）
    - `workflow_dispatch`：可手工触发
      - 默认只跑快主链
      - 勾选 `run_extended_integration=true` 时再跑扩展 integration 层
