@@ -421,7 +421,15 @@ python utils/smoke_test_offline_bundle.py \
 
 #### 7.2 `macos-x64`
 
-在 Intel macOS 宿主机上执行与上面相同的流程，只把 constraints 和平台标识换掉：
+在 Intel macOS 宿主机上执行与上面相同的流程，只把 constraints 和平台标识换掉。
+
+如果这台机器是专门用来验证某个 PR，先在仓库根目录拉下对应 PR 的代码：
+
+```bash
+gh pr checkout <PR号> --force
+```
+
+然后再执行 `macos-x64` 的离线包构建和 smoke：
 
 ```bash
 source .venv/bin/activate && python -m pip install --upgrade pip build
@@ -483,6 +491,12 @@ rm -rf dist build && python -m build --wheel && python utils/build_offline_bundl
   --output-dir dist/offline
 python utils/smoke_test_offline_bundle.py \
   --archive "$(ls dist/offline/dayu-agent-*-linux-x64-offline.tar.gz | tail -n1)"
+```
+
+若需额外手工验证，容器内执行：
+```bash
+pip install -e ".[test,dev,browser]" -c constraints/lock-macos-arm64-py311.txt
+export PATH=$PATH:/tmp/home/.local/bin
 ```
 
 #### 7.4 `windows-x64`
@@ -670,6 +684,9 @@ git pull
 git branch
 git switch feat/xxx
 git rebase main
+
+# 4. 如果这个分支已经 push 到 GitHub，rebase 后要更新远端 PR 分支
+git push --force-with-lease
 ```
 
 推荐 `rebase`：功能分支保持线性，PR review 更直观；只要分支还没 push / 没人协作就安全。已经 push 到 GitHub 的分支做 rebase，push 时要加 `--force-with-lease`。

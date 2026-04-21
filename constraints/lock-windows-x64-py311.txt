@@ -1,2 +1,5 @@
 # Windows x64 受控环境锁定版本。
 -c lock-common-py311.txt
+
+torch==2.4.1
+torchvision==0.19.1

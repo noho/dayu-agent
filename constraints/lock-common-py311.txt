@@ -140,8 +140,6 @@ tenacity==9.1.4
 textdistance==4.6.3
 tld==0.13.2
 tokenizers==0.22.2
-torch==2.4.1
-torchvision==0.19.1
 tqdm==4.67.3
 trafilatura==2.0.0
 transformers==5.5.4

@@ -1,6 +1,8 @@
 # macOS arm64 受控环境锁定版本。
 -c lock-common-py311.txt
 
+torch==2.4.1
+torchvision==0.19.1
 ocrmac==1.0.1
 pyobjc-core==12.1
 pyobjc-framework-Cocoa==12.1

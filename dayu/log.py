@@ -40,7 +40,7 @@ _STDOUT_MAX_LEVEL = _STDERR_MIN_LEVEL - 1
 # ------------------------------------------------------------------
 # 第三方库日志抑制规则
 # ------------------------------------------------------------------
-_ALWAYS_WARNING_LOGGERS = ("httpx", "asyncio", "charset_normalizer", "PIL", "chardet.charsetprober", "matplotlib")
+_ALWAYS_WARNING_LOGGERS = ("RapidOCR", "httpx", "asyncio", "charset_normalizer", "PIL", "chardet.charsetprober", "matplotlib")
 _DEBUG_MODE_INFO_LOGGERS = ("httpcore", "urllib3", "urllib3.connectionpool", "edgar", "docling", "readability.readability")
 
 
