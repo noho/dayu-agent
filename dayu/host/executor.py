@@ -37,7 +37,7 @@ from dayu.contracts.agent_execution import AgentInput, ExecutionContract
 from dayu.contracts.cancellation import CancelledError, CancellationToken
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
 from dayu.contracts.events import AppEvent, AppEventType, AppResult, PublishedRunEventProtocol
-from dayu.contracts.run import ORPHAN_RUN_ERROR_SUMMARY, RunCancelReason, RunRecord, RunState
+from dayu.contracts.run import RunCancelReason, RunRecord, RunState
 from dayu.engine.events import EventType
 from dayu.engine.tool_result import project_for_llm
 from dayu.host.conversation_store import ConversationToolUseSummary
@@ -555,7 +555,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 warnings=tuple(filter(None, warnings)),
                 errors=tuple(filter(None, errors)),
             )
-        self.run_registry.complete_run(run_id)
+        self._complete_run_preserving_terminal_state(run_id=run_id)
         self._mark_pending_turn_sent_to_llm_best_effort(
             run_id=run_id,
             pending_turn_id=pending_turn_id,
@@ -681,12 +681,9 @@ class DefaultHostExecutor(HostExecutorProtocol):
             无。
         """
 
-        if (
-            run.error_summary == ORPHAN_RUN_ERROR_SUMMARY
-            and run.owner_pid > 0
-        ):
+        if run.state == RunState.UNSETTLED and run.owner_pid > 0:
             return (
-                "run 已在外部被标记为 orphan failure；"
+                "run 已在外部被标记为 orphan/unsettled；"
                 f"run_id={run.run_id} owner_pid={run.owner_pid}"
             )
         if run.error_summary:
@@ -870,10 +867,10 @@ class DefaultHostExecutor(HostExecutorProtocol):
             )
             self._delete_pending_turn(pending_turn_id)
             return
-        if run.state == RunState.FAILED:
+        if run.state in (RunState.FAILED, RunState.UNSETTLED):
             if resumable:
                 Log.verbose(
-                    f"[{run.run_id}] run 失败，保留 pending turn 供恢复: pending_turn_id={pending_turn_id}",
+                    f"[{run.run_id}] run 终态={run.state.value}，保留 pending turn 供恢复: pending_turn_id={pending_turn_id}",
                     module=MODULE,
                 )
                 return
@@ -951,7 +948,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 pending_turn_id=pending_turn_id,
                 resumable=resumable,
             )
-        self.run_registry.complete_run(run_id)
+        self._complete_run_preserving_terminal_state(run_id=run_id)
         self._delete_pending_turn_best_effort(run_id=run_id, pending_turn_id=pending_turn_id)
         return None
 
@@ -988,8 +985,8 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 pending_turn_id=pending_turn_id,
                 resumable=resumable,
             )
-        failed_run = self.run_registry.fail_run(
-            run_id,
+        failed_run = self._fail_run_preserving_original_exception(
+            run_id=run_id,
             error_summary=self._summarize_error(exc, error_summary_limit),
         )
         self._reconcile_pending_turn_after_terminal_run(

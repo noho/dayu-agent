@@ -19,6 +19,7 @@ from dayu.contracts.toolset_config import ToolsetConfigSnapshot
 from dayu.host.host_store import HostStore
 from dayu.host.conversation_store import ConversationTranscript
 from dayu.host.pending_turn_store import (
+    InMemoryPendingConversationTurnStore,
     PendingConversationTurnState,
     SQLitePendingConversationTurnStore,
 )
@@ -532,9 +533,55 @@ def test_sqlite_pending_turn_store_record_resume_attempt_respects_atomic_max_att
     assert success_ids == [created.pending_turn_id]
     assert len(errors) == 1
     assert "达到上限" in errors[0]
+    # 达上限后记录被原子删除，防止超限 pending turn 卡死后续恢复
     current = store.get_pending_turn(created.pending_turn_id)
-    assert current is not None
-    assert current.resume_attempt_count == 1
+    assert current is None
+
+
+@pytest.mark.unit
+def test_sqlite_pending_turn_store_exhausted_attempt_deletes_record(tmp_path: Path) -> None:
+    """达上限时应原子删除记录并 raise ValueError。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLitePendingConversationTurnStore(host_store)
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题一",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+        resume_source_json='{"scene_name": "wechat"}',
+    )
+
+    store.record_resume_attempt(created.pending_turn_id, max_attempts=1)
+
+    with pytest.raises(ValueError, match="达到上限"):
+        store.record_resume_attempt(created.pending_turn_id, max_attempts=1)
+
+    assert store.get_pending_turn(created.pending_turn_id) is None
+
+
+@pytest.mark.unit
+def test_inmemory_pending_turn_store_exhausted_attempt_deletes_record() -> None:
+    """内存实现达上限同样原子删除记录。"""
+
+    store = InMemoryPendingConversationTurnStore()
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题一",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+    store.record_resume_attempt(created.pending_turn_id, max_attempts=1)
+
+    with pytest.raises(ValueError, match="达到上限"):
+        store.record_resume_attempt(created.pending_turn_id, max_attempts=1)
+
+    assert store.get_pending_turn(created.pending_turn_id) is None
 
 
 @pytest.mark.unit

@@ -190,6 +190,15 @@ class RunRegistryProtocol(Protocol):
         """标记 run 已取消。"""
         ...
 
+    def mark_unsettled(
+        self,
+        run_id: str,
+        *,
+        error_summary: str | None = None,
+    ) -> RunRecord:
+        """将 run 标记为 UNSETTLED（orphan cleanup / 无法判定的残留）。"""
+        ...
+
     def request_cancel(
         self,
         run_id: str,
@@ -219,6 +228,10 @@ class RunRegistryProtocol(Protocol):
 
     def list_active_runs(self) -> list[RunRecord]:
         """列出所有活跃 run。"""
+        ...
+
+    def list_active_runs_for_owner(self, owner_pid: int) -> list[RunRecord]:
+        """列出指定 owner_pid 拥有的所有活跃 run。"""
         ...
 
     def cleanup_orphan_runs(self) -> list[str]:
@@ -379,6 +392,14 @@ class ReplyOutboxStoreProtocol(Protocol):
         Returns:
             被删除的记录数。
         """
+        ...
+
+    def cleanup_stale_in_progress_deliveries(
+        self,
+        *,
+        max_age: timedelta,
+    ) -> list[str]:
+        """把超过 max_age 的 DELIVERY_IN_PROGRESS 回退为 FAILED_RETRYABLE。"""
         ...
 
 
@@ -747,6 +768,24 @@ class HostGovernanceProtocol(Protocol):
 
     def cleanup_stale_permits(self) -> list[str]:
         """清理过期并发 permit。"""
+        ...
+
+    def cleanup_stale_reply_outbox_deliveries(
+        self,
+        *,
+        max_age: timedelta = ...,
+    ) -> list[str]:
+        """回退超过 max_age 的 reply outbox DELIVERY_IN_PROGRESS 记录。
+
+        Args:
+            max_age: 认定 in_progress 陈旧的最大存活时间。
+
+        Returns:
+            被回退的 delivery_id 列表。
+
+        Raises:
+            无。
+        """
         ...
 
     def get_all_lane_statuses(self) -> dict[str, LaneStatus]:

@@ -19,6 +19,7 @@ from dayu.cli.interactive_state import (
     build_interactive_key,
     resolve_interactive_session_id as resolve_interactive_state_session_id,
 )
+from dayu.cli.graceful_shutdown import register_cli_shutdown_hook
 from dayu.contracts.infrastructure import ConfigLoaderProtocol, PromptAssetStoreProtocol
 from dayu.contracts.session import SessionSource
 from dayu.execution.cli_execution_options import build_execution_options_from_args
@@ -531,6 +532,7 @@ def _prepare_cli_host_dependencies(
         runtime_label="CLI Host runtime",
         log_module=MODULE,
     )
+    register_cli_shutdown_hook(prepared.host)
     return (
         prepared.workspace,
         prepared.default_execution_options,

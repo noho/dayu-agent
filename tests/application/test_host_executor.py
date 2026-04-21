@@ -248,7 +248,7 @@ def test_run_sync_treats_external_cancelled_failure_as_cancelled() -> None:
 
 @pytest.mark.unit
 def test_run_sync_recovers_owned_orphan_failure_before_success(tmp_path: Path) -> None:
-    """同步执行若被误判 orphan failure，当前 owner 仍可成功收口。"""
+    """同步执行若被误判为 UNSETTLED orphan，当前 owner 仍可成功收口。"""
 
     host_store = HostStore(tmp_path / "host.db")
     host_store.initialize_schema()
@@ -257,7 +257,7 @@ def test_run_sync_recovers_owned_orphan_failure_before_success(tmp_path: Path) -
     spec = HostedRunSpec(operation_name="write_pipeline", session_id="s1")
 
     def _operation(context: HostedRunContext) -> int:
-        run_registry.fail_run(context.run_id, error_summary=ORPHAN_RUN_ERROR_SUMMARY)
+        run_registry.mark_unsettled(context.run_id, error_summary=ORPHAN_RUN_ERROR_SUMMARY)
         return 42
 
     result = executor.run_operation_sync(spec=spec, operation=_operation)
@@ -269,8 +269,8 @@ def test_run_sync_recovers_owned_orphan_failure_before_success(tmp_path: Path) -
 
 
 @pytest.mark.unit
-def test_run_sync_preserves_original_exception_when_run_already_failed_externally(tmp_path: Path) -> None:
-    """外部失败终态已写入时，执行器不应再把异常掩盖成状态机错误。"""
+def test_run_sync_preserves_original_exception_when_run_already_unsettled_externally(tmp_path: Path) -> None:
+    """外部写入 UNSETTLED 终态时，执行器不应再把异常掩盖成状态机错误。"""
 
     host_store = HostStore(tmp_path / "host.db")
     host_store.initialize_schema()
@@ -279,14 +279,14 @@ def test_run_sync_preserves_original_exception_when_run_already_failed_externall
     spec = HostedRunSpec(operation_name="write_pipeline", session_id="s1")
 
     def _operation(context: HostedRunContext) -> int:
-        run_registry.fail_run(context.run_id, error_summary=ORPHAN_RUN_ERROR_SUMMARY)
+        run_registry.mark_unsettled(context.run_id, error_summary=ORPHAN_RUN_ERROR_SUMMARY)
         raise RuntimeError("boom")
 
     with pytest.raises(RuntimeError, match="boom"):
         executor.run_operation_sync(spec=spec, operation=_operation)
 
     run = next(iter(run_registry.list_runs()))
-    assert run.state.value == "failed"
+    assert run.state.value == "unsettled"
     assert run.error_summary == ORPHAN_RUN_ERROR_SUMMARY
 
 

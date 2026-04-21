@@ -22,6 +22,13 @@ class RunState(str, Enum):
         CREATED → QUEUED → RUNNING → SUCCEEDED / FAILED / CANCELLED
         CREATED → RUNNING → SUCCEEDED / FAILED / CANCELLED
         CREATED / QUEUED / RUNNING → CANCELLED
+        CREATED / QUEUED / RUNNING → UNSETTLED（orphan cleanup 专用吸收态）
+
+    UNSETTLED 与 FAILED 语义分离：
+        - FAILED 表示业务/Agent 明确失败；
+        - UNSETTLED 表示 Host 无法判定的残留（owner 进程异常终止），
+          由 startup cleanup 统一收敛，方便 admin / 自愈逻辑基于 state
+          做 discriminator，不再依赖 error_summary 字符串匹配。
     """
 
     CREATED = "created"
@@ -30,6 +37,7 @@ class RunState(str, Enum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    UNSETTLED = "unsettled"
 
 
 class RunCancelReason(str, Enum):
@@ -41,12 +49,19 @@ class RunCancelReason(str, Enum):
 
 # 合法的状态转换表：key 为当前状态，value 为允许的目标状态集合
 _VALID_TRANSITIONS: dict[RunState, frozenset[RunState]] = {
-    RunState.CREATED: frozenset({RunState.QUEUED, RunState.RUNNING, RunState.CANCELLED}),
-    RunState.QUEUED: frozenset({RunState.RUNNING, RunState.CANCELLED}),
-    RunState.RUNNING: frozenset({RunState.SUCCEEDED, RunState.FAILED, RunState.CANCELLED}),
+    RunState.CREATED: frozenset(
+        {RunState.QUEUED, RunState.RUNNING, RunState.CANCELLED, RunState.UNSETTLED}
+    ),
+    RunState.QUEUED: frozenset(
+        {RunState.RUNNING, RunState.CANCELLED, RunState.UNSETTLED}
+    ),
+    RunState.RUNNING: frozenset(
+        {RunState.SUCCEEDED, RunState.FAILED, RunState.CANCELLED, RunState.UNSETTLED}
+    ),
     RunState.SUCCEEDED: frozenset(),
     RunState.FAILED: frozenset(),
     RunState.CANCELLED: frozenset(),
+    RunState.UNSETTLED: frozenset(),
 }
 
 # 终态集合
@@ -54,6 +69,7 @@ TERMINAL_STATES: frozenset[RunState] = frozenset({
     RunState.SUCCEEDED,
     RunState.FAILED,
     RunState.CANCELLED,
+    RunState.UNSETTLED,
 })
 
 # 活跃状态集合（用于查询过滤）

@@ -24,6 +24,10 @@ from dayu.host.host_store import HostStore
 
 
 from dayu.host._datetime_utils import now_utc as _now_utc, parse_dt as _parse_dt, serialize_dt as _serialize_dt
+from dayu.log import Log
+
+
+MODULE = "HOST.PENDING_TURN_STORE"
 
 
 def _normalize_metadata(metadata: ExecutionDeliveryContext | None) -> ExecutionDeliveryContext:
@@ -282,8 +286,16 @@ class InMemoryPendingConversationTurnStore:
         if max_attempts <= 0:
             raise ValueError("max_attempts 必须是正整数")
         if existing.resume_attempt_count >= max_attempts:
+            self._records.pop(existing.pending_turn_id, None)
+            Log.warn(
+                "pending turn 恢复次数已达到上限，已原子删除: "
+                f"pending_turn_id={existing.pending_turn_id}, "
+                f"session_id={existing.session_id}, "
+                f"max_attempts={max_attempts}",
+                module=MODULE,
+            )
             raise ValueError(
-                "pending turn 恢复次数已达到上限: "
+                "pending turn 恢复次数已达到上限，已删除: "
                 f"pending_turn_id={pending_turn_id}, max_attempts={max_attempts}"
             )
         updated = PendingConversationTurn(
@@ -596,30 +608,59 @@ class SQLitePendingConversationTurnStore:
         if max_attempts <= 0:
             raise ValueError("max_attempts 必须是正整数")
         conn = self._host_store.get_connection()
-        cursor = conn.execute(
-            """
-            UPDATE pending_conversation_turns
-            SET resume_attempt_count = resume_attempt_count + 1,
-                last_resume_error_message = NULL,
-                updated_at = ?
-            WHERE pending_turn_id = ?
-              AND resume_attempt_count < ?
-            """,
-            (_serialize_dt(_now_utc()), normalized_pending_turn_id, max_attempts),
-        )
-        conn.commit()
-        if cursor.rowcount == 0:
-            existing = self.get_pending_turn(normalized_pending_turn_id)
-            if existing is None:
-                raise KeyError(f"pending turn 不存在: {normalized_pending_turn_id}")
-            raise ValueError(
-                "pending turn 恢复次数已达到上限: "
-                f"pending_turn_id={normalized_pending_turn_id}, max_attempts={max_attempts}"
+        # 用 BEGIN IMMEDIATE 序列化 UPDATE / DELETE / re-read，避免并发下
+        # "UPDATE 胜出方读到记录已被 DELETE 分支抹掉" 的竞态。
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = conn.execute(
+                """
+                UPDATE pending_conversation_turns
+                SET resume_attempt_count = resume_attempt_count + 1,
+                    last_resume_error_message = NULL,
+                    updated_at = ?
+                WHERE pending_turn_id = ?
+                  AND resume_attempt_count < ?
+                """,
+                (_serialize_dt(_now_utc()), normalized_pending_turn_id, max_attempts),
             )
-        updated = self.get_pending_turn(normalized_pending_turn_id)
-        if updated is None:
+            if cursor.rowcount == 0:
+                row = conn.execute(
+                    "SELECT * FROM pending_conversation_turns WHERE pending_turn_id = ?",
+                    (normalized_pending_turn_id,),
+                ).fetchone()
+                if row is None:
+                    conn.commit()
+                    raise KeyError(f"pending turn 不存在: {normalized_pending_turn_id}")
+                existing_session_id = row["session_id"]
+                # 已达上限：原子删除本记录，防止超限 pending turn 卡死 session/scene。
+                conn.execute(
+                    "DELETE FROM pending_conversation_turns WHERE pending_turn_id = ?",
+                    (normalized_pending_turn_id,),
+                )
+                conn.commit()
+                Log.warn(
+                    "pending turn 恢复次数已达到上限，已原子删除: "
+                    f"pending_turn_id={normalized_pending_turn_id}, "
+                    f"session_id={existing_session_id}, "
+                    f"max_attempts={max_attempts}",
+                    module=MODULE,
+                )
+                raise ValueError(
+                    "pending turn 恢复次数已达到上限，已删除: "
+                    f"pending_turn_id={normalized_pending_turn_id}, max_attempts={max_attempts}"
+                )
+            row = conn.execute(
+                "SELECT * FROM pending_conversation_turns WHERE pending_turn_id = ?",
+                (normalized_pending_turn_id,),
+            ).fetchone()
+            conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+        if row is None:
             raise RuntimeError(f"pending turn 更新后读取失败: {normalized_pending_turn_id}")
-        return updated
+        return _row_to_pending_turn(dict(row))
 
     def record_resume_failure(
         self,

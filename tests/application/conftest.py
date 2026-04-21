@@ -193,6 +193,27 @@ class StubRunRegistry:
         )
         return self._runs[run_id]
 
+    def mark_unsettled(self, run_id: str, *, error_summary: str | None = None) -> RunRecord:
+        """标记 UNSETTLED（测试桩同 fail_run 模型）。"""
+        record = self._runs[run_id]
+        self._runs[run_id] = RunRecord(
+            run_id=record.run_id,
+            session_id=record.session_id,
+            service_type=record.service_type,
+            scene_name=record.scene_name,
+            state=RunState.UNSETTLED,
+            created_at=record.created_at,
+            started_at=record.started_at,
+            completed_at=datetime.now(timezone.utc),
+            error_summary=error_summary,
+            cancel_requested_at=record.cancel_requested_at,
+            cancel_requested_reason=record.cancel_requested_reason,
+            cancel_reason=None,
+            owner_pid=record.owner_pid,
+            metadata=record.metadata,
+        )
+        return self._runs[run_id]
+
     def mark_cancelled(
         self,
         run_id: str,
@@ -283,6 +304,15 @@ class StubRunRegistry:
         """列出活跃 run。"""
 
         return [run for run in self._runs.values() if run.state in {RunState.CREATED, RunState.QUEUED, RunState.RUNNING}]
+
+    def list_active_runs_for_owner(self, owner_pid: int) -> list[RunRecord]:
+        """按 owner_pid 过滤活跃 run。"""
+
+        return [
+            run for run in self._runs.values()
+            if run.state in {RunState.CREATED, RunState.QUEUED, RunState.RUNNING}
+            and run.owner_pid == int(owner_pid)
+        ]
 
     def cleanup_orphan_runs(self) -> list[str]:
         """测试桩不做 orphan 清理。"""
