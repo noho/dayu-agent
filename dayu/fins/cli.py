@@ -122,6 +122,7 @@ MODULE = "FINS.CLI"
 _TICKER_CSV_COMMANDS = frozenset({"download", "upload_filing", "upload_material", "upload_filings_from"})
 _UPLOAD_SCRIPT_UNIX_PASSTHROUGH_ARGS = '"$@"'
 _UPLOAD_SCRIPT_WINDOWS_PASSTHROUGH_ARGS = "%*"
+_UPLOAD_SCRIPT_CLI_PREFIX = ("python", "-m", "dayu.cli")
 
 
 @dataclass(frozen=True)
@@ -1634,7 +1635,7 @@ def _build_upload_filings_from_regenerate_command(
     """
 
     parts = [
-        "dayu-cli",
+        *_UPLOAD_SCRIPT_CLI_PREFIX,
         "upload_filings_from",
         "--ticker",
         str(getattr(args, "original_ticker", args.ticker)),
@@ -1707,7 +1708,7 @@ def _build_upload_material_command(
     """
 
     parts = [
-        "dayu-cli",
+        *_UPLOAD_SCRIPT_CLI_PREFIX,
         "upload_material",
         "--base",
         str(base_dir),
@@ -1774,7 +1775,7 @@ def _build_upload_filing_command(
     """
 
     parts = [
-        "dayu-cli",
+        *_UPLOAD_SCRIPT_CLI_PREFIX,
         "upload_filing",
         "--base",
         str(base_dir),

@@ -409,11 +409,8 @@ git push lan main
 #### 7.1 `macos-arm64`（当前本机）
 
 ```bash
-source .venv/bin/activate
-python -m pip install --upgrade pip build
-rm -rf dist build
-python -m build --wheel
-python utils/build_offline_bundle.py \
+source .venv/bin/activate && python -m pip install --upgrade pip build
+rm -rf dist build && python -m build --wheel && python utils/build_offline_bundle.py \
   --wheel "$(ls dist/dayu_agent-*.whl | tail -n1)" \
   --constraints constraints/lock-macos-arm64-py311.txt \
   --platform-id macos-arm64 \
@@ -427,11 +424,8 @@ python utils/smoke_test_offline_bundle.py \
 在 Intel macOS 宿主机上执行与上面相同的流程，只把 constraints 和平台标识换掉：
 
 ```bash
-source .venv/bin/activate
-python -m pip install --upgrade pip build
-rm -rf dist build
-python -m build --wheel
-python utils/build_offline_bundle.py \
+source .venv/bin/activate && python -m pip install --upgrade pip build
+rm -rf dist build && python -m build --wheel && python utils/build_offline_bundle.py \
   --wheel "$(ls dist/dayu_agent-*.whl | tail -n1)" \
   --constraints constraints/lock-macos-x64-py311.txt \
   --platform-id macos-x64 \
@@ -482,9 +476,7 @@ docker run --rm -it \
 容器内执行：
 
 ```bash
-rm -rf dist build
-python -m build --wheel
-python utils/build_offline_bundle.py \
+rm -rf dist build && python -m build --wheel && python utils/build_offline_bundle.py \
   --wheel "$(ls dist/dayu_agent-*.whl | tail -n1)" \
   --constraints constraints/lock-linux-x64-py311.txt \
   --platform-id linux-x64 \

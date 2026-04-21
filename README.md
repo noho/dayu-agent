@@ -432,7 +432,7 @@ dayu-cli upload_material \
 - `upload_filings_from` 未传 `--output` 时，默认把脚本写到 `--base` 指向的 workspace 根目录，文件名为 `upload_filings_{ticker}.sh` / `.cmd`。
 - `upload_filings_from --infer` 只会在脚本生成阶段调用一次 FMP，并把“显式 CSV alias + infer alias”的合并结果，以及最终公司名直接 bake 到脚本正文；脚本头部的重生成命令仍会保留原始 `--ticker` 输入和 `--infer`。
 - 使用 `--infer` 功能需要申请FMP_API_KEY。
-- 生成脚本头部会附带一条注释形式的 `dayu-cli upload_filings_from ...` 重跑命令，后续有新文件时可直接复制粘贴再次生成。
+- 生成脚本头部会附带一条注释形式的 `python -m dayu.cli upload_filings_from ...` 重跑命令；脚本正文里的批量上传命令也统一使用 `python -m dayu.cli`，这样在源码工作区里执行时不会依赖外部 `dayu-cli` entrypoint。
 - 生成脚本中的每条上传命令都会透传脚本调用时的额外参数；macOS / Linux 使用 `"$@"`，Windows 使用 `%*`，因此可直接执行 `./upload_filings_xxx.sh --overwrite` 之类的批量覆盖调用。
 - `upload_filing` 和 `upload_material` 在首次实际写入时会自动创建 `workspace/portfolio/{ticker}` 下的源文档目录；`upload_filings_from` 只生成批量上传脚本，不直接写入源文档。
 
