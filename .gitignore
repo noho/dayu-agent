@@ -12,6 +12,7 @@ __pycache__/
 build/
 dist/
 .venv/
+.venv
 .obsidian/
 .claude/
 CLAUDE.md
@@ -23,3 +24,4 @@ htmlcov/
 .ruff_cache/
 .vscode/*
 .playwright-mcp/
+uv.lock

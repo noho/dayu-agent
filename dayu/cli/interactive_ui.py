@@ -527,7 +527,10 @@ def interactive(
     )
 
     while True:
-        user_input = session.prompt(">>> ")
+        try:
+            user_input = session.prompt(">>> ")
+        except EOFError:
+            break
         if user_input is None:
             consecutive_eof += 1
             if consecutive_eof >= 2:

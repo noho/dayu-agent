@@ -3,6 +3,7 @@
 该模块只负责 interactive UI 自己拥有的会话绑定状态：
 
 - `interactive_key`：仅 interactive UI 自己理解的稳定键
+- `session_id`：可选的显式 Host session 绑定
 - `scene_name`：固定为 `interactive`
 
 模块不理解 Host Session 生命周期，也不负责业务决策。
@@ -59,7 +60,28 @@ class InteractiveSessionState:
     """interactive UI 当前绑定状态。"""
 
     interactive_key: str
+    session_id: str | None = None
     scene_name: Literal["interactive"] = "interactive"
+
+
+def resolve_interactive_session_id(state: InteractiveSessionState) -> str:
+    """解析 interactive 状态绑定的 Host session_id。
+
+    Args:
+        state: interactive UI 当前绑定状态。
+
+    Returns:
+        绑定的 Host session_id。若状态没有显式 session_id，则由
+        ``interactive_key`` 生成确定性 session_id。
+
+    Raises:
+        ValueError: 当显式 session_id 与 interactive_key 均不可用时抛出。
+    """
+
+    explicit_session_id = str(state.session_id or "").strip()
+    if explicit_session_id:
+        return explicit_session_id
+    return build_interactive_session_id(state.interactive_key)
 
 
 class FileInteractiveStateStore:
@@ -106,6 +128,7 @@ class FileInteractiveStateStore:
         if not isinstance(raw, dict):
             raise ValueError("interactive 状态文件必须是 JSON 对象")
         interactive_key = str(raw.get("interactive_key") or "").strip()
+        session_id = str(raw.get("session_id") or "").strip() or None
         scene_name = str(raw.get("scene_name") or "").strip() or "interactive"
         if not interactive_key:
             raise ValueError("interactive 状态缺少 interactive_key")
@@ -113,6 +136,7 @@ class FileInteractiveStateStore:
             raise ValueError("interactive 状态的 scene_name 必须为 interactive")
         return InteractiveSessionState(
             interactive_key=interactive_key,
+            session_id=session_id,
             scene_name="interactive",
         )
 
@@ -157,4 +181,5 @@ __all__ = [
     "InteractiveSessionState",
     "build_interactive_key",
     "build_interactive_session_id",
+    "resolve_interactive_session_id",
 ]

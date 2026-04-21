@@ -17,11 +17,16 @@ from dayu.host.protocols import EventSubscription, HostAdminOperationsProtocol
 from dayu.services.contracts import (
     HostCleanupResult,
     HostStatusView,
+    InteractiveSessionAdminView,
+    InteractiveSessionTurnView,
     LaneStatusView,
     RunAdminView,
     SessionAdminView,
 )
 from dayu.services.protocols import HostAdminServiceProtocol
+
+
+_INTERACTIVE_SCENE_NAME = "interactive"
 
 
 def _parse_session_state(state: str | None) -> SessionState | None:
@@ -102,6 +107,75 @@ def _to_session_view(record: SessionRecord) -> SessionAdminView:
             if last_activity_at is not None
             else str(last_activity_at)
         ),
+    )
+
+
+def _to_interactive_session_view(
+    record: SessionRecord,
+    *,
+    turn_count: int,
+    first_question_preview: str,
+    last_question_preview: str,
+    conversation_summary: str,
+) -> InteractiveSessionAdminView:
+    """把 Host 会话与 conversation 摘要转换为 interactive 管理视图。
+
+    Args:
+        record: Host 会话记录。
+        turn_count: 已持久化的 conversation turn 数量。
+        first_question_preview: 第一轮问题预览。
+        last_question_preview: 最后一轮问题预览。
+        conversation_summary: 会话概览。
+
+    Returns:
+        interactive 会话管理视图。
+
+    Raises:
+        无。
+    """
+
+    created_at = record.created_at
+    last_activity_at = record.last_activity_at
+    return InteractiveSessionAdminView(
+        session_id=record.session_id,
+        state=record.state.value,
+        created_at=created_at.isoformat() if created_at is not None else str(created_at),
+        last_activity_at=(
+            last_activity_at.isoformat()
+            if last_activity_at is not None
+            else str(last_activity_at)
+        ),
+        turn_count=turn_count,
+        first_question_preview=first_question_preview,
+        last_question_preview=last_question_preview,
+        conversation_summary=conversation_summary,
+    )
+
+
+def _to_interactive_turn_view(
+    *,
+    user_text: str,
+    assistant_text: str,
+    created_at: str,
+) -> InteractiveSessionTurnView:
+    """把 Host conversation 单轮摘录转换为 interactive 管理视图。
+
+    Args:
+        user_text: 用户输入文本。
+        assistant_text: 助手最终回答文本。
+        created_at: 该轮创建时间。
+
+    Returns:
+        interactive 单轮对话视图。
+
+    Raises:
+        无。
+    """
+
+    return InteractiveSessionTurnView(
+        user_text=user_text,
+        assistant_text=assistant_text,
+        created_at=created_at,
     )
 
 
@@ -213,6 +287,74 @@ class HostAdminService(HostAdminServiceProtocol):
 
         parsed_state = _parse_session_state(state)
         return [_to_session_view(record) for record in self.host.list_sessions(state=parsed_state)]
+
+    def list_interactive_sessions(self, *, state: str | None = None) -> list[InteractiveSessionAdminView]:
+        """列出 interactive 会话摘要。
+
+        Args:
+            state: 可选状态过滤。
+
+        Returns:
+            interactive 会话摘要视图列表。
+
+        Raises:
+            ValueError: 状态值非法时抛出。
+        """
+
+        parsed_state = _parse_session_state(state)
+        records = self.host.list_sessions(state=parsed_state)
+        views: list[InteractiveSessionAdminView] = []
+        for record in records:
+            if record.source != SessionSource.CLI or record.scene_name != _INTERACTIVE_SCENE_NAME:
+                continue
+            digest = self.host.get_conversation_session_digest(record.session_id)
+            views.append(
+                _to_interactive_session_view(
+                    record,
+                    turn_count=digest.turn_count,
+                    first_question_preview=digest.first_question_preview,
+                    last_question_preview=digest.last_question_preview,
+                    conversation_summary=digest.conversation_summary,
+                )
+            )
+        return views
+
+    def list_interactive_session_recent_turns(
+        self,
+        session_id: str,
+        *,
+        limit: int = 1,
+    ) -> list[InteractiveSessionTurnView]:
+        """列出 interactive 会话最近对话轮次。
+
+        Args:
+            session_id: 会话 ID。
+            limit: 最多返回的轮次数量。
+
+        Returns:
+            最近对话轮次，按时间从旧到新排列。
+
+        Raises:
+            无。
+        """
+
+        record = self.host.get_session(session_id)
+        if (
+            record is None
+            or record.source != SessionSource.CLI
+            or record.scene_name != _INTERACTIVE_SCENE_NAME
+            or record.state != SessionState.ACTIVE
+        ):
+            return []
+        excerpts = self.host.list_conversation_session_turn_excerpts(session_id, limit=limit)
+        return [
+            _to_interactive_turn_view(
+                user_text=excerpt.user_text,
+                assistant_text=excerpt.assistant_text,
+                created_at=excerpt.created_at,
+            )
+            for excerpt in excerpts
+        ]
 
     def get_session(self, session_id: str) -> SessionAdminView | None:
         """获取单个宿主会话。

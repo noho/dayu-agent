@@ -17,7 +17,7 @@ from dayu.cli.interactive_state import (
     FileInteractiveStateStore,
     InteractiveSessionState,
     build_interactive_key,
-    build_interactive_session_id,
+    resolve_interactive_session_id as resolve_interactive_state_session_id,
 )
 from dayu.contracts.infrastructure import ConfigLoaderProtocol, PromptAssetStoreProtocol
 from dayu.contracts.session import SessionSource
@@ -261,7 +261,7 @@ def _purge_old_interactive_session(
         pass
     if old_state is None:
         return
-    old_session_id = build_interactive_session_id(old_state.interactive_key)
+    old_session_id = resolve_interactive_state_session_id(old_state)
     host_db_path = build_host_store_default_path(workspace_dir)
 
     from dayu.host.host_cleanup import purge_sessions_from_host_db
@@ -303,7 +303,33 @@ def _resolve_interactive_session_id(workspace_dir: Path, *, new_session: bool) -
     if state is None:
         state = InteractiveSessionState(interactive_key=build_interactive_key())
         store.save(state)
-    return build_interactive_session_id(state.interactive_key)
+    return resolve_interactive_state_session_id(state)
+
+
+def _bind_interactive_session_id(workspace_dir: Path, session_id: str) -> str:
+    """把 interactive 本地绑定切换到指定 Host session。
+
+    Args:
+        workspace_dir: 工作区根目录。
+        session_id: 目标 Host session ID。
+
+    Returns:
+        已绑定的 Host session ID。
+
+    Raises:
+        ValueError: 当 `session_id` 为空时抛出。
+    """
+
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_session_id:
+        raise ValueError("session_id 不能为空")
+    store = _build_interactive_state_store(workspace_dir)
+    state = InteractiveSessionState(
+        interactive_key=build_interactive_key(),
+        session_id=normalized_session_id,
+    )
+    store.save(state)
+    return normalized_session_id
 
 
 def setup_paths(args: argparse.Namespace) -> WorkspaceConfig:

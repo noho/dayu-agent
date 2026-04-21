@@ -1251,13 +1251,17 @@ Host Session
 
 `dayu.cli interactive` 是当前最能体现四层协同方式的一条路径。
 
-当前实现里，interactive UI 会把自己拥有的 `interactive_key` 持久化在
-`<workspace>/.dayu/interactive/state.json`，并在每次启动时把它确定性映射为
-`session_id`。因此：
+当前实现里，interactive UI 会把本地会话绑定持久化在
+`<workspace>/.dayu/interactive/state.json`。默认路径只保存 UI 自己拥有的
+`interactive_key`，并在每次启动时把它确定性映射为 `session_id`；显式传
+`--session-id` 时，UI 会先通过宿主管理服务校验该 session，再把显式
+`session_id` 写入同一个本地绑定文件。因此：
 
 - 默认重启 interactive 会续接上一条多轮会话。
 - 显式传 `--new-session` 时，UI 会删除旧绑定并生成新的 `interactive_key`。
-- Host 不负责决定“上一次 interactive 是哪个 session”，它只接收 UI 传入的确定性 `session_id`。
+- 显式传 `--session-id` 时，UI 只接受仍处于 active 状态、来源为 CLI、scene 为 `interactive` 的 Host session，并把它绑定为后续默认 interactive session；进入 REPL 前，CLI 会通过 `HostAdminService` 读取最近一轮 conversation 摘录并打印恢复分隔提示。
+- `dayu-cli sessions --interactive` 通过 `HostAdminService` 列出历史 interactive session，并从 Host conversation transcript 读取 turn 数、首个问题预览、最后问题预览和当前 summary 字段；CLI 当前只展示单列 `OVERVIEW`，按 `summary -> 首个问题 -> 最后问题` 的优先级选择文本。
+- Host 不负责决定“上一次 interactive 是哪个 session”，它只接收 UI 已解析并校验过的 `session_id`。
 - CLI / WeChat 在完成 Host runtime 装配后，会先统一执行一次 Host-owned 启动恢复：清理 orphan run 与 stale permit；interactive 进入 REPL 前只负责恢复上一轮 pending turn，本身不再直接持有宿主管理依赖。
 - CLI interactive 与 WeChat daemon 都按各自 `state_dir` 持有单实例锁，避免同一 workspace / label 下两个前台进程并发共享本地状态目录。
 - WeChat daemon 的自动恢复还会额外绑定当前 `state_dir` 派生的 runtime identity，避免不同 daemon 实例在相同 `scene=wechat` 下串恢复彼此的 pending turn；同时同一个 `state_dir` 只允许一个 daemon 持锁运行，只有在单实例前提下，daemon 才会把上一进程遗留的 `delivery_in_progress` reply outbox 记录回收为可重试状态，再进入 pending turn 恢复 / 补发 / 长轮询主循环。
@@ -1267,6 +1271,7 @@ Host Session
 sequenceDiagram
     participant UI as CLI interactive
     participant Startup as startup/*
+    participant Admin as HostAdminService
     participant Service as ChatService
     participant Contract as Contract preparation
     participant Host as Host
@@ -1276,6 +1281,11 @@ sequenceDiagram
     UI->>Startup: resolve_startup_paths / ConfigLoader / prepare_host_runtime_dependencies(...)
     Startup-->>UI: workspace/model/runtime/default execution options/Host 稳定依赖
     UI->>Service: new ChatService(host, scene_execution_acceptance_preparer, ...)
+    opt 显式 --session-id
+      UI->>Admin: get_session(session_id)
+      Admin->>Host: get_session(session_id)
+      UI->>UI: 校验并更新 interactive 本地绑定
+    end
     UI->>Service: list_resumable_pending_turns(session_id, "interactive")
     Service->>Host: list_pending_turns(resumable_only=True)
     alt 存在可恢复 pending turn

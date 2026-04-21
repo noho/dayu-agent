@@ -11,8 +11,10 @@ from dataclasses import dataclass
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+import unicodedata
 from typing import Protocol
 
+from dayu.host.conversation_store import FileConversationStore
 from dayu.host import Host, resolve_host_config
 from dayu.services.host_admin_service import HostAdminService
 from dayu.services.protocols import HostAdminServiceProtocol
@@ -21,6 +23,17 @@ from dayu.startup.config_file_resolver import ConfigFileResolver
 from dayu.startup.config_loader import ConfigLoader
 from dayu.startup.paths import StartupPaths
 from dayu.startup.paths import resolve_startup_paths
+from dayu.workspace_paths import build_conversation_store_dir
+
+
+_SESSION_ID_COLUMN_WIDTH = 36
+_SESSION_SOURCE_COLUMN_WIDTH = 10
+_SESSION_STATE_COLUMN_WIDTH = 10
+_SESSION_DATETIME_COLUMN_WIDTH = 20
+_INTERACTIVE_TURNS_COLUMN_WIDTH = 5
+_INTERACTIVE_OVERVIEW_COLUMN_WIDTH = 48
+_TABLE_TRUNCATION_SUFFIX = "..."
+_WIDE_EAST_ASIAN_WIDTHS = frozenset(("F", "W"))
 
 
 @dataclass(frozen=True)
@@ -99,6 +112,7 @@ def _build_host_runtime(args: argparse.Namespace) -> HostCliRuntime:
         lane_config=host_config.lane_config,
         pending_turn_resume_max_attempts=host_config.pending_turn_resume_max_attempts,
         event_bus=None,
+        conversation_store=FileConversationStore(build_conversation_store_dir(paths.workspace_root)),
     )
     return HostCliRuntime(
         paths=paths,
@@ -151,6 +165,9 @@ def _run_sessions_command(args: argparse.Namespace) -> int:
         print(f"已关闭 session {session_id}，取消了 {len(cancelled_run_ids)} 个活跃 run")
         return 0
 
+    if bool(getattr(args, "interactive", False)):
+        return _run_interactive_sessions_command(args, service)
+
     if args.show_all:
         sessions = service.list_sessions()
     else:
@@ -160,15 +177,159 @@ def _run_sessions_command(args: argparse.Namespace) -> int:
         print("无会话记录")
         return 0
 
-    header = f"{'SESSION_ID':<36} {'SOURCE':<10} {'STATE':<10} {'CREATED':<20} {'LAST_ACTIVITY':<20}"
+    header = (
+        f"{'SESSION_ID':<{_SESSION_ID_COLUMN_WIDTH}} "
+        f"{'SOURCE':<{_SESSION_SOURCE_COLUMN_WIDTH}} "
+        f"{'STATE':<{_SESSION_STATE_COLUMN_WIDTH}} "
+        f"{'CREATED':<{_SESSION_DATETIME_COLUMN_WIDTH}} "
+        f"{'LAST_ACTIVITY':<{_SESSION_DATETIME_COLUMN_WIDTH}}"
+    )
     print(header)
     print("-" * len(header))
     for session in sessions:
         print(
-            f"{session.session_id:<36} {session.source:<10} {session.state:<10} "
-            f"{_format_datetime_iso(session.created_at):<20} {_format_datetime_iso(session.last_activity_at):<20}"
+            f"{session.session_id:<{_SESSION_ID_COLUMN_WIDTH}} "
+            f"{session.source:<{_SESSION_SOURCE_COLUMN_WIDTH}} "
+            f"{session.state:<{_SESSION_STATE_COLUMN_WIDTH}} "
+            f"{_format_datetime_iso(session.created_at):<{_SESSION_DATETIME_COLUMN_WIDTH}} "
+            f"{_format_datetime_iso(session.last_activity_at):<{_SESSION_DATETIME_COLUMN_WIDTH}}"
         )
     return 0
+
+
+def _run_interactive_sessions_command(
+    args: argparse.Namespace,
+    service: HostAdminServiceProtocol,
+) -> int:
+    """执行 interactive 会话列表展示。
+
+    Args:
+        args: 命令行参数。
+        service: 宿主管理服务。
+
+    Returns:
+        退出码。
+
+    Raises:
+        无。
+    """
+
+    sessions = service.list_interactive_sessions(
+        state=None if bool(getattr(args, "show_all", False)) else "active"
+    )
+    if not sessions:
+        print("无 interactive 会话记录")
+        return 0
+    header = (
+        f"{'SESSION_ID':<{_SESSION_ID_COLUMN_WIDTH}} "
+        f"{'STATE':<{_SESSION_STATE_COLUMN_WIDTH}} "
+        f"{'TURNS':>{_INTERACTIVE_TURNS_COLUMN_WIDTH}} "
+        f"{'LAST_ACTIVITY':<{_SESSION_DATETIME_COLUMN_WIDTH}} "
+        f"{_format_table_cell('OVERVIEW', _INTERACTIVE_OVERVIEW_COLUMN_WIDTH)}"
+    )
+    print(header)
+    print("-" * len(header))
+    for session in sessions:
+        overview = _resolve_interactive_session_overview(
+            conversation_summary=session.conversation_summary,
+            first_question_preview=session.first_question_preview,
+            last_question_preview=session.last_question_preview,
+        )
+        print(
+            f"{session.session_id:<{_SESSION_ID_COLUMN_WIDTH}} "
+            f"{session.state:<{_SESSION_STATE_COLUMN_WIDTH}} "
+            f"{session.turn_count:>{_INTERACTIVE_TURNS_COLUMN_WIDTH}} "
+            f"{_format_datetime_iso(session.last_activity_at):<{_SESSION_DATETIME_COLUMN_WIDTH}} "
+            f"{_format_table_cell(overview, _INTERACTIVE_OVERVIEW_COLUMN_WIDTH)}"
+        )
+    return 0
+
+
+def _resolve_interactive_session_overview(
+    *,
+    conversation_summary: str,
+    first_question_preview: str,
+    last_question_preview: str,
+) -> str:
+    """解析 interactive 会话列表中的概览文本。
+
+    Args:
+        conversation_summary: 会话摘要文本。
+        first_question_preview: 首轮用户问题预览。
+        last_question_preview: 最后一轮用户问题预览。
+
+    Returns:
+        用于 CLI 展示的一列概览文本。
+
+    Raises:
+        无。
+    """
+
+    return conversation_summary or first_question_preview or last_question_preview or "-"
+
+
+def _format_table_cell(text: str, width: int) -> str:
+    """按终端显示宽度格式化左对齐表格单元格。
+
+    Args:
+        text: 原始单元格文本。
+        width: 目标显示宽度。
+
+    Returns:
+        已截断并补齐空格的单元格文本。
+
+    Raises:
+        无。
+    """
+
+    truncated = _truncate_to_display_width(text, width)
+    return truncated + (" " * max(width - _display_width(truncated), 0))
+
+
+def _truncate_to_display_width(text: str, width: int) -> str:
+    """按终端显示宽度截断文本。
+
+    Args:
+        text: 原始文本。
+        width: 最大显示宽度。
+
+    Returns:
+        不超过指定显示宽度的文本。
+
+    Raises:
+        无。
+    """
+
+    if _display_width(text) <= width:
+        return text
+
+    suffix_width = _display_width(_TABLE_TRUNCATION_SUFFIX)
+    content_width = max(width - suffix_width, 0)
+    result_chars: list[str] = []
+    used_width = 0
+    for char in text:
+        char_width = _display_width(char)
+        if used_width + char_width > content_width:
+            break
+        result_chars.append(char)
+        used_width += char_width
+    return "".join(result_chars).rstrip() + _TABLE_TRUNCATION_SUFFIX
+
+
+def _display_width(text: str) -> int:
+    """计算文本在等宽终端中的近似显示宽度。
+
+    Args:
+        text: 待计算文本。
+
+    Returns:
+        终端显示宽度。
+
+    Raises:
+        无。
+    """
+
+    return sum(2 if unicodedata.east_asian_width(char) in _WIDE_EAST_ASIAN_WIDTHS else 1 for char in text)
 
 
 def _run_runs_command(args: argparse.Namespace) -> int:

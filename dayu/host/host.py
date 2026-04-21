@@ -16,6 +16,7 @@ from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 from dayu.execution.options import ResolvedExecutionOptions
 from dayu.engine.tool_registry import ToolRegistry
 from dayu.host.concurrency import SQLiteConcurrencyGovernor
+from dayu.host.conversation_store import ConversationStore, FileConversationStore
 from dayu.host.executor import DefaultHostExecutor
 from dayu.host.host_execution import HostExecutorProtocol, HostedRunContext, HostedRunSpec
 from dayu.host.host_store import HostStore
@@ -34,6 +35,8 @@ from dayu.host.reply_outbox_store import InMemoryReplyOutboxStore, SQLiteReplyOu
 from dayu.host.protocols import (
     ConcurrencyGovernorProtocol,
     EventSubscription,
+    ConversationSessionDigest,
+    ConversationSessionTurnExcerpt,
     LaneStatus,
     PendingConversationTurnStoreProtocol,
     PendingTurnSummary,
@@ -46,9 +49,12 @@ from dayu.log import Log
 from dayu.host.run_registry import SQLiteRunRegistry
 from dayu.host.scene_preparer import DefaultScenePreparer
 from dayu.host.session_registry import SQLiteSessionRegistry
+from dayu.workspace_paths import build_conversation_store_dir
 
 
 MODULE = "HOST"
+_CONVERSATION_PREVIEW_MAX_CHARS = 48
+_CONVERSATION_PREVIEW_SUFFIX = "..."
 
 
 TStreamEvent = TypeVar("TStreamEvent", bound=PublishedRunEventProtocol)
@@ -84,6 +90,67 @@ def _to_pending_turn_summary(record: PendingConversationTurn) -> PendingTurnSumm
     )
 
 
+def _build_default_conversation_store(
+    workspace: WorkspaceResourcesProtocol | None,
+) -> ConversationStore | None:
+    """根据工作区构造默认 conversation 存储。
+
+    Args:
+        workspace: Host 运行所需工作区稳定资源。
+
+    Returns:
+        conversation 存储；未提供工作区时返回 ``None``。
+
+    Raises:
+        无。
+    """
+
+    if workspace is None:
+        return None
+    return FileConversationStore(build_conversation_store_dir(workspace.workspace_dir))
+
+
+def _empty_conversation_session_digest() -> ConversationSessionDigest:
+    """构造空 conversation 摘要。
+
+    Args:
+        无。
+
+    Returns:
+        空 conversation 摘要。
+
+    Raises:
+        无。
+    """
+
+    return ConversationSessionDigest(
+        turn_count=0,
+        first_question_preview="",
+        last_question_preview="",
+        conversation_summary="",
+    )
+
+
+def _truncate_conversation_preview(text: str) -> str:
+    """截断 conversation 列表中的问题预览文本。
+
+    Args:
+        text: 原始问题文本。
+
+    Returns:
+        适合 CLI 表格展示的预览文本。
+
+    Raises:
+        无。
+    """
+
+    normalized = " ".join(str(text or "").split())
+    if len(normalized) <= _CONVERSATION_PREVIEW_MAX_CHARS:
+        return normalized
+    content_length = _CONVERSATION_PREVIEW_MAX_CHARS - len(_CONVERSATION_PREVIEW_SUFFIX)
+    return normalized[:content_length].rstrip() + _CONVERSATION_PREVIEW_SUFFIX
+
+
 class Host:
     """Host 聚合根。
 
@@ -107,6 +174,7 @@ class Host:
         concurrency_governor: 显式注入的并发治理器。
         pending_turn_store: 显式注入的 pending turn 仓储。
         reply_outbox_store: 显式注入的 reply outbox 仓储。
+        conversation_store: 显式注入的 conversation transcript 存储。
 
     Returns:
         无。
@@ -131,6 +199,7 @@ class Host:
         concurrency_governor: ConcurrencyGovernorProtocol | None = None,
         pending_turn_store: PendingConversationTurnStoreProtocol | None = None,
         reply_outbox_store: ReplyOutboxStoreProtocol | None = None,
+        conversation_store: ConversationStore | None = None,
     ) -> None:
         """初始化 Host。"""
 
@@ -158,6 +227,7 @@ class Host:
             self._reply_outbox_store = reply_outbox_store or InMemoryReplyOutboxStore()
             self._event_bus = event_bus
             self._pending_turn_resume_max_attempts = pending_turn_resume_max_attempts
+            self._conversation_store = conversation_store or _build_default_conversation_store(workspace)
             return
 
         if host_store_path is None:
@@ -179,6 +249,7 @@ class Host:
         self._reply_outbox_store = reply_outbox_store or default_components._reply_outbox_store
         self._event_bus = event_bus
         self._pending_turn_resume_max_attempts = pending_turn_resume_max_attempts
+        self._conversation_store = conversation_store or _build_default_conversation_store(workspace)
 
     def create_session(
         self,
@@ -299,6 +370,67 @@ class Host:
         """
 
         return self._session_registry.list_sessions(state=state)
+
+    def get_conversation_session_digest(self, session_id: str) -> ConversationSessionDigest:
+        """读取指定 session 的 conversation 摘要。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            conversation 摘要；若 transcript 不存在则返回空摘要。
+
+        Raises:
+            无。
+        """
+
+        if self._conversation_store is None:
+            return _empty_conversation_session_digest()
+        transcript = self._conversation_store.load(session_id)
+        if transcript is None or not transcript.turns:
+            return _empty_conversation_session_digest()
+        first_turn = transcript.turns[0]
+        last_turn = transcript.turns[-1]
+        return ConversationSessionDigest(
+            turn_count=len(transcript.turns),
+            first_question_preview=_truncate_conversation_preview(first_turn.user_text),
+            last_question_preview=_truncate_conversation_preview(last_turn.user_text),
+            conversation_summary="",
+        )
+
+    def list_conversation_session_turn_excerpts(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+    ) -> list[ConversationSessionTurnExcerpt]:
+        """读取指定 session 的最近 conversation 单轮摘录。
+
+        Args:
+            session_id: 目标 session ID。
+            limit: 最多返回的 turn 数量。
+
+        Returns:
+            最近单轮摘录列表，按时间从旧到新排列；若 transcript 不存在则返回空列表。
+
+        Raises:
+            无。
+        """
+
+        if self._conversation_store is None or limit <= 0:
+            return []
+        transcript = self._conversation_store.load(session_id)
+        if transcript is None or not transcript.turns:
+            return []
+        recent_turns = transcript.turns[-limit:]
+        return [
+            ConversationSessionTurnExcerpt(
+                user_text=turn.user_text,
+                assistant_text=turn.assistant_final,
+                created_at=turn.created_at,
+            )
+            for turn in recent_turns
+        ]
 
     def run_operation_stream(
         self,

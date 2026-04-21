@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -15,7 +16,12 @@ from dayu.contracts.run import RunCancelReason, RunRecord, RunState
 from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 from dayu.host.event_bus import AsyncQueueEventBus
 from dayu.host.host import Host
-from dayu.host.protocols import LaneStatus
+from dayu.host.protocols import (
+    ConversationSessionDigest,
+    ConversationSessionTurnExcerpt,
+    HostAdminOperationsProtocol,
+    LaneStatus,
+)
 from dayu.services.contracts import HostCleanupResult
 from dayu.services.host_admin_service import HostAdminService
 from dayu.services.startup_recovery import recover_host_startup_state
@@ -261,6 +267,173 @@ def test_host_admin_service_lists_runs_and_builds_status() -> None:
     assert status.lane_statuses["llm_api"].max_concurrent == 4
     assert cleanup.orphan_run_ids == ("run_orphan_1",)
     assert cleanup.stale_permit_ids == ("permit_1",)
+
+
+@pytest.mark.unit
+def test_host_admin_service_lists_interactive_session_summaries() -> None:
+    """管理服务应只返回 CLI interactive 会话摘要。"""
+
+    now = datetime(2026, 4, 21, 8, 0, tzinfo=timezone.utc)
+
+    class _Host:
+        """测试用最小 Host 管理面。"""
+
+        def list_sessions(self, *, state: SessionState | None = None) -> list[SessionRecord]:
+            """返回多种来源的 session。"""
+
+            records = [
+                SessionRecord(
+                    session_id="interactive_1",
+                    source=SessionSource.CLI,
+                    state=SessionState.ACTIVE,
+                    scene_name="interactive",
+                    created_at=now,
+                    last_activity_at=now,
+                ),
+                SessionRecord(
+                    session_id="prompt_1",
+                    source=SessionSource.CLI,
+                    state=SessionState.ACTIVE,
+                    scene_name="prompt",
+                    created_at=now,
+                    last_activity_at=now,
+                ),
+                SessionRecord(
+                    session_id="wechat_1",
+                    source=SessionSource.WECHAT,
+                    state=SessionState.ACTIVE,
+                    scene_name="interactive",
+                    created_at=now,
+                    last_activity_at=now,
+                ),
+            ]
+            if state is None:
+                return records
+            return [record for record in records if record.state == state]
+
+        def get_conversation_session_digest(self, session_id: str) -> ConversationSessionDigest:
+            """返回指定 session 的 conversation 摘要。"""
+
+            assert session_id == "interactive_1"
+            return ConversationSessionDigest(
+                turn_count=2,
+                first_question_preview="第一问",
+                last_question_preview="最后一问",
+                conversation_summary="",
+            )
+
+    service = HostAdminService(host=cast(HostAdminOperationsProtocol, _Host()))
+
+    sessions = service.list_interactive_sessions(state="active")
+
+    assert [session.session_id for session in sessions] == ["interactive_1"]
+    assert sessions[0].turn_count == 2
+    assert sessions[0].first_question_preview == "第一问"
+    assert sessions[0].last_question_preview == "最后一问"
+
+
+@pytest.mark.unit
+def test_host_admin_service_lists_interactive_recent_turns() -> None:
+    """管理服务应返回 interactive 最近对话轮次。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    class _Host:
+        """测试用最小 Host 管理面。"""
+
+        def get_session(self, session_id: str) -> SessionRecord | None:
+            """返回指定 session。"""
+
+            assert session_id == "interactive_1"
+            now = datetime(2026, 4, 21, 8, 0, tzinfo=timezone.utc)
+            return SessionRecord(
+                session_id="interactive_1",
+                source=SessionSource.CLI,
+                state=SessionState.ACTIVE,
+                scene_name="interactive",
+                created_at=now,
+                last_activity_at=now,
+            )
+
+        def list_conversation_session_turn_excerpts(
+            self,
+            session_id: str,
+            *,
+            limit: int,
+        ) -> list[ConversationSessionTurnExcerpt]:
+            """返回指定 session 的最近 turn 摘录。"""
+
+            assert session_id == "interactive_1"
+            assert limit == 1
+            return [
+                ConversationSessionTurnExcerpt(
+                    user_text="上一轮问题",
+                    assistant_text="上一轮回答",
+                    created_at="2026-04-21T00:01:00+00:00",
+                )
+            ]
+
+    service = HostAdminService(host=cast(HostAdminOperationsProtocol, _Host()))
+
+    turns = service.list_interactive_session_recent_turns("interactive_1", limit=1)
+
+    assert len(turns) == 1
+    assert turns[0].user_text == "上一轮问题"
+    assert turns[0].assistant_text == "上一轮回答"
+
+
+@pytest.mark.unit
+def test_host_admin_service_rejects_non_interactive_recent_turns() -> None:
+    """管理服务不应为非 interactive session 返回对话摘录。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    class _Host:
+        """测试用最小 Host 管理面。"""
+
+        def get_session(self, session_id: str) -> SessionRecord | None:
+            """返回非 interactive session。"""
+
+            assert session_id == "prompt_1"
+            now = datetime(2026, 4, 21, 8, 0, tzinfo=timezone.utc)
+            return SessionRecord(
+                session_id="prompt_1",
+                source=SessionSource.CLI,
+                state=SessionState.ACTIVE,
+                scene_name="prompt",
+                created_at=now,
+                last_activity_at=now,
+            )
+
+        def list_conversation_session_turn_excerpts(
+            self,
+            session_id: str,
+            *,
+            limit: int,
+        ) -> list[ConversationSessionTurnExcerpt]:
+            """非 interactive session 不应触达 Host transcript 摘录。"""
+
+            raise AssertionError("不应读取非 interactive session 的 conversation 摘录")
+
+    service = HostAdminService(host=cast(HostAdminOperationsProtocol, _Host()))
+
+    assert service.list_interactive_session_recent_turns("prompt_1", limit=1) == []
 
 
 @pytest.mark.unit

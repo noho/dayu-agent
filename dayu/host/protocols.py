@@ -567,6 +567,33 @@ class PendingTurnSummary:
     metadata: ExecutionDeliveryContext = field(default_factory=_empty_execution_delivery_context)
 
 
+@dataclass(frozen=True)
+class ConversationSessionDigest:
+    """Host 暴露给管理面的 conversation 摘要。
+
+    该对象只承载可安全展示的 transcript 派生信息，不暴露完整
+    ``ConversationTranscript``，避免 UI 或 Service 直接依赖 Host 内部存储结构。
+    """
+
+    turn_count: int
+    first_question_preview: str
+    last_question_preview: str
+    conversation_summary: str = ""
+
+
+@dataclass(frozen=True)
+class ConversationSessionTurnExcerpt:
+    """Host 暴露给管理面的 conversation 单轮摘录。
+
+    该对象只承载可安全展示的单轮对话文本，不暴露完整
+    ``ConversationTranscript`` 与 derived memory 结构。
+    """
+
+    user_text: str
+    assistant_text: str
+    created_at: str
+
+
 @runtime_checkable
 class SessionOperationsProtocol(Protocol):
     """Service 可见的 Host session 能力协议。"""
@@ -777,8 +804,23 @@ class HostAdminOperationsProtocol(
         """关闭 session 并取消其下所有活跃 run。"""
         ...
 
+    def get_conversation_session_digest(self, session_id: str) -> ConversationSessionDigest:
+        """读取指定 session 的 conversation 摘要。"""
+        ...
+
+    def list_conversation_session_turn_excerpts(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+    ) -> list[ConversationSessionTurnExcerpt]:
+        """读取指定 session 的最近 conversation 单轮摘录。"""
+        ...
+
 
 __all__ = [
+    "ConversationSessionDigest",
+    "ConversationSessionTurnExcerpt",
     "ConversationalExecutionGatewayProtocol",
     "ConcurrencyGovernorProtocol",
     "ConcurrencyPermit",

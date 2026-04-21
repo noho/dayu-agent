@@ -277,6 +277,46 @@ class SessionAdminView:
 
 
 @dataclass(frozen=True)
+class InteractiveSessionAdminView:
+    """宿主管理面的 interactive 会话摘要视图。
+
+    Attributes:
+        session_id: 会话 ID。
+        state: 会话状态。
+        created_at: 创建时间的 ISO 文本。
+        last_activity_at: 最后活跃时间的 ISO 文本。
+        turn_count: 已持久化的 conversation turn 数量。
+        first_question_preview: 第一轮用户问题预览。
+        last_question_preview: 最后一轮用户问题预览。
+        conversation_summary: 会话概览；当前为空，预留给后续一次性摘要。
+    """
+
+    session_id: str
+    state: str
+    created_at: str
+    last_activity_at: str
+    turn_count: int
+    first_question_preview: str
+    last_question_preview: str
+    conversation_summary: str = ""
+
+
+@dataclass(frozen=True)
+class InteractiveSessionTurnView:
+    """宿主管理面的 interactive 单轮对话视图。
+
+    Attributes:
+        user_text: 用户输入文本。
+        assistant_text: 助手最终回答文本。
+        created_at: 该轮对话创建时间的 ISO 文本。
+    """
+
+    user_text: str
+    assistant_text: str
+    created_at: str
+
+
+@dataclass(frozen=True)
 class RunAdminView:
     """宿主管理面的运行视图。
 

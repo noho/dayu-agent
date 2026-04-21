@@ -563,10 +563,17 @@ def _create_parser() -> argparse.ArgumentParser:
         help_text="LLM 配置名称（未传时使用 interactive scene manifest 的 model.default_name）",
     )
     _add_thinking_args(interactive_parser)
-    interactive_parser.add_argument(
+    interactive_session_group = interactive_parser.add_mutually_exclusive_group()
+    interactive_session_group.add_argument(
         "--new-session",
         action="store_true",
         help="删除当前 interactive 会话绑定，并从新会话开始。",
+    )
+    interactive_session_group.add_argument(
+        "--session-id",
+        type=str,
+        default=None,
+        help="恢复并绑定指定的历史 interactive session。",
     )
 
     prompt_parser = subparsers.add_parser("prompt", help="执行单次 prompt 并输出结果")
@@ -661,6 +668,7 @@ def _register_host_subcommands(subparsers: argparse._SubParsersAction[DayuCliArg
     sessions_parser = subparsers.add_parser("sessions", help="管理会话")
     _add_global_args(sessions_parser)
     sessions_parser.add_argument("--all", action="store_true", dest="show_all", help="列出全部会话（含已关闭）")
+    sessions_parser.add_argument("--interactive", action="store_true", help="只列出 interactive 会话并显示摘要")
     sessions_subparsers = sessions_parser.add_subparsers(dest="sessions_action")
     close_parser = sessions_subparsers.add_parser("close", help="关闭会话")
     close_parser.add_argument("session_id", help="要关闭的 session ID")

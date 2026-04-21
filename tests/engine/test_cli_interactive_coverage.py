@@ -17,11 +17,13 @@ from dayu.cli.interactive_state import (
     FileInteractiveStateStore,
     InteractiveSessionState,
     build_interactive_session_id,
+    resolve_interactive_session_id,
 )
 from dayu.cli import main as app_cli_main
 from dayu.cli import interactive_ui as app_interactive
+from dayu.cli.commands import interactive as interactive_command_module
 from dayu.cli.arg_parsing import _create_parser
-from dayu.cli.dependency_setup import setup_loglevel, setup_paths
+from dayu.cli.dependency_setup import _bind_interactive_session_id, setup_loglevel, setup_paths
 from dayu.contracts.events import AppEvent, AppEventType
 from dayu.execution.options import ExecutionOptions
 from dayu.engine.events import EventType, StreamEvent
@@ -34,6 +36,8 @@ from dayu.services.contracts import (
     PromptRequest,
     PromptSubmission,
     SessionResolutionPolicy,
+    SessionAdminView,
+    InteractiveSessionTurnView,
 )
 
 
@@ -179,6 +183,30 @@ def test_interactive_accepts_new_session_flag(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+def test_interactive_accepts_explicit_session_id(tmp_path: Path) -> None:
+    """验证 interactive 子命令支持显式恢复指定 session。"""
+
+    workspace = _build_workspace(tmp_path)
+
+    parsed = _create_parser().parse_args(["interactive", "--base", str(workspace), "--session-id", "interactive_abc"])
+
+    assert parsed.command == "interactive"
+    assert parsed.session_id == "interactive_abc"
+
+
+@pytest.mark.unit
+def test_interactive_session_id_conflicts_with_new_session(tmp_path: Path) -> None:
+    """验证 `--session-id` 与 `--new-session` 互斥。"""
+
+    workspace = _build_workspace(tmp_path)
+
+    with pytest.raises(SystemExit):
+        _create_parser().parse_args(
+            ["interactive", "--base", str(workspace), "--new-session", "--session-id", "interactive_abc"]
+        )
+
+
+@pytest.mark.unit
 def test_interactive_state_store_round_trip_and_clear(tmp_path: Path) -> None:
     """验证 interactive 状态仓储支持读写与清理。"""
 
@@ -190,10 +218,184 @@ def test_interactive_state_store_round_trip_and_clear(tmp_path: Path) -> None:
 
     loaded = store.load()
     assert loaded == state
-    assert build_interactive_session_id(state.interactive_key).startswith("interactive_")
+    assert resolve_interactive_session_id(state) == build_interactive_session_id(state.interactive_key)
 
     store.clear()
     assert store.load() is None
+
+
+@pytest.mark.unit
+def test_interactive_state_store_supports_explicit_session_binding(tmp_path: Path) -> None:
+    """验证 interactive 状态可以绑定指定 Host session。"""
+
+    store = FileInteractiveStateStore(tmp_path / ".dayu" / "interactive")
+    state = InteractiveSessionState(
+        interactive_key="interactive_key_1",
+        session_id="interactive_existing",
+    )
+    store.save(state)
+
+    loaded = store.load()
+
+    assert loaded == state
+    assert loaded is not None
+    assert resolve_interactive_session_id(loaded) == "interactive_existing"
+
+
+@pytest.mark.unit
+def test_bind_interactive_session_id_persists_explicit_binding(tmp_path: Path) -> None:
+    """验证 CLI 装配 helper 会把指定 session 写入 interactive 状态。"""
+
+    workspace = _build_workspace(tmp_path)
+
+    resolved = _bind_interactive_session_id(workspace, "interactive_existing")
+    store = FileInteractiveStateStore(workspace / ".dayu" / "interactive")
+    state = store.load()
+
+    assert resolved == "interactive_existing"
+    assert state is not None
+    assert resolve_interactive_session_id(state) == "interactive_existing"
+
+
+@pytest.mark.unit
+def test_interactive_command_binds_valid_explicit_session(tmp_path: Path) -> None:
+    """验证 interactive 命令会校验并绑定显式 session。"""
+
+    workspace = _build_workspace(tmp_path)
+    session = SessionAdminView(
+        session_id="interactive_existing",
+        source="cli",
+        state="active",
+        scene_name="interactive",
+        created_at="2026-04-21T00:00:00+00:00",
+        last_activity_at="2026-04-21T00:00:00+00:00",
+    )
+    host_admin_service = SimpleNamespace(get_session=lambda _session_id: session)
+
+    resolved = interactive_command_module._resolve_interactive_session_id_from_args(
+        Namespace(session_id="interactive_existing", new_session=False),
+        workspace_dir=workspace,
+        host_admin_service=cast(Any, host_admin_service),
+    )
+    store = FileInteractiveStateStore(workspace / ".dayu" / "interactive")
+    state = store.load()
+
+    assert resolved == "interactive_existing"
+    assert state is not None
+    assert resolve_interactive_session_id(state) == "interactive_existing"
+
+
+@pytest.mark.unit
+def test_interactive_command_rejects_non_interactive_session(tmp_path: Path) -> None:
+    """验证 interactive 命令拒绝绑定非 interactive session。"""
+
+    workspace = _build_workspace(tmp_path)
+    session = SessionAdminView(
+        session_id="prompt_session",
+        source="cli",
+        state="active",
+        scene_name="prompt",
+        created_at="2026-04-21T00:00:00+00:00",
+        last_activity_at="2026-04-21T00:00:00+00:00",
+    )
+    host_admin_service = SimpleNamespace(get_session=lambda _session_id: session)
+
+    resolved = interactive_command_module._resolve_interactive_session_id_from_args(
+        Namespace(session_id="prompt_session", new_session=False),
+        workspace_dir=workspace,
+        host_admin_service=cast(Any, host_admin_service),
+    )
+
+    assert resolved is None
+
+
+@pytest.mark.unit
+def test_interactive_command_prints_restore_context_for_explicit_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """验证显式恢复 session 时会打印上一轮对话提示。
+
+    Args:
+        monkeypatch: pytest monkeypatch 工具。
+        tmp_path: pytest 临时目录。
+        capsys: pytest 输出捕获工具。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    workspace = _build_workspace(tmp_path)
+    session = SessionAdminView(
+        session_id="interactive_existing",
+        source="cli",
+        state="active",
+        scene_name="interactive",
+        created_at="2026-04-21T00:00:00+00:00",
+        last_activity_at="2026-04-21T00:00:00+00:00",
+    )
+    turn = InteractiveSessionTurnView(
+        user_text="上一轮问题",
+        assistant_text="上一轮回答",
+        created_at="2026-04-21T00:01:00+00:00",
+    )
+    host_admin_service = SimpleNamespace(
+        get_session=lambda _session_id: session,
+        list_interactive_session_recent_turns=lambda _session_id, **_kwargs: [turn],
+    )
+    monkeypatch.setattr(interactive_command_module, "setup_loglevel", lambda _args: None)
+    monkeypatch.setattr(
+        interactive_command_module,
+        "setup_paths",
+        lambda _args: SimpleNamespace(workspace_dir=workspace),
+    )
+    monkeypatch.setattr(
+        interactive_command_module,
+        "_build_execution_options",
+        lambda _args: ExecutionOptions(),
+    )
+    monkeypatch.setattr(
+        interactive_command_module,
+        "_prepare_cli_host_dependencies",
+        lambda **_kwargs: (
+            None,
+            None,
+            SimpleNamespace(resolve_scene_model=lambda *_args: {"name": "test-model"}),
+            object(),
+            None,
+        ),
+    )
+    monkeypatch.setattr(interactive_command_module, "_build_chat_service", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        interactive_command_module,
+        "HostAdminService",
+        lambda **_kwargs: host_admin_service,
+    )
+    monkeypatch.setattr(
+        interactive_command_module,
+        "StateDirSingleInstanceLock",
+        lambda **_kwargs: SimpleNamespace(acquire=lambda: None, release=lambda: None),
+    )
+    monkeypatch.setattr(interactive_command_module, "interactive", lambda *_args, **_kwargs: None)
+
+    exit_code = interactive_command_module.run_interactive_command(
+        Namespace(
+            session_id="interactive_existing",
+            new_session=False,
+            thinking=False,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "上一轮对话" in captured.out
+    assert "上一轮问题" in captured.out
+    assert "上一轮回答" in captured.out
+    assert "对话恢复" in captured.out
 
 
 @pytest.mark.unit
@@ -591,9 +793,10 @@ def test_interactive_returns_when_not_tty(monkeypatch: pytest.MonkeyPatch, tmp_p
         AssertionError: 断言失败时抛出。
     """
 
-    agent_session = _build_event_session(
+    fake_session_cls = _build_event_session(
         [StreamEvent(type=EventType.FINAL_ANSWER, data={"content": "ok", "degraded": False}, metadata={})]
-    ).create()
+    )
+    agent_session = fake_session_cls.create()
     errors: list[str] = []
     monkeypatch.setattr(app_interactive.Log, "error", lambda message, module=None: errors.append(message))
     monkeypatch.setattr(app_interactive.sys, "stdin", SimpleNamespace(isatty=lambda: False))
@@ -601,6 +804,90 @@ def test_interactive_returns_when_not_tty(monkeypatch: pytest.MonkeyPatch, tmp_p
     app_interactive.interactive(agent_session, session_id="test-session")
 
     assert any("TTY" in message for message in errors)
+
+
+@pytest.mark.unit
+def test_interactive_exits_cleanly_on_prompt_eof(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """验证 prompt_toolkit 抛出 EOFError 时 interactive 会正常退出。
+
+    Args:
+        monkeypatch: pytest monkeypatch 工具。
+        tmp_path: pytest 临时目录。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    fake_session_cls = _build_event_session(
+        [StreamEvent(type=EventType.FINAL_ANSWER, data={"content": "ok", "degraded": False}, metadata={})]
+    )
+    agent_session = fake_session_cls.create()
+    monkeypatch.setattr(app_interactive.Log, "error", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app_interactive.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+
+    class DummyKeyBindings:
+        """用于替代 prompt_toolkit 的 KeyBindings。"""
+
+        def add(self, *_args: Any, **_kwargs: Any):
+            """返回原函数，模拟 key binding 注册。
+
+            Args:
+                *_args: 位置参数。
+                **_kwargs: 关键字参数。
+
+            Returns:
+                装饰器函数。
+
+            Raises:
+                无。
+            """
+
+            def _decorator(func):
+                return func
+
+            return _decorator
+
+    class DummySession:
+        """用于替代 prompt_toolkit 的 PromptSession。"""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            """初始化测试 PromptSession。
+
+            Args:
+                *args: 位置参数。
+                **kwargs: 关键字参数。
+
+            Returns:
+                无。
+
+            Raises:
+                无。
+            """
+
+        def prompt(self, _text: str) -> str | None:
+            """模拟终端 EOF。
+
+            Args:
+                _text: 提示符文本。
+
+            Returns:
+                不返回。
+
+            Raises:
+                EOFError: 模拟 prompt_toolkit 在 EOF 时抛出的异常。
+            """
+
+            raise EOFError
+
+    monkeypatch.setitem(sys.modules, "prompt_toolkit", SimpleNamespace(PromptSession=DummySession))
+    monkeypatch.setitem(sys.modules, "prompt_toolkit.key_binding", SimpleNamespace(KeyBindings=DummyKeyBindings))
+
+    app_interactive.interactive(agent_session, session_id="test-session")
+
+    assert fake_session_cls.request_log == []
 
 
 @pytest.mark.unit
