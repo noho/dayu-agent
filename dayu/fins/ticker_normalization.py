@@ -65,6 +65,18 @@ _SUFFIX_NO_SEP_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^(.+?)(HKEX|HK|SSE|SH|SS|SZSE|SZ|NASDAQ|NYSE|OQ|PK|US)$"
 )
 _US_SYMBOL_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Z]+(?:[.\-][A-Z0-9]+)?$")
+# 美股 ticker 字面长度上限。
+#
+# 设计意图：防御性输入白名单，**不是**对合法 ticker 的业务约束。
+# - NYSE/NASDAQ/AMEX 当前已上市普通股 ticker 字面长度最长 5 字母（如
+#   ``GOOGL``）；带一级分节的如 ``BRK.B`` 也控制在 5 字符以内。
+# - 上限设置为 8 用于容纳可能的前缀变体（如 OTC 的 ``XXXXY`` Pink Sheet
+#   代码、合并后的临时权证如 ``XXXXW``）并保留少量裕度。
+#
+# 超长输入会直接被 ``_build_us`` 过滤为 ``None``，进入 ``_classify_pure_digits``
+# 之外的市场自适应失败路径，最终由 ``normalize_ticker`` 抛 ``ValueError``。
+# 若后续出现合法 ticker 字面长度超过本上限，应调整本常量并在此同步说明，
+# **不要**绕过该校验。
 _MAX_US_SYMBOL_LENGTH: Final[int] = 8
 
 

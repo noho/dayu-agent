@@ -495,7 +495,7 @@ python utils/smoke_test_offline_bundle.py \
 
 若需额外手工验证，容器内执行：
 ```bash
-pip install -e ".[test,dev,browser]" -c constraints/lock-macos-arm64-py311.txt
+pip install -e ".[test,dev,browser]" -c constraints/lock-linux-x64-py311.txt
 export PATH=$PATH:/tmp/home/.local/bin
 ```
 
