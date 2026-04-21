@@ -160,9 +160,9 @@ def run_process_single_document(
         ValueError: 市场类型非法时抛出。
     """
 
-    profile = normalize_ticker(ticker)
-    if profile.market != "US":
-        raise ValueError(f"SecPipeline 仅支持 US，当前 market={profile.market}")
+    normalized = normalize_ticker(ticker)
+    if normalized.market != "US":
+        raise ValueError(f"SecPipeline 仅支持 US，当前 market={normalized.market}")
     normalized_ticker = host._downloader.normalize_ticker(ticker)
     _raise_if_cancelled(
         host=host,
@@ -319,9 +319,9 @@ async def run_process_stream_impl(
         RuntimeError: 单文档处理失败时向上传递异常并转为 failed 事件。
     """
 
-    profile = normalize_ticker(ticker)
-    if profile.market != "US":
-        raise ValueError(f"SecPipeline 仅支持 US，当前 market={profile.market}")
+    normalized = normalize_ticker(ticker)
+    if normalized.market != "US":
+        raise ValueError(f"SecPipeline 仅支持 US，当前 market={normalized.market}")
     normalized_ticker = host._downloader.normalize_ticker(ticker)
 
     if overwrite and document_ids is None:

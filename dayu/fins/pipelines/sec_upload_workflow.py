@@ -342,9 +342,9 @@ async def run_upload_material_stream(
         RuntimeError: 上传执行失败时抛出。
     """
 
-    profile = normalize_ticker(ticker)
-    if profile.market != "US":
-        raise ValueError(f"SecPipeline 仅支持 US，当前 market={profile.market}")
+    normalized = normalize_ticker(ticker)
+    if normalized.market != "US":
+        raise ValueError(f"SecPipeline 仅支持 US，当前 market={normalized.market}")
     normalized_ticker = host._downloader.normalize_ticker(ticker)
     file_list = files or []
     normalized_fiscal_period = str(fiscal_period or "").strip().upper() or None

@@ -268,9 +268,9 @@ async def run_download_stream_impl(
         RuntimeError: 下载执行失败时抛出。
     """
 
-    profile = normalize_ticker(ticker)
-    if profile.market != "US":
-        raise ValueError(f"SecPipeline 仅支持 US，当前 market={profile.market}")
+    normalized = normalize_ticker(ticker)
+    if normalized.market != "US":
+        raise ValueError(f"SecPipeline 仅支持 US，当前 market={normalized.market}")
     normalized_ticker = host._downloader.normalize_ticker(ticker)
     if rebuild:
         yield DownloadEvent(
@@ -503,7 +503,7 @@ async def run_download_stream_impl(
         action="download",
         ticker=normalized_ticker,
         market_profile={
-            "market": profile.market,
+            "market": normalized.market,
         },
         filters={
             "forms": sorted(form_windows.keys()),

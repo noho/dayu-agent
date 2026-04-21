@@ -68,8 +68,8 @@ def build_ingestion_service_factory(
     def factory(ticker: str) -> FinsIngestionService:
         """按 ticker 创建共享长事务服务。"""
 
-        market_profile = normalize_ticker(ticker)
-        if market_profile.market == "US":
+        normalized_ticker = normalize_ticker(ticker)
+        if normalized_ticker.market == "US":
             pipeline = SecPipeline(
                 workspace_root=workspace_root,
                 company_repository=company_repository,
@@ -80,7 +80,7 @@ def build_ingestion_service_factory(
                 processor_registry=processor_registry,
             )
             return pipeline.ingestion_service
-        if market_profile.market in {"CN", "HK"}:
+        if normalized_ticker.market in {"CN", "HK"}:
             pipeline = CnPipeline(
                 workspace_root=workspace_root,
                 company_repository=company_repository,
@@ -90,7 +90,7 @@ def build_ingestion_service_factory(
                 processor_registry=processor_registry,
             )
             return pipeline.ingestion_service
-        raise ValueError(f"不支持的 market: {market_profile.market}")
+        raise ValueError(f"不支持的 market: {normalized_ticker.market}")
 
     return factory
 

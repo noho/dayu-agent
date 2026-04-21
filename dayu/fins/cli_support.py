@@ -69,8 +69,7 @@ from .pipelines import PipelineProtocol, get_pipeline_from_normalized_ticker
 from .pipelines.download_events import DownloadEvent
 from .pipelines.upload_filing_events import UploadFilingEvent
 from .pipelines.upload_material_events import UploadMaterialEvent
-from dayu.fins.ticker_normalization import normalize_ticker
-from .ticker_normalization import try_normalize_ticker
+from dayu.fins.ticker_normalization import normalize_ticker, try_normalize_ticker
 from .resolver.fmp_company_alias_resolver import (
     FmpAliasInferenceError,
     infer_company_aliases_from_fmp,
