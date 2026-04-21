@@ -70,6 +70,7 @@ from .pipelines.download_events import DownloadEvent
 from .pipelines.upload_filing_events import UploadFilingEvent
 from .pipelines.upload_material_events import UploadMaterialEvent
 from .resolver.market_resolver import MarketResolver
+from .ticker_normalization import try_normalize_ticker
 from .resolver.fmp_company_alias_resolver import (
     FmpAliasInferenceError,
     infer_company_aliases_from_fmp,
@@ -548,6 +549,28 @@ def _normalize_cli_ticker_token(raw_token: str) -> str:
     return compact_token.upper()
 
 
+def _canonicalize_ticker_token(raw_token: str) -> str:
+    """把任意 ticker / alias token 归一到 canonical，失败则回退大写去空白。
+
+    业务动机：meta 中的 ticker alias 要求跨市场归一形态（如 ``9988.HK`` → ``9988``），
+    让工具查询时无论传哪个变形都能命中同一公司。
+
+    Args:
+        raw_token: 原始 token，可能是合法 ticker 变形，也可能是公司名/别名。
+
+    Returns:
+        归一化后的 canonical；无法识别时回退到 ``strip().upper()``。
+
+    Raises:
+        无。
+    """
+
+    token_normalized = try_normalize_ticker(raw_token)
+    if token_normalized is not None:
+        return token_normalized.canonical
+    return _normalize_cli_ticker_token(raw_token)
+
+
 def _merge_ticker_alias_groups(
     *,
     canonical_ticker: str,
@@ -566,13 +589,13 @@ def _merge_ticker_alias_groups(
         ValueError: 规范 ticker 为空时抛出。
     """
 
-    normalized_canonical = _normalize_cli_ticker_token(canonical_ticker)
+    normalized_canonical = _canonicalize_ticker_token(canonical_ticker)
     if not normalized_canonical:
         raise ValueError("ticker 不能为空")
     merged_aliases: list[str] = [normalized_canonical]
     for alias_group in alias_groups:
         for raw_alias in alias_group or []:
-            normalized_alias = _normalize_cli_ticker_token(str(raw_alias))
+            normalized_alias = _canonicalize_ticker_token(str(raw_alias))
             if not normalized_alias or normalized_alias in merged_aliases:
                 continue
             merged_aliases.append(normalized_alias)
@@ -607,7 +630,14 @@ def _parse_ticker_argument(raw_ticker: str) -> _ParsedTickerArgument:
     - 单值：`BABA`
     - CSV：`BABA,9988,9988.HK`
 
-    其中首个 token 永远视为 canonical ticker。
+    语义：**CSV 中每个 token 都走 `try_normalize_ticker` 真源归一化**；归一化成功
+    的 token 取其 canonical，失败的（可能是公司名）回退到 ``strip().upper()``。随
+    后对所有归一化结果统一去重：首个出现的作为 canonical，其余作为显式 alias。
+    保留"公司名当 ticker 传"的既有行为。
+
+    业务动机：CSV 的用途是把同一公司跨市场上市的多个 ticker（例如
+    ``BABA,9988``）整体作为 alias 写入 meta，让工具查询时无论传哪个变形都能命中。
+    因此每个 token 都需要归一化到 canonical，再整体去重。
 
     Args:
         raw_ticker: 原始 `--ticker` 输入。
@@ -622,19 +652,23 @@ def _parse_ticker_argument(raw_ticker: str) -> _ParsedTickerArgument:
     raw_value = str(raw_ticker or "").strip()
     if not raw_value:
         raise ValueError("--ticker 不能为空")
-    raw_tokens = [token for token in raw_value.split(",")]
-    normalized_tokens = [
-        _normalize_cli_ticker_token(token)
-        for token in raw_tokens
-        if _normalize_cli_ticker_token(token)
-    ]
+    raw_tokens = [token.strip() for token in raw_value.split(",") if token.strip()]
+    if not raw_tokens:
+        raise ValueError("--ticker 不能为空")
+
+    normalized_tokens: list[str] = []
+    for token in raw_tokens:
+        candidate = _canonicalize_ticker_token(token)
+        if not candidate or candidate in normalized_tokens:
+            continue
+        normalized_tokens.append(candidate)
+
     if not normalized_tokens:
         raise ValueError("--ticker 不能为空")
+
     canonical_ticker = normalized_tokens[0]
-    explicit_aliases = _merge_ticker_alias_groups(
-        canonical_ticker=canonical_ticker,
-        alias_groups=[normalized_tokens[1:]],
-    )[1:]
+    explicit_aliases = normalized_tokens[1:]
+
     return _ParsedTickerArgument(
         raw_value=raw_value,
         canonical_ticker=canonical_ticker,

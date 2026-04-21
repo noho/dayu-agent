@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 from dayu.fins.domain.document_models import FileObjectMeta, now_iso8601
 from dayu.fins.domain.enums import SourceKind
+from dayu.fins.ticker_normalization import try_normalize_ticker
 
 # -- 文件名常量 --
 _SOURCE_META_FILENAME = "meta.json"
@@ -28,16 +29,22 @@ _REJECTED_FILINGS_DIRNAME = ".rejections"
 def _normalize_ticker(ticker: str) -> str:
     """标准化 ticker。
 
+    优先走 ``try_normalize_ticker`` 真源；识别失败（例如输入是公司名）时回退
+    到 ``strip().upper()``，保留仓储在写入路径上对异常 ticker 的宽容能力。
+
     Args:
         ticker: 原始 ticker。
 
     Returns:
-        标准化后的 ticker（大写、去空白）。
+        标准化后的 ticker。
 
     Raises:
         ValueError: ticker 为空时抛出。
     """
 
+    normalized_source = try_normalize_ticker(ticker)
+    if normalized_source is not None:
+        return normalized_source.canonical
     normalized = ticker.strip().upper()
     if not normalized:
         raise ValueError("ticker 不能为空")

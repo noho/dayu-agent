@@ -439,7 +439,24 @@ python utils/retriage_active_6k_filings.py --base workspace --tickers ALC,ASM,NV
 
 其中第 2 到第 5 步都必须把 `_classify_6k_text()` 当作唯一真源；主文件诊断也只是把同 filing 下各候选 exhibit 重新交给同一真源分类，再报告“当前主文件是否被别的季度 exhibit 支配”，不会额外复制另一套规则。
 
-## 6. 内部分层
+## 6. Ticker 归一化真源
+
+所有 ticker 的归一化都统一收敛到 `dayu/fins/ticker_normalization.py`：
+
+- 公共 API：`normalize_ticker(raw) -> NormalizedTicker`（非法抛 `ValueError`）、`try_normalize_ticker(raw) -> Optional[NormalizedTicker]`（非法返回 `None`）、`ticker_to_company_id(ticker) -> str`。
+- `NormalizedTicker` 包含 `canonical`、`market`、`exchange`、`raw` 四个字段。
+- Canonical 约定：
+  - 港股 4 位补零（`0700`）；港交所新发 5 位代码原样保留（`89988`）；`exchange="HKEX"`、`market="HK"`。
+  - 沪股 6 位裸码，首位 `6`（主板 / 科创板）；`exchange="SSE"`、`market="CN"`。
+  - 深股 6 位裸码，首位 `0` / `3`（主板 / 创业板）；`exchange="SZSE"`、`market="CN"`。
+  - 美股保留原字母（`AAPL` / `BRK.B` / `BF.B`）；`exchange=None`、`market="US"`（当前不区分 NYSE/NASDAQ）。
+- 使用规则：
+  - CLI / service / 仓储 / downloader / pipeline / prompt contribution 一律调用该真源，不再在各自模块重造 normalize 实现。
+  - `FinsToolService._resolve_canonical_ticker` 中真源识别失败时会回退到 `strip().upper()` 作为查询候选，保留"公司名当 ticker 传"的既有行为。
+  - CLI `--ticker` CSV 中**每个 token 都走真源归一化**，再整体去重：首个归一化结果作为 canonical，其余作为显式 alias。业务动机是把同一公司的跨市场 ticker（如 `BABA,9988`）整体作为 alias 写入 meta，让工具查询无论传哪种变形都能命中。
+- `ticker_to_company_id` 当前直接返回 `ticker.canonical`，属"稳定契约、实现可演进"：保留该接口以便后续接入跨市场上市折叠、CIK、统一社会信用代码等更精细的公司主体映射。
+
+## 7. 内部分层
 
 当前更合理的内部理解方式是五层：
 
@@ -520,7 +537,7 @@ python utils/retriage_active_6k_filings.py --base workspace --tickers ALC,ASM,NV
 - `blob` 仓储只负责文件枚举、字节读写与文件对象落盘；凡是需要返回 `Source` 或物化本地路径的流程，必须走 `SourceDocumentRepositoryProtocol`，不能在 blob 仓储协议上临时补 source 能力。
 - Docling 上传链路若需要访问第三方 stub 未声明但运行时存在的字段，必须把适配逻辑收口在 pipeline 单点 helper，不要把第三方具体字段要求向 Tool Service、Processor 或上层调用方扩散。
 
-## 7. 代码阅读顺序
+## 8. 代码阅读顺序
 
 推荐从这里进入：
 

@@ -366,7 +366,8 @@ dayu-cli download --ticker BABA,9988,9988.HK --infer
 
 命令说明：
 - `download` 会根据 `ticker` 自动路由到对应市场。
-- `download`、`upload_filing`、`upload_material`、`upload_filings_from` 的 `--ticker` 支持 CSV（半角逗号分隔）；第一个 token 是 canonical ticker，后续 token 是显式 alias。
+- `download`、`upload_filing`、`upload_material`、`upload_filings_from` 的 `--ticker` 支持 CSV（半角逗号分隔）；CSV 中**每个 token 都会走真源归一化**（如 `9988.HK`→`9988`）后再整体去重。首个归一化结果作为 canonical ticker，其余作为显式 alias 写入 meta，便于工具后续用任意跨市场变形命中同一公司。
+- `--ticker` 支持 `0700.HK` / `HK.00700` / `600519.SH` / `sh600519` / `AAPL.US` 等常见变形，内部统一归一化到裸码（港 4 位补零、沪深 6 位、美股原字母）。公司名仍可作为 ticker 传入，由仓储 alias 查表兜底。
 - 显式传 `--infer` 时，CLI 会把 `--ticker` 里的显式 alias 与 FMP infer 结果合并；`download` 场景下 pipeline 还会继续与 SEC 返回的 alias 合并。
 - 使用 `--infer` 功能需要申请FMP_API_KEY。
 - 首次写入时会自动创建 `workspace/portfolio/{ticker}` 下的源文档目录，不要求你预先手动建好 `filings/`。

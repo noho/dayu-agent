@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from dayu.fins.ticker_normalization import try_normalize_ticker
+
 
 def build_fins_default_subject_contribution(
     *,
@@ -12,6 +14,10 @@ def build_fins_default_subject_contribution(
     company_name: str | None = None,
 ) -> str:
     """构造财报默认分析对象 prompt contribution。
+
+    优先走 ``try_normalize_ticker`` 真源把 ``0700.HK`` / ``600519.SH`` 等变形
+    归一化为 canonical ticker；真源识别失败（例如用户传了公司名字符串）时
+    回退到 ``strip().upper()``，保留 prompt 文本稳定。
 
     Args:
         ticker: 股票代码。
@@ -24,7 +30,11 @@ def build_fins_default_subject_contribution(
         无。
     """
 
-    normalized_ticker = str(ticker or "").strip().upper()
+    normalized_source = try_normalize_ticker(ticker)
+    if normalized_source is not None:
+        normalized_ticker = normalized_source.canonical
+    else:
+        normalized_ticker = str(ticker or "").strip().upper()
     if not normalized_ticker:
         return ""
     normalized_company_name = str(company_name or "").strip()

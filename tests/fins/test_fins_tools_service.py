@@ -3033,20 +3033,20 @@ def test_document_tools_reuse_hk_alias_resolution_across_calls() -> None:
     """验证其余文档读取工具也复用 ticker alias 归一化。"""
 
     class HkAliasRepository(FakeRepository):
-        """返回仓储中实际存在的 5 位港股目录。"""
+        """返回仓储中实际存在的 4 位港股目录。"""
 
         def resolve_existing_ticker(self, candidates: list[str]) -> Optional[str]:
             """返回仓储中的 canonical ticker。"""
 
-            if "09992" in candidates:
-                return "09992"
+            if "9992" in candidates:
+                return "9992"
             return None
 
         def get_company_meta(self, ticker: str) -> CompanyMeta:
             """返回港股公司信息。"""
 
             return CompanyMeta(
-                company_id="09992",
+                company_id="9992",
                 company_name="Pop Mart",
                 ticker=ticker,
                 market="HK",
@@ -3059,8 +3059,8 @@ def test_document_tools_reuse_hk_alias_resolution_across_calls() -> None:
     documents = service.list_documents(ticker="9992.HK")
     sections = service.get_document_sections(ticker="9992.HK", document_id="fil_1")
 
-    assert documents["company"]["ticker"] == "09992"
-    assert sections["ticker"] == "09992"
+    assert documents["company"]["ticker"] == "9992"
+    assert sections["ticker"] == "9992"
 
 
 @pytest.mark.unit

@@ -728,7 +728,7 @@ def test_execute_download_uses_normalized_namespace_values(
     assert captured["pipeline_ticker"] == "BABA"
     assert captured["download_ticker"] == "BABA"
     assert captured["download_form_type"] == "10-K"
-    assert captured["download_ticker_aliases"] == ["BABA", "9988", "9988.HK"]
+    assert captured["download_ticker_aliases"] == ["BABA", "9988"]
     assert isinstance(result.data, DownloadResultData)
     assert result.data.ticker == "BABA"
 
@@ -810,7 +810,7 @@ def test_execute_upload_filing_uses_normalized_namespace_values(
     assert captured["pipeline_ticker"] == "AAPL"
     assert captured["upload_ticker"] == "AAPL"
     assert captured["upload_company_name"] == "Apple Inc."
-    assert captured["upload_ticker_aliases"] == ["AAPL", "AAPL.US"]
+    assert captured["upload_ticker_aliases"] == ["AAPL"]
     assert isinstance(result.data, UploadFilingResultData)
     assert result.data.ticker == "AAPL"
     assert result.data.company_name == "Apple Inc."

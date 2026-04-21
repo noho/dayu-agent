@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from dayu.contracts.env_keys import FMP_API_KEY_ENV
+from dayu.fins.ticker_normalization import try_normalize_ticker
 
 
 @dataclass(frozen=True)
@@ -252,16 +253,23 @@ def _normalize_company_name(company_name: str) -> str:
 def _normalize_ticker_token(raw_token: str) -> str:
     """规范化 ticker token。
 
+    优先走 ``try_normalize_ticker`` 真源，统一识别 ``AAPL.US`` 与 ``AAPL``
+    这类同一 symbol 的不同写法；识别失败时回退到 ``strip().upper()``，保留
+    对非 ticker 输入（如公司名碎片）做最小规范化的能力。
+
     Args:
         raw_token: 原始 ticker token。
 
     Returns:
-        去空白并大写后的 ticker；空输入返回空字符串。
+        canonical ticker 或大写去空白 token；空输入返回空字符串。
 
     Raises:
         无。
     """
 
+    normalized_source = try_normalize_ticker(raw_token)
+    if normalized_source is not None:
+        return normalized_source.canonical
     compact_token = "".join(str(raw_token).strip().split())
     return compact_token.upper()
 

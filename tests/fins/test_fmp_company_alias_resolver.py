@@ -43,7 +43,7 @@ def test_infer_company_aliases_from_fmp_combines_symbol_and_name_results(
 
     assert result.canonical_ticker == "BABA"
     assert result.company_name == "Alibaba Group Holding Limited"
-    assert result.ticker_aliases == ["BABA", "BABAF", "9988.HK", "89988.HK"]
+    assert result.ticker_aliases == ["BABA", "BABAF", "9988", "89988"]
 
 
 def test_infer_company_aliases_from_fmp_uses_first_result_when_no_exact_symbol_match(
@@ -70,7 +70,7 @@ def test_infer_company_aliases_from_fmp_uses_first_result_when_no_exact_symbol_m
     result = module.infer_company_aliases_from_fmp("9988")
 
     assert result.company_name == "Alibaba Group Holding Limited"
-    assert result.ticker_aliases == ["9988", "9988.HK", "89988.HK"]
+    assert result.ticker_aliases == ["9988", "89988"]
 
 
 def test_infer_company_aliases_from_fmp_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

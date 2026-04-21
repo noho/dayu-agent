@@ -72,6 +72,7 @@ from .result_types import (
     XbrlQueryResult,
 )
 from dayu.fins._converters import normalize_optional_text, require_non_empty_text
+from dayu.fins.ticker_normalization import try_normalize_ticker
 from .service_helpers import (
     _collect_parent_titles,
     _normalize_form_type_for_matching,
@@ -100,12 +101,6 @@ from .service_helpers import (
 )
 # 匹配 CJK 统一汉字（基本区 + 扩展A），用于检测查询词是否含中文
 _CN_CHAR_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
-_HK_TICKER_RE = re.compile(r"^(?P<digits>\d{3,5})(?:\.HK|HK)?$")
-_CN_TICKER_SUFFIX_RE = re.compile(r"^(?P<digits>\d{6})\.(?P<exchange>SH|SZ)$")
-_CN_TICKER_PREFIX_RE = re.compile(r"^(?P<exchange>SH|SZ)(?P<digits>\d{6})$")
-_CN_TICKER_DIGITS_RE = re.compile(r"^(?P<digits>\d{6})$")
-
-
 def _any_query_has_chinese(queries: list[str]) -> bool:
     """检测查询列表中是否存在含中文字符的查询词。"""
     return any(_CN_CHAR_RE.search(q) for q in queries)
@@ -120,177 +115,6 @@ _MISSING_TICKER_HINT = (
     "目标：先确认这家公司是否已被当前财报工具收录。允许动作：切到公司或网页来源确认公司标识。"
     "不允许：继续穷举 ticker 变体。下一步：先确认公司标识，再回到财报工具。"
 )
-
-
-def _compact_ticker_text(raw_ticker: str) -> str:
-    """压缩 ticker 文本。
-
-    Args:
-        raw_ticker: 原始 ticker 文本。
-
-    Returns:
-        去除全部空白并转为大写后的 ticker。
-
-    Raises:
-        无。
-    """
-
-    return re.sub(r"\s+", "", raw_ticker).strip().upper()
-
-
-def _append_unique_ticker_candidate(candidates: list[str], candidate: Optional[str]) -> None:
-    """按顺序追加去重后的 ticker 候选。
-
-    Args:
-        candidates: 候选列表。
-        candidate: 待追加 ticker。
-
-    Returns:
-        无。
-
-    Raises:
-        无。
-    """
-
-    normalized_candidate = normalize_optional_text(candidate)
-    if not normalized_candidate:
-        return
-    if normalized_candidate in candidates:
-        return
-    candidates.append(normalized_candidate)
-
-
-def _resolve_cn_exchange(digits: str) -> Optional[str]:
-    """根据 A 股代码推断交易所后缀。
-
-    Args:
-        digits: 6 位数字代码。
-
-    Returns:
-        `SH` / `SZ`；无法稳定推断时返回 `None`。
-
-    Raises:
-        无。
-    """
-
-    if digits.startswith("6"):
-        return "SH"
-    if digits.startswith(("0", "3")):
-        return "SZ"
-    return None
-
-
-def _append_hk_ticker_candidates(candidates: list[str], compact_ticker: str) -> bool:
-    """追加港股 ticker 候选。
-
-    Args:
-        candidates: 待写入候选列表。
-        compact_ticker: 已压缩的 ticker 文本。
-
-    Returns:
-        是否识别为港股数字 ticker。
-
-    Raises:
-        无。
-    """
-
-    match = _HK_TICKER_RE.fullmatch(compact_ticker)
-    if match is None:
-        return False
-
-    digits = match.group("digits")
-    digit_forms = [digits]
-    if len(digits) == 3:
-        digit_forms.append(f"0{digits}")
-        digit_forms.append(f"00{digits}")
-    elif len(digits) == 4:
-        digit_forms.append(f"0{digits}")
-    elif len(digits) == 5 and digits.startswith("0"):
-        digit_forms.append(digits[1:])
-
-    for digit_form in digit_forms:
-        _append_unique_ticker_candidate(candidates, digit_form)
-        _append_unique_ticker_candidate(candidates, f"{digit_form}.HK")
-        _append_unique_ticker_candidate(candidates, f"{digit_form}HK")
-    return True
-
-
-def _append_cn_ticker_candidates(candidates: list[str], compact_ticker: str) -> bool:
-    """追加 A 股 ticker 候选。
-
-    Args:
-        candidates: 待写入候选列表。
-        compact_ticker: 已压缩的 ticker 文本。
-
-    Returns:
-        是否识别为 A 股数字 ticker。
-
-    Raises:
-        无。
-    """
-
-    digits = ""
-    exchange: Optional[str] = None
-
-    suffix_match = _CN_TICKER_SUFFIX_RE.fullmatch(compact_ticker)
-    if suffix_match is not None:
-        digits_group = suffix_match.group("digits")
-        exchange_group = suffix_match.group("exchange")
-        if digits_group is None or exchange_group is None:
-            return False
-        digits = digits_group
-        exchange = exchange_group
-    else:
-        prefix_match = _CN_TICKER_PREFIX_RE.fullmatch(compact_ticker)
-        if prefix_match is not None:
-            digits_match = prefix_match.group("digits")
-            if digits_match is None:
-                return False
-            digits = digits_match
-            exchange = prefix_match.group("exchange")
-        else:
-            digits_match = _CN_TICKER_DIGITS_RE.fullmatch(compact_ticker)
-            if digits_match is None:
-                return False
-            digits_group = digits_match.group("digits")
-            if digits_group is None:
-                return False
-            digits = digits_group
-            exchange = _resolve_cn_exchange(digits)
-
-    _append_unique_ticker_candidate(candidates, digits)
-    if exchange:
-        _append_unique_ticker_candidate(candidates, f"{digits}.{exchange}")
-        _append_unique_ticker_candidate(candidates, f"{exchange}{digits}")
-    return True
-
-
-def _build_ticker_alias_candidates(normalized_ticker: str) -> list[str]:
-    """构建 ticker alias 候选列表。
-
-    该规则仅覆盖：
-    - 港股 3-5 位数字代码及 HK 后缀写法
-    - A 股 6 位数字代码及 SH/SZ 前后缀写法
-    - 其它 ticker 保持原样
-
-    Args:
-        normalized_ticker: 经过必填校验后的 ticker。
-
-    Returns:
-        去重且保序的 ticker 候选列表。
-
-    Raises:
-        无。
-    """
-
-    compact_ticker = _compact_ticker_text(normalized_ticker)
-    candidates: list[str] = []
-    _append_unique_ticker_candidate(candidates, compact_ticker)
-    if _append_hk_ticker_candidates(candidates, compact_ticker):
-        return candidates
-    if _append_cn_ticker_candidates(candidates, compact_ticker):
-        return candidates
-    return candidates
 
 
 class FinsToolService:
@@ -1377,6 +1201,15 @@ class FinsToolService:
     def _resolve_canonical_ticker(self, *, ticker: str, tool_name: str) -> str:
         """将外部 ticker 归一化为可用 ticker。
 
+        解析顺序：
+        1. ``require_non_empty_text`` 拒绝空输入。
+        2. 走 ``try_normalize_ticker`` 真源把 ``0700.HK`` / ``600519.SH`` 等
+           常见变形归一化为 canonical；作为唯一查询候选。
+        3. 若真源识别失败（例如用户传了 ``"Apple Inc."`` 这种公司名），回退到
+           ``strip().upper()`` 作为候选；保留"公司名可当 ticker 传"的既有行为。
+        4. 仓储 ``resolve_existing_ticker`` 在 canonical 未命中时会走公司级
+           ``ticker_aliases`` 索引反查；alias 已全部归一化，无需再构造变体。
+
         Args:
             ticker: 原始 ticker。
             tool_name: 当前调用工具名。
@@ -1398,8 +1231,12 @@ class FinsToolService:
                 "Argument must not be empty",
             ),
         )
-        candidates = _build_ticker_alias_candidates(normalized_ticker)
-        resolved_ticker = self._company_repository.resolve_existing_ticker(candidates)
+        normalized_source = try_normalize_ticker(normalized_ticker)
+        if normalized_source is not None:
+            probe_ticker = normalized_source.canonical
+        else:
+            probe_ticker = normalized_ticker.strip().upper()
+        resolved_ticker = self._company_repository.resolve_existing_ticker([probe_ticker])
         if resolved_ticker is None:
             raise ToolBusinessError(
                 code=ErrorCode.NOT_FOUND.value,
@@ -1409,7 +1246,7 @@ class FinsToolService:
         if resolved_ticker != normalized_ticker:
             Log.debug(
                 f"ticker 已归一化: tool={tool_name} raw={normalized_ticker!r} "
-                f"candidates={candidates!r} canonical={resolved_ticker!r}",
+                f"probe={probe_ticker!r} canonical={resolved_ticker!r}",
                 module=self.MODULE,
             )
         return resolved_ticker

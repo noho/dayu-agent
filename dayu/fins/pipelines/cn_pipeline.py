@@ -25,6 +25,7 @@ from dayu.fins.storage import (
     SourceDocumentRepositoryProtocol,
 )
 from dayu.fins.storage._fs_repository_factory import build_fs_repository_set
+from dayu.fins.ticker_normalization import try_normalize_ticker
 from .download_events import DownloadEvent, DownloadEventType
 from .base import PipelineProtocol
 from .docling_upload_service import (
@@ -1649,6 +1650,9 @@ class CnPipeline(PipelineProtocol):
 def _normalize_ticker(ticker: str) -> str:
     """标准化 ticker。
 
+    代理到 ``dayu.fins.ticker_normalization`` 真源；真源识别失败时
+    回退到 ``strip().upper()``，确保公司名等异常输入仍能触发空值校验。
+
     Args:
         ticker: 原始股票代码。
 
@@ -1659,6 +1663,9 @@ def _normalize_ticker(ticker: str) -> str:
         ValueError: ticker 为空时抛出。
     """
 
+    normalized_source = try_normalize_ticker(ticker)
+    if normalized_source is not None:
+        return normalized_source.canonical
     normalized = ticker.strip().upper()
     if not normalized:
         raise ValueError("ticker 不能为空")

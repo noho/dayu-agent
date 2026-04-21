@@ -71,7 +71,8 @@ def test_merge_ticker_aliases_preserves_group_priority() -> None:
         alias_groups=[["BABA", "9988"], ["9988.HK", "9988", "BABAF"]],
     )
 
-    assert result == ["BABA", "9988", "9988.HK", "BABAF"]
+    # 每个 alias 都走真源归一化后整体去重：`9988.HK` canonical=`9988`，与前者重复。
+    assert result == ["BABA", "9988", "BABAF"]
 
 
 def test_upsert_company_meta_falls_back_to_ticker_name() -> None:

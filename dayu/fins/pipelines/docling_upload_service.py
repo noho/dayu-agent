@@ -33,6 +33,7 @@ from dayu.fins.domain.document_models import (
 )
 from dayu.fins.domain.enums import SourceKind
 from dayu.fins.storage import DocumentBlobRepositoryProtocol, SourceDocumentRepositoryProtocol
+from dayu.fins.ticker_normalization import try_normalize_ticker
 from dayu.log import Log
 
 SUPPORTED_UPLOAD_SUFFIXES = frozenset(
@@ -756,6 +757,9 @@ def _increment_document_version(previous_version: str) -> str:
 def _normalize_ticker(ticker: str) -> str:
     """标准化 ticker。
 
+    代理到 ``dayu.fins.ticker_normalization`` 真源；识别失败时回退到
+    ``strip().upper()`` 以保留空值校验。
+
     Args:
         ticker: 原始 ticker。
 
@@ -766,6 +770,9 @@ def _normalize_ticker(ticker: str) -> str:
         ValueError: ticker 为空时抛出。
     """
 
+    normalized_source = try_normalize_ticker(ticker)
+    if normalized_source is not None:
+        return normalized_source.canonical
     normalized = ticker.strip().upper()
     if not normalized:
         raise ValueError("ticker 不能为空")

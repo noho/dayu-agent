@@ -229,7 +229,7 @@ def test_company_meta_core_private_helpers_cover_cache_meta_scan_and_active_batc
     core.rollback_batch(token)
 
     assert alias_index["APPLE"] == ["AAPL"]
-    assert alias_index["9988.HK"] == ["BABA"]
+    assert alias_index["9988"] == ["BABA"]
     assert cached_meta is not None
     assert cached_meta.company_name == "Apple Inc."
     assert built_alias_index == {"AAPL": ["AAPL"], "APPLE": ["AAPL"]}

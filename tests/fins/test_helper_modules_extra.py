@@ -38,7 +38,7 @@ def test_fmp_alias_helper_functions_cover_normalization_and_selection() -> None:
     assert alias_module._dedupe_ticker_aliases(
         canonical_ticker="BABA",
         raw_aliases=["9988.hk", " BABA ", "9988.HK", ""],
-    ) == ["BABA", "9988.HK"]
+    ) == ["BABA", "9988"]
 
     with pytest.raises(alias_module.FmpAliasInferenceError):
         alias_module._select_symbol_result(results=[], canonical_ticker="BABA")

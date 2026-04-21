@@ -46,6 +46,7 @@ if sys.platform != "win32":
 from dayu.log import Log
 from dayu.fins._converters import normalize_optional_text, optional_int
 from dayu.fins.domain.document_models import FileObjectMeta
+from dayu.fins.ticker_normalization import try_normalize_ticker
 
 SEC_TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik10}.json"
@@ -785,16 +786,23 @@ class SecDownloader:
     def normalize_ticker(self, ticker: str) -> str:
         """标准化 ticker。
 
+        代理到 ``dayu.fins.ticker_normalization`` 真源；识别失败时回退到
+        ``strip().upper()`` 以保留空值校验（保留本方法以便上游 pipeline 通过
+        ``host._downloader.normalize_ticker(...)`` 调用）。
+
         Args:
             ticker: 原始 ticker。
 
         Returns:
-            大写 ticker。
+            canonical 或大写 ticker。
 
         Raises:
             ValueError: ticker 为空时抛出。
         """
 
+        normalized_source = try_normalize_ticker(ticker)
+        if normalized_source is not None:
+            return normalized_source.canonical
         normalized = ticker.strip().upper()
         if not normalized:
             raise ValueError("ticker 不能为空")

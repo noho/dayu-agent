@@ -1460,7 +1460,8 @@ def test_dispatch_download_passes_csv_aliases_to_pipeline() -> None:
     assert result["ticker"] == "BABA"
     assert fake.last_call is not None
     assert fake.last_call[1]["ticker"] == "BABA"
-    assert fake.last_call[1]["ticker_aliases"] == ["BABA", "9988", "9988.HK"]
+    # CSV 每个 token 都归一化后去重：`9988.HK` canonical=`9988` 与前者重复，被去掉。
+    assert fake.last_call[1]["ticker_aliases"] == ["BABA", "9988"]
 
 
 def test_dispatch_download_infer_merges_explicit_and_fmp_aliases(
@@ -1491,7 +1492,8 @@ def test_dispatch_download_infer_merges_explicit_and_fmp_aliases(
     cli._dispatch_action(fake, args)
 
     assert fake.last_call is not None
-    assert fake.last_call[1]["ticker_aliases"] == ["BABA", "9988", "9988.HK", "BABAF"]
+    # CSV token 与 FMP alias 都归一化后整体去重：`9988.HK`→`9988`，`BABAF` 不是合法 ticker 回退大写。
+    assert fake.last_call[1]["ticker_aliases"] == ["BABA", "9988", "BABAF"]
 
 
 def test_dispatch_download_infer_failure_falls_back_to_explicit_aliases(
@@ -1518,7 +1520,7 @@ def test_dispatch_download_infer_failure_falls_back_to_explicit_aliases(
     cli._dispatch_action(fake, args)
 
     assert fake.last_call is not None
-    assert fake.last_call[1]["ticker_aliases"] == ["BABA", "9988", "9988.HK"]
+    assert fake.last_call[1]["ticker_aliases"] == ["BABA", "9988"]
 
 
 def test_dispatch_upload_filing_create_requires_company_meta_when_meta_missing(
@@ -1605,7 +1607,7 @@ def test_dispatch_upload_filing_infer_merges_aliases_and_preserves_explicit_comp
     assert result["ticker"] == "BABA"
     assert result["company_name"] == "阿里巴巴"
     assert fake.last_call is not None
-    assert fake.last_call[1]["ticker_aliases"] == ["BABA", "9988", "BABAF", "9988.HK"]
+    assert fake.last_call[1]["ticker_aliases"] == ["BABA", "9988", "BABAF"]
     assert fake.last_call[1]["company_name"] == "阿里巴巴"
 
 
@@ -1651,7 +1653,7 @@ def test_dispatch_upload_filing_infer_fills_missing_company_name_and_merges_alia
 
     assert result["company_name"] == "Alibaba Group Holding Limited"
     assert fake.last_call is not None
-    assert fake.last_call[1]["ticker_aliases"] == ["BABA", "9988", "BABAF", "9988.HK"]
+    assert fake.last_call[1]["ticker_aliases"] == ["BABA", "9988", "BABAF"]
     assert fake.last_call[1]["company_name"] == "Alibaba Group Holding Limited"
 
 
@@ -1966,12 +1968,12 @@ def test_dispatch_upload_filings_from_infer_bakes_result_into_generated_commands
     result = cli._dispatch_action(FakePipeline(), args)
 
     assert infer_calls == ["BABA"]
-    assert result["generated_ticker_csv"] == "BABA,9988,9988.HK,89988.HK"
+    assert result["generated_ticker_csv"] == "BABA,9988,89988"
     script_text = output_script.read_text(encoding="utf-8")
     assert "# python -m dayu.cli upload_filings_from --ticker BABA,9988" in script_text
     assert "--infer" in script_text
     assert "upload_filing" in script_text
-    assert "--ticker BABA,9988,9988.HK,89988.HK" in script_text
+    assert "--ticker BABA,9988,89988" in script_text
     assert "--company-name '阿里巴巴'" in script_text
     assert script_text.count("--infer") == 1
 
