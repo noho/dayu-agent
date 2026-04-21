@@ -334,32 +334,36 @@
   - 检查 timeout、并发上限、重试预算、tool 调用上限、token 预算、工作目录、网络/文件访问边界等是否由 Host 或 Host public scene preparation 统一落实。
   - 判定标准：资源治理规则散落在 UI / Service / Agent 自行判断，或同一限制存在多个不一致实现 → 报告。
 
-- **5.3 Agent 是否退化为“消息交互执行器”**
+- **5.3 Host状态机是否正确**
+  - 检查turn和outbox的：创建、开始、取消、超时、完成、失败、恢复、孤儿 ，状态转换是否正确。
+  - 特别检查异常情况下状态机处理。
+
+- **5.4 Agent 是否退化为“消息交互执行器”**
   - 检查 Agent 是否只负责在给定输入和约束内进行消息交互、tool 调用编排与结果返回。
   - 重点检查 Agent 是否混入业务受理、执行策略选择、宿主治理、会话管理、恢复策略判断。
   - 判定标准：Agent 代码显式理解业务流程、决定是否接受请求、决定运行时治理规则 → 报告。
 
-- **5.4 Service 是否越过 Host 直接控制 Agent**
+- **5.5 Service 是否越过 Host 直接控制 Agent**
   - 检查 Service 是否通过 Host public contract 发起执行，而不是直接拼装 Agent 输入、直接调用 engine runner、直接操纵 tool loop。
   - 判定标准：Service 绕过 Host 直连 Agent / engine，或直接依赖 Host 内部构件完成执行编排 → 报告。
 
-- **5.5 Host 能力是否对执行形态保持通用**
+- **5.6 Host 能力是否对执行形态保持通用**
   - 检查 Host 的治理能力是否同时适用于普通 Agent、金融专门 Agent、direct operation、复合流水线，而不是把某一具体业务路径硬编码进 Host。
   - 判定标准：Host 中出现仅服务某单一业务场景的专用业务语义分支，导致治理能力无法复用 → 报告。
 
-- **5.6 scene preparation 是否保持机械收敛**
+- **5.7 scene preparation 是否保持机械收敛**
   - 检查 scene preparation / prompting 是否只根据 scene 定义、执行选项和静态策略机械地产生 Agent Input。
   - 判定标准：scene preparation 根据业务语义临场做“该不该查某类金融信息”“该走哪类研究策略”之类判断 → 报告。
 
-- **5.7 失败处理是否由宿主兜底**
+- **5.8 失败处理是否由宿主兜底**
   - 检查 tool 失败、模型异常、取消、中断、投递失败后，最终失败语义、可恢复性、事件记录、外部可见状态是否由 Host 兜底收敛。
   - 判定标准：失败处理依赖 Agent 临场自救才能保持系统一致，或 UI/Service 自行补洞修正 Host 状态 → 报告。
 
-- **5.8 执行契约是否稳定且分层清晰**
+- **5.9 执行契约是否稳定且分层清晰**
   - 检查 Service 输出给 Host 的是稳定 Execution Contract，Host 内部再机械收敛为 Agent Input；不要把两者混成一个跨层万能对象。
   - 判定标准：存在同时承载 UI、Service、Host、Agent 多层对象或语义的 god-bag / god-builder，用于“省事地把所有东西传下去” → 报告。
 
-- **5.9 review 时的判断优先级**
+- **5.10 review 时的判断优先级**
   - 若发现执行问题，优先沿 `UI -> Service -> Contract preparation -> Host -> scene preparation -> Agent` 检查责任归属。
   - 只有在证据直接显示 Agent 本身错误时，才把 root cause 定位到 Agent；禁止因为现象出现在 Agent 输出上，就跳过 Host / Service 直接归因给模型或 prompt。
 

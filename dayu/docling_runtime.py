@@ -264,13 +264,15 @@ def run_docling_pdf_conversion(
         )
     except DoclingRuntimeInitializationError:
         raise
-    except Exception as exc:  # pragma: no cover - 防御性保护
+    except Exception as exc:
         raise DoclingRuntimeInitializationError(f"Docling 转换器初始化失败: {exc}") from exc
+    auto_convert_error: Exception | None = None
     try:
         return convert_operation(converter)
     except Exception as exc:
         if resolved_device_name != _AUTO_DEVICE_NAME:
             raise
+        auto_convert_error = exc
         Log.warn(
             (
                 "Docling auto 设备转换失败，准备回退 CPU 重试一次: "
@@ -288,8 +290,12 @@ def run_docling_pdf_conversion(
         )
     except DoclingRuntimeInitializationError:
         raise
-    except Exception as retry_init_exc:  # pragma: no cover - 防御性保护
+    except Exception as retry_init_exc:
         raise DoclingRuntimeInitializationError(
             f"Docling CPU 回退初始化失败: {retry_init_exc}"
         ) from retry_init_exc
-    return convert_operation(retry_converter)
+    try:
+        return convert_operation(retry_converter)
+    except Exception as retry_exc:
+        # CPU 重试若仍失败，保留第一次 auto 转换失败作为异常因果链，便于排查真实退化路径。
+        raise retry_exc from auto_convert_error

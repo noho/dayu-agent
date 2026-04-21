@@ -286,6 +286,7 @@ class SQLiteRunRegistry(RunRegistryProtocol):
             placeholders = ",".join("?" for _ in active_values)
             orphan_ids: list[str] = []
             for oid in candidate_orphan_ids:
+                # 这里写入的 ORPHAN_RUN_ERROR_SUMMARY 必须与 _transition() 中的修复判定保持同源。
                 cursor = conn.execute(
                     """
                     UPDATE runs SET state = ?, completed_at = ?,

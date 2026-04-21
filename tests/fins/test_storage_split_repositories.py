@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from io import BytesIO
 from pathlib import Path
 
@@ -613,3 +614,119 @@ def test_source_document_repository_directory_and_filing_checks_cover_errors(
     filing_dir.unlink()
     with pytest.raises(FileNotFoundError, match="filing 目录不存在"):
         source_repository.has_filing_xbrl_instance("AAPL", "fil_missing")
+
+
+def test_source_document_repository_reset_source_document_removes_directory_and_manifest_entry(
+    fs_repositories: tuple[
+        FsCompanyMetaRepository,
+        FsSourceDocumentRepository,
+        FsProcessedDocumentRepository,
+        FsDocumentBlobRepository,
+        FsFilingMaintenanceRepository,
+    ],
+) -> None:
+    """验证单文档重置会删除目录并同步清理 manifest 条目。
+
+    Args:
+        fs_repositories: 共享 core 的窄仓储集合。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    _, source_repository, _, _, _ = fs_repositories
+    source_repository.create_source_document(
+        SourceDocumentUpsertRequest(
+            ticker="AAPL",
+            document_id="fil_reset_dir",
+            internal_document_id="reset-dir-1",
+            form_type="10-K",
+            primary_document="main.pdf",
+            meta={},
+        ),
+        source_kind=SourceKind.FILING,
+    )
+    workspace_root = source_repository._repository_set.core.workspace_root
+    document_dir = workspace_root / "portfolio" / "AAPL" / "filings" / "fil_reset_dir"
+
+    source_repository.reset_source_document("AAPL", "fil_reset_dir", SourceKind.FILING)
+
+    assert document_dir.exists() is False
+    assert source_repository.list_source_document_ids("AAPL", SourceKind.FILING) == []
+    with pytest.raises(FileNotFoundError, match="filing"):
+        source_repository.get_source_meta("AAPL", "fil_reset_dir", SourceKind.FILING)
+
+
+def test_source_document_repository_reset_source_document_unlinks_file_target(
+    fs_repositories: tuple[
+        FsCompanyMetaRepository,
+        FsSourceDocumentRepository,
+        FsProcessedDocumentRepository,
+        FsDocumentBlobRepository,
+        FsFilingMaintenanceRepository,
+    ],
+) -> None:
+    """验证单文档重置在目标路径是文件时会直接 unlink 并清理 manifest。
+
+    Args:
+        fs_repositories: 共享 core 的窄仓储集合。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    _, source_repository, _, _, _ = fs_repositories
+    source_repository.create_source_document(
+        SourceDocumentUpsertRequest(
+            ticker="AAPL",
+            document_id="fil_reset_file",
+            internal_document_id="reset-file-1",
+            form_type="10-Q",
+            primary_document="main.pdf",
+            meta={},
+        ),
+        source_kind=SourceKind.FILING,
+    )
+    workspace_root = source_repository._repository_set.core.workspace_root
+    document_path = workspace_root / "portfolio" / "AAPL" / "filings" / "fil_reset_file"
+    shutil.rmtree(document_path)
+    document_path.write_text("not-a-directory", encoding="utf-8")
+
+    source_repository.reset_source_document("AAPL", "fil_reset_file", SourceKind.FILING)
+
+    assert document_path.exists() is False
+    assert source_repository.list_source_document_ids("AAPL", SourceKind.FILING) == []
+
+
+def test_source_document_repository_reset_source_document_tolerates_missing_target(
+    fs_repositories: tuple[
+        FsCompanyMetaRepository,
+        FsSourceDocumentRepository,
+        FsProcessedDocumentRepository,
+        FsDocumentBlobRepository,
+        FsFilingMaintenanceRepository,
+    ],
+) -> None:
+    """验证单文档重置在目录与 manifest 都不存在时保持幂等。
+
+    Args:
+        fs_repositories: 共享 core 的窄仓储集合。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    _, source_repository, _, _, _ = fs_repositories
+
+    source_repository.reset_source_document("AAPL", "fil_missing_reset", SourceKind.FILING)
+
+    assert source_repository.list_source_document_ids("AAPL", SourceKind.FILING) == []
