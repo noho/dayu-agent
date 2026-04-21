@@ -11,8 +11,11 @@ from unittest.mock import patch
 import pytest
 
 from dayu.cli.commands.init import (
+    _CUSTOM_CATALOG_KEY,
+    _CustomOpenAIConfig,
     _HF_MIRROR_URL,
     _INIT_ROLE_KEY,
+    _PROVIDER_OPTION_CUSTOM_OPENAI,
     _PROVIDER_OPTION_DEEPSEEK,
     _PROVIDER_OPTION_MIMO_FLASH,
     _PROVIDER_OPTION_MIMO_PRO,
@@ -25,6 +28,7 @@ from dayu.cli.commands.init import (
     _is_hf_hub_reachable,
     _persist_env_var,
     _prompt_api_key,
+    _prompt_custom_openai_config,
     _prompt_huggingface_config,
     _prompt_optional_search_keys,
     _prompt_provider_selection,
@@ -33,6 +37,7 @@ from dayu.cli.commands.init import (
     _run_init_prewarm,
     _should_run_init_prewarm,
     _update_manifest_default_models,
+    _write_custom_openai_catalog_entries,
     _write_env_to_shell_profile,
     _write_env_windows,
     SEC_USER_AGENT_ENV,
@@ -48,6 +53,7 @@ _PROVIDER_ENV_KEYS: tuple[str, ...] = (
     "ANTHROPIC_API_KEY",
     "GEMINI_API_KEY",
     "QWEN_API_KEY",
+    "CUSTOM_OPENAI_API_KEY",
 )
 
 
@@ -346,6 +352,130 @@ class TestUpdateManifestDefaultModels:
         count = _update_manifest_default_models(tmp_path, "a", "b")
         assert count == 0
 
+    def test_appends_custom_openai_to_allowed_names(self, tmp_path: Path) -> None:
+        """切到 custom-openai 时应把模型名追加到 allowed_names。"""
+        manifests = tmp_path / "prompts" / "manifests"
+        manifests.mkdir(parents=True)
+
+        (manifests / "write.json").write_text(
+            json.dumps({"model": {"default_name": "deepseek-chat", "allowed_names": ["deepseek-chat"]}}),
+            encoding="utf-8",
+        )
+        (manifests / "audit.json").write_text(
+            json.dumps({"model": {"default_name": "deepseek-thinking", "allowed_names": ["deepseek-thinking"]}}),
+            encoding="utf-8",
+        )
+
+        count = _update_manifest_default_models(
+            tmp_path,
+            _CUSTOM_CATALOG_KEY,
+            _CUSTOM_CATALOG_KEY,
+        )
+
+        assert count == 2
+        write_data = json.loads((manifests / "write.json").read_text(encoding="utf-8"))
+        audit_data = json.loads((manifests / "audit.json").read_text(encoding="utf-8"))
+        assert write_data["model"]["allowed_names"] == ["deepseek-chat", _CUSTOM_CATALOG_KEY]
+        assert audit_data["model"]["allowed_names"] == ["deepseek-thinking", _CUSTOM_CATALOG_KEY]
+
+
+class TestPromptCustomOpenAIConfig:
+    """自定义 OpenAI 兼容 API 交互测试。"""
+
+    def test_collects_values_and_normalizes_base_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """正常输入时返回收集结果，并去掉 base URL 末尾斜杠。"""
+        monkeypatch.delenv("CUSTOM_OPENAI_API_KEY", raising=False)
+        inputs = iter(["https://openrouter.ai/api/v1/", "sk-custom", "openai/gpt-4o"])
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+        config = _prompt_custom_openai_config("CUSTOM_OPENAI_API_KEY")
+
+        assert config == _CustomOpenAIConfig(
+            base_url="https://openrouter.ai/api/v1",
+            api_key_value="sk-custom",
+            model_id="openai/gpt-4o",
+        )
+
+    def test_reuses_existing_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """环境变量已存在时复用现有 API Key，不再重复输入。"""
+        monkeypatch.setenv("CUSTOM_OPENAI_API_KEY", "sk-existing-123456")
+        inputs = iter(["https://openrouter.ai/api/v1", "anthropic/claude-sonnet-4"])
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+        config = _prompt_custom_openai_config("CUSTOM_OPENAI_API_KEY")
+
+        assert config.api_key_value == "sk-existing-123456"
+        assert config.model_id == "anthropic/claude-sonnet-4"
+
+    def test_empty_base_url_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Base URL 为空时退出。"""
+        monkeypatch.setattr("builtins.input", lambda *_args: "")
+        with pytest.raises(SystemExit) as exc_info:
+            _prompt_custom_openai_config("CUSTOM_OPENAI_API_KEY")
+        assert exc_info.value.code == 1
+
+    def test_eof_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """EOF 时退出。"""
+        monkeypatch.setattr("builtins.input", lambda *_args: (_ for _ in ()).throw(EOFError))
+        with pytest.raises(SystemExit) as exc_info:
+            _prompt_custom_openai_config("CUSTOM_OPENAI_API_KEY")
+        assert exc_info.value.code == 1
+
+
+class TestWriteCustomOpenAICatalogEntries:
+    """自定义 OpenAI 兼容 catalog 写入测试。"""
+
+    def test_merges_into_existing_catalog(self, tmp_path: Path) -> None:
+        """写入 custom-openai 时保留其他供应商条目。"""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        catalog_path = config_dir / "llm_models.json"
+        catalog_path.write_text(
+            json.dumps(
+                {
+                    "deepseek-chat": {
+                        "runner_type": "openai_compatible",
+                        "name": "deepseek-chat",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        _write_custom_openai_catalog_entries(
+            config_dir,
+            _CustomOpenAIConfig(
+                base_url="https://openrouter.ai/api/v1",
+                api_key_value="sk-custom",
+                model_id="openai/gpt-4o",
+            ),
+            api_key_name="CUSTOM_OPENAI_API_KEY",
+        )
+
+        data = json.loads(catalog_path.read_text(encoding="utf-8"))
+        assert "deepseek-chat" in data
+        assert data[_CUSTOM_CATALOG_KEY]["endpoint_url"] == "https://openrouter.ai/api/v1/chat/completions"
+        assert data[_CUSTOM_CATALOG_KEY]["model"] == "openai/gpt-4o"
+        assert data[_CUSTOM_CATALOG_KEY]["headers"]["Authorization"] == "Bearer {{CUSTOM_OPENAI_API_KEY}}"
+        assert data[_CUSTOM_CATALOG_KEY]["runtime_hints"]["temperature_profiles"]["write"]["temperature"] == 1.0
+
+    def test_invalid_json_raises_value_error(self, tmp_path: Path) -> None:
+        """损坏的 llm_models.json 应抛出用户可理解的 ValueError。"""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "llm_models.json").write_text("{broken json", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="不是合法 JSON"):
+            _write_custom_openai_catalog_entries(
+                config_dir,
+                _CustomOpenAIConfig(
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key_value="sk-custom",
+                    model_id="openai/gpt-4o",
+                ),
+                api_key_name="CUSTOM_OPENAI_API_KEY",
+            )
+
 
 # --------------------------------------------------------------------------- #
 #  run_init_command 集成测试
@@ -489,6 +619,84 @@ class TestRunInit:
         )
         assert result_manifest["model"]["default_name"] == "deepseek-chat"
 
+    def test_custom_openai_flow(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """选择 custom-openai 时应写入 catalog、持久化 key 并更新 manifest。"""
+        src = tmp_path / "pkg_config"
+        src.mkdir()
+        (src / "run.json").write_text("{}", encoding="utf-8")
+        manifests = src / "prompts" / "manifests"
+        manifests.mkdir(parents=True)
+        (manifests / "write.json").write_text(
+            json.dumps({"model": {"default_name": "mimo-v2-pro-plan", "allowed_names": ["mimo-v2-pro-plan"]}}),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(
+            "dayu.cli.commands.init.resolve_package_config_path",
+            lambda: src,
+        )
+
+        pkg_assets = tmp_path / "pkg_assets"
+        pkg_assets.mkdir()
+        (pkg_assets / "定性分析模板.md").write_text("# 模板", encoding="utf-8")
+        monkeypatch.setattr(
+            "dayu.cli.commands.init.resolve_package_assets_path",
+            lambda: pkg_assets,
+        )
+
+        _clear_provider_env_vars(monkeypatch)
+        for key in ("TAVILY_API_KEY", "SERPER_API_KEY", "FMP_API_KEY", "HF_ENDPOINT", "HF_TOKEN"):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.delenv(SEC_USER_AGENT_ENV, raising=False)
+        monkeypatch.setattr("dayu.cli.commands.init._is_hf_hub_reachable", lambda: False)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._run_init_prewarm",
+            lambda **_kwargs: (True, ""),
+        )
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_selection",
+            lambda: _PROVIDER_OPTION_CUSTOM_OPENAI,
+        )
+
+        persist_calls: list[tuple[str, str]] = []
+
+        def _mock_persist(key: str, value: str) -> tuple[str, bool]:
+            persist_calls.append((key, value))
+            return "~/.zshrc", True
+
+        monkeypatch.setattr("dayu.cli.commands.init._persist_env_var", _mock_persist)
+        inputs = iter(
+            [
+                "https://openrouter.ai/api/v1/",
+                "sk-custom-openrouter",
+                "openai/gpt-4o",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ]
+        )
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+        base = tmp_path / "workspace"
+        base.mkdir()
+        args = Namespace(base=str(base), overwrite=False)
+
+        exit_code = run_init_command(args)
+
+        assert exit_code == 0
+        assert persist_calls[0] == ("CUSTOM_OPENAI_API_KEY", "sk-custom-openrouter")
+        result_manifest = json.loads(
+            (base / "config" / "prompts" / "manifests" / "write.json").read_text(encoding="utf-8")
+        )
+        assert result_manifest["model"]["default_name"] == _CUSTOM_CATALOG_KEY
+        assert result_manifest["model"]["allowed_names"] == ["mimo-v2-pro-plan", _CUSTOM_CATALOG_KEY]
+        llm_models = json.loads((base / "config" / "llm_models.json").read_text(encoding="utf-8"))
+        assert llm_models[_CUSTOM_CATALOG_KEY]["model"] == "openai/gpt-4o"
+        assert llm_models[_CUSTOM_CATALOG_KEY]["endpoint_url"] == "https://openrouter.ai/api/v1/chat/completions"
+
 
 class TestUpdateManifestSecondInit:
     """二次 init 换供应商时 manifest 应被正确替换。"""
@@ -572,7 +780,9 @@ class TestUpdateManifestSecondInit:
         assert data["model"]["default_name"] == "deepseek-chat"
         assert data["model"][_INIT_ROLE_KEY] == _ROLE_NON_THINKING
 
-    def test_ambiguous_model_without_marker_no_package_fallback(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_ambiguous_model_without_marker_no_package_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """歧义模型名无标记且包内无对应 manifest 时跳过。"""
         manifests = tmp_path / "prompts" / "manifests"
         manifests.mkdir(parents=True)
@@ -844,9 +1054,7 @@ class TestResolveRoleFromPackageManifest:
         """包内 manifest 的 model 字段非 dict 时返回 None。"""
         pkg_manifests = tmp_path / "pkg_config" / "prompts" / "manifests"
         pkg_manifests.mkdir(parents=True)
-        (pkg_manifests / "weird.json").write_text(
-            json.dumps({"model": "string_instead_of_dict"}), encoding="utf-8"
-        )
+        (pkg_manifests / "weird.json").write_text(json.dumps({"model": "string_instead_of_dict"}), encoding="utf-8")
         monkeypatch.setattr(
             "dayu.cli.commands.init.resolve_package_config_path",
             lambda: tmp_path / "pkg_config",
@@ -866,9 +1074,7 @@ class TestUpdateManifestExtraBranches:
         """model section 非 dict 时跳过该文件。"""
         manifests = tmp_path / "prompts" / "manifests"
         manifests.mkdir(parents=True)
-        (manifests / "bad.json").write_text(
-            json.dumps({"model": "not_a_dict"}), encoding="utf-8"
-        )
+        (manifests / "bad.json").write_text(json.dumps({"model": "not_a_dict"}), encoding="utf-8")
         count = _update_manifest_default_models(tmp_path, "deepseek-chat", "deepseek-thinking")
         assert count == 0
 
@@ -903,8 +1109,10 @@ class TestPromptProviderSelection:
 
     def test_keyboard_interrupt_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """KeyboardInterrupt 时调用 sys.exit(1)。"""
+
         def _raise_kb(*_args: str) -> str:
             raise KeyboardInterrupt
+
         monkeypatch.setattr("builtins.input", _raise_kb)
         with pytest.raises(SystemExit) as exc_info:
             _prompt_provider_selection()
@@ -913,8 +1121,15 @@ class TestPromptProviderSelection:
     def test_empty_input_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """空输入时选择默认供应商（第一个已配置的）。"""
         monkeypatch.setenv("MIMO_API_KEY", "existing")
-        for k in ("MIMO_PLAN_API_KEY", "MIMO_PLAN_SG_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY",
-                   "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "QWEN_API_KEY"):
+        for k in (
+            "MIMO_PLAN_API_KEY",
+            "MIMO_PLAN_SG_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "GEMINI_API_KEY",
+            "QWEN_API_KEY",
+        ):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.setattr("builtins.input", lambda *_args: "")
         result = _prompt_provider_selection()
@@ -969,8 +1184,10 @@ class TestPromptApiKey:
 
     def test_keyboard_interrupt_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """KeyboardInterrupt 时调用 sys.exit(1)。"""
+
         def _raise_kb(*_args: str) -> str:
             raise KeyboardInterrupt
+
         monkeypatch.setattr("builtins.input", _raise_kb)
         with pytest.raises(SystemExit) as exc_info:
             _prompt_api_key("MY_KEY")
@@ -1021,22 +1238,28 @@ class TestIsHfHubReachable:
 
     def test_url_error_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """URLError 时返回 False。"""
+
         def _raise_url_error(*_args: str, **_kw: int) -> None:
             raise urllib.error.URLError("network down")
+
         monkeypatch.setattr("urllib.request.urlopen", _raise_url_error)
         assert _is_hf_hub_reachable() is False
 
     def test_os_error_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """OSError 时返回 False。"""
+
         def _raise_os_error(*_args: str, **_kw: int) -> None:
             raise OSError("connection refused")
+
         monkeypatch.setattr("urllib.request.urlopen", _raise_os_error)
         assert _is_hf_hub_reachable() is False
 
     def test_timeout_error_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """TimeoutError 时返回 False。"""
+
         def _raise_timeout(*_args: str, **_kw: int) -> None:
             raise TimeoutError("timed out")
+
         monkeypatch.setattr("urllib.request.urlopen", _raise_timeout)
         assert _is_hf_hub_reachable() is False
 
@@ -1164,6 +1387,31 @@ class TestRunInitFailurePaths:
         exit_code = run_init_command(args)
         assert exit_code == 0
 
+    def test_custom_openai_invalid_catalog_json_returns_1(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """custom-openai 遇到损坏的 llm_models.json 时应打印错误并返回 1。"""
+        base = self._prepare_mocks(tmp_path, monkeypatch)
+        config_dir = base / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "llm_models.json").write_text("{broken json", encoding="utf-8")
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_selection",
+            lambda: _PROVIDER_OPTION_CUSTOM_OPENAI,
+        )
+        inputs = iter(["https://openrouter.ai/api/v1", "sk-custom", "openai/gpt-4o"])
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+        args = Namespace(base=str(base), overwrite=False)
+        exit_code = run_init_command(args)
+
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "不是合法 JSON" in captured.out
+
 
 class TestInitPrewarm:
     """`dayu-cli init` 首次安装 prewarm 行为测试。"""
@@ -1216,29 +1464,41 @@ class TestInitPrewarm:
         base = tmp_path / "workspace"
         base.mkdir()
 
-        assert _should_run_init_prewarm(
-            is_first_workspace_init=True,
-            overwrite=False,
-            main_key_persist_failed=False,
-        ) is True
+        assert (
+            _should_run_init_prewarm(
+                is_first_workspace_init=True,
+                overwrite=False,
+                main_key_persist_failed=False,
+            )
+            is True
+        )
 
         config_dir = base / "config"
         config_dir.mkdir()
-        assert _should_run_init_prewarm(
-            is_first_workspace_init=False,
-            overwrite=False,
-            main_key_persist_failed=False,
-        ) is False
-        assert _should_run_init_prewarm(
-            is_first_workspace_init=False,
-            overwrite=True,
-            main_key_persist_failed=False,
-        ) is False
-        assert _should_run_init_prewarm(
-            is_first_workspace_init=False,
-            overwrite=False,
-            main_key_persist_failed=True,
-        ) is False
+        assert (
+            _should_run_init_prewarm(
+                is_first_workspace_init=False,
+                overwrite=False,
+                main_key_persist_failed=False,
+            )
+            is False
+        )
+        assert (
+            _should_run_init_prewarm(
+                is_first_workspace_init=False,
+                overwrite=True,
+                main_key_persist_failed=False,
+            )
+            is False
+        )
+        assert (
+            _should_run_init_prewarm(
+                is_first_workspace_init=False,
+                overwrite=False,
+                main_key_persist_failed=True,
+            )
+            is False
+        )
 
     def test_run_init_prewarm_only_imports_runtime_modules(
         self,
