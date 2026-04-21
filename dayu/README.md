@@ -731,6 +731,77 @@ UI 显式参数
 
 两者都不会以原始请求字段形态进入 `Agent`
 
+### 5.3 Fins 两类 dispatch：ticker → pipeline 与 document → processor
+
+Fins 包里存在两条互不相同的 dispatch：一条决定**长事务走哪条 pipeline**（download / upload / process），另一条决定**读取某份文档时用哪个 processor**（tool calling 与 pipeline 内部都会触发）。它们的键、真源、消费者都不同，不能互相代替。
+
+#### 5.3.1 ticker → pipeline（按 market 分派）
+
+进入点有两条：
+
+- **CLI `--ticker`**（`dayu.cli` 的 `download / upload_filings_from / upload_filing / upload_material / process / process_filing / process_material`）：`cli_support.py::_build_pipeline_for_ticker` → `normalize_ticker(ticker)` → `get_pipeline_from_normalized_ticker(...)`。
+- **Tool calling 触发的长事务**（LLM 调用 ingestion 工具由 `IngestionJobManager` 调度）：`toolset_registrars.py` → `FinsRuntime.build_ingestion_service_factory()` 返回 `ticker -> FinsIngestionService` 闭包；闭包内部对每个 job 的 `ticker` 再执行一次 `normalize_ticker` 并构造 `SecPipeline` / `CnPipeline`。
+
+两条路径最终落在同一条分派规则上：
+
+```text
+NormalizedTicker.market == "US"            → SecPipeline
+NormalizedTicker.market in {"HK", "CN"}    → CnPipeline
+其它                                        → ValueError("不支持的 market: …")
+```
+
+分派真源是 `dayu/fins/pipelines/factory.py::get_pipeline_from_normalized_ticker`。CLI 路径直接复用该真源；tool calling 的 `dayu/fins/ingestion/factory.py::build_ingestion_service_factory` 闭包内部当前自带一份等价的 `if US … if CN/HK … else raise` 分支，语义与上面一致，但**没有**复用 `get_pipeline_from_normalized_ticker`，属于重复 dispatch 实现。新增 market 时需要同时改两处；未来应收敛为复用同一真源。
+
+关键事实：
+
+- pipeline 分派只看 `NormalizedTicker.market`，不看 ticker 字面量或字母数字模式。
+- 同一 `FinsRuntime` 实例里，CLI 与 tool 两路共享同一份 `ProcessorRegistry` 与仓储实例，pipeline 构造时把它们逐项注入。
+- `SecPipeline` 已不再接受识别器注入参数；ticker 的市场识别统一由 `dayu/fins/ticker_normalization.py::normalize_ticker` 真源完成。
+
+#### 5.3.2 document → processor（按 source + form_type + media_type 分派）
+
+这条 dispatch 发生在**读取某份已入库文档**时，由 `FinsToolService._create_processor_for_document(ticker, document_id)`（tool calling 路径）或 pipeline 内部 `resolve_processor_*`（长事务路径）触发，调用的都是同一张 `ProcessorRegistry`。
+
+触发链路（tool 视角）：
+
+```text
+LLM tool call
+  → FinsToolService._create_processor_for_document(ticker, document_id)
+  → SourceRepository.get_primary_source(ticker, doc_id, source_kind)   ← 拿到 Source 抽象
+  → SourceRepository.get_source_meta(...)                              ← 读 form_type
+  → ProcessorRegistry.create_with_fallback(
+        source=source,
+        form_type=form_type,
+        media_type=source.media_type,
+    )
+```
+
+分派由三键组合决定：
+
+- `source`：仓储提供的 `Source` 抽象，其 `supports()` 判定 SEC filing 结构、本地文件、扩展名等。
+- `form_type`：`source_meta["form_type"]`，驱动 SEC 表单专项处理器（10-K / 10-Q / 20-F / 8-K / 6-K / SC13 / DEF 14A）。
+- `media_type`：`source.media_type`，驱动 Docling（PDF）/ Markdown / BS（HTML）等通用处理器。
+
+`ProcessorRegistry.resolve_candidates()` 遍历全部注册项调用 `processor_cls.supports(source, form_type, media_type)`，按 `priority` 降序产出候选；`create_with_fallback` 取第一个实例化成功的候选，**构造器抛异常**时自动回退到下一候选并触发 `on_fallback` 回调。
+
+`build_fins_processor_registry()` 当前的优先级锚点：
+
+| Priority | 角色 | 代表处理器 |
+|---:|---|---|
+| 200 | SEC 表单 BS 主路径 | `BsSc13FormProcessor` / `BsSixKFormProcessor` / `BsDef14AFormProcessor` / `BsEightKFormProcessor` / `BsTenKFormProcessor` / `BsTenQFormProcessor` / `BsTwentyFFormProcessor` |
+| 190 | SEC 表单 edgartools 回退 | `Sc13FormProcessor` / `Def14AFormProcessor` / `EightKFormProcessor` / `TenKFormProcessor` / `TenQFormProcessor` / `TwentyFFormProcessor` |
+| 120 | SEC 通用兜底 | `SecProcessor` |
+| 100 | 文档格式通用 | `FinsDoclingProcessor`（PDF）、`FinsMarkdownProcessor`（Markdown） |
+| 80 | HTML 通用 | `FinsBSProcessor` |
+| —  | engine 基座 | `build_engine_processor_registry()` 注入的通用处理器 |
+
+关键事实：
+
+- processor 分派**不看 market、不看 ticker**；CN / HK 文档当前直接走通用 Docling / Markdown / BS 处理器，没有 CN 特化专项处理器——若未来需要 A 股年报专项路径，应在注册表中新增按 form_type + source 判定的注册项，而不是回退到按 market 硬分支。
+- tool calling 路径**不经过 `FinsIngestionService` / `SecPipeline`**；它直接复用共享 `ProcessorRegistry`。因此 tool 路径读取文档时不会触发 pipeline 分派，但**会**受 processor 分派规则的全量约束。
+- 同一 `FinsRuntime` 内 tool 与 pipeline **共享同一份 `ProcessorRegistry`**（在 `DefaultFinsRuntime.create` 时 `build_fins_processor_registry()` 一次构建），注册顺序与优先级在 runtime 初始化时锁定。
+- 若仓储 `form_type` 字段缺失，SEC 专项处理器会在 `supports()` 阶段全部拒绝，实际命中 `SecProcessor(120)` 或更低优先级的通用处理器——这是当前分派的一个已知脆弱点，依赖 ingestion 期正确写入 `form_type`。
+
 ## 6. Host
 
 Host 是 Dayu 的通用托管执行层。它的价值不在于“帮 Service 调一下 Agent”，而在于把一次执行真正收敛成可治理、可观察、可取消、可恢复、可补投递的宿主能力。
