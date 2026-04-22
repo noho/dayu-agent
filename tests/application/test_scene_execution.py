@@ -639,6 +639,12 @@ async def test_scene_preparer_uses_manifest_conversation_flag_for_custom_scene(
         tool_registry=cast(PromptToolExecutorProtocol, SimpleNamespace()),
         agent_create_args=AgentCreateArgs(runner_type="openai_compatible", model_name="test-model"),
         conversation_memory_settings=ConversationMemorySettings(),
+        trace_identity=scene_preparer_module.AgentTraceIdentity(
+            agent_name="custom_scene_agent",
+            agent_kind="scene_agent",
+            scene_name="custom_scene",
+            model_name="test-model",
+        ),
     )
 
     monkeypatch.setattr("dayu.host.scene_preparer.load_scene_definition", lambda *_args, **_kwargs: scene_definition)
@@ -680,7 +686,7 @@ async def test_scene_preparer_uses_manifest_conversation_flag_for_custom_scene(
         prompt_contributions={"base_user": "x"},
         user_message="hello",
         session_key="session-custom",
-        concurrency_lane="llm_api",
+        business_concurrency_lane=None,
         timeout_ms=None,
         resumable=True,
     )
@@ -690,9 +696,17 @@ async def test_scene_preparer_uses_manifest_conversation_flag_for_custom_scene(
         HostedRunContext(run_id="run_1", cancellation_token=CancellationToken()),
     )
     agent_input = prepared_execution.agent_input
+    resume_snapshot = prepared_execution.resume_snapshot
 
     assert agent_input.session_state is not None
     assert agent_input.messages == [{"role": "system", "content": "multi-turn"}]
+    assert agent_input.trace_identity is not None
+    assert resume_snapshot is not None
+    assert resume_snapshot.conversation_session is not None
+    assert resume_snapshot.trace_identity is not None
+    assert resume_snapshot.conversation_session.session_id == "session-custom"
+    assert resume_snapshot.trace_identity.session_id == "session-custom"
+    assert agent_input.trace_identity.session_id == "session-custom"
 
 
 @pytest.mark.unit
@@ -731,7 +745,7 @@ async def test_scene_preparer_rejects_resumable_when_conversation_disabled(
         prompt_contributions={"base_user": "x"},
         user_message="hello",
         session_key="session-custom",
-        concurrency_lane="llm_api",
+        business_concurrency_lane=None,
         timeout_ms=None,
         resumable=True,
     )
@@ -779,7 +793,7 @@ async def test_scene_preparer_rejects_resumable_without_session_key(
         prompt_contributions={"base_user": "x"},
         user_message="hello",
         session_key=None,
-        concurrency_lane="llm_api",
+        business_concurrency_lane=None,
         timeout_ms=None,
         resumable=True,
     )
@@ -937,7 +951,7 @@ def test_scene_preparer_helper_functions_cover_single_turn_and_execution_option_
         prompt_contributions={},
         user_message="hello",
         session_key=None,
-        concurrency_lane=None,
+        business_concurrency_lane=None,
         timeout_ms=4000,
         resumable=False,
     )
@@ -1107,7 +1121,7 @@ async def test_scene_preparer_prepare_restore_and_host_owned_state_helpers(
         prompt_contributions={},
         user_message="hello",
         session_key=None,
-        concurrency_lane=None,
+        business_concurrency_lane=None,
         timeout_ms=2000,
         resumable=False,
     )
@@ -1126,7 +1140,7 @@ async def test_scene_preparer_prepare_restore_and_host_owned_state_helpers(
         service_name="chat_turn",
         scene_name="prompt",
         metadata={"delivery_channel": "interactive"},
-        concurrency_lane=None,
+        business_concurrency_lane=None,
         timeout_ms=1234,
         resumable=True,
         system_prompt="SYS",
@@ -1170,8 +1184,10 @@ async def test_scene_preparer_prepare_restore_and_host_owned_state_helpers(
     assert host_owned_scene.tool_trace_recorder_factory == "trace-factory"
     assert restored_input.system_prompt == "SYS"
     assert restored_input.session_state is not None
+    assert restored_input.trace_identity is not None
     restored_session_state = cast(scene_preparer_module.ConversationSessionState, restored_input.session_state)
     assert restored_session_state.session_id == "session-1"
+    assert restored_input.trace_identity.session_id == "session-1"
 
 
 @pytest.mark.unit

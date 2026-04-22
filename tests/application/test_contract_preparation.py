@@ -82,7 +82,7 @@ def test_prepare_execution_contract_uses_execution_permissions_as_private_networ
         prompt_contributions={"base_user": "x"},
         user_message="hello",
         session_key="session-1",
-        concurrency_lane="llm_api",
+        business_concurrency_lane=None,
     )
 
     web_tools_config = resolve_web_tools_config_from_toolset_configs(
@@ -110,7 +110,7 @@ def test_prepare_execution_contract_filters_prompt_contributions_by_context_slot
         context_slots=("fins_default_subject",),
         user_message="hello",
         session_key="session-1",
-        concurrency_lane="llm_api",
+        business_concurrency_lane=None,
     )
 
     assert contract.preparation_spec.prompt_contributions == {

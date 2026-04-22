@@ -7,6 +7,7 @@ from typing import Optional
 
 from dayu.engine.processors.processor_registry import ProcessorRegistry
 from dayu.log import Log
+from dayu.fins.ingestion.service import FinsIngestionService
 from dayu.fins.processors.registry import (
     build_bs_experiment_registry,
     build_fins_processor_registry,
@@ -105,3 +106,53 @@ def get_pipeline_from_normalized_ticker(
             blob_repository=blob_repository,
         )
     raise ValueError(f"不支持的 market: {normalized_ticker.market}")
+
+
+def build_ingestion_service_from_normalized_ticker(
+    normalized_ticker: NormalizedTicker,
+    workspace_root: Path,
+    *,
+    company_repository: CompanyMetaRepositoryProtocol,
+    source_repository: SourceDocumentRepositoryProtocol,
+    processed_repository: ProcessedDocumentRepositoryProtocol,
+    blob_repository: DocumentBlobRepositoryProtocol,
+    filing_maintenance_repository: FilingMaintenanceRepositoryProtocol,
+    processor_registry: ProcessorRegistry,
+) -> FinsIngestionService:
+    """按 ``NormalizedTicker`` 返回对应 pipeline 的长事务服务。
+
+    该 helper 是 pipelines 包对外暴露的稳定入口，替代上层直接访问具体
+    pipeline 实现类的 ``ingestion_service`` 属性；同时把 market→Pipeline
+    的分发职责统一收敛到 ``get_pipeline_from_normalized_ticker`` 真源。
+
+    Args:
+        normalized_ticker: 已归一化的 ticker。
+        workspace_root: 工作区根目录。
+        company_repository: 共享公司元数据仓储。
+        source_repository: 共享源文档仓储。
+        processed_repository: 共享 processed 文档仓储。
+        blob_repository: 共享文件对象仓储。
+        filing_maintenance_repository: 共享 filing 维护治理仓储（仅 US pipeline
+            实际使用，CN/HK pipeline 忽略）。
+        processor_registry: 共享处理器注册表。
+
+    Returns:
+        目标 pipeline 的 ``FinsIngestionService`` 实例。
+
+    Raises:
+        ValueError: 市场类型不支持时抛出。
+    """
+
+    pipeline = get_pipeline_from_normalized_ticker(
+        normalized_ticker=normalized_ticker,
+        workspace_root=workspace_root,
+        company_repository=company_repository,
+        source_repository=source_repository,
+        processed_repository=processed_repository,
+        blob_repository=blob_repository,
+        filing_maintenance_repository=filing_maintenance_repository,
+        processor_registry=processor_registry,
+    )
+    if isinstance(pipeline, (SecPipeline, CnPipeline)):
+        return pipeline.ingestion_service
+    raise ValueError(f"pipeline 未暴露 ingestion_service: {type(pipeline).__name__}")

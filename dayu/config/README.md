@@ -315,8 +315,19 @@ export MIMO_API_KEY="sk-xxxxxxxx"
   "model": {
     "default_name": "mimo-v2-flash-thinking",
     "allowed_names": ["mimo-v2-flash-thinking", "my-provider-chat"],
-    "temperature_profile": "audit",
-    "max_iterations": 24
+    "temperature_profile": "audit"
+  }
+}
+```
+
+若这个 scene 还需要单独预算，再额外声明：
+
+```json
+{
+  "runtime": {
+    "agent": {
+      "max_iterations": 32
+    }
   }
 }
 ```
@@ -472,7 +483,7 @@ Agent 行为控制：
 说明：
 - `host_config.store.path` 是宿主层 SQLite 数据库文件路径。相对路径按 `workspace` 根目录解析；绝对路径则直接使用。当前默认值是 `.dayu/host/dayu_host.db`。
 - 宿主层的 `session`、`run`、并发 `permit` 与 pending turn 恢复状态都共享这一个数据库文件。
-- `host_config.lane` 是宿主层并发 lane 配置；未显式填写的 lane 回退到默认值。
+- `host_config.lane` 是宿主层并发 lane 配置，内容为 `lane_name: max_concurrent` 键值对；未显式填写的 lane 回退到 Host 默认（`llm_api`）与 Service 业务默认（`write_chapter`、`sec_download`）的合并值。`llm_api` 是 Host 自治 lane，用户可在此下调/上调运维抓手；`write_chapter` 控制同时在写的章节数（写作 pipeline 的 in-process ThreadPoolExecutor worker 上限与本值同源）；`sec_download` 控制 SEC 下载的跨进程串行度。
 - `host_config.pending_turn_resume.max_attempts` 控制单条 pending turn 的最大恢复次数。当前默认值是 `3`；达到上限后 Host 会删除该 pending turn，避免同一 `session + scene` 槽位被坏记录永久卡死。
 
 ### 5.7 `tool_trace_config`
@@ -685,13 +696,13 @@ scene manifest 当前有两类职责：
 {
   "scene": "write",
   "model": {
-    "default_name": "mimo-v2-flash",
-    "allowed_names": ["mimo-v2-flash", "mimo-v2-pro", "deepseek-chat", "qwen3", "gpt-5.4", "claude-sonnet-4-6", "gemini-2.5-flash"],
+    "default_name": "mimo-v2-pro-plan",
+    "allowed_names": ["mimo-v2-flash", "mimo-v2-pro", "mimo-v2-pro-plan", "mimo-v2-pro-plan-sg", "deepseek-chat", "qwen3", "gpt-5.4", "claude-sonnet-4-6", "gemini-2.5-flash"],
     "temperature_profile": "write"
   },
   "runtime": {
     "agent": {
-      "max_iterations": 24
+      "max_iterations": 32
     },
     "runner": {
       "tool_timeout_seconds": 90.0
@@ -707,16 +718,18 @@ scene manifest 当前有两类职责：
 - `runtime.agent.max_iterations` 为可选正整数；若配置，表示该 scene 的默认 Agent 迭代预算，并覆盖 `run.json` 的全局默认值；只有 CLI / request 级显式 `max_iterations` 可以再覆盖它。
 - `runtime.agent.max_consecutive_failed_tool_batches` 为可选正整数；若配置，表示该 scene 的默认连续失败工具批次上限。
 - `runtime.runner.tool_timeout_seconds` 为可选正数；若配置，表示该 scene 的默认 Runner 工具调用超时秒数，并覆盖 `run.json.runner_running_config.tool_timeout_seconds`。
-- 对 `tool_selection.mode = none` 的无工具 scene，通常不需要声明 `runtime.runner.tool_timeout_seconds`；省略即可。
+- `runtime` 整体可省略；未显式声明时，该 scene 完全回退到 `run.json` 的全局默认值。
+- 对 `tool_selection.mode = none` 的无工具 scene，通常不需要声明 `runtime.runner.tool_timeout_seconds`；若也不需要特殊预算，整个 `runtime` 都可以省略。
 - CLI 的 `--model-name` 只有在显式传入时才覆盖普通 scene 的 `model.default_name`。
 - `write` 命令中的 `--audit-model-name` 只有在显式传入时才覆盖 `decision` / `audit` / `confirm` 的 `model.default_name`。
 - CLI 的 `--temperature` 只有在显式传入时才覆盖全部 scene 的 temperature；最终优先级为 `CLI --temperature > llm_models.runtime_hints.temperature_profiles[scene.temperature_profile].temperature`。
 - 若 profile 缺失 temperature，则运行直接报错，不再隐式使用顶层 `temperature`。
 - `regenerate` / `fix` / `repair` 的 `model.temperature_profile` 当前统一复用 `write`；scene 语义仍由各自的 `scenes/*.md` 契约区分，profile 只负责温度标定。
+- 当前包内默认中，`write` / `regenerate` / `fix` / `repair` / `confirm` / `decision` / `infer` 显式声明更高的 scene 预算；`audit` / `overview` 则复用 `run.json` 的全局默认值。
 
 当前默认模型策略：
-- 写作链路（`write` / `regenerate` / `fix` / `repair`）默认使用 `mimo-v2-pro`，且 `allowed_names` 预置非 thinking 的写作侧模型；切换默认模型时通常只需要改 `model.default_name`。
-- 推理问答链路（`prompt` / `interactive` / `infer` / `decision` / `audit` / `confirm` / `conversation_compaction`）默认使用 `mimo-v2-pro-thinking`，且 `allowed_names` 预置 thinking / 推理侧模型；切换默认模型时通常只需要改 `model.default_name`。
+- 写作链路（`write` / `regenerate` / `fix` / `repair`）默认使用 `mimo-v2-pro-plan`，且 `allowed_names` 预置非 thinking 的写作侧模型；切换默认模型时通常只需要改 `model.default_name`。
+- 推理问答链路（`prompt` / `interactive` / `infer` / `decision` / `audit` / `confirm` / `conversation_compaction`）默认使用 `mimo-v2-pro-thinking-plan`，且 `allowed_names` 预置 thinking / 推理侧模型；切换默认模型时通常只需要改 `model.default_name`。
 - 需要注意：DeepSeek 官方文档说明 `deepseek-reasoner` 不支持 `temperature` / `top_p`，传入不会报错，但也不会生效；因此审计链路的真实行为主要由模型本身与 prompt 契约决定，而不是 temperature。
 - 项目内当前建议温度口径统一为：`mimo-v2-pro = write 0.8 / overview 0.3`、`mimo-v2-pro-thinking = prompt 0.8 / interactive 0.8 / audit 0.4`、`deepseek-thinking = prompt 1.3 / interactive 1.3 / audit 0.8`、`qwen3-thinking = prompt 0.6 / interactive 0.6 / audit 0.2`。
 - 对于 `gpt-5.4`、`claude-sonnet-4-6`、`gemini-2.5-flash` 这类官方只给通用口径、未给 scene 明细表的模型，当前默认按“分析低温、交互中温、创作高温”映射：`audit / infer / overview / conversation_compaction = 0.2`，`prompt / interactive / decision = 0.6`，`write = 0.8`；其中 `claude-sonnet-4-6` 的创作档按 Anthropic 文档再抬一档到 `0.9`。

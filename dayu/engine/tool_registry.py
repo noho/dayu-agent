@@ -367,10 +367,7 @@ class ToolRegistry:
             raise FileNotFoundError(f"路径不存在: {path} (resolved to {resolved_path})")
         
         # 3. 检查是否在允许的路径范围内
-        for allowed_path in self.allowed_paths:
-            # 同样解析 allowed_path 的符号链接
-            resolved_allowed = allowed_path.resolve()
-            
+        for resolved_allowed in self.allowed_paths:
             try:
                 # 检查 resolved_path 是否在 resolved_allowed 下
                 # 如果是文件，检查文件本身是否匹配

@@ -589,7 +589,7 @@ def test_build_material_and_filing_ids() -> None:
     assert upd_doc != create_doc
 
     doc_id, internal_id = build_cn_filing_ids(
-        ticker="aapl",
+        ticker="AAPL",
         form_type="q1",
         fiscal_year=2025,
         fiscal_period="q1",
@@ -598,7 +598,7 @@ def test_build_material_and_filing_ids() -> None:
     assert internal_id.startswith("cn_")
     assert doc_id == f"fil_{internal_id}"
     sec_doc_id, sec_internal_id = build_sec_filing_ids(
-        ticker="aapl",
+        ticker="AAPL",
         fiscal_year=2025,
         fiscal_period="q1",
         amended=False,
@@ -606,6 +606,21 @@ def test_build_material_and_filing_ids() -> None:
     assert sec_internal_id.startswith("sec_")
     assert sec_doc_id == f"fil_{sec_internal_id}"
     assert sec_doc_id != doc_id
+    with pytest.raises(ValueError, match="ticker 不能为空"):
+        build_cn_filing_ids(
+            ticker="  ",
+            form_type="Q1",
+            fiscal_year=2025,
+            fiscal_period="Q1",
+            amended=False,
+        )
+    with pytest.raises(ValueError, match="ticker 不能为空"):
+        build_sec_filing_ids(
+            ticker="",
+            fiscal_year=2025,
+            fiscal_period="Q1",
+            amended=False,
+        )
     with pytest.raises(ValueError, match="form_type 不能为空"):
         build_cn_filing_ids(
             ticker="AAPL",

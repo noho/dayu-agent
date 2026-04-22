@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, TypeVar, cast
 
 from dayu.contracts.agent_execution import ExecutionContract, deserialize_execution_contract_snapshot
 from dayu.contracts.events import AppEvent, AppResult
 from dayu.contracts.events import PublishedRunEventProtocol
+from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.contracts.infrastructure import ModelCatalogProtocol, WorkspaceResourcesProtocol
 from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, ReplyOutboxSubmitRequest
 from dayu.contracts.run import RunCancelReason, RunRecord, RunState
@@ -55,6 +58,7 @@ from dayu.workspace_paths import build_conversation_store_dir
 MODULE = "HOST"
 _CONVERSATION_PREVIEW_MAX_CHARS = 48
 _CONVERSATION_PREVIEW_SUFFIX = "..."
+_STALE_REPLY_OUTBOX_MAX_AGE = timedelta(minutes=15)
 
 
 TStreamEvent = TypeVar("TStreamEvent", bound=PublishedRunEventProtocol)
@@ -256,7 +260,7 @@ class Host:
         *,
         session_id: str | None = None,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """创建新的 Host Session。
 
@@ -264,7 +268,7 @@ class Host:
             source: 会话来源。
             session_id: 可选显式 session_id。
             scene_name: 首次使用的 scene。
-            metadata: 附加元数据。
+            metadata: 会话级交付上下文元数据。
 
         Returns:
             新建 SessionRecord。
@@ -291,7 +295,7 @@ class Host:
         source: SessionSource,
         *,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """幂等获取或创建 Host Session。
 
@@ -299,7 +303,7 @@ class Host:
             session_id: 确定性会话 ID。
             source: 会话来源。
             scene_name: 首次使用的 scene。
-            metadata: 附加元数据。
+            metadata: 会话级交付上下文元数据。
 
         Returns:
             现有或新建 SessionRecord。
@@ -355,11 +359,15 @@ class Host:
         self,
         *,
         state: SessionState | None = None,
+        source: SessionSource | None = None,
+        scene_name: str | None = None,
     ) -> list[SessionRecord]:
         """列出 Host Session。
 
         Args:
             state: 可选状态过滤。
+            source: 可选来源过滤。
+            scene_name: 可选 scene 名称过滤。
 
         Returns:
             匹配的 SessionRecord 列表。
@@ -368,7 +376,11 @@ class Host:
             无。
         """
 
-        return self._session_registry.list_sessions(state=state)
+        return self._session_registry.list_sessions(
+            state=state,
+            source=source,
+            scene_name=scene_name,
+        )
 
     def get_conversation_session_digest(self, session_id: str) -> ConversationSessionDigest:
         """读取指定 session 的 conversation 摘要。
@@ -710,6 +722,52 @@ class Host:
             Log.info(f"Host 清理 orphan runs: run_ids={','.join(orphan_ids)}", module=MODULE)
         return orphan_ids
 
+    def shutdown_active_runs_for_owner(self) -> list[str]:
+        """把当前进程拥有的全部活跃 run 主动收敛为 CANCELLED。
+
+        用于 CLI / daemon 进程收到 SIGTERM / atexit 时 best-effort 收口，
+        避免留下活跃 run 被后续启动 cleanup 误判为 UNSETTLED orphan。
+
+        Args:
+            无。
+
+        Returns:
+            被收敛的 run_id 列表。
+
+        Raises:
+            无。失败仅 Log.warn。
+        """
+
+        try:
+            active_runs = self._run_registry.list_active_runs_for_owner(os.getpid())
+        except Exception as exc:  # pragma: no cover - 防御 DB 异常
+            Log.warn(f"Host 收集 owner 活跃 run 失败: {exc}", module=MODULE)
+            return []
+
+        cancelled_ids: list[str] = []
+        for run in active_runs:
+            try:
+                self._run_registry.request_cancel(
+                    run.run_id,
+                    cancel_reason=RunCancelReason.USER_CANCELLED,
+                )
+                self._run_registry.mark_cancelled(
+                    run.run_id,
+                    cancel_reason=RunCancelReason.USER_CANCELLED,
+                )
+                cancelled_ids.append(run.run_id)
+            except Exception as exc:
+                Log.warn(
+                    f"Host 收敛 owner 活跃 run 失败: run_id={run.run_id}, error={exc}",
+                    module=MODULE,
+                )
+        if cancelled_ids:
+            Log.info(
+                f"Host 进程退出前收敛活跃 runs: count={len(cancelled_ids)}, run_ids={','.join(cancelled_ids)}",
+                module=MODULE,
+            )
+        return cancelled_ids
+
     def cleanup_stale_permits(self) -> list[str]:
         """清理 owner_pid 已死亡的并发 permit。
 
@@ -726,6 +784,35 @@ class Host:
         if self._concurrency_governor is None:
             return []
         return self._concurrency_governor.cleanup_stale_permits()
+
+    def cleanup_stale_reply_outbox_deliveries(
+        self,
+        *,
+        max_age: timedelta = _STALE_REPLY_OUTBOX_MAX_AGE,
+    ) -> list[str]:
+        """清理卡住的 DELIVERY_IN_PROGRESS reply outbox 记录。
+
+        Args:
+            max_age: IN_PROGRESS 多久未收到终态视为 stale，默认 15 分钟。
+
+        Returns:
+            被回退的 delivery_id 列表。
+
+        Raises:
+            无。失败仅 Log.warn。
+        """
+
+        try:
+            stale_ids = self._reply_outbox_store.cleanup_stale_in_progress_deliveries(max_age=max_age)
+        except Exception as exc:  # pragma: no cover - 防御 DB 异常
+            Log.warn(f"Host 清理 stale reply outbox 失败: {exc}", module=MODULE)
+            return []
+        if stale_ids:
+            Log.info(
+                f"Host 清理 stale reply outbox: count={len(stale_ids)}, ids={','.join(stale_ids)}",
+                module=MODULE,
+            )
+        return stale_ids
 
     def get_all_lane_statuses(self) -> dict[str, LaneStatus]:
         """获取全部并发 lane 状态快照。

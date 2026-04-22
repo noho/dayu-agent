@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,11 @@ import pytest
 from dayu.contracts.reply_outbox import ReplyOutboxState, ReplyOutboxSubmitRequest
 from dayu.host.host_store import HostStore
 from dayu.host.protocols import ReplyOutboxStoreProtocol
-from dayu.host.reply_outbox_store import InMemoryReplyOutboxStore, SQLiteReplyOutboxStore
+from dayu.host.reply_outbox_store import (
+    InMemoryReplyOutboxStore,
+    SQLiteReplyOutboxStore,
+    STALE_IN_PROGRESS_ERROR_MESSAGE,
+)
 
 
 def _build_submit_request(*, delivery_key: str = "wechat:run_1") -> ReplyOutboxSubmitRequest:
@@ -388,3 +393,112 @@ def test_reply_outbox_store_implements_runtime_protocol(tmp_path: Path) -> None:
 
     assert isinstance(InMemoryReplyOutboxStore(), ReplyOutboxStoreProtocol)
     assert isinstance(SQLiteReplyOutboxStore(host_store), ReplyOutboxStoreProtocol)
+
+
+@pytest.mark.unit
+def test_inmemory_mark_failed_is_idempotent_on_failed_terminal() -> None:
+    """FAILED_TERMINAL 成为吸收态：重复 mark_failed 幂等返回同一记录。"""
+
+    store = InMemoryReplyOutboxStore()
+    submitted = store.submit_reply(_build_submit_request())
+    store.claim_reply(submitted.delivery_id)
+    failed = store.mark_failed(submitted.delivery_id, retryable=False, error_message="fatal")
+    assert failed.state == ReplyOutboxState.FAILED_TERMINAL
+
+    # 再次 mark_failed：不改 last_error_message、不抛错、不改 state
+    again = store.mark_failed(submitted.delivery_id, retryable=True, error_message="second try")
+    assert again.state == ReplyOutboxState.FAILED_TERMINAL
+    assert again.last_error_message == "fatal"
+
+
+@pytest.mark.unit
+def test_sqlite_mark_failed_is_idempotent_on_failed_terminal(tmp_path: Path) -> None:
+    """SQLite 实现同样对 FAILED_TERMINAL 幂等。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLiteReplyOutboxStore(host_store)
+    submitted = store.submit_reply(_build_submit_request())
+    store.claim_reply(submitted.delivery_id)
+    failed = store.mark_failed(submitted.delivery_id, retryable=False, error_message="fatal")
+    assert failed.state == ReplyOutboxState.FAILED_TERMINAL
+
+    again = store.mark_failed(submitted.delivery_id, retryable=True, error_message="second try")
+    assert again.state == ReplyOutboxState.FAILED_TERMINAL
+    assert again.last_error_message == "fatal"
+
+
+@pytest.mark.unit
+def test_inmemory_cleanup_stale_in_progress_reverts_old_records() -> None:
+    """超过 max_age 的 DELIVERY_IN_PROGRESS 被回退为 FAILED_RETRYABLE。"""
+
+    store = InMemoryReplyOutboxStore()
+    submitted = store.submit_reply(_build_submit_request())
+    claimed = store.claim_reply(submitted.delivery_id)
+    # 手工把 updated_at 调到很久以前
+    old_record = claimed
+    store._records[old_record.delivery_id] = type(old_record)(
+        delivery_id=old_record.delivery_id,
+        delivery_key=old_record.delivery_key,
+        session_id=old_record.session_id,
+        scene_name=old_record.scene_name,
+        source_run_id=old_record.source_run_id,
+        reply_content=old_record.reply_content,
+        metadata=old_record.metadata,
+        state=old_record.state,
+        created_at=old_record.created_at,
+        updated_at=old_record.updated_at - timedelta(hours=1),
+        delivery_attempt_count=old_record.delivery_attempt_count,
+        last_error_message=old_record.last_error_message,
+    )
+
+    stale = store.cleanup_stale_in_progress_deliveries(max_age=timedelta(minutes=15))
+    assert stale == [old_record.delivery_id]
+    refreshed = store.get_reply(old_record.delivery_id)
+    assert refreshed is not None
+    assert refreshed.state == ReplyOutboxState.FAILED_RETRYABLE
+    assert refreshed.last_error_message == STALE_IN_PROGRESS_ERROR_MESSAGE
+
+
+@pytest.mark.unit
+def test_sqlite_cleanup_stale_in_progress_reverts_old_records(tmp_path: Path) -> None:
+    """SQLite 实现同样按 max_age 回退 stale in_progress。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLiteReplyOutboxStore(host_store)
+    submitted = store.submit_reply(_build_submit_request())
+    claimed = store.claim_reply(submitted.delivery_id)
+
+    # 把 updated_at 手工调到 1 小时前
+    conn = host_store.get_connection()
+    from dayu.host._datetime_utils import serialize_dt
+    conn.execute(
+        "UPDATE reply_outbox SET updated_at = ? WHERE delivery_id = ?",
+        (serialize_dt(claimed.updated_at - timedelta(hours=1)), claimed.delivery_id),
+    )
+    conn.commit()
+
+    stale = store.cleanup_stale_in_progress_deliveries(max_age=timedelta(minutes=15))
+    assert stale == [claimed.delivery_id]
+    refreshed = store.get_reply(claimed.delivery_id)
+    assert refreshed is not None
+    assert refreshed.state == ReplyOutboxState.FAILED_RETRYABLE
+    assert refreshed.last_error_message == STALE_IN_PROGRESS_ERROR_MESSAGE
+
+
+@pytest.mark.unit
+def test_cleanup_stale_in_progress_skips_fresh_records(tmp_path: Path) -> None:
+    """未超 max_age 的 IN_PROGRESS 不会被回退。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLiteReplyOutboxStore(host_store)
+    submitted = store.submit_reply(_build_submit_request())
+    store.claim_reply(submitted.delivery_id)
+
+    stale = store.cleanup_stale_in_progress_deliveries(max_age=timedelta(hours=1))
+    assert stale == []
+    refreshed = store.get_reply(submitted.delivery_id)
+    assert refreshed is not None
+    assert refreshed.state == ReplyOutboxState.DELIVERY_IN_PROGRESS

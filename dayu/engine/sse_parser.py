@@ -20,12 +20,11 @@ from __future__ import annotations
 
 import asyncio
 import codecs
-import inspect
 import json
 import time
 from dataclasses import dataclass, field
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Dict, List
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List
 
 from .events import (
     StreamEvent,
@@ -45,8 +44,8 @@ MODULE = "ENGINE.SSE_PARSER"
 _DEFAULT_STREAM_IDLE_HEARTBEAT_SEC = 10.0
 
 
-from dayu.engine.cancellation import resolve_cancellation_waiter as _resolve_cancellation_waiter
-from dayu.engine.cancellation import cancel_task_and_wait as _cancel_task_and_wait
+from dayu.engine.cancellation import await_or_cancel as _await_or_cancel
+from dayu.engine.cancellation import create_cancellation_waiter as _create_cancellation_waiter
 
 
 @dataclass
@@ -177,69 +176,6 @@ class SSEStreamParser:
         if self._cancellation_token is not None:
             self._cancellation_token.raise_if_cancelled()
 
-    def _create_cancellation_waiter(self) -> tuple[asyncio.Future[None] | None, Callable[[], None] | None]:
-        """创建与当前取消令牌联动的等待 future。
-
-        参数:
-            无。
-
-        返回值:
-            tuple[asyncio.Future[None] | None, Callable[[], None] | None]:
-                取消等待 future 与回调注销函数；未配置取消令牌时返回 `(None, None)`。
-
-        异常:
-            RuntimeError: 当前事件循环不可用时由底层抛出。
-        """
-
-        if self._cancellation_token is None:
-            return None, None
-        loop = asyncio.get_running_loop()
-        waiter: asyncio.Future[None] = loop.create_future()
-
-        def _on_cancel() -> None:
-            loop.call_soon_threadsafe(_resolve_cancellation_waiter, waiter)
-
-        unregister = self._cancellation_token.on_cancel(_on_cancel)
-        if self._cancellation_token.is_cancelled():
-            _resolve_cancellation_waiter(waiter)
-        return waiter, unregister
-
-    async def _await_or_cancel(
-        self,
-        awaitable: Any,
-        *,
-        operation_name: str,
-        cancellation_waiter: asyncio.Future[None] | None,
-    ) -> Any:
-        """等待单个 awaitable，并在取消时优先终止。"""
-
-        try:
-            self._raise_if_cancelled()
-        except Exception:
-            if inspect.iscoroutine(awaitable):
-                awaitable.close()
-            raise
-        if cancellation_waiter is None:
-            return await awaitable
-
-        task = asyncio.ensure_future(awaitable)
-        try:
-            done, _ = await asyncio.wait(
-                {task, cancellation_waiter},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if cancellation_waiter in done and self._cancellation_token is not None and self._cancellation_token.is_cancelled():
-                await _cancel_task_and_wait(task)
-                Log.info(
-                    f"{self._log_prefix} 解析等待点已因取消中止: {operation_name}",
-                    module=MODULE,
-                )
-                raise EngineCancelledError(f"operation cancelled: {operation_name}")
-            return await task
-        except asyncio.CancelledError:
-            await _cancel_task_and_wait(task)
-            raise
-
     def get_result(self) -> SSEParseResult:
         """
         获取解析结果（应在 parse_stream 迭代完成后调用）。
@@ -287,7 +223,7 @@ class SSEStreamParser:
         idle_log_count = 0
         idle_log_interval = self._get_stream_idle_heartbeat_sec()
         pending_chunk_task: asyncio.Task[bytes] | None = None
-        cancellation_waiter, unregister_cancellation_waiter = self._create_cancellation_waiter()
+        cancellation_waiter, unregister_cancellation_waiter = _create_cancellation_waiter(self._cancellation_token)
 
         try:
             while True:
@@ -297,10 +233,14 @@ class SSEStreamParser:
 
                 try:
                     if idle_log_interval is None:
-                        chunk = await self._await_or_cancel(
+                        chunk = await _await_or_cancel(
                             chunk_iter.__anext__(),
                             operation_name="sse_next_chunk",
                             cancellation_waiter=cancellation_waiter,
+                            cancellation_token=self._cancellation_token,
+                            raise_if_cancelled=self._raise_if_cancelled,
+                            log_prefix=self._log_prefix,
+                            log_module=MODULE,
                         )
                     else:
                         if pending_chunk_task is None:
@@ -640,17 +580,17 @@ class SSEStreamParser:
                     body=json.dumps({"tool_calls": tool_calls}, ensure_ascii=False, default=str),
                 )
                 return
-            for tc in tool_calls:
+            for index, tc in enumerate(tool_calls):
                 if not isinstance(tc, dict):
                     self._record_protocol_error(
                         "tool_call_incomplete",
                         "Tool call arguments incomplete or invalid",
                         body=json.dumps(
-                            ["tool_call entry is not object"],
+                            [f"tool_call entry at index {index} is not object"],
                             ensure_ascii=False,
                         ),
                     )
-                    return
+                    continue
                 async for event in self._handle_tool_call_delta(tc):
                     yield event
 

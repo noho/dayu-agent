@@ -1,4 +1,10 @@
-"""长事务服务工厂。"""
+"""长事务服务工厂。
+
+本模块把 "ticker → FinsIngestionService" 的路由职责收敛到
+``dayu.fins.pipelines.factory.get_pipeline_from_normalized_ticker``
+这一真源，避免在 ingestion 层与 pipeline 层各自维护 market→Pipeline
+的分支，防止后续新增 market 时两处需要同步修改。
+"""
 
 from __future__ import annotations
 
@@ -16,8 +22,7 @@ from dayu.fins.storage import (
 )
 
 from .service import FinsIngestionService
-from ..pipelines.cn_pipeline import CnPipeline
-from ..pipelines.sec_pipeline import SecPipeline
+from ..pipelines.factory import build_ingestion_service_from_normalized_ticker
 
 IngestionServiceFactory = Callable[[str], FinsIngestionService]
 
@@ -33,6 +38,11 @@ def build_ingestion_service_factory(
     processor_registry: ProcessorRegistry,
 ) -> IngestionServiceFactory:
     """构建按 ticker 路由的长事务服务工厂。
+
+    内部委托给 ``get_pipeline_from_normalized_ticker`` 做 market→Pipeline
+    的分派，本函数只负责校验依赖、归一化 ticker、从 pipeline 取出其长事务
+    服务。``CnPipeline`` 不接受 ``filing_maintenance_repository``，由
+    ``get_pipeline_from_normalized_ticker`` 负责裁剪传参。
 
     Args:
         workspace_root: 工作区根目录。
@@ -66,31 +76,29 @@ def build_ingestion_service_factory(
         raise ValueError("processor_registry 不能为空")
 
     def factory(ticker: str) -> FinsIngestionService:
-        """按 ticker 创建共享长事务服务。"""
+        """按 ticker 创建共享长事务服务。
 
-        normalized_ticker = normalize_ticker(ticker)
-        if normalized_ticker.market == "US":
-            pipeline = SecPipeline(
-                workspace_root=workspace_root,
-                company_repository=company_repository,
-                source_repository=source_repository,
-                processed_repository=processed_repository,
-                blob_repository=blob_repository,
-                filing_maintenance_repository=filing_maintenance_repository,
-                processor_registry=processor_registry,
-            )
-            return pipeline.ingestion_service
-        if normalized_ticker.market in {"CN", "HK"}:
-            pipeline = CnPipeline(
-                workspace_root=workspace_root,
-                company_repository=company_repository,
-                source_repository=source_repository,
-                processed_repository=processed_repository,
-                blob_repository=blob_repository,
-                processor_registry=processor_registry,
-            )
-            return pipeline.ingestion_service
-        raise ValueError(f"不支持的 market: {normalized_ticker.market}")
+        Args:
+            ticker: 原始 ticker。
+
+        Returns:
+            该 ticker 对应 pipeline 的 ``ingestion_service``。
+
+        Raises:
+            ValueError: ticker 无法识别或 market 不受支持时抛出。
+        """
+
+        normalized = normalize_ticker(ticker)
+        return build_ingestion_service_from_normalized_ticker(
+            normalized_ticker=normalized,
+            workspace_root=workspace_root,
+            company_repository=company_repository,
+            source_repository=source_repository,
+            processed_repository=processed_repository,
+            blob_repository=blob_repository,
+            filing_maintenance_repository=filing_maintenance_repository,
+            processor_registry=processor_registry,
+        )
 
     return factory
 

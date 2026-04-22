@@ -14,11 +14,19 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from datetime import timedelta
 
 
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
 from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, ReplyOutboxSubmitRequest
 from dayu.host.host_store import HostStore
+from dayu.log import Log
+
+
+MODULE = "HOST.REPLY_OUTBOX_STORE"
+
+
+STALE_IN_PROGRESS_ERROR_MESSAGE = "stale in_progress recovery"
 
 
 from dayu.host._datetime_utils import now_utc as _now_utc, parse_dt as _parse_dt, serialize_dt as _serialize_dt
@@ -335,6 +343,9 @@ class InMemoryReplyOutboxStore:
                 "已完成交付的 reply delivery 不能再标记失败: "
                 f"delivery_id={delivery_id}"
             )
+        if existing.state == ReplyOutboxState.FAILED_TERMINAL:
+            # FAILED_TERMINAL 为吸收态，重复调用幂等返回现有记录
+            return existing
         normalized_error_message = _normalize_text(error_message, field_name="error_message")
         updated = ReplyOutboxRecord(
             delivery_id=existing.delivery_id,
@@ -355,6 +366,52 @@ class InMemoryReplyOutboxStore:
         )
         self._records[updated.delivery_id] = updated
         return updated
+
+    def cleanup_stale_in_progress_deliveries(
+        self,
+        *,
+        max_age: timedelta,
+    ) -> list[str]:
+        """把超过 max_age 的 DELIVERY_IN_PROGRESS 回退为 FAILED_RETRYABLE。
+
+        Args:
+            max_age: 超过多久未收到终态的 IN_PROGRESS 视为 stale。
+
+        Returns:
+            被回退的 delivery_id 列表。
+
+        Raises:
+            无。
+        """
+
+        cutoff = _now_utc() - max_age
+        stale_ids: list[str] = []
+        for delivery_id, record in list(self._records.items()):
+            if record.state != ReplyOutboxState.DELIVERY_IN_PROGRESS:
+                continue
+            if record.updated_at > cutoff:
+                continue
+            self._records[delivery_id] = ReplyOutboxRecord(
+                delivery_id=record.delivery_id,
+                delivery_key=record.delivery_key,
+                session_id=record.session_id,
+                scene_name=record.scene_name,
+                source_run_id=record.source_run_id,
+                reply_content=record.reply_content,
+                metadata=record.metadata,
+                state=ReplyOutboxState.FAILED_RETRYABLE,
+                created_at=record.created_at,
+                updated_at=_now_utc(),
+                delivery_attempt_count=record.delivery_attempt_count,
+                last_error_message=STALE_IN_PROGRESS_ERROR_MESSAGE,
+            )
+            stale_ids.append(delivery_id)
+        if stale_ids:
+            Log.warn(
+                f"reply outbox 清理 stale in_progress: count={len(stale_ids)}, ids={','.join(stale_ids)}",
+                module=MODULE,
+            )
+        return stale_ids
 
     def delete_by_session_id(self, session_id: str) -> int:
         """删除指定 session 的所有交付记录。
@@ -674,6 +731,9 @@ class SQLiteReplyOutboxStore:
                 "已完成交付的 reply delivery 不能再标记失败: "
                 f"delivery_id={delivery_id}"
             )
+        if existing.state == ReplyOutboxState.FAILED_TERMINAL:
+            # FAILED_TERMINAL 为吸收态，重复调用幂等返回现有记录
+            return existing
         normalized_error_message = _normalize_text(error_message, field_name="error_message")
         conn = self._host_store.get_connection()
         conn.execute(
@@ -696,6 +756,61 @@ class SQLiteReplyOutboxStore:
         if updated is None:
             raise RuntimeError(f"reply delivery 更新后读取失败: {existing.delivery_id}")
         return updated
+
+    def cleanup_stale_in_progress_deliveries(
+        self,
+        *,
+        max_age: timedelta,
+    ) -> list[str]:
+        """把超过 max_age 的 DELIVERY_IN_PROGRESS 回退为 FAILED_RETRYABLE。
+
+        Args:
+            max_age: 超过多久未收到终态的 IN_PROGRESS 视为 stale。
+
+        Returns:
+            被回退的 delivery_id 列表。
+
+        Raises:
+            无。
+        """
+
+        cutoff = _serialize_dt(_now_utc() - max_age)
+        now_ts = _serialize_dt(_now_utc())
+        conn = self._host_store.get_connection()
+        rows = conn.execute(
+            """
+            SELECT delivery_id FROM reply_outbox
+            WHERE state = ? AND updated_at <= ?
+            """,
+            (ReplyOutboxState.DELIVERY_IN_PROGRESS.value, cutoff),
+        ).fetchall()
+        stale_ids = [str(row["delivery_id"]) for row in rows]
+        if not stale_ids:
+            return []
+        placeholders = ",".join(["?"] * len(stale_ids))
+        conn.execute(
+            f"""
+            UPDATE reply_outbox
+            SET state = ?,
+                last_error_message = ?,
+                updated_at = ?
+            WHERE delivery_id IN ({placeholders})
+              AND state = ?
+            """,
+            (
+                ReplyOutboxState.FAILED_RETRYABLE.value,
+                STALE_IN_PROGRESS_ERROR_MESSAGE,
+                now_ts,
+                *stale_ids,
+                ReplyOutboxState.DELIVERY_IN_PROGRESS.value,
+            ),
+        )
+        conn.commit()
+        Log.warn(
+            f"reply outbox 清理 stale in_progress: count={len(stale_ids)}, ids={','.join(stale_ids)}",
+            module=MODULE,
+        )
+        return stale_ids
 
     def delete_by_session_id(self, session_id: str) -> int:
         """删除指定 session 的所有交付记录。

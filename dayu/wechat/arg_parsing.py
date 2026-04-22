@@ -13,7 +13,7 @@ from dayu.execution.cli_execution_options import (
     add_execution_option_arguments,
     build_execution_options_from_args,
 )
-from dayu.log import Log, LogLevel
+from dayu.log import Log, LogLevel, set_level_from_flags
 from dayu.workspace_paths import DEFAULT_WECHAT_INSTANCE_LABEL, build_wechat_state_dir
 
 if TYPE_CHECKING:
@@ -423,18 +423,13 @@ def setup_loglevel(args: argparse.Namespace) -> None:
         无。
     """
 
-    if args.log_level:
-        Log.set_level(LogLevel[args.log_level.upper()])
-    elif args.debug:
-        Log.set_level(LogLevel.DEBUG)
-    elif args.verbose:
-        Log.set_level(LogLevel.VERBOSE)
-    elif args.info:
-        Log.set_level(LogLevel.INFO)
-    elif args.quiet:
-        Log.set_level(LogLevel.ERROR)
-    else:
-        Log.set_level(LogLevel.INFO)
+    set_level_from_flags(
+        log_level=getattr(args, "log_level", None),
+        debug=bool(getattr(args, "debug", False)),
+        verbose=bool(getattr(args, "verbose", False)),
+        info=bool(getattr(args, "info", False)),
+        quiet=bool(getattr(args, "quiet", False)),
+    )
 
 
 def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:

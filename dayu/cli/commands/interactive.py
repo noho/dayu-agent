@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 from dayu.cli.conversation_labels import FileConversationLabelRegistry
@@ -112,7 +113,7 @@ def run_interactive_command(args: argparse.Namespace) -> int:
         )
         Log.info(
             "使用模型: "
-            f"{json.dumps(interactive_model, ensure_ascii=False, sort_keys=True)}",
+            f"{json.dumps(asdict(interactive_model), ensure_ascii=False, sort_keys=True)}",
             module=MODULE,
         )
         if label is not None and recreated_from_closed:

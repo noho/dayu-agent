@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 from pathlib import Path
 from threading import Barrier, Thread
 from typing import Any, AsyncIterator, Optional, cast
@@ -416,10 +417,35 @@ def test_default_fins_runtime_helper_methods_cover_registry_and_company_meta_sum
         "company_id": "1",
     }
 
-    monkeypatch.setattr(runtime.company_repository, "get_company_meta", lambda _ticker: (_ for _ in ()).throw(RuntimeError("missing")))
+    monkeypatch.setattr(
+        runtime.company_repository,
+        "get_company_meta",
+        lambda _ticker: (_ for _ in ()).throw(ValueError("broken meta")),
+    )
 
     assert runtime.get_company_name("MSFT") == ""
     assert runtime.get_company_meta_summary("MSFT") == {"ticker": "MSFT"}
+
+
+@pytest.mark.unit
+def test_prepare_download_execution_returns_typed_runtime_args(tmp_path: Path) -> None:
+    """内部准备阶段应返回强类型参数对象而非 `argparse.Namespace`。"""
+
+    runtime = _make_runtime(tmp_path)
+
+    prepared_args, _pipeline = runtime._prepare_download_execution(
+        DownloadCommandPayload(
+            ticker="AAPL",
+            form_type=("10-K",),
+            ticker_aliases=("AAPL.US",),
+        )
+    )
+
+    assert not isinstance(prepared_args, argparse.Namespace)
+    assert prepared_args.ticker == "AAPL"
+    assert prepared_args.form_type == ["10-K"]
+    assert prepared_args.ticker_aliases is not None
+    assert all(isinstance(alias, str) for alias in prepared_args.ticker_aliases)
 
 
 @pytest.mark.unit
@@ -432,21 +458,31 @@ def test_execute_sync_upload_filings_from_uses_script_generator(
     runtime = _make_runtime(tmp_path)
     source_dir = tmp_path / "source"
     source_dir.mkdir()
+    observed_args: dict[str, str | None] = {}
 
     monkeypatch.setattr(
         service_runtime_module,
         "generate_upload_filings_script",
-        lambda namespace: {
-            "script_path": "/tmp/upload.py",
-            "script_platform": "sec",
-            "ticker": namespace.ticker,
-            "source_dir": namespace.source_dir,
-            "total_files": 1,
-            "recognized_count": 1,
-            "material_count": 0,
-            "skipped_count": 0,
-            "recognized": [{"file": "10k.html", "fiscal_year": 2024, "fiscal_period": "FY"}],
-        },
+        lambda namespace: (
+            observed_args.update(
+                original_ticker=namespace.original_ticker,
+                original_company_name=namespace.original_company_name,
+            ) or {
+                "script_path": "/tmp/upload.py",
+                "script_platform": "sec",
+                "ticker": (
+                    (_ for _ in ()).throw(AssertionError("runtime 不应再传 argparse.Namespace"))
+                    if isinstance(namespace, argparse.Namespace)
+                    else namespace.ticker
+                ),
+                "source_dir": namespace.source_dir,
+                "total_files": 1,
+                "recognized_count": 1,
+                "material_count": 0,
+                "skipped_count": 0,
+                "recognized": [{"file": "10k.html", "fiscal_year": 2024, "fiscal_period": "FY"}],
+            }
+        ),
     )
 
     result = _require_sync_result(
@@ -466,6 +502,8 @@ def test_execute_sync_upload_filings_from_uses_script_generator(
     upload_filings_from_data = cast(Any, result.data)
 
     assert upload_filings_from_data.ticker == "AAPL"
+    assert observed_args["original_ticker"] == "AAPL"
+    assert observed_args["original_company_name"] == "Apple"
     assert upload_filings_from_data.source_dir == str(source_dir)
     assert upload_filings_from_data.recognized[0].file == "10k.html"
 

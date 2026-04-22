@@ -8,12 +8,13 @@ from typing import AsyncIterator, Callable
 from dayu.contracts.events import AppEvent
 from dayu.contracts.session import SessionSource
 from dayu.host.protocols import HostedExecutionGatewayProtocol
+from dayu.services.concurrency_lanes import resolve_contract_concurrency_lane
 from dayu.services.contract_preparation import prepare_execution_contract
 from dayu.services.contracts import PromptRequest, PromptSubmission
 from dayu.services.internal.session_coordinator import ServiceSessionCoordinator
 from dayu.services.prompt_contributions import (
     build_base_user_contribution,
-    build_fins_default_subject_contribution,
+    build_optional_fins_subject_contribution,
 )
 from dayu.services.protocols import PromptServiceProtocol
 from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
@@ -48,24 +49,6 @@ class PromptService(PromptServiceProtocol):
             event_stream=self._stream_in_session(request=request, session_id=session.session_id),
         )
 
-    async def stream(self, request: PromptRequest) -> AsyncIterator[AppEvent]:
-        """兼容旧调用方的单轮 Prompt 流式接口。
-
-        Args:
-            request: Prompt 请求。
-
-        Yields:
-            应用层事件。
-
-        Raises:
-            ValueError: 输入为空时抛出。
-            KeyError: 显式续聊但 session 不存在时抛出。
-        """
-
-        submission = await self.submit(request)
-        async for event in submission.event_stream:
-            yield event
-
     def _resolve_session(self, request: PromptRequest):
         """解析 Prompt 请求对应的 Host session。"""
 
@@ -99,16 +82,12 @@ class PromptService(PromptServiceProtocol):
         prompt_contributions = {
             "base_user": build_base_user_contribution(),
         }
-        # 归一化 ticker：未提供时保持 None，提供时大写并去空白
-        ticker = str(request.ticker).strip().upper() if request.ticker else None
-        if ticker:
-            company_name = self.company_name_resolver(ticker) if self.company_name_resolver is not None else ""
-            subject_text = build_fins_default_subject_contribution(
-                ticker=ticker,
-                company_name=company_name,
-            )
-            if subject_text:
-                prompt_contributions["fins_default_subject"] = subject_text
+        subject_text = build_optional_fins_subject_contribution(
+            ticker=request.ticker,
+            company_name_resolver=self.company_name_resolver,
+        )
+        if subject_text:
+            prompt_contributions["fins_default_subject"] = subject_text
 
         execution_contract = prepare_execution_contract(
             service_name="prompt",
@@ -119,7 +98,7 @@ class PromptService(PromptServiceProtocol):
             selected_toolsets=(),
             user_message=user_message,
             session_key=session_id,
-            concurrency_lane="llm_api",
+            business_concurrency_lane=resolve_contract_concurrency_lane("prompt"),
             execution_options=request.execution_options,
             timeout_ms=None,
             resumable=accepted_scene.default_resumable,

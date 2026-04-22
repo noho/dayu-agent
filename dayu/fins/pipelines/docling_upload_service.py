@@ -717,16 +717,30 @@ def _resolve_document_version(previous_meta: Optional[dict[str, Any]], source_fi
 def _resolve_upsert_mode(action: str, previous_meta: Optional[dict[str, Any]], overwrite: bool) -> str:
     """解析写入模式。
 
+    判定规则：
+
+    - ``action == "update"``：
+      * 目标存在：返回 ``"update"``。
+      * 目标不存在且 ``overwrite == True``：视为"覆盖式创建"，返回
+        ``"create"``，这条分支让 CLI 的 ``--overwrite`` 在显式传入
+        ``update`` 动作时也能走通，而不是强制调用方先探测是否存在。
+      * 目标不存在且 ``overwrite == False``：抛 ``FileNotFoundError``。
+    - ``action == "create"``：
+      * 目标不存在：返回 ``"create"``。
+      * 目标存在且 ``overwrite == True``：返回 ``"update"``（原地覆盖）。
+      * 目标存在且 ``overwrite == False``：抛 ``FileExistsError``。
+
     Args:
-        action: 上传动作（create/update）。
-        previous_meta: 旧元数据。
-        overwrite: 是否覆盖。
+        action: 上传动作（``create`` / ``update``）。
+        previous_meta: 旧元数据；不存在时为 ``None``。
+        overwrite: 是否启用覆盖。
 
     Returns:
-        `create` 或 `update`。
+        ``"create"`` 或 ``"update"``。
 
     Raises:
-        FileNotFoundError: update 目标不存在时抛出。
+        FileNotFoundError: ``action == "update"``、目标不存在且未启用覆盖时抛出。
+        FileExistsError: ``action == "create"``、目标已存在且未启用覆盖时抛出。
     """
 
     if action == "update":
@@ -974,8 +988,13 @@ def build_cn_filing_ids(
 ) -> tuple[str, str]:
     """生成港A股 filing 文档 ID 对。
 
+    契约：``ticker`` 必须是已经过 ``ticker_normalization.normalize_ticker``
+    的 canonical 形态；本函数只负责按稳定规则生成 ID，不再在内部重复归一化，
+    以保证归一化职责在调用方层唯一。
+
     Args:
-        ticker: 股票代码。
+        ticker: 已归一化的 canonical ticker（非空、已去空白并符合各市场
+            canonical 规则）。
         form_type: form_type。
         fiscal_year: 财年。
         fiscal_period: 财期。
@@ -988,7 +1007,9 @@ def build_cn_filing_ids(
         ValueError: 参数非法时抛出。
     """
 
-    normalized_ticker = _normalize_ticker(ticker)
+    normalized_ticker = ticker.strip()
+    if not normalized_ticker:
+        raise ValueError("ticker 不能为空")
     normalized_form = form_type.strip().upper()
     normalized_period = fiscal_period.strip().upper()
     if not normalized_form:
@@ -1009,8 +1030,12 @@ def build_sec_filing_ids(
 ) -> tuple[str, str]:
     """生成美股 filing 文档 ID 对。
 
+    契约：``ticker`` 必须是已经过 ``ticker_normalization.normalize_ticker``
+    的 canonical 形态；本函数只负责按稳定规则生成 ID，不再在内部重复归一化，
+    以保证归一化职责在调用方层唯一。
+
     Args:
-        ticker: 股票代码。
+        ticker: 已归一化的 canonical ticker。
         fiscal_year: 财年。
         fiscal_period: 财期。
         amended: 是否修订版。
@@ -1022,7 +1047,9 @@ def build_sec_filing_ids(
         ValueError: 参数非法时抛出。
     """
 
-    normalized_ticker = _normalize_ticker(ticker)
+    normalized_ticker = ticker.strip()
+    if not normalized_ticker:
+        raise ValueError("ticker 不能为空")
     normalized_period = fiscal_period.strip().upper()
     if not normalized_period:
         raise ValueError("fiscal_period 不能为空")

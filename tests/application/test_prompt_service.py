@@ -222,6 +222,19 @@ def _build_service() -> tuple[PromptService, _FakeSceneExecutionAcceptancePrepar
     return service, resolver
 
 
+async def _submit_and_collect(
+    service: PromptService,
+    request: PromptRequest,
+) -> list:
+    """提交单轮 Prompt 并收集事件。"""
+
+    submission = await service.submit(request)
+    events = []
+    async for event in submission.event_stream:
+        events.append(event)
+    return events
+
+
 @pytest.mark.unit
 def test_stream_prompt_outputs_execution_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     """验证 PromptService 会直接生成 ExecutionContract。"""
@@ -233,20 +246,14 @@ def test_stream_prompt_outputs_execution_contract(monkeypatch: pytest.MonkeyPatc
 
     service, resolver = _build_service()
 
-    async def _collect() -> list:
-        events = []
-        async for event in service.stream(PromptRequest(user_text=" hello ", ticker="AAPL")):
-            events.append(event)
-        return events
-
-    events = asyncio.run(_collect())
+    events = asyncio.run(_submit_and_collect(service, PromptRequest(user_text=" hello ", ticker="AAPL")))
 
     assert [event.type for event in events] == [AppEventType.CONTENT_DELTA, AppEventType.FINAL_ANSWER]
     assert resolver.calls == [{"scene_name": "prompt", "execution_options": None}]
     contract = _last_execution_contract(service.host)
     assert contract.service_name == "prompt"
     assert contract.scene_name == "prompt"
-    assert contract.host_policy.concurrency_lane == "llm_api"
+    assert contract.host_policy.business_concurrency_lane is None
     assert contract.host_policy.timeout_ms is None
     assert contract.host_policy.resumable is False
     assert contract.message_inputs.user_message == "hello"
@@ -286,15 +293,12 @@ def test_stream_prompt_reuses_explicit_session_id(monkeypatch: pytest.MonkeyPatc
         session_id="session_prompt",
     )
 
-    async def _collect() -> list:
-        events = []
-        async for event in service.stream(
+    asyncio.run(
+        _submit_and_collect(
+            service,
             PromptRequest(user_text=" hello ", ticker="AAPL", session_id=session.session_id),
-        ):
-            events.append(event)
-        return events
-
-    asyncio.run(_collect())
+        )
+    )
 
     contract = _last_execution_contract(service.host)
     assert contract.host_policy.session_key == session.session_id
@@ -306,11 +310,5 @@ def test_stream_prompt_raises_when_input_empty() -> None:
 
     service, _ = _build_service()
 
-    async def _collect() -> list:
-        events = []
-        async for event in service.stream(PromptRequest(user_text="   ", ticker="AAPL")):
-            events.append(event)
-        return events
-
     with pytest.raises(ValueError):
-        asyncio.run(_collect())
+        asyncio.run(_submit_and_collect(service, PromptRequest(user_text="   ", ticker="AAPL")))

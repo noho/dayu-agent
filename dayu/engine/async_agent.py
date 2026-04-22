@@ -495,6 +495,7 @@ class AsyncAgent:
         iteration_id = f"{run_id}_iteration_0"
         # 跨轮次累积内容，确保续写场景下 final_answer_event 包含完整内容
         accumulated_content_parts: List[str] = []
+        call_payloads = dict(extra_payloads)
         
         while iteration < self.running_config.max_iterations:
             # 协作式取消检查：每轮迭代起始时检查取消令牌
@@ -551,7 +552,6 @@ class AsyncAgent:
                     model_input_messages=copy.deepcopy(messages),
                     tool_schemas=iteration_tool_schemas,
                 )
-            call_payloads = dict(extra_payloads)
             call_payloads["trace_context"] = {
                 "run_id": run_id,
                 "iteration_id": iteration_id,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 
 from dayu.cli.dependency_setup import (
     WorkspaceConfig,
@@ -107,7 +108,7 @@ def _run_one_shot_prompt_command(
     )
     Log.info(
         "使用模型: "
-        f"{json.dumps(prompt_model, ensure_ascii=False, sort_keys=True)}",
+        f"{json.dumps(asdict(prompt_model), ensure_ascii=False, sort_keys=True)}",
         module=MODULE,
     )
     Log.info("执行单次 prompt...", module=MODULE)
@@ -179,7 +180,7 @@ def _run_labeled_prompt_command(
             )
             Log.info(
                 "使用模型: "
-                f"{json.dumps(prompt_model, ensure_ascii=False, sort_keys=True)}",
+                f"{json.dumps(asdict(prompt_model), ensure_ascii=False, sort_keys=True)}",
                 module=MODULE,
             )
             if recreated_from_closed:

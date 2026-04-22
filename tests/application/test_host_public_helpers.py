@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import pytest
 
+from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 from dayu.engine.events import EventType, StreamEvent
 from dayu.host.events import build_app_event_from_stream_event
@@ -47,7 +48,7 @@ class _StubSessionHost:
         *,
         session_id: str | None = None,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """创建会话记录。"""
 
@@ -71,7 +72,7 @@ class _StubSessionHost:
         source: SessionSource,
         *,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """按确定性 ID 获取或创建会话。"""
 
@@ -88,12 +89,22 @@ class _StubSessionHost:
         self.calls.append(("get", session_id))
         return self.sessions.get(session_id)
 
-    def list_sessions(self, *, state: SessionState | None = None) -> list[SessionRecord]:
+    def list_sessions(
+        self,
+        *,
+        state: SessionState | None = None,
+        source: SessionSource | None = None,
+        scene_name: str | None = None,
+    ) -> list[SessionRecord]:
         """列出会话。"""
 
-        if state is None:
-            return list(self.sessions.values())
-        return [record for record in self.sessions.values() if record.state == state]
+        return [
+            record
+            for record in self.sessions.values()
+            if (state is None or record.state == state)
+            and (source is None or record.source == source)
+            and (scene_name is None or record.scene_name == scene_name)
+        ]
 
     def touch_session(self, session_id: str) -> None:
         """刷新会话活跃时间。"""

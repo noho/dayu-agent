@@ -509,6 +509,20 @@ class _FsSourceDocumentMixin(_FsStorageInfra):
     ) -> None:
         """执行单文档重置（内部实现）。
 
+        行为与错误传播：
+
+        - 目标目录存在且为目录：调用 ``shutil.rmtree`` 物理删除整个文档目录。
+          若目录下存在无权限的子项或只读文件，``rmtree`` 会抛 ``OSError``。
+        - 目标是文件（少数异常路径下出现）：``unlink(missing_ok=True)`` 删除。
+        - 随后从对应 manifest 中移除该 document_id 条目。
+
+        设计决策（异常直抛，不做回退）：
+            该方法作为 ``overwrite`` 重建路径的第一步，一旦删除失败（例如权限
+            受限、文件系统忙），**必须**让异常向上传播；宁可让整个 upload
+            流程失败，也不允许仓储侧保留"旧数据残留 + 新 manifest 条目"的
+            不一致状态。上层（``reset_upload_target_for_overwrite`` →
+            ``execute_upload``）因此不会吞掉这里抛出的 ``OSError``。
+
         Args:
             ticker: 股票代码。
             document_id: 文档 ID。
@@ -518,7 +532,8 @@ class _FsSourceDocumentMixin(_FsStorageInfra):
             无。
 
         Raises:
-            OSError: 删除目录或 manifest 失败时抛出。
+            OSError: 删除目录、文件或 manifest 失败时抛出；调用方有责任感知并
+                中止后续写入，以保证仓储一致性。
         """
 
         normalized_ticker = _normalize_ticker(ticker)

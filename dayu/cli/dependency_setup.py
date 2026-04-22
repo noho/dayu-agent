@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
 from dayu.cli.interactive_state import (
     FileInteractiveStateStore,
@@ -19,8 +19,10 @@ from dayu.cli.interactive_state import (
     build_interactive_key,
     resolve_interactive_session_id as resolve_interactive_state_session_id,
 )
+from dayu.cli.graceful_shutdown import register_cli_shutdown_hook
 from dayu.contracts.infrastructure import ConfigLoaderProtocol, PromptAssetStoreProtocol
 from dayu.contracts.session import SessionSource
+from dayu.contracts.tool_configs import DocToolLimits, FinsToolLimits
 from dayu.execution.cli_execution_options import build_execution_options_from_args
 from dayu.execution.options import (
     ExecutionOptions,
@@ -37,7 +39,7 @@ from dayu.fins.domain.enums import SourceKind
 from dayu.fins.service_runtime import DefaultFinsRuntime
 from dayu.fins.storage import FsSourceDocumentRepository
 from dayu.host import Host
-from dayu.log import Log, LogLevel
+from dayu.log import Log, set_level_from_flags
 from dayu.services import prepare_host_runtime_dependencies, WriteRunConfig
 from dayu.services.chat_service import ChatService
 from dayu.services.fins_service import FinsService
@@ -135,8 +137,8 @@ class RunningConfig:
 
     runner_running_config: RunnerRuntimeConfig
     agent_running_config: AgentRuntimeConfig
-    doc_tool_limits: object | None
-    fins_tool_limits: object | None
+    doc_tool_limits: DocToolLimits | None
+    fins_tool_limits: FinsToolLimits | None
     web_tools_config: _WebToolsConfigLike
     tool_trace_config: TraceSettings
     model_name: str = ""
@@ -179,10 +181,6 @@ class ModelName:
     """模型名包装对象。"""
 
     model_name: str
-
-
-ToolTraceConfig = TraceSettings
-
 
 @dataclass
 class WriteCliConfig:
@@ -505,6 +503,7 @@ def _prepare_cli_host_dependencies(
         runtime_label="CLI Host runtime",
         log_module=MODULE,
     )
+    register_cli_shutdown_hook(prepared.host)
     return (
         prepared.workspace,
         prepared.default_execution_options,
@@ -594,6 +593,7 @@ def _build_write_service(
 
     return WriteService(
         host=host,
+        host_governance=host,
         workspace=workspace,
         scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
         company_name_resolver=fins_runtime.get_company_name,
@@ -765,19 +765,14 @@ def setup_loglevel(args: argparse.Namespace) -> None:
         KeyError: 传入未知日志级别名称时抛出。
     """
 
-    if args.log_level:
-        Log.set_level(LogLevel[args.log_level.upper()])
-    elif args.debug:
-        Log.set_level(LogLevel.DEBUG)
-    elif args.verbose:
-        Log.set_level(LogLevel.VERBOSE)
-    elif args.info:
-        Log.set_level(LogLevel.INFO)
-    elif args.quiet:
-        Log.set_level(LogLevel.ERROR)
-    else:
-        # 即使无显式 flag，也需调用 set_level 以触发第三方库抑制逻辑
-        Log.set_level(LogLevel.INFO)
+    # 即使无显式 flag，也需调用 set_level 以触发第三方库抑制逻辑。
+    set_level_from_flags(
+        log_level=getattr(args, "log_level", None),
+        debug=bool(getattr(args, "debug", False)),
+        verbose=bool(getattr(args, "verbose", False)),
+        info=bool(getattr(args, "info", False)),
+        quiet=bool(getattr(args, "quiet", False)),
+    )
 
 
 def run_write_pipeline(

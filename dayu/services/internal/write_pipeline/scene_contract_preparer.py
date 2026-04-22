@@ -17,7 +17,10 @@ from typing import Callable
 from dayu.contracts.agent_execution import ExecutionContract
 from dayu.contracts.infrastructure import ConfigLoaderProtocol
 from dayu.execution.options import ExecutionOptions
+from dayu.execution.runtime_config import OpenAIRunnerRuntimeConfig
+from dayu.log import Log
 from dayu.services.contracts import WriteRunConfig
+from dayu.services.concurrency_lanes import resolve_contract_concurrency_lane
 from dayu.services.contract_preparation import prepare_execution_contract
 from dayu.services.internal.write_pipeline.execution_options import (
     build_execution_options_with_scene_overrides,
@@ -31,6 +34,95 @@ from dayu.services.scene_execution_acceptance import (
     AcceptedSceneExecution,
     SceneExecutionAcceptancePreparer,
 )
+
+MODULE = "APP.WRITE_PIPELINE"
+
+
+def _resolve_scene_tool_timeout_seconds(prepared_scene: AcceptedSceneExecution) -> float | None:
+    """解析 scene 生效的工具超时秒数。
+
+    Args:
+        prepared_scene: 已解析的 scene 执行信息。
+
+    Returns:
+        工具超时秒数；当前 runner 不支持时返回 ``None``。
+
+    Raises:
+        无。
+    """
+
+    runner_running_config = prepared_scene.resolved_execution_options.runner_running_config
+    if isinstance(runner_running_config, OpenAIRunnerRuntimeConfig):
+        return runner_running_config.tool_timeout_seconds
+    return None
+
+
+def _build_scene_resolution_debug_message(
+    *,
+    action: str,
+    scene_name: str,
+    host_session_id: str,
+    prepared_scene: AcceptedSceneExecution | None = None,
+) -> str:
+    """构造 scene 缓存/创建调试日志。
+
+    Args:
+        action: 当前动作，如 ``cache_hit``、``created``。
+        scene_name: scene 名称。
+        host_session_id: 当前写作复用的宿主 session。
+        prepared_scene: 已解析的 scene 执行信息；为空时仅输出最小摘要。
+
+    Returns:
+        统一格式的调试日志文本。
+
+    Raises:
+        无。
+    """
+
+    if prepared_scene is None:
+        return (
+            "scene 准备结果: "
+            f"action={action}, scene_name={scene_name}, host_session_id={host_session_id}"
+        )
+    return (
+        "scene 准备结果: "
+        f"action={action}, scene_name={scene_name}, "
+        f"host_session_id={host_session_id}, "
+        f"model_name={prepared_scene.accepted_execution_spec.model.model_name}, "
+        f"temperature={prepared_scene.resolved_temperature}, "
+        f"max_iterations={prepared_scene.resolved_execution_options.agent_running_config.max_iterations}, "
+        f"tool_timeout_seconds={_resolve_scene_tool_timeout_seconds(prepared_scene)}, "
+        f"business_lane={resolve_contract_concurrency_lane(scene_name) or ''}, "
+        f"resumable={prepared_scene.default_resumable}"
+    )
+
+
+def _build_execution_contract_debug_message(*, contract: ExecutionContract) -> str:
+    """构造 ExecutionContract 调试日志。
+
+    Args:
+        contract: 已构建的执行契约。
+
+    Returns:
+        统一格式的调试日志文本。
+
+    Raises:
+        无。
+    """
+
+    accepted_runtime = contract.accepted_execution_spec.runtime
+    tool_timeout_seconds = accepted_runtime.runner_running_config.get("tool_timeout_seconds")
+    return (
+        "构建 ExecutionContract: "
+        f"scene_name={contract.scene_name}, "
+        f"host_session_id={contract.host_policy.session_key or ''}, "
+        f"business_lane={contract.host_policy.business_concurrency_lane or ''}, "
+        f"resumable={contract.host_policy.resumable}, "
+        f"model_name={contract.accepted_execution_spec.model.model_name}, "
+        f"temperature={contract.accepted_execution_spec.model.temperature}, "
+        f"max_iterations={accepted_runtime.agent_running_config.get('max_iterations')}, "
+        f"tool_timeout_seconds={tool_timeout_seconds}"
+    )
 
 class SceneAgentCreationError(RuntimeError):
     """scene Agent 创建失败异常。"""
@@ -323,14 +415,44 @@ class SceneContractPreparer:
         with self._resolved_scene_lock:
             cached_scene = self._resolved_scene_executions.get(scene_name)
             if cached_scene is not None:
+                Log.debug(
+                    _build_scene_resolution_debug_message(
+                        action="cache_hit",
+                        scene_name=scene_name,
+                        host_session_id=self._host_session_id,
+                        prepared_scene=(
+                            cached_scene if isinstance(cached_scene, AcceptedSceneExecution) else None
+                        ),
+                    ),
+                    module=MODULE,
+                )
                 return cached_scene
 
             self._ensure_scene_environment_ready(scene_name=scene_name, agent_label=agent_label)
+            Log.debug(
+                _build_scene_resolution_debug_message(
+                    action="cache_miss",
+                    scene_name=scene_name,
+                    host_session_id=self._host_session_id,
+                ),
+                module=MODULE,
+            )
 
             resolved_scene = create_agent()
             if resolved_scene is None:
                 raise SceneAgentCreationError(scene_name=scene_name, agent_label=agent_label)
             self._resolved_scene_executions[scene_name] = resolved_scene
+            Log.debug(
+                _build_scene_resolution_debug_message(
+                    action="created",
+                    scene_name=scene_name,
+                    host_session_id=self._host_session_id,
+                    prepared_scene=(
+                        resolved_scene if isinstance(resolved_scene, AcceptedSceneExecution) else None
+                    ),
+                ),
+                module=MODULE,
+            )
             return resolved_scene
 
     # ------------------------------------------------------------------
@@ -360,7 +482,7 @@ class SceneContractPreparer:
         if not user_message:
             raise ValueError("写作流水线 prompt 不能为空")
         prompt_contributions = self._build_prompt_contributions()
-        return prepare_execution_contract(
+        contract = prepare_execution_contract(
             service_name="write_pipeline",
             scene_name=prepared_scene.scene_name,
             accepted_execution_spec=prepared_scene.accepted_execution_spec,
@@ -369,11 +491,16 @@ class SceneContractPreparer:
             selected_toolsets=(),
             user_message=user_message,
             session_key=self._host_session_id,
-            concurrency_lane="llm_api",
+            business_concurrency_lane=resolve_contract_concurrency_lane(prepared_scene.scene_name),
             execution_options=self._build_execution_options_for_scene(prepared_scene.scene_name),
             timeout_ms=None,
             resumable=prepared_scene.default_resumable,
         )
+        Log.debug(
+            _build_execution_contract_debug_message(contract=contract),
+            module=MODULE,
+        )
+        return contract
 
     # ------------------------------------------------------------------
     # 内部辅助

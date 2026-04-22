@@ -7,6 +7,7 @@ import threading
 import time
 from collections.abc import Iterable
 from contextlib import contextmanager
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Sequence, cast
@@ -37,6 +38,7 @@ from dayu.execution.options import (
 )
 from dayu.execution.runtime_config import AgentRuntimeConfig, OpenAIRunnerRuntimeConfig
 from dayu.host.host_execution import HostExecutorProtocol
+from dayu.host.protocols import HostGovernanceProtocol, LaneStatus
 from dayu.log import Log
 from dayu.prompting.scene_definition import load_scene_definition
 from dayu.services.internal.write_pipeline.chapter_contracts import ChapterContract, ItemRule, PreferredLens
@@ -111,6 +113,8 @@ from dayu.services.internal.write_pipeline.scene_contract_preparer import (
     SceneContractPreparer,
     SceneAgentCreationError,
 )
+from dayu.services.conversation_policy_reader import ConversationPolicyReader
+from dayu.services.scene_definition_reader import SceneDefinitionReader
 from dayu.services.scene_execution_acceptance import AcceptedSceneExecution, SceneExecutionAcceptancePreparer
 from dayu.services.internal.write_pipeline.scene_executor import (
     _LLM_RETRY_DELAY_SECONDS,
@@ -336,6 +340,38 @@ def _build_test_host_executor() -> HostExecutorProtocol:
     return cast(HostExecutorProtocol, _FakeHostExecutor())
 
 
+class _FakeHostGovernance:
+    """测试用 Host governance 实现，提供 write_chapter lane 上限。"""
+
+    def __init__(self, write_chapter_max: int = 5) -> None:
+        self._write_chapter_max = write_chapter_max
+
+    def cleanup_stale_permits(self) -> list[str]:
+        """返回空清理列表以满足协议。"""
+
+        return []
+
+    def cleanup_stale_reply_outbox_deliveries(self, *, max_age: timedelta = timedelta(minutes=5)) -> list[str]:
+        """返回空 reply outbox 回退列表以满足协议。"""
+
+        del max_age
+        return []
+
+    def get_all_lane_statuses(self) -> dict[str, LaneStatus]:
+        """返回写作测试需要的 lane 状态快照。"""
+
+        return {
+            "write_chapter": LaneStatus(lane="write_chapter", max_concurrent=self._write_chapter_max, active=0),
+            "llm_api": LaneStatus(lane="llm_api", max_concurrent=8, active=0),
+        }
+
+
+def _build_test_host_governance() -> HostGovernanceProtocol:
+    """构造测试用宿主治理协议视图。"""
+
+    return cast(HostGovernanceProtocol, _FakeHostGovernance())
+
+
 def _build_test_pipeline_runner(tmp_path: Path) -> WritePipelineRunner:
     """构建最小可调用的写作流水线 runner。
 
@@ -357,6 +393,7 @@ def _build_test_pipeline_runner(tmp_path: Path) -> WritePipelineRunner:
         write_config=_build_test_write_config(tmp_path),
         scene_execution_acceptance_preparer=_as_scene_execution_acceptance_preparer(_FakeAgentProvider()),
         host_executor=_build_test_host_executor(),
+        host_governance=_build_test_host_governance(),
         host_session_id="write_session",
     )
 
@@ -1398,6 +1435,20 @@ class _FakeCancelledPromptAgent:
         )
 
 
+class _FakeModelCatalog:
+    """测试用模型目录。"""
+
+    def load_model(self, model_name: str) -> ModelConfig:
+        """返回指定模型配置。"""
+
+        return _build_test_model_config(model_name)
+
+    def load_models(self) -> dict[str, ModelConfig]:
+        """返回空模型字典以满足协议。"""
+
+        return {}
+
+
 class _SequenceCaller:
     """按顺序返回预设值的可调用对象。"""
 
@@ -1499,6 +1550,7 @@ def _build_runner(
     company_name_resolver: Callable[[str], str] | None = None,
     company_meta_summary_resolver: Callable[[str], dict[str, str]] | None = None,
     infer: bool = False,
+    fast: bool = False,
 ) -> WritePipelineRunner:
     """构建测试用写作执行器。
 
@@ -1514,7 +1566,7 @@ def _build_runner(
 
     workspace = tmp_path / "workspace"
     (workspace / "portfolio" / "AAPL" / "filings").mkdir(parents=True, exist_ok=True)
-    write_config = _build_test_write_config(tmp_path, infer=infer)
+    write_config = _build_test_write_config(tmp_path, infer=infer, fast=fast)
     workspace_config = _build_test_workspace_resources(workspace)
     running_config = _build_test_resolved_options(tmp_path / "trace")
     provider = _FakeAgentProvider()
@@ -1524,6 +1576,7 @@ def _build_runner(
         write_config=write_config,
         scene_execution_acceptance_preparer=_as_scene_execution_acceptance_preparer(provider),
         host_executor=_build_test_host_executor(),
+        host_governance=_build_test_host_governance(),
         host_session_id="write_session",
         company_name_resolver=company_name_resolver,
         company_meta_summary_resolver=company_meta_summary_resolver,
@@ -2020,6 +2073,7 @@ def test_run_write_pipeline_wrapper_and_print_write_report_cover_entrypoints(
         write_config=_build_test_write_config(tmp_path),
         scene_execution_acceptance_preparer=_as_scene_execution_acceptance_preparer(_FakeAgentProvider()),
         host_executor=_build_test_host_executor(),
+        host_governance=_build_test_host_governance(),
         host_session_id="host-session",
     )
     missing_report_code = print_write_report(output_dir)
@@ -3067,6 +3121,7 @@ def test_create_write_agent_leaves_max_iterations_to_runtime_scene_resolution(
         write_config=write_config,
         scene_execution_acceptance_preparer=_as_scene_execution_acceptance_preparer(provider),
         host_executor=_build_test_host_executor(),
+        host_governance=_build_test_host_governance(),
         host_session_id="write_session",
     )
     runner._preparer._create_write_agent()
@@ -3097,6 +3152,7 @@ def test_create_write_agent_does_not_inject_global_max_iterations_into_execution
         write_config=write_config,
         scene_execution_acceptance_preparer=_as_scene_execution_acceptance_preparer(provider),
         host_executor=_build_test_host_executor(),
+        host_governance=_build_test_host_governance(),
         host_session_id="write_session",
     )
     runner._preparer._create_write_agent()
@@ -3235,6 +3291,7 @@ def test_create_audit_agent_prepares_scene_with_audit_execution_options(
         write_config=write_config,
         scene_execution_acceptance_preparer=_as_scene_execution_acceptance_preparer(provider),
         host_executor=_build_test_host_executor(),
+        host_governance=_build_test_host_governance(),
         host_session_id="write_session",
     )
     runner._preparer._create_audit_agent()
@@ -3272,6 +3329,7 @@ def test_create_audit_agent_does_not_override_web_provider(
         write_config=write_config,
         scene_execution_acceptance_preparer=_as_scene_execution_acceptance_preparer(provider),
         host_executor=_build_test_host_executor(),
+        host_governance=_build_test_host_governance(),
         host_session_id="write_session",
     )
     runner._preparer._create_audit_agent()
@@ -3311,6 +3369,7 @@ def test_create_repair_agent_uses_repair_scene_without_tools(
         write_config=write_config,
         scene_execution_acceptance_preparer=_as_scene_execution_acceptance_preparer(provider),
         host_executor=_build_test_host_executor(),
+        host_governance=_build_test_host_governance(),
         host_session_id="write_session",
     )
     runner._preparer._create_repair_agent()
@@ -3337,6 +3396,7 @@ def test_create_confirm_agent_uses_confirm_scene_with_tools(
         write_config=write_config,
         scene_execution_acceptance_preparer=_as_scene_execution_acceptance_preparer(provider),
         host_executor=_build_test_host_executor(),
+        host_governance=_build_test_host_governance(),
         host_session_id="write_session",
     )
     runner._preparer._create_confirm_agent()
@@ -3374,6 +3434,7 @@ def test_create_write_and_audit_agents_use_separate_model_overrides(tmp_path: Pa
         write_config=write_config,
         scene_execution_acceptance_preparer=_as_scene_execution_acceptance_preparer(provider),
         host_executor=_build_test_host_executor(),
+        host_governance=_build_test_host_governance(),
         host_session_id="write_session",
         execution_options=ExecutionOptions(model_name="write-override", temperature=0.3, debug_sse=True),
     )
@@ -3418,6 +3479,55 @@ def test_scene_contract_preparer_build_execution_contract_uses_audit_scene_optio
 
 
 @pytest.mark.unit
+def test_scene_execution_acceptance_preparer_emits_debug_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 scene 接受结果会输出模型、预算与超时摘要日志。"""
+
+    logs: list[str] = []
+    monkeypatch.setattr(Log, "debug", lambda message, *, module: logs.append(f"{module}:{message}"))
+    preparer = SceneExecutionAcceptancePreparer(
+        workspace_dir=tmp_path,
+        base_execution_options=_build_test_resolved_options(tmp_path / "trace"),
+        model_catalog=cast(Any, _FakeModelCatalog()),
+        scene_definition_reader=SceneDefinitionReader(prompt_asset_store=_FakePromptAssetStore()),
+        conversation_policy_reader=ConversationPolicyReader(),
+    )
+
+    accepted = preparer.prepare("write")
+
+    assert accepted.scene_name == "write"
+    assert any("SERVICE.SCENE_ACCEPTANCE:scene 接受结果:" in item for item in logs)
+    assert any(
+        f"scene_name=write" in item and f"model_name={accepted.accepted_execution_spec.model.model_name}" in item
+        for item in logs
+    )
+    assert any("max_iterations=" in item and "tool_timeout_seconds=" in item for item in logs)
+
+
+@pytest.mark.unit
+def test_scene_contract_preparer_and_prompt_runner_emit_debug_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 scene 缓存、contract 构建、dispatch 与结果摘要日志都会输出。"""
+
+    runner = _build_runner(tmp_path)
+    logs: list[str] = []
+    monkeypatch.setattr(Log, "debug", lambda message, *, module: logs.append(f"{module}:{message}"))
+    cast(Any, runner._prompt_runner)._prompt_agent = _FakePromptAgent(
+        side_effects=[
+            AppResult(content="第一次结果", errors=[], warnings=[]),
+            AppResult(content="第二次结果", errors=[], warnings=[]),
+        ]
+    )
+
+    runner._prompt_runner._run_agent_prompt_raw("请写第一段")
+    runner._prompt_runner._run_agent_prompt_raw("请写第二段")
+
+    assert any("scene 准备结果: action=created, scene_name=write" in item for item in logs)
+    assert any("scene 准备结果: action=cache_hit, scene_name=write" in item for item in logs)
+    assert any("构建 ExecutionContract: scene_name=write" in item for item in logs)
+    assert any("开始执行 scene contract: scene_name=write" in item for item in logs)
+    assert any("scene contract 执行完成: scene_name=write, errors_count=0, warnings_count=0" in item for item in logs)
+
+
+@pytest.mark.unit
 def test_scene_contract_preparer_filters_prompt_contributions_for_infer_scene(tmp_path: Path) -> None:
     """验证 infer scene 的 ExecutionContract 只携带 manifest 声明允许的 slot。"""
 
@@ -3433,6 +3543,35 @@ def test_scene_contract_preparer_filters_prompt_contributions_for_infer_scene(tm
 
     assert list(contract.preparation_spec.prompt_contributions.keys()) == ["fins_default_subject"]
     assert "base_user" not in contract.preparation_spec.prompt_contributions
+
+
+@pytest.mark.unit
+def test_chapter_execution_coordinator_emits_chapter_scene_debug_log(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证章节写作入口会输出 chapter_title/prompt_name/phase/scene 摘要日志。"""
+
+    runner = _build_runner(tmp_path, fast=True)
+    logs: list[str] = []
+    task = ChapterTask(index=1, title="经营表现与核心驱动", skeleton="## 经营表现与核心驱动")
+    monkeypatch.setattr(Log, "debug", lambda message, *, module: logs.append(f"{module}:{message}"))
+
+    result = runner._chapter_execution_coordinator.run_single_chapter(
+        task=task,
+        company_name="Apple",
+        prompt_name="write_chapter",
+        prompt_inputs=runner._prompter.build_chapter_prompt_inputs(task=task, company_name="Apple"),
+        company_facets=None,
+        company_facet_catalog={},
+    )
+
+    assert result.status == "passed"
+    assert any(
+        "章节 scene 调用摘要: chapter_title=经营表现与核心驱动, prompt_name=write_chapter, phase=initial, scene_name=write"
+        in item
+        for item in logs
+    )
 
 
 @pytest.mark.unit
@@ -3523,6 +3662,7 @@ def test_create_decision_agent_uses_decision_scene_with_tools(
         write_config=write_config,
         scene_execution_acceptance_preparer=_as_scene_execution_acceptance_preparer(provider),
         host_executor=_build_test_host_executor(),
+        host_governance=_build_test_host_governance(),
         host_session_id="write_session",
     )
     runner._preparer._create_decision_agent()
@@ -3548,6 +3688,7 @@ def test_get_or_create_prepared_scene_raises_scene_agent_creation_error_when_pre
         write_config=write_config,
         scene_execution_acceptance_preparer=_as_scene_execution_acceptance_preparer(provider),
         host_executor=_build_test_host_executor(),
+        host_governance=_build_test_host_governance(),
         host_session_id="write_session",
     )
     monkeypatch.setattr(runner._preparer, "_create_write_agent", lambda: None)
@@ -3632,6 +3773,7 @@ def test_should_skip_with_resume() -> None:
         write_config=config,
         scene_execution_acceptance_preparer=_as_scene_execution_acceptance_preparer(_FakeAgentProvider()),
         host_executor=_build_test_host_executor(),
+        host_governance=_build_test_host_governance(),
         host_session_id="write_session",
     )
 
@@ -7467,10 +7609,10 @@ def test_run_middle_tasks_in_parallel_stops_dispatching_after_scene_creation_err
 ) -> None:
     """验证中间章节批次遇到 Agent 创建失败后不会继续派发后续任务。"""
 
-    from dayu.services.internal.write_pipeline import pipeline as pipeline_module
+    from dayu.services.internal.write_pipeline import pipeline as pipeline_module  # noqa: F401
 
     runner = _build_runner(tmp_path)
-    monkeypatch.setattr(pipeline_module, "_MIDDLE_CHAPTER_MAX_WORKERS", 2)
+    monkeypatch.setattr(runner, "_resolve_middle_worker_limit", lambda: 2)
 
     started_titles: list[str] = []
     middle_tasks = [

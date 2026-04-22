@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.host.host_store import HostStore
 from dayu.host.session_registry import SQLiteSessionRegistry
 from dayu.contracts.session import SessionSource, SessionState
@@ -53,12 +54,12 @@ class TestCreateSession:
             SessionSource.API,
             session_id="my-session-123",
             scene_name="chat",
-            metadata={"key": "value"},
+            metadata=ExecutionDeliveryContext({"chat_key": "value"}),
         )
         assert session.session_id == "my-session-123"
         assert session.source == SessionSource.API
         assert session.scene_name == "chat"
-        assert session.metadata == {"key": "value"}
+        assert session.metadata == {"chat_key": "value"}
 
     @pytest.mark.unit
     def test_create_session_timestamps(self, registry: SQLiteSessionRegistry) -> None:
@@ -134,6 +135,21 @@ class TestGetAndListSessions:
         closed = registry.list_sessions(state=SessionState.CLOSED)
         assert len(closed) == 1
         assert closed[0].session_id == "s1"
+
+    @pytest.mark.unit
+    def test_list_sessions_filter_by_source_and_scene_name(self, registry: SQLiteSessionRegistry) -> None:
+        """按来源和 scene 名称过滤 session。"""
+
+        registry.create_session(SessionSource.CLI, session_id="interactive_1", scene_name="interactive")
+        registry.create_session(SessionSource.CLI, session_id="prompt_1", scene_name="prompt")
+        registry.create_session(SessionSource.WECHAT, session_id="wechat_1", scene_name="interactive")
+
+        sessions = registry.list_sessions(
+            source=SessionSource.CLI,
+            scene_name="interactive",
+        )
+
+        assert [session.session_id for session in sessions] == ["interactive_1"]
 
 
 class TestTouchSession:

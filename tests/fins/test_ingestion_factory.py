@@ -83,24 +83,6 @@ async def _empty_process_stream() -> AsyncIterator[ProcessEvent]:
         yield ProcessEvent(event_type=ProcessEventType.PIPELINE_COMPLETED, ticker="TEST")
 
 
-@dataclass
-class _PipelineSpy:
-    """记录构造参数的 pipeline 替身。"""
-
-    workspace_root: Path
-    company_repository: Any
-    source_repository: Any
-    processed_repository: Any
-    blob_repository: Any
-    processor_registry: Any
-    filing_maintenance_repository: Any | None = None
-
-    def __post_init__(self) -> None:
-        """初始化固定 ingestion_service。"""
-
-        self.ingestion_service = FinsIngestionService(backend=_BackendStub())
-
-
 @dataclass(frozen=True)
 class _RepositoryArgs:
     """测试用仓储参数包。"""
@@ -182,7 +164,7 @@ def test_build_ingestion_service_factory_routes_us_market_to_sec_pipeline(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """验证 US ticker 会路由到 SecPipeline。"""
+    """验证 US ticker 会通过 pipeline 工厂路由到 US pipeline。"""
 
     captured: dict[str, Any] = {}
 
@@ -191,24 +173,20 @@ def test_build_ingestion_service_factory_routes_us_market_to_sec_pipeline(
 
         return NormalizedTicker(canonical=ticker.upper(), market="US", exchange=None, raw=ticker)
 
-    class _SecPipelineSpy(_PipelineSpy):
-        """SecPipeline 替身。"""
+    sentinel_service = FinsIngestionService(backend=_BackendStub())
 
-        def __post_init__(self) -> None:
-            """记录被调用的管线类型。"""
+    def _fake_build_service(**kwargs: Any) -> FinsIngestionService:
+        """记录路由参数并返回预置 ingestion_service。"""
 
-            captured["kind"] = "sec"
-            captured["workspace_root"] = self.workspace_root
-            captured["company_repository"] = self.company_repository
-            captured["source_repository"] = self.source_repository
-            captured["processed_repository"] = self.processed_repository
-            captured["blob_repository"] = self.blob_repository
-            captured["filing_maintenance_repository"] = self.filing_maintenance_repository
-            captured["processor_registry"] = self.processor_registry
-            super().__post_init__()
+        captured["kwargs"] = kwargs
+        return sentinel_service
 
     monkeypatch.setattr(module, "normalize_ticker", _fake_resolve)
-    monkeypatch.setattr(module, "SecPipeline", _SecPipelineSpy)
+    monkeypatch.setattr(
+        module,
+        "build_ingestion_service_from_normalized_ticker",
+        _fake_build_service,
+    )
 
     repository_args = _build_repository_args()
     processor_registry = _StubProcessorRegistry()
@@ -224,15 +202,17 @@ def test_build_ingestion_service_factory_routes_us_market_to_sec_pipeline(
 
     service = factory("aapl")
 
-    assert isinstance(service, FinsIngestionService)
-    assert captured["kind"] == "sec"
-    assert captured["workspace_root"] == tmp_path
-    assert captured["company_repository"] is repository_args.company_repository
-    assert captured["source_repository"] is repository_args.source_repository
-    assert captured["processed_repository"] is repository_args.processed_repository
-    assert captured["blob_repository"] is repository_args.blob_repository
-    assert captured["filing_maintenance_repository"] is repository_args.filing_maintenance_repository
-    assert captured["processor_registry"] is processor_registry
+    assert service is sentinel_service
+    kwargs = captured["kwargs"]
+    assert kwargs["normalized_ticker"].market == "US"
+    assert kwargs["normalized_ticker"].canonical == "AAPL"
+    assert kwargs["workspace_root"] == tmp_path
+    assert kwargs["company_repository"] is repository_args.company_repository
+    assert kwargs["source_repository"] is repository_args.source_repository
+    assert kwargs["processed_repository"] is repository_args.processed_repository
+    assert kwargs["blob_repository"] is repository_args.blob_repository
+    assert kwargs["filing_maintenance_repository"] is repository_args.filing_maintenance_repository
+    assert kwargs["processor_registry"] is processor_registry
 
 
 @pytest.mark.unit
@@ -242,7 +222,7 @@ def test_build_ingestion_service_factory_routes_cn_and_hk_to_cn_pipeline(
     tmp_path: Path,
     market: str,
 ) -> None:
-    """验证 CN/HK ticker 会复用 CnPipeline。"""
+    """验证 CN/HK ticker 会通过 pipeline 工厂复用 CN pipeline。"""
 
     captured: dict[str, Any] = {}
 
@@ -251,23 +231,20 @@ def test_build_ingestion_service_factory_routes_cn_and_hk_to_cn_pipeline(
 
         return NormalizedTicker(canonical=ticker.upper(), market=cast(Any, market), exchange=None, raw=ticker)
 
-    class _CnPipelineSpy(_PipelineSpy):
-        """CnPipeline 替身。"""
+    sentinel_service = FinsIngestionService(backend=_BackendStub())
 
-        def __post_init__(self) -> None:
-            """记录被调用的管线类型。"""
+    def _fake_build_service(**kwargs: Any) -> FinsIngestionService:
+        """记录路由参数并返回预置 ingestion_service。"""
 
-            captured["kind"] = "cn"
-            captured["workspace_root"] = self.workspace_root
-            captured["company_repository"] = self.company_repository
-            captured["source_repository"] = self.source_repository
-            captured["processed_repository"] = self.processed_repository
-            captured["blob_repository"] = self.blob_repository
-            captured["processor_registry"] = self.processor_registry
-            super().__post_init__()
+        captured["kwargs"] = kwargs
+        return sentinel_service
 
     monkeypatch.setattr(module, "normalize_ticker", _fake_resolve)
-    monkeypatch.setattr(module, "CnPipeline", _CnPipelineSpy)
+    monkeypatch.setattr(
+        module,
+        "build_ingestion_service_from_normalized_ticker",
+        _fake_build_service,
+    )
 
     repository_args = _build_repository_args()
     factory = module.build_ingestion_service_factory(
@@ -282,13 +259,12 @@ def test_build_ingestion_service_factory_routes_cn_and_hk_to_cn_pipeline(
 
     service = factory("000001")
 
-    assert isinstance(service, FinsIngestionService)
-    assert captured["kind"] == "cn"
-    assert captured["workspace_root"] == tmp_path
-    assert captured["company_repository"] is repository_args.company_repository
-    assert captured["source_repository"] is repository_args.source_repository
-    assert captured["processed_repository"] is repository_args.processed_repository
-    assert captured["blob_repository"] is repository_args.blob_repository
+    assert service is sentinel_service
+    kwargs = captured["kwargs"]
+    assert kwargs["normalized_ticker"].market == market
+    assert kwargs["workspace_root"] == tmp_path
+    assert kwargs["company_repository"] is repository_args.company_repository
+    assert kwargs["source_repository"] is repository_args.source_repository
 
 
 @pytest.mark.unit
@@ -296,7 +272,7 @@ def test_build_ingestion_service_factory_rejects_unsupported_market(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """验证未知市场会显式报错。"""
+    """验证未知市场会由 pipeline 工厂抛出显式错误。"""
 
     monkeypatch.setattr(
         module,

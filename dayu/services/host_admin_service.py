@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime
 from typing import AsyncIterator
 
 from dayu.contracts.events import AppEvent, PublishedRunEventProtocol
@@ -23,6 +24,24 @@ from dayu.services.contracts import (
     SessionTurnExcerptView,
 )
 from dayu.services.protocols import HostAdminServiceProtocol
+
+
+def _format_optional_datetime(value: datetime | None) -> str:
+    """把可选时间格式化为管理视图使用的字符串。
+
+    Args:
+        value: 原始时间对象。
+
+    Returns:
+        存在时返回 ISO 8601 字符串，否则返回空字符串。
+
+    Raises:
+        无。
+    """
+
+    if value is None:
+        return ""
+    return value.isoformat()
 
 
 def _parse_session_state(state: str | None) -> SessionState | None:
@@ -147,12 +166,8 @@ def _to_session_view(
         source=record.source.value,
         state=record.state.value,
         scene_name=record.scene_name,
-        created_at=created_at.isoformat() if created_at is not None else str(created_at),
-        last_activity_at=(
-            last_activity_at.isoformat()
-            if last_activity_at is not None
-            else str(last_activity_at)
-        ),
+        created_at=_format_optional_datetime(created_at),
+        last_activity_at=_format_optional_datetime(last_activity_at),
         turn_count=turn_count,
         first_question_preview=first_question_preview,
         last_question_preview=last_question_preview,
@@ -518,8 +533,7 @@ class HostAdminService(HostAdminServiceProtocol):
             无。
         """
 
-        active_sessions = self.host.list_sessions(state=SessionState.ACTIVE)
-        total_sessions = self.host.list_sessions()
+        sessions = self.host.list_sessions()
         active_runs = self.host.list_active_runs()
         active_runs_by_type = dict(Counter(record.service_type for record in active_runs))
         lane_statuses: dict[str, LaneStatusView] = {}
@@ -530,8 +544,8 @@ class HostAdminService(HostAdminServiceProtocol):
                 max_concurrent=snapshot.max_concurrent,
             )
         return HostStatusView(
-            active_session_count=len(active_sessions),
-            total_session_count=len(total_sessions),
+            active_session_count=sum(1 for session in sessions if session.state == SessionState.ACTIVE),
+            total_session_count=len(sessions),
             active_run_count=len(active_runs),
             active_runs_by_type=active_runs_by_type,
             lane_statuses=lane_statuses,

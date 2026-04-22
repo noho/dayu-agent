@@ -17,14 +17,15 @@ from typing import Any, AsyncIterator, Callable, TypeVar
 from dayu.host.cancellation_bridge import CancellationBridge
 from dayu.host.events import build_app_event_from_stream_event
 from dayu.host.host_execution import HostExecutorProtocol, HostedRunContext, HostedRunSpec
+from dayu.host.agent_builder import build_async_agent
+from dayu.host.concurrency import HOST_AGENT_LANE
+from dayu.host.pending_turn_store import PendingConversationTurnState
 from dayu.host.prepared_turn import (
     AcceptedAgentTurnSnapshot,
     PreparedAgentTurnSnapshot,
     serialize_accepted_agent_turn_snapshot,
     serialize_prepared_agent_turn_snapshot,
 )
-from dayu.host.pending_turn_store import PendingConversationTurnState
-from dayu.host.agent_builder import build_async_agent
 from dayu.host.scene_preparer import ScenePreparationProtocol
 from dayu.host.protocols import (
     ConcurrencyGovernorProtocol,
@@ -37,7 +38,7 @@ from dayu.contracts.agent_execution import AgentInput, ExecutionContract
 from dayu.contracts.cancellation import CancelledError, CancellationToken
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
 from dayu.contracts.events import AppEvent, AppEventType, AppResult, PublishedRunEventProtocol
-from dayu.contracts.run import ORPHAN_RUN_ERROR_SUMMARY, RunCancelReason, RunRecord, RunState
+from dayu.contracts.run import RunCancelReason, RunRecord, RunState
 from dayu.engine.events import EventType
 from dayu.engine.tool_result import project_for_llm
 from dayu.host.conversation_store import ConversationToolUseSummary
@@ -47,6 +48,97 @@ TStreamEvent = TypeVar("TStreamEvent", bound=PublishedRunEventProtocol)
 TSyncResult = TypeVar("TSyncResult")
 MODULE = "HOST.EXECUTOR"
 _DEFAULT_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS = 300.0
+
+
+def _format_run_identity(
+    *,
+    run_id: str,
+    session_id: str | None,
+    scene_name: str | None,
+    service_type: str,
+) -> str:
+    """格式化 run 基本身份信息。
+
+    Args:
+        run_id: Host run ID。
+        session_id: 宿主会话 ID。
+        scene_name: scene 名称。
+        service_type: 服务类型。
+
+    Returns:
+        统一格式的 run 身份摘要。
+
+    Raises:
+        无。
+    """
+
+    return (
+        f"run_id={run_id}, session_id={session_id or ''}, "
+        f"scene_name={scene_name or ''}, service_type={service_type}"
+    )
+
+
+def _build_agent_run_start_debug_message(
+    *,
+    run_id: str,
+    session_id: str | None,
+    scene_name: str | None,
+    service_type: str,
+    timeout_ms: int | None,
+    business_lane: str | None,
+    resumable: bool,
+) -> str:
+    """构造 Agent 子执行启动调试日志。
+
+    Args:
+        run_id: Host run ID。
+        session_id: 宿主会话 ID。
+        scene_name: scene 名称。
+        service_type: 服务类型。
+        timeout_ms: run 超时毫秒数。
+        business_lane: 业务 lane。
+        resumable: 当前 scene 是否允许恢复。
+
+    Returns:
+        启动调试日志文本。
+
+    Raises:
+        无。
+    """
+
+    return (
+        "Host 启动 agent run: "
+        f"{_format_run_identity(run_id=run_id, session_id=session_id, scene_name=scene_name, service_type=service_type)}, "
+        f"timeout_ms={timeout_ms}, business_lane={business_lane or ''}, resumable={resumable}"
+    )
+
+
+def _build_agent_settle_debug_message(
+    *,
+    phase: str,
+    run_id: str,
+    pending_turn_id: str | None,
+    resumable: bool,
+) -> str:
+    """构造 Agent 收敛路径调试日志。
+
+    Args:
+        phase: 当前收敛路径名称。
+        run_id: Host run ID。
+        pending_turn_id: 当前 pending turn ID。
+        resumable: 当前 scene 是否允许恢复。
+
+    Returns:
+        收敛路径调试日志文本。
+
+    Raises:
+        无。
+    """
+
+    return (
+        "Host 收敛 agent run: "
+        f"phase={phase}, run_id={run_id}, pending_turn_id={pending_turn_id or ''}, resumable={resumable}"
+    )
 
 
 def _resolve_concurrency_acquire_timeout_seconds(timeout_ms: int | None) -> float:
@@ -65,6 +157,35 @@ def _resolve_concurrency_acquire_timeout_seconds(timeout_ms: int | None) -> floa
     if timeout_ms is None:
         return _DEFAULT_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS
     return max(0.001, timeout_ms / 1000.0)
+
+
+def _required_lanes_for_spec(spec: HostedRunSpec, *, include_agent_lane: bool) -> list[str]:
+    """计算一次 run 需要叠加持有的 lane 名，按字母序返回以防死锁。
+
+    Args:
+        spec: 宿主 run 规格。
+        include_agent_lane: 是否由 Host 独立裁决叠加 ``llm_api`` lane。
+
+    Returns:
+        需要 acquire 的 lane 名列表，按字母序。
+
+    Raises:
+        ValueError: Service 在 ``business_concurrency_lane`` 写入 Host 自治
+            lane 名时抛出。
+    """
+
+    lanes: list[str] = []
+    if include_agent_lane:
+        lanes.append(HOST_AGENT_LANE)
+    business_lane = spec.business_concurrency_lane
+    if business_lane:
+        if business_lane == HOST_AGENT_LANE:
+            raise ValueError(
+                "business_concurrency_lane 不允许等于 Host 自治 lane 名；"
+                "llm_api 由 Host 根据调用路径自动管理"
+            )
+        lanes.append(business_lane)
+    return sorted(lanes)
 
 
 class RunDeadlineWatcher:
@@ -161,7 +282,9 @@ class DefaultHostExecutor(HostExecutorProtocol):
             scene_name=spec.scene_name,
             metadata=dict(spec.metadata),
         )
-        context, bridge, deadline_watcher, permit = self._start_run(spec=spec, run_id=run.run_id)
+        context, bridge, deadline_watcher, permits = self._start_run(
+            spec=spec, run_id=run.run_id, include_agent_lane=False,
+        )
         try:
             async for event in event_stream_factory(context):
                 if spec.publish_events:
@@ -187,7 +310,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             )
             raise
         finally:
-            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permit=permit)
+            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits)
 
     def run_operation_sync(
         self,
@@ -204,7 +327,9 @@ class DefaultHostExecutor(HostExecutorProtocol):
             scene_name=spec.scene_name,
             metadata=dict(spec.metadata),
         )
-        context, bridge, deadline_watcher, permit = self._start_run(spec=spec, run_id=run.run_id)
+        context, bridge, deadline_watcher, permits = self._start_run(
+            spec=spec, run_id=run.run_id, include_agent_lane=False,
+        )
         try:
             result = operation(context)
             if self._is_cancelled(run_id=run.run_id, token=context.cancellation_token):
@@ -226,7 +351,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             )
             raise
         finally:
-            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permit=permit)
+            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits)
 
     async def run_agent_stream(
         self,
@@ -251,8 +376,8 @@ class DefaultHostExecutor(HostExecutorProtocol):
             operation_name=execution_contract.service_name,
             session_id=execution_contract.host_policy.session_key,
             scene_name=execution_contract.scene_name,
-            metadata=dict(execution_contract.metadata),
-            concurrency_lane=execution_contract.host_policy.concurrency_lane,
+            metadata=execution_contract.metadata,
+            business_concurrency_lane=execution_contract.host_policy.business_concurrency_lane,
             timeout_ms=execution_contract.host_policy.timeout_ms,
         )
         run = self.run_registry.register_run(
@@ -261,12 +386,26 @@ class DefaultHostExecutor(HostExecutorProtocol):
             scene_name=spec.scene_name,
             metadata=dict(spec.metadata),
         )
-        context, bridge, deadline_watcher, permit = self._start_run(spec=spec, run_id=run.run_id)
+        context, bridge, deadline_watcher, permits = self._start_run(
+            spec=spec, run_id=run.run_id, include_agent_lane=True,
+        )
         pending_turn_id = self._register_accepted_pending_turn(
             execution_contract=execution_contract,
             run_id=run.run_id,
         )
         resumable = bool(execution_contract.host_policy.resumable)
+        Log.debug(
+            _build_agent_run_start_debug_message(
+                run_id=run.run_id,
+                session_id=spec.session_id,
+                scene_name=spec.scene_name,
+                service_type=spec.operation_name,
+                timeout_ms=spec.timeout_ms,
+                business_lane=spec.business_concurrency_lane,
+                resumable=resumable,
+            ),
+            module=MODULE,
+        )
         try:
             prepared_execution = await self.scene_preparation.prepare(execution_contract, context)
             if resumable and prepared_execution.resume_snapshot is None:
@@ -304,7 +443,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 return
             raise
         finally:
-            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permit=permit)
+            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits)
 
     async def run_prepared_turn_stream(
         self,
@@ -322,9 +461,23 @@ class DefaultHostExecutor(HostExecutorProtocol):
             scene_name=spec.scene_name,
             metadata=dict(spec.metadata),
         )
-        context, bridge, deadline_watcher, permit = self._start_run(spec=spec, run_id=run.run_id)
+        context, bridge, deadline_watcher, permits = self._start_run(
+            spec=spec, run_id=run.run_id, include_agent_lane=True,
+        )
         pending_turn_id = self._register_prepared_pending_turn(prepared_turn=prepared_turn, run_id=run.run_id)
         resumable = bool(prepared_turn.resumable)
+        Log.debug(
+            _build_agent_run_start_debug_message(
+                run_id=run.run_id,
+                session_id=spec.session_id,
+                scene_name=spec.scene_name,
+                service_type=spec.operation_name,
+                timeout_ms=spec.timeout_ms,
+                business_lane=spec.business_concurrency_lane,
+                resumable=resumable,
+            ),
+            module=MODULE,
+        )
         try:
             agent_input = await self.scene_preparation.restore_prepared_execution(prepared_turn, context)
             async for event in self._run_prepared_agent_stream(
@@ -355,7 +508,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 return
             raise
         finally:
-            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permit=permit)
+            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits)
 
     def _register_accepted_pending_turn(
         self,
@@ -555,7 +708,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 warnings=tuple(filter(None, warnings)),
                 errors=tuple(filter(None, errors)),
             )
-        self.run_registry.complete_run(run_id)
+        self._complete_run_preserving_terminal_state(run_id=run_id)
         self._mark_pending_turn_sent_to_llm_best_effort(
             run_id=run_id,
             pending_turn_id=pending_turn_id,
@@ -566,8 +719,23 @@ class DefaultHostExecutor(HostExecutorProtocol):
         *,
         spec: HostedRunSpec,
         run_id: str,
-    ) -> tuple[HostedRunContext, CancellationBridge, RunDeadlineWatcher, ConcurrencyPermit | None]:
-        """启动宿主级 run 生命周期。"""
+        include_agent_lane: bool,
+    ) -> tuple[HostedRunContext, CancellationBridge, RunDeadlineWatcher, list[ConcurrencyPermit]]:
+        """启动宿主级 run 生命周期。
+
+        Args:
+            spec: 宿主 run 规格。
+            run_id: 当前 run ID。
+            include_agent_lane: 是否需要为本次 run 额外持有 Host 自治 ``llm_api``
+                permit；Agent 执行路径由 Host 独立裁决置为 ``True``，通用宿主
+                路径为 ``False``。
+
+        Returns:
+            run 上下文、取消桥、deadline watcher、已持有的 permit 列表（按字母序）。
+
+        Raises:
+            ValueError: ``business_concurrency_lane`` 写入 Host 自治 lane 名时抛出。
+        """
 
         token = CancellationToken()
         bridge = CancellationBridge(self.run_registry, run_id, token)
@@ -580,25 +748,37 @@ class DefaultHostExecutor(HostExecutorProtocol):
         )
         deadline_watcher.start()
         self.run_registry.start_run(run_id)
-        permit = None
-        if self.concurrency_governor is not None and spec.concurrency_lane:
-            permit = self.concurrency_governor.acquire(
-                spec.concurrency_lane,
-                timeout=_resolve_concurrency_acquire_timeout_seconds(spec.timeout_ms),
-            )
-        return HostedRunContext(run_id=run_id, cancellation_token=token), bridge, deadline_watcher, permit
+        permits: list[ConcurrencyPermit] = []
+        if self.concurrency_governor is not None:
+            lanes = _required_lanes_for_spec(spec, include_agent_lane=include_agent_lane)
+            if lanes:
+                acquire_timeout = _resolve_concurrency_acquire_timeout_seconds(spec.timeout_ms)
+                # 走 acquire_many：单事务原子拿齐全部 lane；
+                # 进程若在两步 acquire 之间被 SIGKILL，SQLite 事务未 COMMIT 等于没写，
+                # 不会残留半截 permit，无需 executor 层 try/except 回滚。
+                permits = self.concurrency_governor.acquire_many(
+                    lanes, timeout=acquire_timeout
+                )
+        return HostedRunContext(run_id=run_id, cancellation_token=token), bridge, deadline_watcher, permits
 
     def _finish_run(
         self,
         *,
         bridge: CancellationBridge,
         deadline_watcher: RunDeadlineWatcher,
-        permit: ConcurrencyPermit | None,
+        permits: list[ConcurrencyPermit],
     ) -> None:
         """释放宿主级资源。"""
 
-        if permit is not None and self.concurrency_governor is not None:
-            self.concurrency_governor.release(permit)
+        if self.concurrency_governor is not None:
+            for acquired in reversed(permits):
+                try:
+                    self.concurrency_governor.release(acquired)
+                except Exception:  # noqa: BLE001
+                    Log.warn(
+                        f"permit 释放失败: lane={acquired.lane}",
+                        module=MODULE,
+                    )
         deadline_watcher.stop()
         bridge.stop()
 
@@ -681,12 +861,9 @@ class DefaultHostExecutor(HostExecutorProtocol):
             无。
         """
 
-        if (
-            run.error_summary == ORPHAN_RUN_ERROR_SUMMARY
-            and run.owner_pid > 0
-        ):
+        if run.state == RunState.UNSETTLED and run.owner_pid > 0:
             return (
-                "run 已在外部被标记为 orphan failure；"
+                "run 已在外部被标记为 orphan/unsettled；"
                 f"run_id={run.run_id} owner_pid={run.owner_pid}"
             )
         if run.error_summary:
@@ -870,10 +1047,10 @@ class DefaultHostExecutor(HostExecutorProtocol):
             )
             self._delete_pending_turn(pending_turn_id)
             return
-        if run.state == RunState.FAILED:
+        if run.state in (RunState.FAILED, RunState.UNSETTLED):
             if resumable:
                 Log.verbose(
-                    f"[{run.run_id}] run 失败，保留 pending turn 供恢复: pending_turn_id={pending_turn_id}",
+                    f"[{run.run_id}] run 终态={run.state.value}，保留 pending turn 供恢复: pending_turn_id={pending_turn_id}",
                     module=MODULE,
                 )
                 return
@@ -909,6 +1086,15 @@ class DefaultHostExecutor(HostExecutorProtocol):
             需要 yield 到事件流的取消事件。
         """
 
+        Log.debug(
+            _build_agent_settle_debug_message(
+                phase="cancel",
+                run_id=run_id,
+                pending_turn_id=pending_turn_id,
+                resumable=resumable,
+            ),
+            module=MODULE,
+        )
         cancelled_run = self._finalize_cancelled(run_id)
         self._reconcile_pending_turn_after_terminal_run(
             pending_turn_id=pending_turn_id,
@@ -942,6 +1128,15 @@ class DefaultHostExecutor(HostExecutorProtocol):
             取消路径返回需要 yield 的取消事件；其它路径返回 ``None``。
         """
 
+        Log.debug(
+            _build_agent_settle_debug_message(
+                phase="complete",
+                run_id=run_id,
+                pending_turn_id=pending_turn_id,
+                resumable=resumable,
+            ),
+            module=MODULE,
+        )
         if self._is_run_succeeded(run_id):
             self._delete_pending_turn_best_effort(run_id=run_id, pending_turn_id=pending_turn_id)
             return None
@@ -951,7 +1146,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 pending_turn_id=pending_turn_id,
                 resumable=resumable,
             )
-        self.run_registry.complete_run(run_id)
+        self._complete_run_preserving_terminal_state(run_id=run_id)
         self._delete_pending_turn_best_effort(run_id=run_id, pending_turn_id=pending_turn_id)
         return None
 
@@ -982,14 +1177,23 @@ class DefaultHostExecutor(HostExecutorProtocol):
             失败路径返回 ``None``，调用方应 raise。
         """
 
+        Log.debug(
+            _build_agent_settle_debug_message(
+                phase="fail",
+                run_id=run_id,
+                pending_turn_id=pending_turn_id,
+                resumable=resumable,
+            ),
+            module=MODULE,
+        )
         if self._is_cancelled(run_id=run_id, token=token):
             return self._settle_agent_cancelled(
                 run_id=run_id,
                 pending_turn_id=pending_turn_id,
                 resumable=resumable,
             )
-        failed_run = self.run_registry.fail_run(
-            run_id,
+        failed_run = self._fail_run_preserving_original_exception(
+            run_id=run_id,
             error_summary=self._summarize_error(exc, error_summary_limit),
         )
         self._reconcile_pending_turn_after_terminal_run(
@@ -1160,8 +1364,8 @@ def _build_run_spec_from_prepared_turn(prepared_turn: PreparedAgentTurnSnapshot)
         operation_name=prepared_turn.service_name,
         session_id=session_id,
         scene_name=prepared_turn.scene_name,
-        metadata=dict(prepared_turn.metadata),
-        concurrency_lane=prepared_turn.concurrency_lane,
+        metadata=prepared_turn.metadata,
+        business_concurrency_lane=prepared_turn.business_concurrency_lane,
         timeout_ms=prepared_turn.timeout_ms,
     )
 

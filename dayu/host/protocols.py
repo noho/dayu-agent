@@ -37,7 +37,7 @@ class SessionRegistryProtocol(Protocol):
         *,
         session_id: str | None = None,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """创建新 session。
 
@@ -45,7 +45,7 @@ class SessionRegistryProtocol(Protocol):
             source: 会话来源。
             session_id: 显式指定 ID，不传则自动生成。
             scene_name: 首次使用的 scene。
-            metadata: 非结构化附加信息。
+            metadata: 会话级交付上下文元数据。
 
         Returns:
             新创建的 SessionRecord。
@@ -58,7 +58,7 @@ class SessionRegistryProtocol(Protocol):
         source: SessionSource,
         *,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """幂等获取或创建 session。
 
@@ -69,7 +69,7 @@ class SessionRegistryProtocol(Protocol):
             session_id: 确定性 session ID。
             source: 会话来源。
             scene_name: 首次使用的 scene。
-            metadata: 非结构化附加信息。
+            metadata: 会话级交付上下文元数据。
 
         Returns:
             已有或新创建的 SessionRecord。
@@ -91,11 +91,15 @@ class SessionRegistryProtocol(Protocol):
         self,
         *,
         state: SessionState | None = None,
+        source: SessionSource | None = None,
+        scene_name: str | None = None,
     ) -> list[SessionRecord]:
         """列出 sessions。
 
         Args:
             state: 可选状态过滤。
+            source: 可选来源过滤。
+            scene_name: 可选 scene 名称过滤。
 
         Returns:
             匹配的 SessionRecord 列表。
@@ -190,6 +194,15 @@ class RunRegistryProtocol(Protocol):
         """标记 run 已取消。"""
         ...
 
+    def mark_unsettled(
+        self,
+        run_id: str,
+        *,
+        error_summary: str | None = None,
+    ) -> RunRecord:
+        """将 run 标记为 UNSETTLED（orphan cleanup / 无法判定的残留）。"""
+        ...
+
     def request_cancel(
         self,
         run_id: str,
@@ -219,6 +232,10 @@ class RunRegistryProtocol(Protocol):
 
     def list_active_runs(self) -> list[RunRecord]:
         """列出所有活跃 run。"""
+        ...
+
+    def list_active_runs_for_owner(self, owner_pid: int) -> list[RunRecord]:
+        """列出指定 owner_pid 拥有的所有活跃 run。"""
         ...
 
     def cleanup_orphan_runs(self) -> list[str]:
@@ -381,6 +398,14 @@ class ReplyOutboxStoreProtocol(Protocol):
         """
         ...
 
+    def cleanup_stale_in_progress_deliveries(
+        self,
+        *,
+        max_age: timedelta,
+    ) -> list[str]:
+        """把超过 max_age 的 DELIVERY_IN_PROGRESS 回退为 FAILED_RETRYABLE。"""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # ConcurrencyGovernor
@@ -424,6 +449,31 @@ class ConcurrencyGovernorProtocol(Protocol):
 
         Raises:
             TimeoutError: 等待超时。
+        """
+        ...
+
+    def acquire_many(
+        self,
+        lanes: list[str],
+        *,
+        timeout: float | None = None,
+    ) -> list[ConcurrencyPermit]:
+        """原子获取多个 lane 的并发许可，要么全拿要么全不拿。
+
+        实现必须在单个持久化事务内完成"所有 lane 额度检查 + 所有 permit 写入"，
+        保证进程被 SIGKILL / OOM 杀死于两步 acquire 之间时不会残留 permit。
+
+        Args:
+            lanes: 需要 acquire 的 lane 名列表；调用方应保证已去重并按字母序排序，
+                以在跨 run 之间使用一致的顺序，规避潜在死锁。
+            timeout: 最大等待秒数，None 表示无限等待。
+
+        Returns:
+            与 ``lanes`` 对应顺序的许可列表。
+
+        Raises:
+            TimeoutError: 等待超时；此时不持有任何 permit。
+            ValueError: 出现未配置的 lane 名时抛出；此时不持有任何 permit。
         """
         ...
 
@@ -603,7 +653,7 @@ class SessionOperationsProtocol(Protocol):
         *,
         session_id: str | None = None,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """创建新的 Host session。"""
         ...
@@ -614,7 +664,7 @@ class SessionOperationsProtocol(Protocol):
         source: SessionSource,
         *,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """按确定性 session_id 幂等获取或创建 Host session。"""
         ...
@@ -627,6 +677,8 @@ class SessionOperationsProtocol(Protocol):
         self,
         *,
         state: SessionState | None = None,
+        source: SessionSource | None = None,
+        scene_name: str | None = None,
     ) -> list[SessionRecord]:
         """列出 Host session。"""
         ...
@@ -746,6 +798,24 @@ class HostGovernanceProtocol(Protocol):
 
     def cleanup_stale_permits(self) -> list[str]:
         """清理过期并发 permit。"""
+        ...
+
+    def cleanup_stale_reply_outbox_deliveries(
+        self,
+        *,
+        max_age: timedelta = ...,
+    ) -> list[str]:
+        """回退超过 max_age 的 reply outbox DELIVERY_IN_PROGRESS 记录。
+
+        Args:
+            max_age: 认定 in_progress 陈旧的最大存活时间。
+
+        Returns:
+            被回退的 delivery_id 列表。
+
+        Raises:
+            无。
+        """
         ...
 
     def get_all_lane_statuses(self) -> dict[str, LaneStatus]:

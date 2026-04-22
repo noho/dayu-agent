@@ -98,17 +98,50 @@ class TestRunStateTransitions:
 
     @pytest.mark.unit
     def test_complete_run_allows_owned_orphan_recovery(self, registry: SQLiteRunRegistry) -> None:
-        """当前 owner 可把误判为 orphan 的失败 run 修复为成功。"""
+        """当前 owner 可把被 cleanup 误判为 orphan 的 UNSETTLED run 修复为成功。"""
 
         run = registry.register_run(service_type="test")
         registry.start_run(run.run_id)
-        registry.fail_run(run.run_id, error_summary=ORPHAN_RUN_ERROR_SUMMARY)
+        registry.mark_unsettled(run.run_id, error_summary=ORPHAN_RUN_ERROR_SUMMARY)
 
         recovered = registry.complete_run(run.run_id)
 
         assert recovered.state == RunState.SUCCEEDED
         assert recovered.completed_at is not None
         assert recovered.error_summary is None
+
+    @pytest.mark.unit
+    def test_complete_run_rejects_failed_recovery(self, registry: SQLiteRunRegistry) -> None:
+        """FAILED 终态不再被允许修复为 SUCCEEDED（仅 UNSETTLED 可被 owner 修复）。"""
+
+        run = registry.register_run(service_type="test")
+        registry.start_run(run.run_id)
+        registry.fail_run(run.run_id, error_summary="business failure")
+
+        with pytest.raises(ValueError, match="非法状态转换"):
+            registry.complete_run(run.run_id)
+
+    @pytest.mark.unit
+    def test_mark_unsettled_from_running(self, registry: SQLiteRunRegistry) -> None:
+        """RUNNING → UNSETTLED 合法。"""
+
+        run = registry.register_run(service_type="test")
+        registry.start_run(run.run_id)
+        unsettled = registry.mark_unsettled(run.run_id, error_summary=ORPHAN_RUN_ERROR_SUMMARY)
+        assert unsettled.state == RunState.UNSETTLED
+        assert unsettled.completed_at is not None
+        assert unsettled.error_summary == ORPHAN_RUN_ERROR_SUMMARY
+
+    @pytest.mark.unit
+    def test_unsettled_is_absorbing(self, registry: SQLiteRunRegistry) -> None:
+        """UNSETTLED 对非当前 owner / 非 SUCCEEDED 转换都是吸收态。"""
+
+        run = registry.register_run(service_type="test")
+        registry.start_run(run.run_id)
+        registry.mark_unsettled(run.run_id, error_summary=ORPHAN_RUN_ERROR_SUMMARY)
+        # UNSETTLED → FAILED 非法
+        with pytest.raises(ValueError, match="非法状态转换"):
+            registry.fail_run(run.run_id, error_summary="x")
 
     @pytest.mark.unit
     def test_fail_run(self, registry: SQLiteRunRegistry) -> None:
@@ -280,6 +313,32 @@ class TestQueryAndList:
         assert len(active) == 1
         assert active[0].run_id == r1.run_id
 
+    @pytest.mark.unit
+    def test_list_active_runs_for_owner_filters_by_pid(self, registry: SQLiteRunRegistry) -> None:
+        """list_active_runs_for_owner 严格按 PID 过滤。"""
+
+        import os as _os
+
+        r1 = registry.register_run(service_type="a")
+        r2 = registry.register_run(service_type="b")
+        registry.start_run(r1.run_id)
+        registry.start_run(r2.run_id)
+
+        # r2 改挂到另一个 PID
+        conn = registry._host_store.get_connection()
+        conn.execute("UPDATE runs SET owner_pid = ? WHERE run_id = ?", (42, r2.run_id))
+        conn.commit()
+
+        mine = registry.list_active_runs_for_owner(_os.getpid())
+        other = registry.list_active_runs_for_owner(42)
+
+        mine_ids = {run.run_id for run in mine}
+        other_ids = {run.run_id for run in other}
+
+        assert r1.run_id in mine_ids
+        assert r2.run_id not in mine_ids
+        assert other_ids == {r2.run_id}
+
 
 @pytest.mark.unit
 def test_run_registry_emits_lifecycle_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -301,9 +360,15 @@ def test_run_registry_emits_lifecycle_logs(tmp_path: Path, monkeypatch: pytest.M
     debug_messages = [call.args[0] for call in debug_mock.call_args_list]
     info_messages = [call.args[0] for call in info_mock.call_args_list]
 
-    assert any("注册 run" in message for message in debug_messages)
-    assert any("run 状态迁移" in message and "to_state=running" in message for message in debug_messages)
-    assert any("run 状态迁移" in message and "to_state=cancelled" in message for message in debug_messages)
+    assert any("注册 run" in message and "owner_pid=" in message and "db_path=" in message for message in debug_messages)
+    assert any(
+        "run 状态迁移" in message and "to_state=running" in message and "db_path=" in message
+        for message in debug_messages
+    )
+    assert any(
+        "run 状态迁移" in message and "to_state=cancelled" in message and "db_path=" in message
+        for message in debug_messages
+    )
     assert any("登记 run 取消请求" in message for message in info_messages)
 
 
@@ -320,7 +385,7 @@ class TestCleanupOrphanRuns:
 
     @pytest.mark.unit
     def test_cleanup_dead_pid_run(self, registry: SQLiteRunRegistry) -> None:
-        """owner_pid 不存在的活跃 run 被标记 FAILED。"""
+        """owner_pid 不存在的活跃 run 被标记 UNSETTLED（不再写 FAILED）。"""
         run = registry.register_run(service_type="test")
         registry.start_run(run.run_id)
 
@@ -342,7 +407,7 @@ class TestCleanupOrphanRuns:
 
         updated = registry.get_run(run.run_id)
         assert updated is not None
-        assert updated.state == RunState.FAILED
+        assert updated.state == RunState.UNSETTLED
         assert "orphan" in (updated.error_summary or "")
 
     @pytest.mark.unit

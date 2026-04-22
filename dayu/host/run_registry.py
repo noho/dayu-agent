@@ -31,6 +31,69 @@ _ORPHAN_CLEANUP_MIN_RUN_AGE = timedelta(minutes=10)
 from dayu.host._datetime_utils import now_utc as _now_utc, parse_dt_optional as _parse_dt_optional, serialize_dt as _serialize_dt
 
 
+def _build_run_registration_debug_message(
+    *,
+    run_id: str,
+    service_type: str,
+    session_id: str | None,
+    scene_name: str | None,
+    owner_pid: int,
+    db_path: str,
+) -> str:
+    """构造 run 注册调试日志。
+
+    Args:
+        run_id: 新注册的 run ID。
+        service_type: 服务类型。
+        session_id: 宿主会话 ID。
+        scene_name: scene 名称。
+        owner_pid: 当前 owner PID。
+        db_path: Host SQLite 路径。
+
+    Returns:
+        统一格式的调试日志文本。
+
+    Raises:
+        无。
+    """
+
+    return (
+        "注册 run: "
+        f"run_id={run_id}, service_type={service_type}, "
+        f"session_id={session_id or ''}, scene_name={scene_name or ''}, "
+        f"owner_pid={owner_pid}, db_path={db_path}"
+    )
+
+
+def _build_run_transition_debug_message(
+    *,
+    run_id: str,
+    current_state: RunState,
+    target_state: RunState,
+    db_path: str,
+) -> str:
+    """构造 run 状态迁移调试日志。
+
+    Args:
+        run_id: 目标 run ID。
+        current_state: 当前状态。
+        target_state: 目标状态。
+        db_path: Host SQLite 路径。
+
+    Returns:
+        统一格式的调试日志文本。
+
+    Raises:
+        无。
+    """
+
+    return (
+        "run 状态迁移: "
+        f"run_id={run_id}, from_state={current_state.value}, "
+        f"to_state={target_state.value}, db_path={db_path}"
+    )
+
+
 def _row_to_record(row: dict[str, Any]) -> RunRecord:
     """将 SQLite 行记录转换为 RunRecord。
 
@@ -109,7 +172,14 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         conn.commit()
 
         Log.debug(
-            f"注册 run: run_id={run_id}, service_type={service_type}, session_id={session_id or ''}, scene_name={scene_name or ''}",
+            _build_run_registration_debug_message(
+                run_id=run_id,
+                service_type=service_type,
+                session_id=session_id,
+                scene_name=scene_name,
+                owner_pid=pid,
+                db_path=str(self._host_store.db_path),
+            ),
             module=MODULE,
         )
 
@@ -165,6 +235,33 @@ class SQLiteRunRegistry(RunRegistryProtocol):
             RunState.CANCELLED,
             completed_at=_now_utc(),
             cancel_reason=cancel_reason,
+        )
+
+    def mark_unsettled(
+        self,
+        run_id: str,
+        *,
+        error_summary: str | None = None,
+    ) -> RunRecord:
+        """将 run 标记为 UNSETTLED（orphan cleanup / 无法判定的残留）。
+
+        Args:
+            run_id: 目标 run ID。
+            error_summary: 错误摘要（通常为 orphan 描述）。
+
+        Returns:
+            更新后的 RunRecord。
+
+        Raises:
+            KeyError: run 不存在。
+            ValueError: 非法状态转换。
+        """
+
+        return self._transition(
+            run_id,
+            RunState.UNSETTLED,
+            completed_at=_now_utc(),
+            error_summary=error_summary,
         )
 
     def request_cancel(
@@ -266,8 +363,41 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         ).fetchall()
         return [_row_to_record(dict(row)) for row in rows]
 
+    def list_active_runs_for_owner(self, owner_pid: int) -> list[RunRecord]:
+        """列出指定 owner_pid 拥有的所有活跃 run。
+
+        Args:
+            owner_pid: 进程 PID。
+
+        Returns:
+            指定 owner 仍活跃的 run 列表。
+
+        Raises:
+            无。
+        """
+
+        active_values = tuple(s.value for s in ACTIVE_STATES)
+        placeholders = ",".join("?" for _ in active_values)
+        conn = self._host_store.get_connection()
+        rows = conn.execute(
+            f"""
+            SELECT * FROM runs
+            WHERE state IN ({placeholders})
+              AND owner_pid = ?
+            ORDER BY created_at DESC
+            """,  # noqa: S608
+            (*active_values, int(owner_pid)),
+        ).fetchall()
+        return [_row_to_record(dict(row)) for row in rows]
+
     def cleanup_orphan_runs(self) -> list[str]:
-        """清理 owner_pid 已死亡的活跃 run，标记为 FAILED。"""
+        """清理 owner_pid 已死亡的活跃 run，标记为 UNSETTLED。
+
+        UNSETTLED 与 FAILED 语义分离：
+            - FAILED：业务/Agent 明确失败；
+            - UNSETTLED：Host 无法判定的残留（owner 进程异常终止），
+              admin / 自愈逻辑以 state 为 discriminator，不再依赖 error_summary。
+        """
 
         active_runs = self.list_active_runs()
         candidate_orphan_ids: list[str] = []
@@ -286,7 +416,8 @@ class SQLiteRunRegistry(RunRegistryProtocol):
             placeholders = ",".join("?" for _ in active_values)
             orphan_ids: list[str] = []
             for oid in candidate_orphan_ids:
-                # 这里写入的 ORPHAN_RUN_ERROR_SUMMARY 必须与 _transition() 中的修复判定保持同源。
+                # 写入 UNSETTLED + ORPHAN_RUN_ERROR_SUMMARY；
+                # ORPHAN_RUN_ERROR_SUMMARY 仅作为描述性填充，判定一律走 state == UNSETTLED。
                 cursor = conn.execute(
                     """
                     UPDATE runs SET state = ?, completed_at = ?,
@@ -295,7 +426,7 @@ class SQLiteRunRegistry(RunRegistryProtocol):
                       AND state IN ({placeholders})
                     """.format(placeholders=placeholders),
                     (
-                        RunState.FAILED.value,
+                        RunState.UNSETTLED.value,
                         now_str,
                         ORPHAN_RUN_ERROR_SUMMARY,
                         oid,
@@ -307,7 +438,7 @@ class SQLiteRunRegistry(RunRegistryProtocol):
             conn.commit()
             if orphan_ids:
                 Log.info(
-                    f"清理 orphan runs: count={len(orphan_ids)}, run_ids={','.join(orphan_ids)}",
+                    f"清理 orphan runs -> UNSETTLED: count={len(orphan_ids)}, run_ids={','.join(orphan_ids)}",
                     module=MODULE,
                 )
             return orphan_ids
@@ -355,17 +486,18 @@ class SQLiteRunRegistry(RunRegistryProtocol):
             raise KeyError(f"run 不存在: {run_id}")
 
         current_state = RunState(row["state"])
+        is_owner_unsettled_recovery = False
         if not is_valid_transition(current_state, target_state):
             if (
-                current_state == RunState.FAILED
+                current_state == RunState.UNSETTLED
                 and target_state == RunState.SUCCEEDED
                 and int(row["owner_pid"]) == os.getpid()
-                and str(row["error_summary"] or "").strip() == ORPHAN_RUN_ERROR_SUMMARY
             ):
+                is_owner_unsettled_recovery = True
                 Log.warn(
                     (
                         "检测到当前 owner 修复被误判为 orphan 的 run，"
-                        f"允许恢复成功终态: run_id={run_id}"
+                        f"允许从 UNSETTLED 恢复成功终态: run_id={run_id}"
                     ),
                     module=MODULE,
                 )
@@ -387,8 +519,8 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         if error_summary is not None:
             set_parts.append("error_summary = ?")
             params.append(error_summary)
-        elif target_state != RunState.FAILED:
-            # 终态离开 FAILED 时统一清空 error_summary，包括 owner 修复 orphan failure 的成功收口。
+        elif is_owner_unsettled_recovery:
+            # owner 把 UNSETTLED 修复回 SUCCEEDED 时清空 orphan 填充的 error_summary。
             set_parts.append("error_summary = NULL")
         if cancel_requested_at is not None:
             set_parts.append("cancel_requested_at = ?")
@@ -414,7 +546,12 @@ class SQLiteRunRegistry(RunRegistryProtocol):
             (run_id,),
         ).fetchone()
         Log.debug(
-            f"run 状态迁移: run_id={run_id}, from_state={current_state.value}, to_state={target_state.value}",
+            _build_run_transition_debug_message(
+                run_id=run_id,
+                current_state=current_state,
+                target_state=target_state,
+                db_path=str(self._host_store.db_path),
+            ),
             module=MODULE,
         )
         return _row_to_record(dict(updated_row))

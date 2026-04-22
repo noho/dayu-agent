@@ -39,6 +39,7 @@ from dayu.services.contracts import (
     ChatTurnSubmission,
     PromptRequest,
     PromptSubmission,
+    SceneModelConfig,
     SessionResolutionPolicy,
     SessionTurnExcerptView,
 )
@@ -345,7 +346,12 @@ def test_interactive_command_with_label_recreates_closed_record_with_warning(
         lambda **_kwargs: (
             None,
             None,
-            SimpleNamespace(resolve_scene_model=lambda *_args: {"name": "interactive-model"}),
+            SimpleNamespace(
+                resolve_scene_model=lambda *_args: SceneModelConfig(
+                    name="interactive-model",
+                    temperature=1.0,
+                )
+            ),
             object(),
             None,
         ),
@@ -557,7 +563,11 @@ def test_interactive_command_prints_restore_context_for_labeled_session(
             None,
             SimpleNamespace(
                 resolve_scene_model=lambda scene_name, *_args: (
-                    resolved_scene_names.append(str(scene_name)) or {"name": f"{scene_name}-model"}
+                    resolved_scene_names.append(str(scene_name))
+                    or SceneModelConfig(
+                        name=f"{scene_name}-model",
+                        temperature=1.0,
+                    )
                 )
             ),
             object(),
@@ -611,7 +621,7 @@ def test_interactive_command_prints_restore_context_for_labeled_session(
     assert "对话恢复" in captured.out
     assert resolved_scene_names == ["prompt_mt"]
     assert any("执行带标签 interactive，恢复标签: apple" in item for item in info_logs)
-    assert any('使用模型: {"name": "prompt_mt-model"}' in item for item in info_logs)
+    assert any('使用模型: {"name": "prompt_mt-model"' in item for item in info_logs)
 
 
 @pytest.mark.unit
@@ -643,7 +653,12 @@ def test_interactive_command_logs_create_label_for_new_labeled_session(
         lambda **_kwargs: (
             None,
             None,
-            SimpleNamespace(resolve_scene_model=lambda *_args: {"name": "test-model"}),
+            SimpleNamespace(
+                resolve_scene_model=lambda *_args: SceneModelConfig(
+                    name="test-model",
+                    temperature=1.0,
+                )
+            ),
             object(),
             None,
         ),
@@ -759,7 +774,12 @@ def test_interactive_command_releases_label_lease_after_exit(
         lambda **_kwargs: (
             None,
             None,
-            SimpleNamespace(resolve_scene_model=lambda *_args: {"name": "test-model"}),
+            SimpleNamespace(
+                resolve_scene_model=lambda *_args: SceneModelConfig(
+                    name="test-model",
+                    temperature=1.0,
+                )
+            ),
             object(),
             None,
         ),

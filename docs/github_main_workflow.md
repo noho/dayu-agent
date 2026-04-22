@@ -190,6 +190,11 @@ git push -u github <feat/short-topic>
 gh pr create --fill          # 或去网页开
 ```
 
+查看 CI 状态：
+```bash
+gh pr checks https://github.com/noho/dayu-agent/pull/<PR号> --watch
+```
+
 如果想让 CI 额外跑扩展集成测试和 PR 可执行的平台完整验证：
 ```bash
 git branch --show-current
@@ -362,6 +367,13 @@ push 后 PR 自动更新，CI 重新跑。最终 merge 时用 **Squash and merge
 
 ### 5. PR merge 后本地同步
 
+- **CI 通过**：Squash merge 并删除远端分支：
+  ```bash
+  gh pr merge <PR号> --squash --delete-branch \
+  --subject "v0.1.2 — 提供离线安装；支持MiMo Plan海外；bug fix" \
+  --body "最终提交说明"
+  ```
+
 `gh pr merge --delete-branch` 会自动删除本地和远端分支并切回 main，只需拉取最新：
 
 ```bash
@@ -495,7 +507,7 @@ python utils/smoke_test_offline_bundle.py \
 
 若需额外手工验证，容器内执行：
 ```bash
-pip install -e ".[test,dev,browser]" -c constraints/lock-macos-arm64-py311.txt
+pip install -e ".[test,dev,browser]" -c constraints/lock-linux-x64-py311.txt
 export PATH=$PATH:/tmp/home/.local/bin
 ```
 
@@ -596,7 +608,7 @@ pip install --upgrade https://github.com/noho/dayu-agent/releases/download/v0.1.
 
 ## 离线安装
 
-从 [Releases](https://github.com/noho/dayu-agent/releases/tag/v0.1.2) 页面下载对应平台的离线安装包：
+从 [Releases](https://github.com/noho/dayu-agent/releases) 页面下载对应平台的离线安装包：
 
 - macOS ARM64: `dayu-agent-0.1.2-macos-arm64-offline.tar.gz`
 - macOS x64: `dayu-agent-0.1.2-macos-x64-offline.tar.gz`

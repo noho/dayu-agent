@@ -292,6 +292,19 @@ async def _consume_submission(
     return events
 
 
+async def _submit_turn_and_collect(
+    service: ChatService,
+    request: ChatTurnRequest,
+) -> list:
+    """提交聊天单轮并收集事件。"""
+
+    submission = await service.submit_turn(request)
+    events = []
+    async for event in submission.event_stream:
+        events.append(event)
+    return events
+
+
 def _seed_pending_turn_with_contract(
     service: ChatService,
     *,
@@ -330,7 +343,7 @@ def _seed_pending_turn_with_contract(
             str(key): str(value)
             for key, value in execution_contract.metadata.items()
         }),
-        concurrency_lane=execution_contract.host_policy.concurrency_lane,
+        business_concurrency_lane=execution_contract.host_policy.business_concurrency_lane,
         timeout_ms=execution_contract.host_policy.timeout_ms,
         resumable=bool(execution_contract.host_policy.resumable),
         system_prompt="resume-system",
@@ -431,13 +444,12 @@ def test_stream_turn_outputs_execution_contract(monkeypatch: pytest.MonkeyPatch)
 
     service, resolver = _build_service()
 
-    async def _collect() -> list:
-        events = []
-        async for event in service.stream_turn(ChatTurnRequest(session_id="s1", user_text=" hello ", ticker="AAPL")):
-            events.append(event)
-        return events
-
-    events = asyncio.run(_collect())
+    events = asyncio.run(
+        _submit_turn_and_collect(
+            service,
+            ChatTurnRequest(session_id="s1", user_text=" hello ", ticker="AAPL"),
+        )
+    )
 
     assert [event.type for event in events] == [AppEventType.CONTENT_DELTA, AppEventType.FINAL_ANSWER]
     assert resolver.calls == [{"scene_name": "interactive", "execution_options": None}]
@@ -468,8 +480,9 @@ def test_stream_turn_persists_delivery_context_in_metadata(monkeypatch: pytest.M
 
     service, _resolver = _build_service()
 
-    async def _collect() -> None:
-        async for _event in service.stream_turn(
+    asyncio.run(
+        _submit_turn_and_collect(
+            service,
             ChatTurnRequest(
                 session_id="s1",
                 user_text=" hello ",
@@ -478,11 +491,9 @@ def test_stream_turn_persists_delivery_context_in_metadata(monkeypatch: pytest.M
                     "delivery_channel": "wechat",
                     "delivery_target": "user-1",
                 }),
-            )
-        ):
-            pass
-
-    asyncio.run(_collect())
+            ),
+        )
+    )
 
     assert _last_execution_contract(service).metadata == {
         "delivery_channel": "wechat",
@@ -501,13 +512,12 @@ def test_stream_turn_supports_scene_override(monkeypatch: pytest.MonkeyPatch) ->
 
     service, resolver = _build_service()
 
-    async def _collect() -> None:
-        async for _event in service.stream_turn(
-            ChatTurnRequest(session_id="s1", user_text=" hello ", ticker="AAPL", scene_name="wechat")
-        ):
-            pass
-
-    asyncio.run(_collect())
+    asyncio.run(
+        _submit_turn_and_collect(
+            service,
+            ChatTurnRequest(session_id="s1", user_text=" hello ", ticker="AAPL", scene_name="wechat"),
+        )
+    )
 
     assert resolver.calls == [{"scene_name": "wechat", "execution_options": None}]
     assert _last_execution_contract(service).scene_name == "wechat"
@@ -534,10 +544,8 @@ def test_stream_turn_passes_same_host_session_on_multiple_calls(monkeypatch: pyt
     service, _ = _build_service()
 
     async def _run_pair() -> None:
-        async for _event in service.stream_turn(ChatTurnRequest(session_id="s1", user_text="q1", ticker="AAPL")):
-            pass
-        async for _event in service.stream_turn(ChatTurnRequest(session_id="s1", user_text="q2", ticker="AAPL")):
-            pass
+        await _submit_turn_and_collect(service, ChatTurnRequest(session_id="s1", user_text="q1", ticker="AAPL"))
+        await _submit_turn_and_collect(service, ChatTurnRequest(session_id="s1", user_text="q2", ticker="AAPL"))
 
     asyncio.run(_run_pair())
 
@@ -550,14 +558,13 @@ def test_stream_turn_raises_when_input_empty() -> None:
 
     service, _ = _build_service()
 
-    async def _collect() -> list:
-        events = []
-        async for event in service.stream_turn(ChatTurnRequest(session_id="s1", user_text="   ", ticker="AAPL")):
-            events.append(event)
-        return events
-
     with pytest.raises(ValueError):
-        asyncio.run(_collect())
+        asyncio.run(
+            _submit_turn_and_collect(
+                service,
+                ChatTurnRequest(session_id="s1", user_text="   ", ticker="AAPL"),
+            )
+        )
 
 
 @pytest.mark.unit
@@ -611,19 +618,18 @@ def test_submit_turn_can_ensure_deterministic_session(monkeypatch: pytest.Monkey
 
     service, _resolver = _build_service(session_source=SessionSource.WECHAT)
 
-    async def _collect() -> None:
-        async for _event in service.stream_turn(
+    asyncio.run(
+        _submit_turn_and_collect(
+            service,
             ChatTurnRequest(
                 session_id="wechat_session_1",
                 user_text=" hello ",
                 ticker="AAPL",
                 scene_name="wechat",
                 session_resolution_policy=SessionResolutionPolicy.ENSURE_DETERMINISTIC,
-            )
-        ):
-            pass
-
-    asyncio.run(_collect())
+            ),
+        )
+    )
 
     session = _session_registry(service).get_session("wechat_session_1")
     assert session is not None
@@ -642,8 +648,9 @@ def test_resume_pending_turn_replays_prepared_snapshot(monkeypatch: pytest.Monke
     service, _resolver = _build_service(session_source=SessionSource.WECHAT)
     original_execution_options = ExecutionOptions(model_name="resume-model", max_iterations=7)
 
-    async def _prime_contract() -> None:
-        async for _event in service.stream_turn(
+    asyncio.run(
+        _submit_turn_and_collect(
+            service,
             ChatTurnRequest(
                 session_id="s1",
                 user_text="历史问题",
@@ -654,11 +661,9 @@ def test_resume_pending_turn_replays_prepared_snapshot(monkeypatch: pytest.Monke
                     "delivery_channel": "wechat",
                     "delivery_target": "user-1",
                 }),
-            )
-        ):
-            pass
-
-    asyncio.run(_prime_contract())
+            ),
+        )
+    )
 
     original_contract = _last_execution_contract(service)
     pending_turn_id = _seed_pending_turn_with_contract(
@@ -692,8 +697,9 @@ def test_resume_pending_turn_replays_accepted_snapshot_via_prepare(monkeypatch: 
     service, _resolver = _build_service(session_source=SessionSource.WECHAT)
     original_execution_options = ExecutionOptions(model_name="resume-model", max_iterations=7)
 
-    async def _prime_contract() -> None:
-        async for _event in service.stream_turn(
+    asyncio.run(
+        _submit_turn_and_collect(
+            service,
             ChatTurnRequest(
                 session_id="s1",
                 user_text="历史问题",
@@ -704,11 +710,9 @@ def test_resume_pending_turn_replays_accepted_snapshot_via_prepare(monkeypatch: 
                     "delivery_channel": "wechat",
                     "delivery_target": "user-1",
                 }),
-            )
-        ):
-            pass
-
-    asyncio.run(_prime_contract())
+            ),
+        )
+    )
 
     original_contract = _last_execution_contract(service)
     pending_turn_id = _seed_accepted_pending_turn_with_contract(
@@ -760,8 +764,9 @@ def test_resume_pending_turn_uses_host_owned_prepared_snapshot(
         ),
     )
 
-    async def _prime_contract() -> None:
-        async for _event in service.stream_turn(
+    asyncio.run(
+        _submit_turn_and_collect(
+            service,
             ChatTurnRequest(
                 session_id="s1",
                 user_text="历史问题",
@@ -772,11 +777,9 @@ def test_resume_pending_turn_uses_host_owned_prepared_snapshot(
                     "delivery_channel": "wechat",
                     "delivery_target": "user-1",
                 }),
-            )
-        ):
-            pass
-
-    asyncio.run(_prime_contract())
+            ),
+        )
+    )
 
     original_contract = _last_execution_contract(service)
     pending_turn_id = _seed_pending_turn_with_contract(
@@ -803,11 +806,7 @@ def test_resume_pending_turn_rejects_active_source_run(monkeypatch: pytest.Monke
     )
     service, _resolver = _build_service()
 
-    async def _prime_contract() -> None:
-        async for _event in service.stream_turn(ChatTurnRequest(session_id="s1", user_text="q", ticker="AAPL")):
-            pass
-
-    asyncio.run(_prime_contract())
+    asyncio.run(_submit_turn_and_collect(service, ChatTurnRequest(session_id="s1", user_text="q", ticker="AAPL")))
     pending_turn_id = _seed_pending_turn_with_contract(
         service,
         execution_contract=_last_execution_contract(service),
@@ -832,11 +831,7 @@ def test_resume_pending_turn_deletes_record_after_max_attempts(monkeypatch: pyte
     )
     service, _resolver = _build_service()
 
-    async def _prime_contract() -> None:
-        async for _event in service.stream_turn(ChatTurnRequest(session_id="s1", user_text="q", ticker="AAPL")):
-            pass
-
-    asyncio.run(_prime_contract())
+    asyncio.run(_submit_turn_and_collect(service, ChatTurnRequest(session_id="s1", user_text="q", ticker="AAPL")))
     pending_turn_id = _seed_pending_turn_with_contract(
         service,
         execution_contract=_last_execution_contract(service),
@@ -870,11 +865,7 @@ def test_resume_pending_turn_rejects_succeeded_source_run(monkeypatch: pytest.Mo
     )
     service, _resolver = _build_service()
 
-    async def _prime_contract() -> None:
-        async for _event in service.stream_turn(ChatTurnRequest(session_id="s1", user_text="q", ticker="AAPL")):
-            pass
-
-    asyncio.run(_prime_contract())
+    asyncio.run(_submit_turn_and_collect(service, ChatTurnRequest(session_id="s1", user_text="q", ticker="AAPL")))
     pending_turn_id = _seed_pending_turn_with_contract(
         service,
         execution_contract=_last_execution_contract(service),
@@ -896,11 +887,7 @@ def test_resume_pending_turn_rejects_user_cancelled_source_run(monkeypatch: pyte
     )
     service, _resolver = _build_service()
 
-    async def _prime_contract() -> None:
-        async for _event in service.stream_turn(ChatTurnRequest(session_id="s1", user_text="q", ticker="AAPL")):
-            pass
-
-    asyncio.run(_prime_contract())
+    asyncio.run(_submit_turn_and_collect(service, ChatTurnRequest(session_id="s1", user_text="q", ticker="AAPL")))
     pending_turn_id = _seed_pending_turn_with_contract(
         service,
         execution_contract=_last_execution_contract(service),
@@ -922,11 +909,7 @@ def test_resume_pending_turn_deletes_record_immediately_when_snapshot_is_malform
     )
     service, _resolver = _build_service()
 
-    async def _prime_contract() -> None:
-        async for _event in service.stream_turn(ChatTurnRequest(session_id="s1", user_text="q", ticker="AAPL")):
-            pass
-
-    asyncio.run(_prime_contract())
+    asyncio.run(_submit_turn_and_collect(service, ChatTurnRequest(session_id="s1", user_text="q", ticker="AAPL")))
     pending_turn_id = _seed_pending_turn_with_contract(
         service,
         execution_contract=_last_execution_contract(service),
@@ -956,11 +939,7 @@ def test_resume_pending_turn_allows_timeout_cancelled_source_run(monkeypatch: py
     )
     service, _resolver = _build_service()
 
-    async def _prime_contract() -> None:
-        async for _event in service.stream_turn(ChatTurnRequest(session_id="s1", user_text="q", ticker="AAPL")):
-            pass
-
-    asyncio.run(_prime_contract())
+    asyncio.run(_submit_turn_and_collect(service, ChatTurnRequest(session_id="s1", user_text="q", ticker="AAPL")))
     pending_turn_id = _seed_pending_turn_with_contract(
         service,
         execution_contract=_last_execution_contract(service),
@@ -981,11 +960,7 @@ def test_resume_pending_turn_emits_verbose_logs(monkeypatch: pytest.MonkeyPatch)
     )
     service, _resolver = _build_service()
 
-    async def _prime_contract() -> None:
-        async for _event in service.stream_turn(ChatTurnRequest(session_id="s1", user_text="q", ticker="AAPL")):
-            pass
-
-    asyncio.run(_prime_contract())
+    asyncio.run(_submit_turn_and_collect(service, ChatTurnRequest(session_id="s1", user_text="q", ticker="AAPL")))
     pending_turn_id = _seed_pending_turn_with_contract(
         service,
         execution_contract=_last_execution_contract(service),
@@ -1016,11 +991,7 @@ def test_resume_pending_turn_rejects_cross_session_resume(monkeypatch: pytest.Mo
     )
     service, _resolver = _build_service()
 
-    async def _prime_contract() -> None:
-        async for _event in service.stream_turn(ChatTurnRequest(session_id="s1", user_text="q", ticker="AAPL")):
-            pass
-
-    asyncio.run(_prime_contract())
+    asyncio.run(_submit_turn_and_collect(service, ChatTurnRequest(session_id="s1", user_text="q", ticker="AAPL")))
     pending_turn_id = _seed_pending_turn_with_contract(
         service,
         execution_contract=_last_execution_contract(service),

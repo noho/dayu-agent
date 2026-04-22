@@ -14,6 +14,7 @@ from dayu.contracts.agent_execution import (
     AcceptedRuntimeSpec,
     AcceptedToolConfigSpec,
     ExecutionContract,
+    ExecutionContractSnapshotValue,
     ExecutionDocPermissions,
     ExecutionHostPolicy,
     ExecutionMessageInputs,
@@ -53,6 +54,23 @@ def _build_toolset_configs(
     )
 
 
+def _read_attribute(target: object, name: str) -> object:
+    """读取测试目标的属性值。
+
+    Args:
+        target: 待读取属性的对象。
+        name: 属性名。
+
+    Returns:
+        属性值。
+
+    Raises:
+        AttributeError: 属性不存在时抛出。
+    """
+
+    return getattr(target, name)
+
+
 @pytest.mark.unit
 def test_execution_contract_snapshot_roundtrip() -> None:
     """ExecutionContract 快照应能无损恢复关键治理与 prompt 信息。"""
@@ -62,7 +80,7 @@ def test_execution_contract_snapshot_roundtrip() -> None:
         scene_name="wechat",
         host_policy=ExecutionHostPolicy(
             session_key="session-1",
-            concurrency_lane="llm_api",
+            business_concurrency_lane=None,
             timeout_ms=None,
             resumable=True,
         ),
@@ -137,6 +155,50 @@ def test_execution_contract_snapshot_roundtrip() -> None:
 
 
 @pytest.mark.unit
+def test_accepted_execution_spec_rejects_flat_compatibility_accessors() -> None:
+    """AcceptedExecutionSpec 只暴露分组后的稳定契约，不再提供兼容平铺属性。"""
+
+    spec = AcceptedExecutionSpec(
+        model=AcceptedModelSpec(model_name="gpt-test", temperature=0.2),
+        runtime=AcceptedRuntimeSpec(
+            runner_running_config={"tool_timeout_seconds": 12.0},
+            agent_running_config={"max_iterations": 6},
+        ),
+        infrastructure=AcceptedInfrastructureSpec(
+            trace_settings=TraceSettings(enabled=True, output_dir=Path("/tmp/trace")),
+            conversation_memory_settings=ConversationMemorySettings(
+                compaction_scene_name="conversation_compaction"
+            ),
+        ),
+    )
+
+    assert spec.model.model_name == "gpt-test"
+    assert spec.runtime.runner_running_config == {"tool_timeout_seconds": 12.0}
+    assert spec.infrastructure.trace_settings == TraceSettings(
+        enabled=True,
+        output_dir=Path("/tmp/trace"),
+    )
+
+    with pytest.raises(AttributeError):
+        _read_attribute(spec, "model_name")
+
+    with pytest.raises(AttributeError):
+        _read_attribute(spec, "temperature")
+
+    with pytest.raises(AttributeError):
+        _read_attribute(spec, "runner_running_config")
+
+    with pytest.raises(AttributeError):
+        _read_attribute(spec, "agent_running_config")
+
+    with pytest.raises(AttributeError):
+        _read_attribute(spec, "trace_settings")
+
+    with pytest.raises(AttributeError):
+        _read_attribute(spec, "conversation_memory_settings")
+
+
+@pytest.mark.unit
 def test_execution_contract_snapshot_rejects_removed_failed_tool_field() -> None:
     """旧字段名进入 execution option snapshot 时应显式失败。"""
 
@@ -145,7 +207,7 @@ def test_execution_contract_snapshot_rejects_removed_failed_tool_field() -> None
         scene_name="wechat",
         host_policy=ExecutionHostPolicy(
             session_key="session-1",
-            concurrency_lane="llm_api",
+            business_concurrency_lane=None,
             timeout_ms=None,
             resumable=True,
         ),
@@ -195,7 +257,7 @@ def test_execution_contract_snapshot_roundtrip_toolset_config_overrides() -> Non
         scene_name="wechat",
         host_policy=ExecutionHostPolicy(
             session_key="session-1",
-            concurrency_lane="llm_api",
+            business_concurrency_lane=None,
             timeout_ms=None,
             resumable=True,
         ),
@@ -254,9 +316,128 @@ def test_execution_contract_snapshot_roundtrip_toolset_config_overrides() -> Non
             payload={"provider": "off", "max_search_results": 3},
         ),
     )
+
+
+@pytest.mark.unit
+def test_execution_contract_snapshot_uses_trace_settings_dataclass_defaults_when_missing_optional_fields() -> None:
+    """缺失 trace 可选字段时应回退到 `TraceSettings` dataclass 默认值。"""
+
+    contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="interactive",
+        host_policy=ExecutionHostPolicy(
+            session_key="session-1",
+            business_concurrency_lane=None,
+            timeout_ms=None,
+            resumable=True,
+        ),
+        preparation_spec=ScenePreparationSpec(
+            selected_toolsets=(),
+            execution_permissions=ExecutionPermissions(
+                web=ExecutionWebPermissions(allow_private_network_url=False),
+                doc=ExecutionDocPermissions(),
+            ),
+            prompt_contributions={},
+        ),
+        message_inputs=ExecutionMessageInputs(user_message="hello"),
+        accepted_execution_spec=AcceptedExecutionSpec(
+            model=AcceptedModelSpec(model_name="gpt-test", temperature=0.2),
+            runtime=AcceptedRuntimeSpec(agent_running_config={"max_iterations": 6}),
+            tools=AcceptedToolConfigSpec(toolset_configs=()),
+            infrastructure=AcceptedInfrastructureSpec(
+                trace_settings=TraceSettings(
+                    enabled=True,
+                    output_dir=Path("/tmp/trace"),
+                    max_file_bytes=0,
+                    retention_days=0,
+                    compress_rolled=False,
+                    partition_by_session=False,
+                ),
+                conversation_memory_settings=ConversationMemorySettings(),
+            ),
+        ),
+        execution_options=ExecutionOptions(),
+    )
+
+    snapshot = serialize_execution_contract_snapshot(contract)
+    accepted_execution_spec_payload = cast(
+        dict[str, ExecutionContractSnapshotValue],
+        snapshot["accepted_execution_spec"],
+    )
+    infrastructure_payload = dict(
+        cast(dict[str, ExecutionContractSnapshotValue], accepted_execution_spec_payload["infrastructure"])
+    )
+    trace_settings_payload = dict(
+        cast(dict[str, ExecutionContractSnapshotValue], infrastructure_payload["trace_settings"])
+    )
+    for field_name in ("max_file_bytes", "retention_days", "compress_rolled", "partition_by_session"):
+        trace_settings_payload.pop(field_name, None)
+    infrastructure_payload["trace_settings"] = trace_settings_payload
+    accepted_execution_spec_payload["infrastructure"] = infrastructure_payload
+    snapshot["accepted_execution_spec"] = accepted_execution_spec_payload
+
+    restored = deserialize_execution_contract_snapshot(snapshot)
+
+    assert restored.accepted_execution_spec.infrastructure.trace_settings == TraceSettings(
+        enabled=True,
+        output_dir=Path("/tmp/trace"),
+    )
+    assert restored.execution_options is not None
     assert restored.execution_options.doc_tool_limits is None
     assert restored.execution_options.fins_tool_limits is None
     assert restored.execution_options.web_tools_config is None
-    assert not hasattr(restored.execution_options, "doc_tool_limits_override")
-    assert not hasattr(restored.execution_options, "fins_tool_limits_override")
-    assert not hasattr(restored.execution_options, "web_tools_config_override")
+
+
+@pytest.mark.unit
+def test_execution_contract_snapshot_drops_trace_settings_when_output_dir_missing() -> None:
+    """缺失 trace output_dir 时不应恢复为当前工作目录。"""
+
+    contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="interactive",
+        host_policy=ExecutionHostPolicy(
+            session_key="session-1",
+            business_concurrency_lane=None,
+            timeout_ms=None,
+            resumable=True,
+        ),
+        preparation_spec=ScenePreparationSpec(
+            selected_toolsets=(),
+            execution_permissions=ExecutionPermissions(
+                web=ExecutionWebPermissions(allow_private_network_url=False),
+                doc=ExecutionDocPermissions(),
+            ),
+            prompt_contributions={},
+        ),
+        message_inputs=ExecutionMessageInputs(user_message="hello"),
+        accepted_execution_spec=AcceptedExecutionSpec(
+            model=AcceptedModelSpec(model_name="gpt-test", temperature=0.2),
+            runtime=AcceptedRuntimeSpec(agent_running_config={"max_iterations": 6}),
+            tools=AcceptedToolConfigSpec(toolset_configs=()),
+            infrastructure=AcceptedInfrastructureSpec(
+                trace_settings=TraceSettings(enabled=True, output_dir=Path("/tmp/trace")),
+                conversation_memory_settings=ConversationMemorySettings(),
+            ),
+        ),
+        execution_options=ExecutionOptions(),
+    )
+
+    snapshot = serialize_execution_contract_snapshot(contract)
+    accepted_execution_spec_payload = cast(
+        dict[str, ExecutionContractSnapshotValue],
+        snapshot["accepted_execution_spec"],
+    )
+    infrastructure_payload = dict(
+        cast(dict[str, ExecutionContractSnapshotValue], accepted_execution_spec_payload["infrastructure"])
+    )
+    trace_settings_payload = dict(
+        cast(dict[str, ExecutionContractSnapshotValue], infrastructure_payload["trace_settings"])
+    )
+    trace_settings_payload.pop("output_dir", None)
+    infrastructure_payload["trace_settings"] = trace_settings_payload
+    accepted_execution_spec_payload["infrastructure"] = infrastructure_payload
+    snapshot["accepted_execution_spec"] = accepted_execution_spec_payload
+
+    restored = deserialize_execution_contract_snapshot(snapshot)
+
+    assert restored.accepted_execution_spec.infrastructure.trace_settings is None

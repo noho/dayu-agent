@@ -88,7 +88,7 @@ class PreparedAgentTurnSnapshot:
     service_name: str
     scene_name: str
     metadata: ExecutionDeliveryContext
-    concurrency_lane: str | None
+    business_concurrency_lane: str | None
     timeout_ms: int | None
     resumable: bool
     system_prompt: str
@@ -174,7 +174,7 @@ def deserialize_prepared_agent_turn_snapshot(
     service_name = _normalize_required_text(payload.get("service_name"), field_name="service_name")
     scene_name = _normalize_required_text(payload.get("scene_name"), field_name="scene_name")
     system_prompt = str(payload.get("system_prompt") or "")
-    concurrency_lane = _normalize_optional_text(payload.get("concurrency_lane"))
+    business_concurrency_lane = _normalize_optional_text(payload.get("business_concurrency_lane"))
     timeout_ms = _coerce_optional_int(payload.get("timeout_ms"), field_name="timeout_ms")
     resumable = bool(payload.get("resumable"))
     metadata = normalize_execution_delivery_context(_as_object(payload.get("metadata")))
@@ -193,7 +193,7 @@ def deserialize_prepared_agent_turn_snapshot(
         service_name=service_name,
         scene_name=scene_name,
         metadata=metadata,
-        concurrency_lane=concurrency_lane,
+        business_concurrency_lane=business_concurrency_lane,
         timeout_ms=timeout_ms,
         resumable=resumable,
         system_prompt=system_prompt,
@@ -329,7 +329,7 @@ def _parse_execution_host_policy(value: dict[str, PendingTurnSnapshotValue]) -> 
 
     return ExecutionHostPolicy(
         session_key=_normalize_optional_text(value.get("session_key")),
-        concurrency_lane=_normalize_optional_text(value.get("concurrency_lane")),
+        business_concurrency_lane=_normalize_optional_text(value.get("business_concurrency_lane")),
         timeout_ms=_coerce_optional_int(value.get("timeout_ms"), field_name="timeout_ms"),
         resumable=bool(value.get("resumable", False)),
     )

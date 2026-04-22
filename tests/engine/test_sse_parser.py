@@ -399,6 +399,45 @@ async def test_handle_payload_records_protocol_error_when_tool_calls_not_list() 
 
 
 @pytest.mark.asyncio
+async def test_handle_payload_skips_invalid_tool_call_entry_but_continues_following_entries() -> None:
+    """非法 tool_call entry 不应阻断同一 chunk 中后续合法 entry 的处理。"""
+
+    parser = SSEStreamParser(
+        name="test",
+        request_id="req_tool_calls_mixed_entries",
+        running_config=_RunningConfigStub(),
+    )
+    payload = json.dumps(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            "invalid-entry",
+                            {
+                                "index": 0,
+                                "id": "tc_1",
+                                "function": {
+                                    "name": "search",
+                                    "arguments": "{\"q\":\"abc\"}",
+                                },
+                            },
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+
+    events = await _collect_events(parser._handle_payload(payload))
+    result = parser.get_result()
+
+    assert [event.type for event in events] == [EventType.TOOL_CALL_START, EventType.TOOL_CALL_DELTA]
+    assert result.protocol_errors[0]["error_type"] == "tool_call_incomplete"
+    assert "index 0" in result.protocol_errors[0]["body"]
+
+
+@pytest.mark.asyncio
 async def test_handle_tool_call_delta_covers_missing_index_and_debug_logs(monkeypatch: Any) -> None:
     """验证工具增量在缺索引与调试模式下的行为。
 

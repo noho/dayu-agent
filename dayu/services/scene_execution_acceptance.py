@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
 
 from dayu.contracts.agent_execution import (
     AcceptedExecutionSpec,
@@ -15,6 +14,7 @@ from dayu.contracts.agent_execution import (
 )
 from dayu.contracts.infrastructure import ModelCatalogProtocol
 from dayu.contracts.model_config import ModelConfig
+from dayu.execution.runtime_config import OpenAIRunnerRuntimeConfig
 from dayu.execution.runtime_config import build_agent_running_config_snapshot, build_runner_running_config_snapshot
 from dayu.execution.options import (
     ExecutionOptions,
@@ -24,7 +24,42 @@ from dayu.execution.options import (
 )
 from dayu.prompting.scene_definition import SceneDefinition
 from dayu.services.conversation_policy_reader import ConversationPolicyReader
+from dayu.services.contracts import SceneModelConfig
 from dayu.services.scene_definition_reader import SceneDefinitionReader
+from dayu.log import Log
+
+MODULE = "SERVICE.SCENE_ACCEPTANCE"
+
+
+def _build_scene_acceptance_debug_message(
+    *,
+    accepted_scene: "AcceptedSceneExecution",
+) -> str:
+    """构造 scene 接受结果调试日志。
+
+    Args:
+        accepted_scene: 已接受的 scene 执行结果。
+
+    Returns:
+        统一格式的调试日志文本。
+
+    Raises:
+        无。
+    """
+
+    runner_running_config = accepted_scene.resolved_execution_options.runner_running_config
+    tool_timeout_seconds: float | None = None
+    if isinstance(runner_running_config, OpenAIRunnerRuntimeConfig):
+        tool_timeout_seconds = runner_running_config.tool_timeout_seconds
+    return (
+        "scene 接受结果: "
+        f"scene_name={accepted_scene.scene_name}, "
+        f"model_name={accepted_scene.accepted_execution_spec.model.model_name}, "
+        f"temperature={accepted_scene.resolved_temperature}, "
+        f"max_iterations={accepted_scene.resolved_execution_options.agent_running_config.max_iterations}, "
+        f"tool_timeout_seconds={tool_timeout_seconds}, "
+        f"resumable={accepted_scene.default_resumable}"
+    )
 
 
 @dataclass(frozen=True)
@@ -39,13 +74,13 @@ class AcceptedSceneExecution:
     accepted_execution_spec: AcceptedExecutionSpec
 
     @property
-    def scene_model(self) -> dict[str, str | float]:
+    def scene_model(self) -> SceneModelConfig:
         """返回用于展示的模型摘要。"""
 
-        return {
-            "name": self.accepted_execution_spec.model.model_name,
-            "temperature": self.resolved_temperature,
-        }
+        return SceneModelConfig(
+            name=self.accepted_execution_spec.model.model_name,
+            temperature=self.resolved_temperature,
+        )
 
     @property
     def default_resumable(self) -> bool:
@@ -119,7 +154,7 @@ class SceneExecutionAcceptancePreparer:
             resolved_execution_options,
             conversation_memory_settings=conversation_memory_settings,
         )
-        return AcceptedSceneExecution(
+        accepted_scene = AcceptedSceneExecution(
             scene_name=scene_name,
             scene_definition=scene_definition,
             resolved_execution_options=resolved_execution_options,
@@ -131,12 +166,17 @@ class SceneExecutionAcceptancePreparer:
                 resolved_temperature=resolved_temperature,
             ),
         )
+        Log.debug(
+            _build_scene_acceptance_debug_message(accepted_scene=accepted_scene),
+            module=MODULE,
+        )
+        return accepted_scene
 
     def resolve_scene_model(
         self,
         scene_name: str,
         execution_options: ExecutionOptions | None = None,
-    ) -> dict[str, str | float]:
+    ) -> SceneModelConfig:
         """解析用于展示的 scene 模型摘要。"""
 
         return self.prepare(scene_name, execution_options).scene_model

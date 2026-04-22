@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import MISSING, asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping, TypeAlias, cast
 
@@ -115,6 +115,54 @@ def _empty_execution_delivery_context() -> ExecutionDeliveryContext:
     """
 
     return {}
+
+
+def _trace_settings_default_int(field_name: str) -> int:
+    """读取 `TraceSettings` 指定整数字段的 dataclass 默认值。
+
+    Args:
+        field_name: `TraceSettings` 中的目标字段名。
+
+    Returns:
+        对应字段的整数默认值。
+
+    Raises:
+        KeyError: 字段不存在时抛出。
+        TypeError: 字段默认值不是整数时抛出。
+        ValueError: 字段未声明默认值时抛出。
+    """
+
+    field_info = TraceSettings.__dataclass_fields__[field_name]
+    default_value = field_info.default
+    if default_value is MISSING:
+        raise ValueError(f"TraceSettings.{field_name} 未声明默认值")
+    if isinstance(default_value, bool) or not isinstance(default_value, int):
+        raise TypeError(f"TraceSettings.{field_name} 默认值不是整数")
+    return default_value
+
+
+def _trace_settings_default_bool(field_name: str) -> bool:
+    """读取 `TraceSettings` 指定布尔字段的 dataclass 默认值。
+
+    Args:
+        field_name: `TraceSettings` 中的目标字段名。
+
+    Returns:
+        对应字段的布尔默认值。
+
+    Raises:
+        KeyError: 字段不存在时抛出。
+        TypeError: 字段默认值不是布尔值时抛出。
+        ValueError: 字段未声明默认值时抛出。
+    """
+
+    field_info = TraceSettings.__dataclass_fields__[field_name]
+    default_value = field_info.default
+    if default_value is MISSING:
+        raise ValueError(f"TraceSettings.{field_name} 未声明默认值")
+    if not isinstance(default_value, bool):
+        raise TypeError(f"TraceSettings.{field_name} 默认值不是布尔值")
+    return default_value
 
 
 @dataclass(frozen=True)
@@ -335,42 +383,6 @@ class AcceptedExecutionSpec:
         object.__setattr__(self, "tools", tools or AcceptedToolConfigSpec())
         object.__setattr__(self, "infrastructure", infrastructure or AcceptedInfrastructureSpec())
 
-    @property
-    def model_name(self) -> str:
-        """返回兼容旧调用点的模型名。"""
-
-        return self.model.model_name
-
-    @property
-    def temperature(self) -> float | None:
-        """返回兼容旧调用点的 temperature。"""
-
-        return self.model.temperature
-
-    @property
-    def runner_running_config(self) -> RunnerRunningConfigSnapshot:
-        """返回兼容旧调用点的 runner 运行配置快照。"""
-
-        return self.runtime.runner_running_config
-
-    @property
-    def agent_running_config(self) -> AgentRunningConfigSnapshot:
-        """返回兼容旧调用点的 agent 运行配置快照。"""
-
-        return self.runtime.agent_running_config
-
-    @property
-    def trace_settings(self) -> TraceSettings | None:
-        """返回兼容旧调用点的工具追踪配置。"""
-
-        return self.infrastructure.trace_settings
-
-    @property
-    def conversation_memory_settings(self) -> ConversationMemorySettings | None:
-        """返回兼容旧调用点的会话记忆配置。"""
-
-        return self.infrastructure.conversation_memory_settings
-
 
 @dataclass(frozen=True)
 class ExecutionHostPolicy:
@@ -378,7 +390,12 @@ class ExecutionHostPolicy:
 
     Args:
         session_key: Host Session 键。
-        concurrency_lane: 并发 lane。
+        business_concurrency_lane: 业务并发通道名称。
+
+            该字段仅用于 Service 声明业务并发通道（如 ``write_chapter`` /
+            ``sec_download``）；``llm_api`` 属于 Host 自治 lane，由 Host 根据
+            ExecutionContract 的调用路径自动叠加，禁止在此字段写入 Host 自治
+            lane 名。
         timeout_ms: 本次执行超时。
         resumable: 是否允许恢复。
 
@@ -390,7 +407,7 @@ class ExecutionHostPolicy:
     """
 
     session_key: str | None = None
-    concurrency_lane: str | None = None
+    business_concurrency_lane: str | None = None
     timeout_ms: int | None = None
     resumable: bool = False
 
@@ -925,9 +942,35 @@ def _deserialize_accepted_execution_spec(
     conversation_memory_settings_payload = _snapshot_optional_object(
         infrastructure_payload.get("conversation_memory_settings")
     )
-    trace_output_dir = (
-        Path(_snapshot_optional_str(trace_settings_payload.get("output_dir")) or "")
-        if trace_settings_payload is not None and _snapshot_optional_str(trace_settings_payload.get("output_dir")) is not None
+    trace_output_dir_raw = (
+        _snapshot_optional_str(trace_settings_payload.get("output_dir"))
+        if trace_settings_payload is not None
+        else None
+    )
+    trace_output_dir = Path(trace_output_dir_raw) if trace_output_dir_raw is not None else None
+    trace_enabled = (
+        _snapshot_optional_bool(trace_settings_payload.get("enabled"))
+        if trace_settings_payload is not None
+        else None
+    )
+    trace_max_file_bytes = (
+        _snapshot_optional_int(trace_settings_payload.get("max_file_bytes"))
+        if trace_settings_payload is not None
+        else None
+    )
+    trace_retention_days = (
+        _snapshot_optional_int(trace_settings_payload.get("retention_days"))
+        if trace_settings_payload is not None
+        else None
+    )
+    trace_compress_rolled = (
+        _snapshot_optional_bool(trace_settings_payload.get("compress_rolled"))
+        if trace_settings_payload is not None
+        else None
+    )
+    trace_partition_by_session = (
+        _snapshot_optional_bool(trace_settings_payload.get("partition_by_session"))
+        if trace_settings_payload is not None
         else None
     )
     return AcceptedExecutionSpec(
@@ -951,12 +994,28 @@ def _deserialize_accepted_execution_spec(
         infrastructure=AcceptedInfrastructureSpec(
             trace_settings=(
                 TraceSettings(
-                    enabled=bool(_snapshot_optional_bool(trace_settings_payload.get("enabled"))),
-                    output_dir=trace_output_dir if trace_output_dir is not None else Path("."),
-                    max_file_bytes=_snapshot_optional_int(trace_settings_payload.get("max_file_bytes")) or 64 * 1024 * 1024,
-                    retention_days=_snapshot_optional_int(trace_settings_payload.get("retention_days")) or 30,
-                    compress_rolled=_snapshot_optional_bool(trace_settings_payload.get("compress_rolled")) is not False,
-                    partition_by_session=_snapshot_optional_bool(trace_settings_payload.get("partition_by_session")) is not False,
+                    enabled=bool(trace_enabled),
+                    output_dir=trace_output_dir,
+                    max_file_bytes=(
+                        trace_max_file_bytes
+                        if trace_max_file_bytes is not None
+                        else _trace_settings_default_int("max_file_bytes")
+                    ),
+                    retention_days=(
+                        trace_retention_days
+                        if trace_retention_days is not None
+                        else _trace_settings_default_int("retention_days")
+                    ),
+                    compress_rolled=(
+                        trace_compress_rolled
+                        if trace_compress_rolled is not None
+                        else _trace_settings_default_bool("compress_rolled")
+                    ),
+                    partition_by_session=(
+                        trace_partition_by_session
+                        if trace_partition_by_session is not None
+                        else _trace_settings_default_bool("partition_by_session")
+                    ),
                 )
                 if trace_settings_payload is not None and trace_output_dir is not None
                 else None
@@ -978,7 +1037,7 @@ def serialize_execution_contract_snapshot(
         "scene_name": execution_contract.scene_name,
         "host_policy": {
             "session_key": execution_contract.host_policy.session_key,
-            "concurrency_lane": execution_contract.host_policy.concurrency_lane,
+            "business_concurrency_lane": execution_contract.host_policy.business_concurrency_lane,
             "timeout_ms": execution_contract.host_policy.timeout_ms,
             "resumable": execution_contract.host_policy.resumable,
         },
@@ -1041,7 +1100,7 @@ def deserialize_execution_contract_snapshot(
         scene_name=_snapshot_optional_str(snapshot.get("scene_name")) or "",
         host_policy=ExecutionHostPolicy(
             session_key=_snapshot_optional_str(host_policy.get("session_key")),
-            concurrency_lane=_snapshot_optional_str(host_policy.get("concurrency_lane")),
+            business_concurrency_lane=_snapshot_optional_str(host_policy.get("business_concurrency_lane")),
             timeout_ms=_snapshot_optional_int(host_policy.get("timeout_ms")),
             resumable=bool(_snapshot_optional_bool(host_policy.get("resumable"))),
         ),

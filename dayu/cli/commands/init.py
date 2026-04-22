@@ -20,8 +20,9 @@ import sys
 from argparse import Namespace
 from dataclasses import dataclass
 from pathlib import Path
-import urllib.request
 import urllib.error
+import urllib.request
+from dayu.cli.workspace_migrations import apply_all_workspace_migrations
 from dayu.startup.config_file_resolver import resolve_package_assets_path, resolve_package_config_path
 from dayu.contracts.env_keys import (
     FMP_API_KEY_ENV,
@@ -29,12 +30,14 @@ from dayu.contracts.env_keys import (
     SERPER_API_KEY_ENV,
     TAVILY_API_KEY_ENV,
 )
+from dayu.workspace_paths import build_dayu_root_path
 
 MODULE = "CLI.INIT"
 
 # --------------------------------------------------------------------------- #
 #  供应商定义
 # --------------------------------------------------------------------------- #
+
 
 @dataclass(frozen=True)
 class _ProviderOption:
@@ -60,6 +63,20 @@ _PROVIDER_OPTION_CUSTOM_OPENAI = "custom_openai"
 
 # 自定义 OpenAI 兼容 API（OpenRouter 等）统一使用的目录键
 _CUSTOM_CATALOG_KEY = "custom-openai"
+_CUSTOM_OPENAI_TEMPERATURE_PROFILES: dict[str, dict[str, float]] = {
+    "write": {"temperature": 1.0},
+    "overview": {"temperature": 1.0},
+    "audit": {"temperature": 0.8},
+    "decision": {"temperature": 1.0},
+    "interactive": {"temperature": 1.0},
+    "prompt": {"temperature": 1.0},
+    "infer": {"temperature": 0.5},
+    "conversation_compaction": {"temperature": 0.4},
+}
+_CUSTOM_OPENAI_CONVERSATION_MEMORY: dict[str, int] = {
+    "episodic_memory_token_budget_floor": 4000,
+    "episodic_memory_token_budget_cap": 4000,
+}
 
 _PROVIDER_OPTIONS: tuple[_ProviderOption, ...] = (
     _ProviderOption(
@@ -314,6 +331,102 @@ def _persist_env_var(key: str, value: str) -> tuple[str, bool]:
     except OSError:
         return str(profile), False
     return str(profile), True
+
+
+# --------------------------------------------------------------------------- #
+#  工作区重置
+# --------------------------------------------------------------------------- #
+
+
+def _build_workspace_reset_targets(base_dir: Path) -> tuple[Path, ...]:
+    """构造 `init --reset` 需要处理的工作区目标路径列表。
+
+    Args:
+        base_dir: 工作区根目录。
+
+    Returns:
+        需要参与 reset 的目标路径元组。
+
+    Raises:
+        无。
+    """
+
+    return (
+        build_dayu_root_path(base_dir),
+        base_dir / "config",
+        base_dir / "assets",
+    )
+
+
+def _confirm_workspace_reset(base_dir: Path) -> bool:
+    """交互确认是否执行工作区重置。
+
+    Args:
+        base_dir: 工作区根目录。
+
+    Returns:
+        用户明确输入 ``y`` / ``yes`` 时返回 `True`；其余输入（含回车）返回 `False`。
+
+    Raises:
+        无。输入流中断时按未确认处理。
+    """
+
+    targets = _build_workspace_reset_targets(base_dir)
+    target_lines = "\n".join(f"  - {target}" for target in targets)
+    prompt = (
+        "\n⚠️  --reset 将删除以下目录并重新初始化：\n"
+        f"{target_lines}\n"
+        "是否继续？(y/N): "
+    )
+    try:
+        answer = input(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    return answer in ("y", "yes")
+
+
+def _remove_workspace_target(target: Path) -> bool:
+    """删除工作区中的单个初始化目标路径。
+
+    Args:
+        target: 需要删除的目标路径，可能是目录、文件或符号链接。
+
+    Returns:
+        若目标存在且已删除则返回 `True`；若目标原本不存在则返回 `False`。
+
+    Raises:
+        OSError: 当文件系统删除失败时抛出。
+    """
+
+    if target.is_symlink() or target.is_file():
+        target.unlink()
+        return True
+    if target.is_dir():
+        shutil.rmtree(target)
+        return True
+    return False
+
+
+def _reset_workspace_init_targets(base_dir: Path) -> tuple[Path, ...]:
+    """删除 `init` 管理的工作区初始化产物与运行时状态。
+
+    Args:
+        base_dir: 工作区根目录。
+
+    Returns:
+        实际被删除的目标路径元组，顺序与删除顺序一致。
+
+    Raises:
+        OSError: 当任一目标删除失败时抛出。
+    """
+
+    targets = _build_workspace_reset_targets(base_dir)
+    removed_targets: list[Path] = []
+    for target in targets:
+        if _remove_workspace_target(target):
+            removed_targets.append(target)
+    return tuple(removed_targets)
 
 
 # --------------------------------------------------------------------------- #
@@ -599,7 +712,6 @@ def _update_manifest_default_models(
         allowed = model_section.get("allowed_names")
         if isinstance(allowed, list) and new_name not in allowed:
             allowed.append(new_name)
-            model_section["allowed_names"] = allowed
             changed = True
 
         if changed:
@@ -699,16 +811,18 @@ class _CustomOpenAIConfig:
     """用户自定义 OpenAI 兼容 API 的参数。"""
 
     base_url: str
-    api_key_env: str
     api_key_value: str
     model_id: str
 
 
-def _prompt_custom_openai_config() -> _CustomOpenAIConfig:
+def _prompt_custom_openai_config(api_key_name: str) -> _CustomOpenAIConfig:
     """交互式收集自定义 OpenAI 兼容 API 参数。
 
     收集 base URL、API Key 值，以及单个模型 ID；thinking / 非 thinking
     两个角色共享该模型。
+
+    Args:
+        api_key_name: 当前供应商对应的 API Key 环境变量名。
 
     Returns:
         已收集完毕的 `_CustomOpenAIConfig`。
@@ -726,16 +840,15 @@ def _prompt_custom_openai_config() -> _CustomOpenAIConfig:
             sys.exit(1)
         base_url = base_url.rstrip("/")
 
-        api_key_env = "CUSTOM_OPENAI_API_KEY"
-        existing_value = os.environ.get(api_key_env, "")
+        existing_value = os.environ.get(api_key_name, "")
         if existing_value:
             masked = existing_value[:4] + "***" + existing_value[-4:] if len(existing_value) > 8 else "***"
-            print(f"  {api_key_env} 已在环境变量中配置（{masked}），将复用该值。")
+            print(f"  {api_key_name} 已在环境变量中配置（{masked}），将复用该值。")
             api_key_value = existing_value
         else:
-            api_key_value = input(f"  请输入 {api_key_env}: ").strip()
+            api_key_value = input(f"  请输入 {api_key_name}: ").strip()
             if not api_key_value:
-                print(f"错误: {api_key_env} 不能为空")
+                print(f"错误: {api_key_name} 不能为空")
                 sys.exit(1)
 
         print("  请填写模型 ID（OpenRouter 示例：openai/gpt-4o、anthropic/claude-sonnet-4）")
@@ -749,88 +862,105 @@ def _prompt_custom_openai_config() -> _CustomOpenAIConfig:
 
     return _CustomOpenAIConfig(
         base_url=base_url,
-        api_key_env=api_key_env,
         api_key_value=api_key_value,
         model_id=model_id,
     )
 
 
-def _write_custom_openai_catalog_entries(
-    config_dir: Path, custom: _CustomOpenAIConfig
-) -> None:
-    """将自定义 API 的两个条目写入工作区 ``llm_models.json``。
+def _build_custom_openai_catalog_entry(
+    *,
+    endpoint_url: str,
+    api_key_name: str,
+    model_id: str,
+    description: str,
+) -> dict[str, object]:
+    """构造自定义 OpenAI 兼容模型的 catalog 条目。
 
-    使用固定的目录键 `_CUSTOM_CATALOG_NON_THINKING` / `_CUSTOM_CATALOG_THINKING`，
-    覆盖式写入以保证 init 可重复执行。
+    Args:
+        endpoint_url: OpenAI 兼容接口的 ``/chat/completions`` 地址。
+        api_key_name: 对应 API Key 的环境变量名。
+        model_id: 用户输入的目标模型 ID。
+        description: 写入 catalog 的描述信息。
+
+    Returns:
+        可直接写入 ``llm_models.json`` 的模型条目字典。
+
+    Raises:
+        无。
+    """
+
+    headers = {
+        "Authorization": f"Bearer {{{{{api_key_name}}}}}",
+        "Content-Type": "application/json",
+    }
+    runtime_hints = {
+        "temperature_profiles": _CUSTOM_OPENAI_TEMPERATURE_PROFILES,
+        "conversation_memory": _CUSTOM_OPENAI_CONVERSATION_MEMORY,
+    }
+    return {
+        "runner_type": "openai_compatible",
+        "name": _CUSTOM_CATALOG_KEY,
+        "endpoint_url": endpoint_url,
+        "model": model_id,
+        "headers": headers,
+        "timeout": 3600,
+        "stream_idle_timeout": 120.0,
+        "stream_idle_heartbeat_sec": 10.0,
+        "supports_stream": True,
+        "supports_tool_calling": True,
+        "supports_usage": True,
+        "supports_stream_usage": True,
+        "max_context_tokens": 131072,
+        "max_output_tokens": 8192,
+        "extra_payloads": {},
+        "description": description,
+        "runtime_hints": runtime_hints,
+    }
+
+
+def _write_custom_openai_catalog_entries(
+    config_dir: Path,
+    custom: _CustomOpenAIConfig,
+    *,
+    api_key_name: str,
+) -> None:
+    """将自定义 API 的单个条目写入工作区 ``llm_models.json``。
+
+    thinking / 非 thinking 角色共享同一个 catalog key ``custom-openai``，
+    因而这里只覆盖该单个条目，同时保留文件中的其他供应商配置。
 
     Args:
         config_dir: 工作区配置目录。
         custom: 用户填写的自定义 API 参数。
+        api_key_name: 当前供应商对应的 API Key 环境变量名。
 
     Raises:
+        ValueError: ``llm_models.json`` 非法或顶层结构不是对象时抛出。
         OSError: 文件读写失败时抛出。
     """
 
     catalog_path = config_dir / "llm_models.json"
     data: dict[str, object] = {}
     if catalog_path.exists():
-        text = catalog_path.read_text(encoding="utf-8")
-        if text.strip():
-            data = json.loads(text)
+        raw_text = catalog_path.read_text(encoding="utf-8")
+        if raw_text.strip():
+            try:
+                parsed = json.loads(raw_text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{catalog_path} 不是合法 JSON，请先修复该文件后再重试 init。") from exc
+            if not isinstance(parsed, dict):
+                raise ValueError(f"{catalog_path} 顶层必须是 JSON 对象，请先修复该文件后再重试 init。")
+            data = parsed
 
     endpoint_url = f"{custom.base_url}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {{{{{custom.api_key_env}}}}}",
-        "Content-Type": "application/json",
-    }
-
-    runtime_hints = {
-        "temperature_profiles": {
-            "write": {"temperature": 1.0},
-            "overview": {"temperature": 1.0},
-            "audit": {"temperature": 0.8},
-            "decision": {"temperature": 1.0},
-            "interactive": {"temperature": 1.0},
-            "prompt": {"temperature": 1.0},
-            "infer": {"temperature": 0.5},
-            "conversation_compaction": {"temperature": 0.4},
-        },
-        "conversation_memory": {
-            "episodic_memory_token_budget_floor": 4000,
-            "episodic_memory_token_budget_cap": 4000,
-        },
-    }
-
-    def _entry(catalog_key: str, model_id: str, description: str) -> dict[str, object]:
-        return {
-            "runner_type": "openai_compatible",
-            "name": catalog_key,
-            "endpoint_url": endpoint_url,
-            "model": model_id,
-            "headers": headers,
-            "timeout": 3600,
-            "stream_idle_timeout": 120.0,
-            "stream_idle_heartbeat_sec": 10.0,
-            "supports_stream": True,
-            "supports_tool_calling": True,
-            "supports_usage": True,
-            "supports_stream_usage": True,
-            "max_context_tokens": 131072,
-            "max_output_tokens": 8192,
-            "extra_payloads": {},
-            "description": description,
-            "runtime_hints": runtime_hints,
-        }
-
-    data[_CUSTOM_CATALOG_KEY] = _entry(
-        _CUSTOM_CATALOG_KEY,
-        custom.model_id,
-        f"自定义 OpenAI 兼容 API（{custom.base_url}）",
+    data[_CUSTOM_CATALOG_KEY] = _build_custom_openai_catalog_entry(
+        endpoint_url=endpoint_url,
+        api_key_name=api_key_name,
+        model_id=custom.model_id,
+        description=f"自定义 OpenAI 兼容 API（{custom.base_url}）",
     )
 
-    catalog_path.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    catalog_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _prompt_optional_search_keys() -> list[tuple[str, str]]:
@@ -977,7 +1107,7 @@ def _prompt_sec_user_agent() -> tuple[str, str] | None:
         print(f"  {SEC_USER_AGENT_ENV} 已配置: {existing}，跳过。")
         return None
 
-    print('  SEC 要求爬虫请求提供真实 User-Agent（含邮箱），')
+    print("  SEC 要求爬虫请求提供真实 User-Agent（含邮箱），")
     print('  格式示例: "MyCompany admin@mycompany.com"')
 
     try:
@@ -1002,7 +1132,8 @@ def run_init_command(args: Namespace) -> int:
     """执行 ``dayu-cli init`` 子命令。
 
     Args:
-        args: 解析后的命令行参数，包含 ``base``（工作区目录）和 ``overwrite``（是否覆盖）。
+        args: 解析后的命令行参数，包含 ``base``（工作区目录）、
+            ``overwrite``（是否覆盖已有配置）与 ``reset``（是否先重置工作区状态）。
 
     Returns:
         退出码，0 表示成功。
@@ -1012,8 +1143,21 @@ def run_init_command(args: Namespace) -> int:
     """
 
     base_dir = Path(args.base).resolve()
-    overwrite: bool = getattr(args, "overwrite", False)
-    is_first_workspace_init = not (base_dir / "config").exists()
+    overwrite: bool = bool(getattr(args, "overwrite", False))
+    reset: bool = bool(getattr(args, "reset", False))
+    if reset:
+        if not _confirm_workspace_reset(base_dir):
+            print("已取消工作区重置。")
+            return 1
+        removed_targets = _reset_workspace_init_targets(base_dir)
+        if removed_targets:
+            removed_names = "、".join(path.name for path in removed_targets)
+            print(f"✓ 已重置工作区初始化目录: {removed_names}")
+        else:
+            target_names = "、".join(path.name for path in _build_workspace_reset_targets(base_dir))
+            print(f"✓ 已执行工作区重置：未发现需要删除的 {target_names}")
+
+    is_first_workspace_init = reset or not (base_dir / "config").exists()
     # 1. 复制配置
     config_dir = _copy_config(base_dir, overwrite=overwrite)
     print(f"✓ 配置已复制到: {config_dir}")
@@ -1022,6 +1166,10 @@ def run_init_command(args: Namespace) -> int:
     assets_dir = _copy_assets(base_dir, overwrite=overwrite)
     print(f"✓ assets 已复制到: {assets_dir}")
 
+    # 1c. 对旧工作区应用一次性迁移（run.json、Host SQLite）。
+    # 具体规则集中在 dayu.cli.workspace_migrations，避免混入 init 常规流程。
+    apply_all_workspace_migrations(base_dir=base_dir, config_dir=config_dir)
+
     # 2. 选择初始化模型方案 + 输入 API Key（已有则跳过）
     chosen_option_key = _prompt_provider_selection()
     chosen_option = _PROVIDER_OPTIONS_BY_KEY[chosen_option_key]
@@ -1029,18 +1177,26 @@ def run_init_command(args: Namespace) -> int:
     main_key_persist_failed = False
 
     if chosen_option_key == _PROVIDER_OPTION_CUSTOM_OPENAI:
-        custom = _prompt_custom_openai_config()
-        effective_api_key_name = custom.api_key_env
-        _write_custom_openai_catalog_entries(config_dir, custom)
+        effective_api_key_name = chosen_option.api_key_name
+        custom = _prompt_custom_openai_config(effective_api_key_name)
+        try:
+            _write_custom_openai_catalog_entries(
+                config_dir,
+                custom,
+                api_key_name=effective_api_key_name,
+            )
+        except ValueError as exc:
+            print(f"\n❌ {exc}")
+            return 1
         print(f"✓ 已写入自定义模型条目到 {config_dir / 'llm_models.json'}")
-        if os.environ.get(custom.api_key_env) == custom.api_key_value:
-            print(f"\n✓ {custom.api_key_env} 已在环境变量中配置，跳过写入。")
+        if os.environ.get(effective_api_key_name) == custom.api_key_value:
+            print(f"\n✓ {effective_api_key_name} 已在环境变量中配置，跳过写入。")
         else:
-            _target, ok = _persist_env_var(custom.api_key_env, custom.api_key_value)
+            _target, ok = _persist_env_var(effective_api_key_name, custom.api_key_value)
             env_vars_written = True
             if not ok:
                 main_key_persist_failed = True
-                print(f"\n❌ {custom.api_key_env} 无法持久化到系统环境变量。")
+                print(f"\n❌ {effective_api_key_name} 无法持久化到系统环境变量。")
                 print(f"   已为当前进程设置，但重开终端后会丢失。")
                 print(f"   为避免切换模型后下次启动找不到 API Key，跳过 manifest 更新。")
                 print(f"   请手动配置环境变量后重新运行 dayu-cli init。")

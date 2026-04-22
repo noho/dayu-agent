@@ -136,6 +136,87 @@ class TestLaneStatus:
         assert "sec_download" in all_status
 
 
+class TestAcquireMany:
+    """acquire_many 原子多 lane 获取测试。"""
+
+    @pytest.mark.unit
+    def test_acquire_many_success_returns_ordered_permits(
+        self, governor: SQLiteConcurrencyGovernor
+    ) -> None:
+        """全部 lane 有额度时，返回顺序与入参一致。"""
+
+        permits = governor.acquire_many(["llm_api", "sec_download"], timeout=1.0)
+        assert [p.lane for p in permits] == ["llm_api", "sec_download"]
+
+    @pytest.mark.unit
+    def test_acquire_many_is_atomic_on_failure(
+        self,
+        governor: SQLiteConcurrencyGovernor,
+        host_store: HostStore,
+    ) -> None:
+        """任一 lane 超额时整体失败，且不留下任何部分 permit。
+
+        该测试锁住 executor 迁移到 acquire_many 的核心动机：
+        即便进程在 acquire_many 事务中被 SIGKILL，SQLite 事务未 COMMIT 等于未写，
+        不会产生"llm_api 拿到但 sec_download 没拿到" 的半截状态。
+        这里通过预占满 sec_download 再请求 ["llm_api", "sec_download"] 来模拟。
+        """
+
+        # 先把 sec_download 占满。
+        held = governor.try_acquire("sec_download")
+        assert held is not None
+
+        with pytest.raises(TimeoutError):
+            governor.acquire_many(["llm_api", "sec_download"], timeout=0.2)
+
+        # llm_api 不应被占用：原子失败 → 未 COMMIT → active == 0。
+        status = governor.get_lane_status("llm_api")
+        assert status.active == 0
+
+        # 数据库层面也应只剩下预占的 sec_download 那一条。
+        conn = host_store.get_connection()
+        row = conn.execute("SELECT COUNT(*) AS cnt FROM permits").fetchone()
+        assert row["cnt"] == 1
+
+    @pytest.mark.unit
+    def test_acquire_many_rejects_unknown_lane_without_side_effects(
+        self, governor: SQLiteConcurrencyGovernor
+    ) -> None:
+        """未配置 lane 在进入事务前就被拒绝，不能留下任何 permit。"""
+
+        with pytest.raises(ValueError, match="未配置的并发通道"):
+            governor.acquire_many(["llm_api", "unknown"], timeout=1.0)
+
+        status = governor.get_lane_status("llm_api")
+        assert status.active == 0
+
+    @pytest.mark.unit
+    def test_acquire_many_empty_lanes_returns_empty_list(
+        self, governor: SQLiteConcurrencyGovernor
+    ) -> None:
+        """空 lane 列表视为 no-op，返回空列表不触发 SQL。"""
+
+        assert governor.acquire_many([], timeout=1.0) == []
+
+    @pytest.mark.unit
+    def test_acquire_many_blocks_until_slot_available(
+        self, governor: SQLiteConcurrencyGovernor
+    ) -> None:
+        """sec_download 释放后，被阻塞的 acquire_many 应能成功。"""
+
+        blocker = governor.try_acquire("sec_download")
+        assert blocker is not None
+
+        # 先尝试失败一次确认确实在阻塞路径。
+        with pytest.raises(TimeoutError):
+            governor.acquire_many(["llm_api", "sec_download"], timeout=0.1)
+
+        # 释放后再试必须成功。
+        governor.release(blocker)
+        permits = governor.acquire_many(["llm_api", "sec_download"], timeout=1.0)
+        assert [p.lane for p in permits] == ["llm_api", "sec_download"]
+
+
 class TestCleanupStalePermits:
     """cleanup_stale_permits 测试。"""
 

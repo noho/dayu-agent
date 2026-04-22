@@ -65,7 +65,19 @@ class CompanyMetaRepositoryProtocol(Protocol):
         ...
 
     def get_company_meta(self, ticker: str) -> CompanyMeta:
-        """读取公司级元数据。"""
+        """读取公司级元数据。
+
+        Args:
+            ticker: 股票代码。
+
+        Returns:
+            对应公司的元数据对象。
+
+        Raises:
+            FileNotFoundError: 元数据不存在时抛出。
+            ValueError: 元数据内容缺失或格式非法时抛出。
+            OSError: 底层文件系统读取失败时抛出。
+        """
         ...
 
     def upsert_company_meta(self, meta: CompanyMeta) -> None:
