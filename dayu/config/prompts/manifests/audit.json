@@ -16,11 +16,6 @@
     ],
     "temperature_profile": "audit"
   },
-  "runtime": {
-    "agent": {
-      "max_iterations": 24
-    }
-  },
   "version": "v1",
   "description": "审计场景",
   "extends": [],

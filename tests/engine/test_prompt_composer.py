@@ -169,14 +169,14 @@ def test_manifest_duplicate_order_raises(tmp_path: Path) -> None:
 
 @pytest.mark.unit
 def test_manifest_tool_selection_is_loaded_from_shared_parser() -> None:
-    """验证 scene manifest 的 tool_selection 会被共享解析器读取。"""
+    """验证轻场景 scene manifest 的 tool_selection 与 runtime 回退会被共享解析器读取。"""
 
     manifest = load_scene_definition(FilePromptAssetStore(ConfigFileResolver()), "audit")
 
     assert manifest.model.default_name == "mimo-v2-pro-thinking-plan"
     assert manifest.model.allowed_names == _EXPECTED_THINKING_ALLOWED_NAMES
     assert manifest.model.temperature_profile == "audit"
-    assert manifest.runtime.agent.max_iterations == 24
+    assert manifest.runtime.agent.max_iterations is None
     assert manifest.runtime.agent.max_consecutive_failed_tool_batches is None
     assert manifest.runtime.runner.tool_timeout_seconds is None
     assert manifest.tool_selection_policy.mode.value == "none"
