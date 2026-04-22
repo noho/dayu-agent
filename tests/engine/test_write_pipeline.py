@@ -113,6 +113,8 @@ from dayu.services.internal.write_pipeline.scene_contract_preparer import (
     SceneContractPreparer,
     SceneAgentCreationError,
 )
+from dayu.services.conversation_policy_reader import ConversationPolicyReader
+from dayu.services.scene_definition_reader import SceneDefinitionReader
 from dayu.services.scene_execution_acceptance import AcceptedSceneExecution, SceneExecutionAcceptancePreparer
 from dayu.services.internal.write_pipeline.scene_executor import (
     _LLM_RETRY_DELAY_SECONDS,
@@ -1433,6 +1435,20 @@ class _FakeCancelledPromptAgent:
         )
 
 
+class _FakeModelCatalog:
+    """测试用模型目录。"""
+
+    def load_model(self, model_name: str) -> ModelConfig:
+        """返回指定模型配置。"""
+
+        return _build_test_model_config(model_name)
+
+    def load_models(self) -> dict[str, ModelConfig]:
+        """返回空模型字典以满足协议。"""
+
+        return {}
+
+
 class _SequenceCaller:
     """按顺序返回预设值的可调用对象。"""
 
@@ -1534,6 +1550,7 @@ def _build_runner(
     company_name_resolver: Callable[[str], str] | None = None,
     company_meta_summary_resolver: Callable[[str], dict[str, str]] | None = None,
     infer: bool = False,
+    fast: bool = False,
 ) -> WritePipelineRunner:
     """构建测试用写作执行器。
 
@@ -1549,7 +1566,7 @@ def _build_runner(
 
     workspace = tmp_path / "workspace"
     (workspace / "portfolio" / "AAPL" / "filings").mkdir(parents=True, exist_ok=True)
-    write_config = _build_test_write_config(tmp_path, infer=infer)
+    write_config = _build_test_write_config(tmp_path, infer=infer, fast=fast)
     workspace_config = _build_test_workspace_resources(workspace)
     running_config = _build_test_resolved_options(tmp_path / "trace")
     provider = _FakeAgentProvider()
@@ -3462,6 +3479,55 @@ def test_scene_contract_preparer_build_execution_contract_uses_audit_scene_optio
 
 
 @pytest.mark.unit
+def test_scene_execution_acceptance_preparer_emits_debug_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 scene 接受结果会输出模型、预算与超时摘要日志。"""
+
+    logs: list[str] = []
+    monkeypatch.setattr(Log, "debug", lambda message, *, module: logs.append(f"{module}:{message}"))
+    preparer = SceneExecutionAcceptancePreparer(
+        workspace_dir=tmp_path,
+        base_execution_options=_build_test_resolved_options(tmp_path / "trace"),
+        model_catalog=cast(Any, _FakeModelCatalog()),
+        scene_definition_reader=SceneDefinitionReader(prompt_asset_store=_FakePromptAssetStore()),
+        conversation_policy_reader=ConversationPolicyReader(),
+    )
+
+    accepted = preparer.prepare("write")
+
+    assert accepted.scene_name == "write"
+    assert any("SERVICE.SCENE_ACCEPTANCE:scene 接受结果:" in item for item in logs)
+    assert any(
+        f"scene_name=write" in item and f"model_name={accepted.accepted_execution_spec.model.model_name}" in item
+        for item in logs
+    )
+    assert any("max_iterations=" in item and "tool_timeout_seconds=" in item for item in logs)
+
+
+@pytest.mark.unit
+def test_scene_contract_preparer_and_prompt_runner_emit_debug_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 scene 缓存、contract 构建、dispatch 与结果摘要日志都会输出。"""
+
+    runner = _build_runner(tmp_path)
+    logs: list[str] = []
+    monkeypatch.setattr(Log, "debug", lambda message, *, module: logs.append(f"{module}:{message}"))
+    cast(Any, runner._prompt_runner)._prompt_agent = _FakePromptAgent(
+        side_effects=[
+            AppResult(content="第一次结果", errors=[], warnings=[]),
+            AppResult(content="第二次结果", errors=[], warnings=[]),
+        ]
+    )
+
+    runner._prompt_runner._run_agent_prompt_raw("请写第一段")
+    runner._prompt_runner._run_agent_prompt_raw("请写第二段")
+
+    assert any("scene 准备结果: action=created, scene_name=write" in item for item in logs)
+    assert any("scene 准备结果: action=cache_hit, scene_name=write" in item for item in logs)
+    assert any("构建 ExecutionContract: scene_name=write" in item for item in logs)
+    assert any("开始执行 scene contract: scene_name=write" in item for item in logs)
+    assert any("scene contract 执行完成: scene_name=write, errors_count=0, warnings_count=0" in item for item in logs)
+
+
+@pytest.mark.unit
 def test_scene_contract_preparer_filters_prompt_contributions_for_infer_scene(tmp_path: Path) -> None:
     """验证 infer scene 的 ExecutionContract 只携带 manifest 声明允许的 slot。"""
 
@@ -3477,6 +3543,35 @@ def test_scene_contract_preparer_filters_prompt_contributions_for_infer_scene(tm
 
     assert list(contract.preparation_spec.prompt_contributions.keys()) == ["fins_default_subject"]
     assert "base_user" not in contract.preparation_spec.prompt_contributions
+
+
+@pytest.mark.unit
+def test_chapter_execution_coordinator_emits_chapter_scene_debug_log(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证章节写作入口会输出 chapter_title/prompt_name/phase/scene 摘要日志。"""
+
+    runner = _build_runner(tmp_path, fast=True)
+    logs: list[str] = []
+    task = ChapterTask(index=1, title="经营表现与核心驱动", skeleton="## 经营表现与核心驱动")
+    monkeypatch.setattr(Log, "debug", lambda message, *, module: logs.append(f"{module}:{message}"))
+
+    result = runner._chapter_execution_coordinator.run_single_chapter(
+        task=task,
+        company_name="Apple",
+        prompt_name="write_chapter",
+        prompt_inputs=runner._prompter.build_chapter_prompt_inputs(task=task, company_name="Apple"),
+        company_facets=None,
+        company_facet_catalog={},
+    )
+
+    assert result.status == "passed"
+    assert any(
+        "章节 scene 调用摘要: chapter_title=经营表现与核心驱动, prompt_name=write_chapter, phase=initial, scene_name=write"
+        in item
+        for item in logs
+    )
 
 
 @pytest.mark.unit

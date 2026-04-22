@@ -31,6 +31,69 @@ _ORPHAN_CLEANUP_MIN_RUN_AGE = timedelta(minutes=10)
 from dayu.host._datetime_utils import now_utc as _now_utc, parse_dt_optional as _parse_dt_optional, serialize_dt as _serialize_dt
 
 
+def _build_run_registration_debug_message(
+    *,
+    run_id: str,
+    service_type: str,
+    session_id: str | None,
+    scene_name: str | None,
+    owner_pid: int,
+    db_path: str,
+) -> str:
+    """构造 run 注册调试日志。
+
+    Args:
+        run_id: 新注册的 run ID。
+        service_type: 服务类型。
+        session_id: 宿主会话 ID。
+        scene_name: scene 名称。
+        owner_pid: 当前 owner PID。
+        db_path: Host SQLite 路径。
+
+    Returns:
+        统一格式的调试日志文本。
+
+    Raises:
+        无。
+    """
+
+    return (
+        "注册 run: "
+        f"run_id={run_id}, service_type={service_type}, "
+        f"session_id={session_id or ''}, scene_name={scene_name or ''}, "
+        f"owner_pid={owner_pid}, db_path={db_path}"
+    )
+
+
+def _build_run_transition_debug_message(
+    *,
+    run_id: str,
+    current_state: RunState,
+    target_state: RunState,
+    db_path: str,
+) -> str:
+    """构造 run 状态迁移调试日志。
+
+    Args:
+        run_id: 目标 run ID。
+        current_state: 当前状态。
+        target_state: 目标状态。
+        db_path: Host SQLite 路径。
+
+    Returns:
+        统一格式的调试日志文本。
+
+    Raises:
+        无。
+    """
+
+    return (
+        "run 状态迁移: "
+        f"run_id={run_id}, from_state={current_state.value}, "
+        f"to_state={target_state.value}, db_path={db_path}"
+    )
+
+
 def _row_to_record(row: dict[str, Any]) -> RunRecord:
     """将 SQLite 行记录转换为 RunRecord。
 
@@ -109,7 +172,14 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         conn.commit()
 
         Log.debug(
-            f"注册 run: run_id={run_id}, service_type={service_type}, session_id={session_id or ''}, scene_name={scene_name or ''}",
+            _build_run_registration_debug_message(
+                run_id=run_id,
+                service_type=service_type,
+                session_id=session_id,
+                scene_name=scene_name,
+                owner_pid=pid,
+                db_path=str(self._host_store.db_path),
+            ),
             module=MODULE,
         )
 
@@ -476,7 +546,12 @@ class SQLiteRunRegistry(RunRegistryProtocol):
             (run_id,),
         ).fetchone()
         Log.debug(
-            f"run 状态迁移: run_id={run_id}, from_state={current_state.value}, to_state={target_state.value}",
+            _build_run_transition_debug_message(
+                run_id=run_id,
+                current_state=current_state,
+                target_state=target_state,
+                db_path=str(self._host_store.db_path),
+            ),
             module=MODULE,
         )
         return _row_to_record(dict(updated_row))

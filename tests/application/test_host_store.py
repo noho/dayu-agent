@@ -117,6 +117,30 @@ class TestConnection:
         store.close()
 
     @pytest.mark.unit
+    def test_get_connection_logs_only_on_first_connection_creation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """首次建连会输出调试日志，后续同线程复用不重复输出。"""
+
+        debug_mock = Mock()
+        monkeypatch.setattr(Log, "debug", debug_mock)
+        store = HostStore(tmp_path / "test.db")
+
+        store.initialize_schema()
+        store.get_connection()
+        store.get_connection()
+
+        debug_messages = [call.args[0] for call in debug_mock.call_args_list]
+        assert len(debug_messages) == 1
+        assert "HostStore 创建线程连接" in debug_messages[0]
+        assert f"db_path={tmp_path / 'test.db'}" in debug_messages[0]
+        assert "thread_ident=" in debug_messages[0]
+        assert "conn_id=" in debug_messages[0]
+        store.close()
+
+    @pytest.mark.unit
     def test_get_connection_different_per_thread(self, tmp_path: Path) -> None:
         """不同线程获取不同连接。"""
         store = HostStore(tmp_path / "test.db")

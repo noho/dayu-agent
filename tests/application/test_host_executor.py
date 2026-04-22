@@ -852,6 +852,158 @@ def test_run_agent_stream_emits_verbose_logs_for_pending_turn_lifecycle(monkeypa
 
 
 @pytest.mark.unit
+def test_run_agent_stream_emits_debug_logs_for_start_and_complete(monkeypatch: pytest.MonkeyPatch) -> None:
+    """正常完成路径会输出启动、收敛与临时探针日志。"""
+
+    from tests.application.conftest import StubRunRegistry
+
+    class _StubScenePreparation:
+        async def prepare(self, execution_contract: ExecutionContract, run_context: HostedRunContext) -> PreparedAgentExecution:
+            del run_context
+            return _build_prepared_execution(execution_contract=execution_contract)
+
+        async def restore_prepared_execution(
+            self,
+            prepared_turn: PreparedAgentTurnSnapshot,
+            run_context: HostedRunContext,
+        ) -> AgentInput:
+            del prepared_turn, run_context
+            raise AssertionError("该测试不应走恢复路径")
+
+    class _FakeAgent:
+        async def run_messages(self, messages, *, session_id, run_id, stream):
+            del messages, session_id, run_id, stream
+            yield StreamEvent(EventType.FINAL_ANSWER, {"content": "done", "degraded": False}, {})
+
+    debug_logs: list[str] = []
+    executor = DefaultHostExecutor(
+        run_registry=StubRunRegistry(),
+        scene_preparation=_StubScenePreparation(),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr("dayu.host.executor.build_async_agent", lambda **_: _FakeAgent())
+    monkeypatch.setattr(Log, "debug", lambda message, *, module: debug_logs.append(f"{module}:{message}"))
+    execution_contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="interactive",
+        host_policy=ExecutionHostPolicy(session_key="s1", resumable=True, timeout_ms=1234),
+        preparation_spec=ScenePreparationSpec(),
+        message_inputs=ExecutionMessageInputs(user_message="问题"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
+    )
+
+    async def _collect() -> None:
+        async for _event in executor.run_agent_stream(execution_contract):
+            pass
+
+    asyncio.run(_collect())
+
+    assert any("Host 启动 agent run" in item and "scene_name=interactive" in item and "service_type=chat_turn" in item for item in debug_logs)
+    assert any("Host 收敛 agent run: phase=complete" in item for item in debug_logs)
+
+
+@pytest.mark.unit
+def test_run_agent_stream_emits_debug_logs_for_fail_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """异常失败路径会输出 fail 收敛日志。"""
+
+    from tests.application.conftest import StubRunRegistry
+
+    class _StubScenePreparation:
+        async def prepare(self, execution_contract: ExecutionContract, run_context: HostedRunContext) -> PreparedAgentExecution:
+            del run_context
+            return _build_prepared_execution(execution_contract=execution_contract)
+
+        async def restore_prepared_execution(
+            self,
+            prepared_turn: PreparedAgentTurnSnapshot,
+            run_context: HostedRunContext,
+        ) -> AgentInput:
+            del prepared_turn, run_context
+            raise AssertionError("该测试不应走恢复路径")
+
+    class _FailingAgent:
+        async def run_messages(self, messages, *, session_id, run_id, stream):
+            del messages, session_id, run_id, stream
+            raise RuntimeError("boom")
+            yield
+
+    debug_logs: list[str] = []
+    executor = DefaultHostExecutor(
+        run_registry=StubRunRegistry(),
+        scene_preparation=_StubScenePreparation(),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr("dayu.host.executor.build_async_agent", lambda **_: _FailingAgent())
+    monkeypatch.setattr(Log, "debug", lambda message, *, module: debug_logs.append(f"{module}:{message}"))
+    execution_contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="interactive",
+        host_policy=ExecutionHostPolicy(session_key="s1", resumable=False),
+        preparation_spec=ScenePreparationSpec(),
+        message_inputs=ExecutionMessageInputs(user_message="问题"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
+    )
+
+    async def _collect() -> None:
+        async for _event in executor.run_agent_stream(execution_contract):
+            pass
+
+    with pytest.raises(RuntimeError, match="boom"):
+        asyncio.run(_collect())
+
+    assert any("Host 收敛 agent run: phase=fail" in item for item in debug_logs)
+
+
+@pytest.mark.unit
+def test_run_agent_stream_emits_debug_logs_for_cancel_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """取消路径会输出 cancel 收敛日志。"""
+
+    from tests.application.conftest import StubRunRegistry
+
+    class _StubScenePreparation:
+        async def prepare(self, execution_contract: ExecutionContract, run_context: HostedRunContext) -> PreparedAgentExecution:
+            run_registry.request_cancel(run_context.run_id, cancel_reason=RunCancelReason.USER_CANCELLED)
+            run_context.cancellation_token.cancel()
+            return _build_prepared_execution(execution_contract=execution_contract)
+
+        async def restore_prepared_execution(
+            self,
+            prepared_turn: PreparedAgentTurnSnapshot,
+            run_context: HostedRunContext,
+        ) -> AgentInput:
+            del prepared_turn, run_context
+            raise AssertionError("该测试不应走恢复路径")
+
+    class _FakeAgent:
+        async def run_messages(self, messages, *, session_id, run_id, stream):
+            del messages, session_id, run_id, stream
+            yield StreamEvent(EventType.FINAL_ANSWER, {"content": "done", "degraded": False}, {})
+
+    debug_logs: list[str] = []
+    run_registry = StubRunRegistry()
+    executor = DefaultHostExecutor(
+        run_registry=run_registry,
+        scene_preparation=_StubScenePreparation(),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr("dayu.host.executor.build_async_agent", lambda **_: _FakeAgent())
+    monkeypatch.setattr(Log, "debug", lambda message, *, module: debug_logs.append(f"{module}:{message}"))
+    execution_contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="interactive",
+        host_policy=ExecutionHostPolicy(session_key="s1", resumable=True),
+        preparation_spec=ScenePreparationSpec(),
+        message_inputs=ExecutionMessageInputs(user_message="问题"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
+    )
+
+    async def _collect() -> None:
+        async for _event in executor.run_agent_stream(execution_contract):
+            pass
+
+    asyncio.run(_collect())
+
+    assert any("Host 收敛 agent run: phase=cancel" in item for item in debug_logs)
+
+
+@pytest.mark.unit
 def test_run_agent_stream_deletes_pending_turn_for_user_cancel(monkeypatch: pytest.MonkeyPatch) -> None:
     """用户取消后不应保留 pending turn。"""
 

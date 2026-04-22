@@ -45,6 +45,35 @@ MODULE = "APP.WRITE_PIPELINE"
 _INITIAL_WRITE_ARTIFACT_NAME = "initial_write"
 
 
+def _build_chapter_scene_debug_message(
+    *,
+    chapter_title: str,
+    prompt_name: str,
+    phase: str,
+    scene_name: str,
+) -> str:
+    """构造章节 scene 调试日志。
+
+    Args:
+        chapter_title: 章节标题。
+        prompt_name: 当前 prompt 名称。
+        phase: 当前阶段名。
+        scene_name: 当前调用的 scene 名称。
+
+    Returns:
+        统一格式的调试日志文本。
+
+    Raises:
+        无。
+    """
+
+    return (
+        "章节 scene 调用摘要: "
+        f"chapter_title={chapter_title}, prompt_name={prompt_name}, "
+        f"phase={phase}, scene_name={scene_name}"
+    )
+
+
 class ChapterExecutionStage(StrEnum):
     """章节执行状态机阶段。"""
 
@@ -303,6 +332,21 @@ class ChapterExecutionCoordinator:
         """执行单个章节完整流水线。"""
 
         Log.info(f"开始写章节: {task.title}", module=MODULE)
+        Log.debug(
+            _build_chapter_scene_debug_message(
+                chapter_title=task.title,
+                prompt_name=prompt_name,
+                phase=WritePhaseName.INITIAL,
+                scene_name=(
+                    "overview"
+                    if prompt_name == "fill_overview"
+                    else "decision"
+                    if prompt_name == "write_research_decision"
+                    else "write"
+                ),
+            ),
+            module=MODULE,
+        )
         initial_prompt = self._prompter.render_task_prompt(prompt_name=prompt_name, prompt_inputs=prompt_inputs)
         current_content = self._prompt_runner.run_initial_chapter_prompt(prompt_name=prompt_name, prompt_text=initial_prompt)
         current_content = _normalize_chapter_markdown_for_audit(current_content)
@@ -453,6 +497,15 @@ class ChapterExecutionCoordinator:
         rewrite_retry_count = resolve_rewrite_retry_count(execution_state, action="执行 rewrite ")
         if execution_state.rewrite_strategy == RepairStrategy.REGENERATE:
             Log.info(f"开始整章重建: {task.title}, retry={rewrite_retry_count}", module=MODULE)
+            Log.debug(
+                _build_chapter_scene_debug_message(
+                    chapter_title=task.title,
+                    prompt_name="regenerate_chapter",
+                    phase=phase,
+                    scene_name="regenerate",
+                ),
+                module=MODULE,
+            )
             regenerate_prompt = self._prompter.render_task_prompt(
                 prompt_name="regenerate_chapter",
                 prompt_inputs=self._prompter.build_regenerate_prompt_inputs(
@@ -477,6 +530,15 @@ class ChapterExecutionCoordinator:
             return
 
         Log.info(f"开始局部修复: {task.title}, retry={rewrite_retry_count}", module=MODULE)
+        Log.debug(
+            _build_chapter_scene_debug_message(
+                chapter_title=task.title,
+                prompt_name="repair_chapter",
+                phase=phase,
+                scene_name="repair",
+            ),
+            module=MODULE,
+        )
         repair_inputs = self._prompter.build_repair_prompt_inputs(
             task=task,
             company_name=execution_state.company_name,
