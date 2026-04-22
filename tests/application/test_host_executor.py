@@ -121,7 +121,7 @@ def _build_prepared_execution(
         service_name=execution_contract.service_name,
         scene_name=execution_contract.scene_name,
         metadata=execution_contract.metadata,
-        concurrency_lane=execution_contract.host_policy.concurrency_lane,
+        business_concurrency_lane=execution_contract.host_policy.business_concurrency_lane,
         timeout_ms=execution_contract.host_policy.timeout_ms,
         resumable=bool(execution_contract.host_policy.resumable),
         system_prompt=system_prompt,
@@ -159,7 +159,7 @@ def test_run_stream_manages_run_lifecycle_and_event_publish() -> None:
         concurrency_governor=governor,  # type: ignore[arg-type]
         event_bus=event_bus,  # type: ignore[arg-type]
     )
-    spec = HostedRunSpec(operation_name="prompt", session_id="s1", concurrency_lane="llm_api")
+    spec = HostedRunSpec(operation_name="prompt", session_id="s1", business_concurrency_lane="sec_download")
 
     async def _stream(context: HostedRunContext):
         assert context.run_id
@@ -175,9 +175,9 @@ def test_run_stream_manages_run_lifecycle_and_event_publish() -> None:
     events = asyncio.run(_collect())
 
     assert len(events) == 1
-    assert governor.acquired == ["llm_api"]
+    assert governor.acquired == ["sec_download"]
     assert governor.acquire_timeouts == [executor_module._DEFAULT_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS]
-    assert governor.released == ["llm_api"]
+    assert governor.released == ["sec_download"]
     run = next(iter(run_registry._runs.values()))
     assert run.state.value == "succeeded"
     assert event_bus.published == [(run.run_id, events[0])]
@@ -1417,7 +1417,7 @@ def test_host_executor_helper_functions_cover_deadline_and_summary_edges() -> No
         service_name="chat_turn",
         scene_name="interactive",
         metadata={"delivery_channel": "interactive"},
-        concurrency_lane=None,
+        business_concurrency_lane=None,
         timeout_ms=None,
         resumable=False,
         system_prompt="sys",
@@ -1514,7 +1514,7 @@ def test_run_operation_uses_run_timeout_as_concurrency_acquire_budget() -> None:
     spec = HostedRunSpec(
         operation_name="prompt",
         session_id="s1",
-        concurrency_lane="llm_api",
+        business_concurrency_lane="sec_download",
         timeout_ms=1500,
     )
 

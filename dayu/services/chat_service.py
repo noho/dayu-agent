@@ -10,6 +10,7 @@ from dayu.contracts.events import AppEvent
 from dayu.contracts.session import SessionSource
 from dayu.host.protocols import ConversationalExecutionGatewayProtocol, PendingTurnSummary
 from dayu.contracts.execution_metadata import normalize_execution_delivery_context
+from dayu.services.concurrency_lanes import resolve_contract_concurrency_lane
 from dayu.services.contract_preparation import prepare_execution_contract
 from dayu.services.contracts import (
     ChatPendingTurnView,
@@ -181,7 +182,7 @@ class ChatService(ChatServiceProtocol):
             selected_toolsets=(),
             user_message=prepared_context.user_message,
             session_key=session_id,
-            concurrency_lane="llm_api",
+            business_concurrency_lane=resolve_contract_concurrency_lane(prepared_context.scene_name),
             metadata=request.delivery_context,
             execution_options=request.execution_options,
             timeout_ms=None,

@@ -17,7 +17,7 @@ from dayu.execution.options import ExecutionOptions
 from dayu.execution.options import ResolvedExecutionOptions, build_base_execution_options
 from dayu.host.host import Host
 from dayu.host.host_execution import HostedRunContext, HostedRunSpec
-from dayu.host.protocols import HostedExecutionGatewayProtocol
+from dayu.host.protocols import HostedExecutionGatewayProtocol, HostGovernanceProtocol
 from dayu.host.protocols import RunRegistryProtocol
 from dayu.services.conversation_policy_reader import ConversationPolicyReader
 from dayu.services.scene_definition_reader import SceneDefinitionReader
@@ -309,6 +309,7 @@ def test_write_service_runs_pipeline_via_host_executor(monkeypatch: pytest.Monke
     )
     service = WriteService(
         host=host,
+        host_governance=host,
         workspace=workspace,
         scene_execution_acceptance_preparer=_FakeSceneExecutionAcceptancePreparer(
             workspace_dir=workspace.workspace_dir,
@@ -328,7 +329,7 @@ def test_write_service_runs_pipeline_via_host_executor(monkeypatch: pytest.Monke
     assert host_executor.sync_call_count == 1
     assert host_executor.last_spec is not None
     assert host_executor.last_spec.operation_name == "write_pipeline"
-    assert host_executor.last_spec.concurrency_lane == "llm_api"
+    assert host_executor.last_spec.business_concurrency_lane == "write_chapter"
     assert host_executor.last_spec.metadata == {}
 
     assert isinstance(service, WriteServiceProtocol)
@@ -364,6 +365,7 @@ def test_write_service_resolves_overview_scene_with_primary_model(monkeypatch: p
 
     service = WriteService(
         host=host,
+        host_governance=host,
         workspace=workspace,
         scene_execution_acceptance_preparer=_CapturingSceneExecutionAcceptancePreparer(
             workspace_dir=workspace.workspace_dir,
@@ -394,6 +396,7 @@ def test_write_service_returns_cancelled_exit_code_when_host_sync_path_is_cancel
     host_gateway = _CancellingHostedGateway()
     service = WriteService(
         host=cast(HostedExecutionGatewayProtocol, host_gateway),
+        host_governance=cast(HostGovernanceProtocol, host_gateway),
         workspace=workspace,
         scene_execution_acceptance_preparer=_FakeSceneExecutionAcceptancePreparer(
             workspace_dir=workspace.workspace_dir,

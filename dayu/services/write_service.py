@@ -9,7 +9,8 @@ from typing import Callable
 from dayu.contracts.session import SessionSource
 from dayu.execution.options import ExecutionOptions
 from dayu.contracts.host_execution import HostedRunSpec
-from dayu.host.protocols import HostedExecutionGatewayProtocol
+from dayu.host.protocols import HostedExecutionGatewayProtocol, HostGovernanceProtocol
+from dayu.services.concurrency_lanes import resolve_hosted_run_concurrency_lane
 from dayu.services.contracts import WriteRequest
 from dayu.services.internal.write_pipeline.enums import (
     AUDIT_WRITE_SCENES,
@@ -32,6 +33,7 @@ class WriteService(WriteServiceProtocol):
     """写作服务。"""
 
     host: HostedExecutionGatewayProtocol
+    host_governance: HostGovernanceProtocol
     workspace: WorkspaceResourcesProtocol
     scene_execution_acceptance_preparer: SceneExecutionAcceptancePreparer
     company_name_resolver: Callable[[str], str] | None = None
@@ -55,7 +57,7 @@ class WriteService(WriteServiceProtocol):
             operation_name="write_pipeline",
             session_id=session.session_id,
             scene_name=WriteSceneName.WRITE,
-            concurrency_lane="llm_api",
+            business_concurrency_lane=resolve_hosted_run_concurrency_lane("write_pipeline"),
         )
         return self.host.run_operation_sync(
             spec=spec,
@@ -91,6 +93,7 @@ class WriteService(WriteServiceProtocol):
             write_config=write_config,
             scene_execution_acceptance_preparer=self.scene_execution_acceptance_preparer,
             host_executor=self.host,
+            host_governance=self.host_governance,
             host_session_id=host_session_id,
             execution_options=main_execution_options,
             company_name_resolver=self.company_name_resolver,

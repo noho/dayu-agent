@@ -18,6 +18,7 @@ from dayu.contracts.agent_execution import ExecutionContract
 from dayu.contracts.infrastructure import ConfigLoaderProtocol
 from dayu.execution.options import ExecutionOptions
 from dayu.services.contracts import WriteRunConfig
+from dayu.services.concurrency_lanes import resolve_contract_concurrency_lane
 from dayu.services.contract_preparation import prepare_execution_contract
 from dayu.services.internal.write_pipeline.execution_options import (
     build_execution_options_with_scene_overrides,
@@ -369,7 +370,7 @@ class SceneContractPreparer:
             selected_toolsets=(),
             user_message=user_message,
             session_key=self._host_session_id,
-            concurrency_lane="llm_api",
+            business_concurrency_lane=resolve_contract_concurrency_lane(prepared_scene.scene_name),
             execution_options=self._build_execution_options_for_scene(prepared_scene.scene_name),
             timeout_ms=None,
             resumable=prepared_scene.default_resumable,

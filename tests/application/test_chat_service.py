@@ -343,7 +343,7 @@ def _seed_pending_turn_with_contract(
             str(key): str(value)
             for key, value in execution_contract.metadata.items()
         }),
-        concurrency_lane=execution_contract.host_policy.concurrency_lane,
+        business_concurrency_lane=execution_contract.host_policy.business_concurrency_lane,
         timeout_ms=execution_contract.host_policy.timeout_ms,
         resumable=bool(execution_contract.host_policy.resumable),
         system_prompt="resume-system",

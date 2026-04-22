@@ -17,14 +17,15 @@ from typing import Any, AsyncIterator, Callable, TypeVar
 from dayu.host.cancellation_bridge import CancellationBridge
 from dayu.host.events import build_app_event_from_stream_event
 from dayu.host.host_execution import HostExecutorProtocol, HostedRunContext, HostedRunSpec
+from dayu.host.agent_builder import build_async_agent
+from dayu.host.concurrency import HOST_AGENT_LANE
+from dayu.host.pending_turn_store import PendingConversationTurnState
 from dayu.host.prepared_turn import (
     AcceptedAgentTurnSnapshot,
     PreparedAgentTurnSnapshot,
     serialize_accepted_agent_turn_snapshot,
     serialize_prepared_agent_turn_snapshot,
 )
-from dayu.host.pending_turn_store import PendingConversationTurnState
-from dayu.host.agent_builder import build_async_agent
 from dayu.host.scene_preparer import ScenePreparationProtocol
 from dayu.host.protocols import (
     ConcurrencyGovernorProtocol,
@@ -65,6 +66,35 @@ def _resolve_concurrency_acquire_timeout_seconds(timeout_ms: int | None) -> floa
     if timeout_ms is None:
         return _DEFAULT_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS
     return max(0.001, timeout_ms / 1000.0)
+
+
+def _required_lanes_for_spec(spec: HostedRunSpec, *, include_agent_lane: bool) -> list[str]:
+    """计算一次 run 需要叠加持有的 lane 名，按字母序返回以防死锁。
+
+    Args:
+        spec: 宿主 run 规格。
+        include_agent_lane: 是否由 Host 独立裁决叠加 ``llm_api`` lane。
+
+    Returns:
+        需要 acquire 的 lane 名列表，按字母序。
+
+    Raises:
+        ValueError: Service 在 ``business_concurrency_lane`` 写入 Host 自治
+            lane 名时抛出。
+    """
+
+    lanes: list[str] = []
+    if include_agent_lane:
+        lanes.append(HOST_AGENT_LANE)
+    business_lane = spec.business_concurrency_lane
+    if business_lane:
+        if business_lane == HOST_AGENT_LANE:
+            raise ValueError(
+                "business_concurrency_lane 不允许等于 Host 自治 lane 名；"
+                "llm_api 由 Host 根据调用路径自动管理"
+            )
+        lanes.append(business_lane)
+    return sorted(lanes)
 
 
 class RunDeadlineWatcher:
@@ -161,7 +191,9 @@ class DefaultHostExecutor(HostExecutorProtocol):
             scene_name=spec.scene_name,
             metadata=dict(spec.metadata),
         )
-        context, bridge, deadline_watcher, permit = self._start_run(spec=spec, run_id=run.run_id)
+        context, bridge, deadline_watcher, permits = self._start_run(
+            spec=spec, run_id=run.run_id, include_agent_lane=False,
+        )
         try:
             async for event in event_stream_factory(context):
                 if spec.publish_events:
@@ -187,7 +219,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             )
             raise
         finally:
-            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permit=permit)
+            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits)
 
     def run_operation_sync(
         self,
@@ -204,7 +236,9 @@ class DefaultHostExecutor(HostExecutorProtocol):
             scene_name=spec.scene_name,
             metadata=dict(spec.metadata),
         )
-        context, bridge, deadline_watcher, permit = self._start_run(spec=spec, run_id=run.run_id)
+        context, bridge, deadline_watcher, permits = self._start_run(
+            spec=spec, run_id=run.run_id, include_agent_lane=False,
+        )
         try:
             result = operation(context)
             if self._is_cancelled(run_id=run.run_id, token=context.cancellation_token):
@@ -226,7 +260,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             )
             raise
         finally:
-            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permit=permit)
+            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits)
 
     async def run_agent_stream(
         self,
@@ -252,7 +286,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             session_id=execution_contract.host_policy.session_key,
             scene_name=execution_contract.scene_name,
             metadata=execution_contract.metadata,
-            concurrency_lane=execution_contract.host_policy.concurrency_lane,
+            business_concurrency_lane=execution_contract.host_policy.business_concurrency_lane,
             timeout_ms=execution_contract.host_policy.timeout_ms,
         )
         run = self.run_registry.register_run(
@@ -261,7 +295,9 @@ class DefaultHostExecutor(HostExecutorProtocol):
             scene_name=spec.scene_name,
             metadata=dict(spec.metadata),
         )
-        context, bridge, deadline_watcher, permit = self._start_run(spec=spec, run_id=run.run_id)
+        context, bridge, deadline_watcher, permits = self._start_run(
+            spec=spec, run_id=run.run_id, include_agent_lane=True,
+        )
         pending_turn_id = self._register_accepted_pending_turn(
             execution_contract=execution_contract,
             run_id=run.run_id,
@@ -304,7 +340,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 return
             raise
         finally:
-            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permit=permit)
+            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits)
 
     async def run_prepared_turn_stream(
         self,
@@ -322,7 +358,9 @@ class DefaultHostExecutor(HostExecutorProtocol):
             scene_name=spec.scene_name,
             metadata=dict(spec.metadata),
         )
-        context, bridge, deadline_watcher, permit = self._start_run(spec=spec, run_id=run.run_id)
+        context, bridge, deadline_watcher, permits = self._start_run(
+            spec=spec, run_id=run.run_id, include_agent_lane=True,
+        )
         pending_turn_id = self._register_prepared_pending_turn(prepared_turn=prepared_turn, run_id=run.run_id)
         resumable = bool(prepared_turn.resumable)
         try:
@@ -355,7 +393,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 return
             raise
         finally:
-            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permit=permit)
+            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits)
 
     def _register_accepted_pending_turn(
         self,
@@ -566,8 +604,23 @@ class DefaultHostExecutor(HostExecutorProtocol):
         *,
         spec: HostedRunSpec,
         run_id: str,
-    ) -> tuple[HostedRunContext, CancellationBridge, RunDeadlineWatcher, ConcurrencyPermit | None]:
-        """启动宿主级 run 生命周期。"""
+        include_agent_lane: bool,
+    ) -> tuple[HostedRunContext, CancellationBridge, RunDeadlineWatcher, list[ConcurrencyPermit]]:
+        """启动宿主级 run 生命周期。
+
+        Args:
+            spec: 宿主 run 规格。
+            run_id: 当前 run ID。
+            include_agent_lane: 是否需要为本次 run 额外持有 Host 自治 ``llm_api``
+                permit；Agent 执行路径由 Host 独立裁决置为 ``True``，通用宿主
+                路径为 ``False``。
+
+        Returns:
+            run 上下文、取消桥、deadline watcher、已持有的 permit 列表（按字母序）。
+
+        Raises:
+            ValueError: ``business_concurrency_lane`` 写入 Host 自治 lane 名时抛出。
+        """
 
         token = CancellationToken()
         bridge = CancellationBridge(self.run_registry, run_id, token)
@@ -580,25 +633,44 @@ class DefaultHostExecutor(HostExecutorProtocol):
         )
         deadline_watcher.start()
         self.run_registry.start_run(run_id)
-        permit = None
-        if self.concurrency_governor is not None and spec.concurrency_lane:
-            permit = self.concurrency_governor.acquire(
-                spec.concurrency_lane,
-                timeout=_resolve_concurrency_acquire_timeout_seconds(spec.timeout_ms),
-            )
-        return HostedRunContext(run_id=run_id, cancellation_token=token), bridge, deadline_watcher, permit
+        permits: list[ConcurrencyPermit] = []
+        if self.concurrency_governor is not None:
+            lanes = _required_lanes_for_spec(spec, include_agent_lane=include_agent_lane)
+            acquire_timeout = _resolve_concurrency_acquire_timeout_seconds(spec.timeout_ms)
+            governor = self.concurrency_governor
+            try:
+                for lane_name in lanes:
+                    permits.append(governor.acquire(lane_name, timeout=acquire_timeout))
+            except BaseException:
+                for acquired in reversed(permits):
+                    try:
+                        governor.release(acquired)
+                    except Exception:  # noqa: BLE001
+                        Log.warn(
+                            f"[{run_id}] 回滚 permit 释放失败: lane={acquired.lane}",
+                            module=MODULE,
+                        )
+                raise
+        return HostedRunContext(run_id=run_id, cancellation_token=token), bridge, deadline_watcher, permits
 
     def _finish_run(
         self,
         *,
         bridge: CancellationBridge,
         deadline_watcher: RunDeadlineWatcher,
-        permit: ConcurrencyPermit | None,
+        permits: list[ConcurrencyPermit],
     ) -> None:
         """释放宿主级资源。"""
 
-        if permit is not None and self.concurrency_governor is not None:
-            self.concurrency_governor.release(permit)
+        if self.concurrency_governor is not None:
+            for acquired in reversed(permits):
+                try:
+                    self.concurrency_governor.release(acquired)
+                except Exception:  # noqa: BLE001
+                    Log.warn(
+                        f"permit 释放失败: lane={acquired.lane}",
+                        module=MODULE,
+                    )
         deadline_watcher.stop()
         bridge.stop()
 
@@ -1158,7 +1230,7 @@ def _build_run_spec_from_prepared_turn(prepared_turn: PreparedAgentTurnSnapshot)
         session_id=session_id,
         scene_name=prepared_turn.scene_name,
         metadata=prepared_turn.metadata,
-        concurrency_lane=prepared_turn.concurrency_lane,
+        business_concurrency_lane=prepared_turn.business_concurrency_lane,
         timeout_ms=prepared_turn.timeout_ms,
     )
 

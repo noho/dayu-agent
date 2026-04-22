@@ -14,6 +14,7 @@ from dayu.contracts.infrastructure import ModelCatalogProtocol, PromptAssetStore
 from dayu.execution.options import ExecutionOptions, ResolvedExecutionOptions
 from dayu.fins.service_runtime import DefaultFinsRuntime
 from dayu.host import Host, resolve_host_config
+from dayu.services.concurrency_lanes import SERVICE_DEFAULT_LANE_CONFIG
 from dayu.services.conversation_policy_reader import ConversationPolicyReader
 from dayu.services.host_admin_service import HostAdminService
 from dayu.services.scene_definition_reader import SceneDefinitionReader
@@ -139,6 +140,7 @@ def prepare_host_runtime_dependencies(
     host_config = resolve_host_config(
         workspace_root=paths.workspace_root,
         run_config=run_config,
+        service_lane_defaults=dict(SERVICE_DEFAULT_LANE_CONFIG),
         explicit_lane_config=None,
     )
     host = Host(

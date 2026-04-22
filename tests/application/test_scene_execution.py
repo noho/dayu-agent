@@ -686,7 +686,7 @@ async def test_scene_preparer_uses_manifest_conversation_flag_for_custom_scene(
         prompt_contributions={"base_user": "x"},
         user_message="hello",
         session_key="session-custom",
-        concurrency_lane="llm_api",
+        business_concurrency_lane=None,
         timeout_ms=None,
         resumable=True,
     )
@@ -745,7 +745,7 @@ async def test_scene_preparer_rejects_resumable_when_conversation_disabled(
         prompt_contributions={"base_user": "x"},
         user_message="hello",
         session_key="session-custom",
-        concurrency_lane="llm_api",
+        business_concurrency_lane=None,
         timeout_ms=None,
         resumable=True,
     )
@@ -793,7 +793,7 @@ async def test_scene_preparer_rejects_resumable_without_session_key(
         prompt_contributions={"base_user": "x"},
         user_message="hello",
         session_key=None,
-        concurrency_lane="llm_api",
+        business_concurrency_lane=None,
         timeout_ms=None,
         resumable=True,
     )
@@ -951,7 +951,7 @@ def test_scene_preparer_helper_functions_cover_single_turn_and_execution_option_
         prompt_contributions={},
         user_message="hello",
         session_key=None,
-        concurrency_lane=None,
+        business_concurrency_lane=None,
         timeout_ms=4000,
         resumable=False,
     )
@@ -1121,7 +1121,7 @@ async def test_scene_preparer_prepare_restore_and_host_owned_state_helpers(
         prompt_contributions={},
         user_message="hello",
         session_key=None,
-        concurrency_lane=None,
+        business_concurrency_lane=None,
         timeout_ms=2000,
         resumable=False,
     )
@@ -1140,7 +1140,7 @@ async def test_scene_preparer_prepare_restore_and_host_owned_state_helpers(
         service_name="chat_turn",
         scene_name="prompt",
         metadata={"delivery_channel": "interactive"},
-        concurrency_lane=None,
+        business_concurrency_lane=None,
         timeout_ms=1234,
         resumable=True,
         system_prompt="SYS",

@@ -3828,6 +3828,7 @@ def test_main_write_returns_130_when_run_write_pipeline_is_cancelled(
         "dayu.cli.commands.write._build_write_service",
         lambda **_kwargs: WriteService(
             host=cast(HostedExecutionGatewayProtocol, _CancellingWriteHost()),
+            host_governance=cast(Any, _CancellingWriteHost()),
             workspace=cast(Any, fake_dependencies.workspace),
             scene_execution_acceptance_preparer=cast(Any, fake_dependencies.scene_execution_acceptance_preparer),
         ),

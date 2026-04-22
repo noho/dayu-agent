@@ -26,7 +26,8 @@ class HostedRunSpec:
         session_id: 关联的 Host session ID。
         scene_name: 关联的 scene 名称。
         metadata: 结构化交付元数据。
-        concurrency_lane: 并发 lane 名称。
+        business_concurrency_lane: 业务并发通道名称；``llm_api`` 由 Host 根据
+            调用路径自动叠加，Service 禁止在此字段写入 Host 自治 lane 名。
         timeout_ms: 超时毫秒数。
         publish_events: 是否发布事件到 event bus。
         error_summary_limit: 错误摘要字符上限。
@@ -36,7 +37,7 @@ class HostedRunSpec:
     session_id: str | None = None
     scene_name: str | None = None
     metadata: ExecutionDeliveryContext = field(default_factory=empty_execution_delivery_context)
-    concurrency_lane: str | None = None
+    business_concurrency_lane: str | None = None
     timeout_ms: int | None = None
     publish_events: bool = True
     error_summary_limit: int = 500

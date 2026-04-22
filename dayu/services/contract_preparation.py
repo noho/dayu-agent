@@ -66,7 +66,7 @@ def prepare_scene_preparation_spec(
 def prepare_host_policy(
     *,
     session_key: str | None,
-    concurrency_lane: str | None,
+    business_concurrency_lane: str | None,
     timeout_ms: int | None = None,
     resumable: bool = False,
 ) -> ExecutionHostPolicy:
@@ -74,7 +74,7 @@ def prepare_host_policy(
 
     return ExecutionHostPolicy(
         session_key=session_key,
-        concurrency_lane=concurrency_lane,
+        business_concurrency_lane=business_concurrency_lane,
         timeout_ms=timeout_ms,
         resumable=resumable,
     )
@@ -101,7 +101,7 @@ def prepare_execution_contract(
     context_slots: tuple[str, ...] | None = None,
     user_message: str,
     session_key: str | None,
-    concurrency_lane: str | None,
+    business_concurrency_lane: str | None,
     metadata: ExecutionDeliveryContext | None = None,
     selected_toolsets: tuple[str, ...] = (),
     execution_permissions: ExecutionPermissions | None = None,
@@ -116,7 +116,7 @@ def prepare_execution_contract(
         scene_name=scene_name,
         host_policy=prepare_host_policy(
             session_key=session_key,
-            concurrency_lane=concurrency_lane,
+            business_concurrency_lane=business_concurrency_lane,
             timeout_ms=timeout_ms,
             resumable=resumable,
         ),

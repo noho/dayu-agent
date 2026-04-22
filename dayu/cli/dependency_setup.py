@@ -619,6 +619,7 @@ def _build_write_service(
 
     return WriteService(
         host=host,
+        host_governance=host,
         workspace=workspace,
         scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
         company_name_resolver=fins_runtime.get_company_name,

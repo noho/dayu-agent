@@ -390,7 +390,12 @@ class ExecutionHostPolicy:
 
     Args:
         session_key: Host Session 键。
-        concurrency_lane: 并发 lane。
+        business_concurrency_lane: 业务并发通道名称。
+
+            该字段仅用于 Service 声明业务并发通道（如 ``write_chapter`` /
+            ``sec_download``）；``llm_api`` 属于 Host 自治 lane，由 Host 根据
+            ExecutionContract 的调用路径自动叠加，禁止在此字段写入 Host 自治
+            lane 名。
         timeout_ms: 本次执行超时。
         resumable: 是否允许恢复。
 
@@ -402,7 +407,7 @@ class ExecutionHostPolicy:
     """
 
     session_key: str | None = None
-    concurrency_lane: str | None = None
+    business_concurrency_lane: str | None = None
     timeout_ms: int | None = None
     resumable: bool = False
 
@@ -1032,7 +1037,7 @@ def serialize_execution_contract_snapshot(
         "scene_name": execution_contract.scene_name,
         "host_policy": {
             "session_key": execution_contract.host_policy.session_key,
-            "concurrency_lane": execution_contract.host_policy.concurrency_lane,
+            "business_concurrency_lane": execution_contract.host_policy.business_concurrency_lane,
             "timeout_ms": execution_contract.host_policy.timeout_ms,
             "resumable": execution_contract.host_policy.resumable,
         },
@@ -1095,7 +1100,7 @@ def deserialize_execution_contract_snapshot(
         scene_name=_snapshot_optional_str(snapshot.get("scene_name")) or "",
         host_policy=ExecutionHostPolicy(
             session_key=_snapshot_optional_str(host_policy.get("session_key")),
-            concurrency_lane=_snapshot_optional_str(host_policy.get("concurrency_lane")),
+            business_concurrency_lane=_snapshot_optional_str(host_policy.get("business_concurrency_lane")),
             timeout_ms=_snapshot_optional_int(host_policy.get("timeout_ms")),
             resumable=bool(_snapshot_optional_bool(host_policy.get("resumable"))),
         ),

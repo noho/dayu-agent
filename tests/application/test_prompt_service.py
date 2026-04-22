@@ -253,7 +253,7 @@ def test_stream_prompt_outputs_execution_contract(monkeypatch: pytest.MonkeyPatc
     contract = _last_execution_contract(service.host)
     assert contract.service_name == "prompt"
     assert contract.scene_name == "prompt"
-    assert contract.host_policy.concurrency_lane == "llm_api"
+    assert contract.host_policy.business_concurrency_lane is None
     assert contract.host_policy.timeout_ms is None
     assert contract.host_policy.resumable is False
     assert contract.message_inputs.user_message == "hello"

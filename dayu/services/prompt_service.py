@@ -8,6 +8,7 @@ from typing import AsyncIterator, Callable
 from dayu.contracts.events import AppEvent
 from dayu.contracts.session import SessionSource
 from dayu.host.protocols import HostedExecutionGatewayProtocol
+from dayu.services.concurrency_lanes import resolve_contract_concurrency_lane
 from dayu.services.contract_preparation import prepare_execution_contract
 from dayu.services.contracts import PromptRequest, PromptSubmission
 from dayu.services.internal.session_coordinator import ServiceSessionCoordinator
@@ -97,7 +98,7 @@ class PromptService(PromptServiceProtocol):
             selected_toolsets=(),
             user_message=user_message,
             session_key=session_id,
-            concurrency_lane="llm_api",
+            business_concurrency_lane=resolve_contract_concurrency_lane("prompt"),
             execution_options=request.execution_options,
             timeout_ms=None,
             resumable=accepted_scene.default_resumable,

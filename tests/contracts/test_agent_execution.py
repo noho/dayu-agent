@@ -80,7 +80,7 @@ def test_execution_contract_snapshot_roundtrip() -> None:
         scene_name="wechat",
         host_policy=ExecutionHostPolicy(
             session_key="session-1",
-            concurrency_lane="llm_api",
+            business_concurrency_lane=None,
             timeout_ms=None,
             resumable=True,
         ),
@@ -207,7 +207,7 @@ def test_execution_contract_snapshot_rejects_removed_failed_tool_field() -> None
         scene_name="wechat",
         host_policy=ExecutionHostPolicy(
             session_key="session-1",
-            concurrency_lane="llm_api",
+            business_concurrency_lane=None,
             timeout_ms=None,
             resumable=True,
         ),
@@ -257,7 +257,7 @@ def test_execution_contract_snapshot_roundtrip_toolset_config_overrides() -> Non
         scene_name="wechat",
         host_policy=ExecutionHostPolicy(
             session_key="session-1",
-            concurrency_lane="llm_api",
+            business_concurrency_lane=None,
             timeout_ms=None,
             resumable=True,
         ),
@@ -327,7 +327,7 @@ def test_execution_contract_snapshot_uses_trace_settings_dataclass_defaults_when
         scene_name="interactive",
         host_policy=ExecutionHostPolicy(
             session_key="session-1",
-            concurrency_lane="llm_api",
+            business_concurrency_lane=None,
             timeout_ms=None,
             resumable=True,
         ),
@@ -397,7 +397,7 @@ def test_execution_contract_snapshot_drops_trace_settings_when_output_dir_missin
         scene_name="interactive",
         host_policy=ExecutionHostPolicy(
             session_key="session-1",
-            concurrency_lane="llm_api",
+            business_concurrency_lane=None,
             timeout_ms=None,
             resumable=True,
         ),

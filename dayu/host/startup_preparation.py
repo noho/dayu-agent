@@ -30,6 +30,7 @@ def resolve_host_config(
     *,
     workspace_root: Path,
     run_config: dict[str, Any],
+    service_lane_defaults: dict[str, int] | None = None,
     explicit_lane_config: dict[str, int] | None = None,
 ) -> ResolvedHostConfig:
     """解析 Host 启动配置。
@@ -37,6 +38,8 @@ def resolve_host_config(
     Args:
         workspace_root: 当前工作区根目录。
         run_config: 已加载的 `run.json` 配置对象。
+        service_lane_defaults: Service 启动期注入的业务 lane 默认配置；
+            Host 不感知其业务语义，仅按 lane_config 合并顺序叠加。
         explicit_lane_config: UI 启动期额外传入的 lane 覆盖配置。
 
     Returns:
@@ -55,7 +58,11 @@ def resolve_host_config(
         raise TypeError("run.json.host_config 必须是对象")
     return ResolvedHostConfig(
         store_path=_resolve_store_path(workspace_root=workspace_root, raw_host_config=raw_host_config),
-        lane_config=_resolve_lane_config(raw_host_config=raw_host_config, explicit_lane_config=explicit_lane_config),
+        lane_config=_resolve_lane_config(
+            raw_host_config=raw_host_config,
+            service_lane_defaults=service_lane_defaults,
+            explicit_lane_config=explicit_lane_config,
+        ),
         pending_turn_resume_max_attempts=_resolve_pending_turn_resume_max_attempts(raw_host_config),
     )
 
@@ -106,11 +113,26 @@ def _resolve_store_path(*, workspace_root: Path, raw_host_config: dict[str, Any]
 def _resolve_lane_config(
     *,
     raw_host_config: dict[str, Any],
+    service_lane_defaults: dict[str, int] | None,
     explicit_lane_config: dict[str, int] | None,
 ) -> dict[str, int]:
-    """解析 Host 最终生效的并发 lane 配置。"""
+    """解析 Host 最终生效的并发 lane 配置。
+
+    合并顺序（后者覆盖前者）：
+        1. Host ``DEFAULT_LANE_CONFIG``（仅 Host 自治 lane）。
+        2. ``service_lane_defaults``：Service 启动期注入的业务 lane 默认值。
+        3. ``run.json.host_config.lane``：用户可覆盖任何一层。
+        4. ``explicit_lane_config``：UI/CLI 启动期最强覆盖。
+    """
 
     resolved = dict(DEFAULT_LANE_CONFIG)
+    if service_lane_defaults is not None:
+        resolved.update(
+            _normalize_lane_config(
+                service_lane_defaults,
+                source_name="resolve_host_config(service_lane_defaults)",
+            )
+        )
     raw_lane_config = raw_host_config.get("lane")
     if raw_lane_config is not None:
         resolved.update(

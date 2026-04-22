@@ -5,11 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import AsyncIterator, Callable
 
-from dayu.contracts.fins import FinsCommand, FinsCommandName, FinsEvent, FinsEventType, FinsResult
+from dayu.contracts.fins import FinsCommand, FinsEvent, FinsEventType, FinsResult
 from dayu.contracts.session import SessionRecord, SessionSource
 from dayu.fins.service_runtime import FinsRuntimeProtocol
 from dayu.contracts.host_execution import HostedRunContext, HostedRunSpec
 from dayu.host.protocols import HostedExecutionGatewayProtocol
+from dayu.services.concurrency_lanes import resolve_hosted_run_concurrency_lane
 from dayu.services.contracts import FinsSubmission, FinsSubmitRequest, SessionResolutionPolicy
 from dayu.services.internal.session_coordinator import ServiceSessionCoordinator
 from dayu.services.protocols import FinsServiceProtocol
@@ -52,7 +53,9 @@ class FinsService(FinsServiceProtocol):
             operation_name=f"fins_{request.command.name}",
             session_id=session.session_id,
             scene_name=request.command.name,
-            concurrency_lane=self._resolve_concurrency_lane(request.command),
+            business_concurrency_lane=resolve_hosted_run_concurrency_lane(
+                f"fins_{request.command.name}"
+            ),
         )
 
         if request.command.stream:
@@ -109,13 +112,6 @@ class FinsService(FinsServiceProtocol):
             scene_name=command.name,
             policy=policy,
         )
-
-    def _resolve_concurrency_lane(self, command: FinsCommand) -> str | None:
-        """根据命令类型确定并发 lane。"""
-
-        if command.name == FinsCommandName.DOWNLOAD:
-            return "sec_download"
-        return None
 
     def _execute_sync(
         self,

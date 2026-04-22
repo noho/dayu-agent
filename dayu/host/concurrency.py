@@ -9,16 +9,17 @@ import os
 import time
 import uuid
 
-from typing import Any
-
 from dayu.host.host_store import HostStore
 from dayu.host.protocols import ConcurrencyGovernorProtocol, ConcurrencyPermit, LaneStatus
 from dayu.process_liveness import is_pid_alive
 
-# 默认 lane 配置
+# Host 自治 lane 名称：所有 Agent 执行路径都会自动叠加该 lane。
+# Service 层禁止使用该字面量，也不允许在 business_concurrency_lane 中写入该值。
+HOST_AGENT_LANE: str = "llm_api"
+
+# 默认 lane 配置：仅保留 Host 自治 lane；业务 lane 默认值由 Service 启动期注入。
 DEFAULT_LANE_CONFIG: dict[str, int] = {
-    "llm_api": 8,
-    "sec_download": 1,
+    HOST_AGENT_LANE: 8,
 }
 
 # 轮询间隔（秒）
@@ -162,4 +163,4 @@ class SQLiteConcurrencyGovernor(ConcurrencyGovernorProtocol):
         return stale_ids
 
 
-__all__ = ["DEFAULT_LANE_CONFIG", "SQLiteConcurrencyGovernor"]
+__all__ = ["DEFAULT_LANE_CONFIG", "HOST_AGENT_LANE", "SQLiteConcurrencyGovernor"]

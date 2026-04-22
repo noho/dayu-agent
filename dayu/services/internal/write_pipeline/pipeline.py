@@ -24,8 +24,10 @@ except ImportError:  # pragma: no cover - Windows 不提供 fcntl
 
 from dayu.contracts.cancellation import CancelledError
 from dayu.host import HostExecutorProtocol
+from dayu.host.protocols import HostGovernanceProtocol
 from dayu.execution.options import ExecutionOptions, ResolvedExecutionOptions
 from dayu.log import Log
+from dayu.services.concurrency_lanes import LANE_WRITE_CHAPTER
 from dayu.services.internal.write_pipeline.chapter_audit_coordinator import (
     ChapterAuditCoordinator,
 )
@@ -88,7 +90,6 @@ from dayu.services.internal.write_pipeline.report_assembler import ReportAssembl
 MODULE = "APP.WRITE_PIPELINE"
 
 _INFER_COMPANY_META_EXCLUDED_FIELDS = frozenset({"company_id"})
-_MIDDLE_CHAPTER_MAX_WORKERS = 5
 
 
 def _sanitize_company_meta_for_infer(company_meta: dict[str, str]) -> dict[str, str]:
@@ -173,6 +174,7 @@ class WritePipelineRunner:
         write_config: WriteRunConfig,
         scene_execution_acceptance_preparer: SceneExecutionAcceptancePreparer,
         host_executor: HostExecutorProtocol,
+        host_governance: HostGovernanceProtocol,
         host_session_id: str,
         execution_options: ExecutionOptions | None = None,
         company_name_resolver: Callable[[str], str] | None = None,
@@ -186,6 +188,7 @@ class WritePipelineRunner:
             write_config: 写作运行配置。
             scene_execution_acceptance_preparer: scene 执行接受准备器。
             host_executor: 宿主执行器。
+            host_governance: Host governance 面；用于读取并发 lane 最大值。
             host_session_id: 当前写作流水线复用的 Host Session。
             execution_options: 请求级覆盖参数。
             company_name_resolver: 可选公司名称解析函数。
@@ -203,6 +206,7 @@ class WritePipelineRunner:
         self._write_config = write_config
         self._company_name_resolver = company_name_resolver
         self._company_meta_summary_resolver = company_meta_summary_resolver
+        self._host_governance = host_governance
 
         self._output_dir = Path(write_config.output_dir).resolve()
         self._chapters_dir = self._output_dir / _CHAPTERS_DIR_NAME
@@ -569,6 +573,28 @@ class WritePipelineRunner:
         Log.info(f"写作完成: {output_file}", module=MODULE)
         return 4 if summary_payload["failed_count"] > 0 else 0
 
+    def _resolve_middle_worker_limit(self) -> int:
+        """通过 Host governance 读取中间章节并发上限。
+
+        Returns:
+            ``write_chapter`` lane 的最大并发数。
+
+        Raises:
+            RuntimeError: ``write_chapter`` lane 未配置时抛出。
+        """
+
+        lane_statuses = self._host_governance.get_all_lane_statuses()
+        lane_status = lane_statuses.get(LANE_WRITE_CHAPTER)
+        if lane_status is None:
+            raise RuntimeError(
+                f"缺少 {LANE_WRITE_CHAPTER} lane 配置，无法确定写作并发上限"
+            )
+        if lane_status.max_concurrent <= 0:
+            raise RuntimeError(
+                f"{LANE_WRITE_CHAPTER} lane 配置非法: max_concurrent={lane_status.max_concurrent}"
+            )
+        return lane_status.max_concurrent
+
     def _run_middle_tasks_in_parallel(
         self,
         *,
@@ -607,7 +633,7 @@ class WritePipelineRunner:
         if not pending_tasks:
             return chapter_results
 
-        worker_count = min(_MIDDLE_CHAPTER_MAX_WORKERS, len(pending_tasks))
+        worker_count = min(self._resolve_middle_worker_limit(), len(pending_tasks))
         completed_results: dict[str, ChapterResult] = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
             future_to_task: dict[concurrent.futures.Future[ChapterResult], ChapterTask] = {}
@@ -1179,6 +1205,7 @@ def run_write_pipeline(
     write_config: WriteRunConfig,
     scene_execution_acceptance_preparer: SceneExecutionAcceptancePreparer,
     host_executor: HostExecutorProtocol,
+    host_governance: HostGovernanceProtocol,
     host_session_id: str,
     execution_options: ExecutionOptions | None = None,
     company_name_resolver: Callable[[str], str] | None = None,
@@ -1210,6 +1237,7 @@ def run_write_pipeline(
         write_config=write_config,
         scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
         host_executor=host_executor,
+        host_governance=host_governance,
         host_session_id=host_session_id,
         execution_options=execution_options,
         company_name_resolver=company_name_resolver,

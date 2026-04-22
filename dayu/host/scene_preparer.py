@@ -875,7 +875,7 @@ def _build_prepared_turn_snapshot(
         service_name=execution_contract.service_name,
         scene_name=execution_contract.scene_name,
         metadata=execution_contract.metadata,
-        concurrency_lane=execution_contract.host_policy.concurrency_lane,
+        business_concurrency_lane=execution_contract.host_policy.business_concurrency_lane,
         timeout_ms=execution_contract.host_policy.timeout_ms,
         resumable=bool(execution_contract.host_policy.resumable),
         system_prompt=system_prompt,
