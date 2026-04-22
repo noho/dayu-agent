@@ -890,6 +890,9 @@ class AsyncAgent:
                 return
 
             if (content_complete_seen or done_event_seen) and not tool_calls_data:
+                # 这里刻意把“无工具调用的本轮”视为非失败工具批次，并清零连续失败计数。
+                # 纯文本回答、截断续写等路径都依赖这条稳定语义；而 tool_call 协议错误
+                # 会在更早的 ERROR 分支直接终止，不会走到这个 reset 分支。
                 consecutive_failed_tool_batches = 0
                 # 截断续写：finish_reason=length 时自动续写而非直接终止
                 is_truncated = done_event_summary.get("truncated", False)

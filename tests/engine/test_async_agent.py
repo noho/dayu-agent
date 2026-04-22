@@ -1477,6 +1477,51 @@ class TestAsyncAgentRun:
         assert EventType.FINAL_ANSWER in event_types
         assert len(runner.calls) == 4
 
+    async def test_tool_protocol_error_does_not_reset_failed_batch_counter_as_plain_text(self):
+        """工具协议错误应直接终止，而不是被当成纯文本轮清零失败计数。"""
+
+        runner = DummyRunner([
+            [
+                tool_call_dispatched("call_1", "tool", {"iter": 1}, index_in_iteration=0),
+                tool_call_result(
+                    "call_1",
+                    {"ok": False, "error": "FAIL", "message": "fail"},
+                    name="tool",
+                    arguments={"iter": 1},
+                    index_in_iteration=0,
+                ),
+                tool_calls_batch_done(["call_1"], ok=0, error=1, timeout=0, cancelled=0),
+                content_complete(""),
+                done_event(),
+            ],
+            [
+                content_complete("partial"),
+                error_event(
+                    "Tool call arguments incomplete or invalid",
+                    recoverable=False,
+                    error_type="tool_call_incomplete",
+                ),
+            ],
+            [content_delta("should not continue"), content_complete("should not continue"), done_event()],
+        ])
+        config = AgentRunningConfig(
+            fallback_mode="raise_error",
+            max_consecutive_failed_tool_batches=2,
+        )
+        agent = AsyncAgent(runner, running_config=config)
+
+        events = []
+        async for event in agent.run("prompt"):
+            events.append(event)
+
+        event_types = [event.type for event in events]
+        assert EventType.ERROR in event_types
+        assert EventType.FINAL_ANSWER not in event_types
+        assert len(runner.calls) == 2
+        error_events = [event for event in events if event.type == EventType.ERROR]
+        assert error_events
+        assert error_events[-1].metadata.get("error_type") == "tool_call_incomplete"
+
     async def test_fallback_error_stops_without_final_answer(self):
         """测试降级路径遇到 error_event 不再产出 final_answer"""
         runner = DummyRunner([
