@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import MISSING, asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping, TypeAlias, cast
 
@@ -115,6 +115,54 @@ def _empty_execution_delivery_context() -> ExecutionDeliveryContext:
     """
 
     return {}
+
+
+def _trace_settings_default_int(field_name: str) -> int:
+    """读取 `TraceSettings` 指定整数字段的 dataclass 默认值。
+
+    Args:
+        field_name: `TraceSettings` 中的目标字段名。
+
+    Returns:
+        对应字段的整数默认值。
+
+    Raises:
+        KeyError: 字段不存在时抛出。
+        TypeError: 字段默认值不是整数时抛出。
+        ValueError: 字段未声明默认值时抛出。
+    """
+
+    field_info = TraceSettings.__dataclass_fields__[field_name]
+    default_value = field_info.default
+    if default_value is MISSING:
+        raise ValueError(f"TraceSettings.{field_name} 未声明默认值")
+    if isinstance(default_value, bool) or not isinstance(default_value, int):
+        raise TypeError(f"TraceSettings.{field_name} 默认值不是整数")
+    return default_value
+
+
+def _trace_settings_default_bool(field_name: str) -> bool:
+    """读取 `TraceSettings` 指定布尔字段的 dataclass 默认值。
+
+    Args:
+        field_name: `TraceSettings` 中的目标字段名。
+
+    Returns:
+        对应字段的布尔默认值。
+
+    Raises:
+        KeyError: 字段不存在时抛出。
+        TypeError: 字段默认值不是布尔值时抛出。
+        ValueError: 字段未声明默认值时抛出。
+    """
+
+    field_info = TraceSettings.__dataclass_fields__[field_name]
+    default_value = field_info.default
+    if default_value is MISSING:
+        raise ValueError(f"TraceSettings.{field_name} 未声明默认值")
+    if not isinstance(default_value, bool):
+        raise TypeError(f"TraceSettings.{field_name} 默认值不是布尔值")
+    return default_value
 
 
 @dataclass(frozen=True)
@@ -925,9 +973,35 @@ def _deserialize_accepted_execution_spec(
     conversation_memory_settings_payload = _snapshot_optional_object(
         infrastructure_payload.get("conversation_memory_settings")
     )
-    trace_output_dir = (
-        Path(_snapshot_optional_str(trace_settings_payload.get("output_dir")) or "")
-        if trace_settings_payload is not None and _snapshot_optional_str(trace_settings_payload.get("output_dir")) is not None
+    trace_output_dir_raw = (
+        _snapshot_optional_str(trace_settings_payload.get("output_dir"))
+        if trace_settings_payload is not None
+        else None
+    )
+    trace_output_dir = Path(trace_output_dir_raw) if trace_output_dir_raw is not None else None
+    trace_enabled = (
+        _snapshot_optional_bool(trace_settings_payload.get("enabled"))
+        if trace_settings_payload is not None
+        else None
+    )
+    trace_max_file_bytes = (
+        _snapshot_optional_int(trace_settings_payload.get("max_file_bytes"))
+        if trace_settings_payload is not None
+        else None
+    )
+    trace_retention_days = (
+        _snapshot_optional_int(trace_settings_payload.get("retention_days"))
+        if trace_settings_payload is not None
+        else None
+    )
+    trace_compress_rolled = (
+        _snapshot_optional_bool(trace_settings_payload.get("compress_rolled"))
+        if trace_settings_payload is not None
+        else None
+    )
+    trace_partition_by_session = (
+        _snapshot_optional_bool(trace_settings_payload.get("partition_by_session"))
+        if trace_settings_payload is not None
         else None
     )
     return AcceptedExecutionSpec(
@@ -951,12 +1025,28 @@ def _deserialize_accepted_execution_spec(
         infrastructure=AcceptedInfrastructureSpec(
             trace_settings=(
                 TraceSettings(
-                    enabled=bool(_snapshot_optional_bool(trace_settings_payload.get("enabled"))),
+                    enabled=bool(trace_enabled),
                     output_dir=trace_output_dir if trace_output_dir is not None else Path("."),
-                    max_file_bytes=_snapshot_optional_int(trace_settings_payload.get("max_file_bytes")) or 64 * 1024 * 1024,
-                    retention_days=_snapshot_optional_int(trace_settings_payload.get("retention_days")) or 30,
-                    compress_rolled=_snapshot_optional_bool(trace_settings_payload.get("compress_rolled")) is not False,
-                    partition_by_session=_snapshot_optional_bool(trace_settings_payload.get("partition_by_session")) is not False,
+                    max_file_bytes=(
+                        trace_max_file_bytes
+                        if trace_max_file_bytes is not None
+                        else _trace_settings_default_int("max_file_bytes")
+                    ),
+                    retention_days=(
+                        trace_retention_days
+                        if trace_retention_days is not None
+                        else _trace_settings_default_int("retention_days")
+                    ),
+                    compress_rolled=(
+                        trace_compress_rolled
+                        if trace_compress_rolled is not None
+                        else _trace_settings_default_bool("compress_rolled")
+                    ),
+                    partition_by_session=(
+                        trace_partition_by_session
+                        if trace_partition_by_session is not None
+                        else _trace_settings_default_bool("partition_by_session")
+                    ),
                 )
                 if trace_settings_payload is not None and trace_output_dir is not None
                 else None

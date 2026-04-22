@@ -119,9 +119,10 @@ def prepare_host_runtime_dependencies(
         prompt_asset_store=prompt_asset_store,
     )
     model_catalog = ConfigLoaderModelCatalog(config_loader)
+    run_config = config_loader.load_run_config()
     base_execution_options = build_base_execution_options(
         workspace_dir=paths.workspace_root,
-        run_config=config_loader.load_run_config(),
+        run_config=run_config,
     )
     default_execution_options = merge_execution_options(
         base_options=base_execution_options,
@@ -135,7 +136,6 @@ def prepare_host_runtime_dependencies(
         prompt_asset_store=prompt_asset_store,
     )
     fins_runtime = DefaultFinsRuntime.create(workspace_root=paths.workspace_root)
-    run_config = config_loader.load_run_config()
     host_config = resolve_host_config(
         workspace_root=paths.workspace_root,
         run_config=run_config,

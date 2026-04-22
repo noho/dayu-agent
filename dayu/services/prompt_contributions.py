@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -46,6 +47,34 @@ def build_fins_default_subject_contribution(
     return "\n".join(lines)
 
 
+def build_optional_fins_subject_contribution(
+    *,
+    ticker: str | None,
+    company_name_resolver: Callable[[str], str] | None = None,
+) -> str:
+    """按可选 ticker 构造财报分析对象 prompt contribution。
+
+    Args:
+        ticker: 可选股票代码；为空时不生成 contribution。
+        company_name_resolver: 可选公司名称解析器，接收规范化后的 ticker。
+
+    Returns:
+        对应 ``fins_default_subject`` slot 的文本；未提供 ticker 时返回空字符串。
+
+    Raises:
+        无。
+    """
+
+    normalized_ticker = str(ticker or "").strip().upper()
+    if not normalized_ticker:
+        return ""
+    company_name = company_name_resolver(normalized_ticker) if company_name_resolver is not None else ""
+    return build_fins_default_subject_contribution(
+        ticker=normalized_ticker,
+        company_name=company_name,
+    )
+
+
 def build_base_user_contribution(*, now: datetime | None = None) -> str:
     """构造通用用户与运行时上下文 prompt contribution。
 
@@ -71,4 +100,5 @@ def build_base_user_contribution(*, now: datetime | None = None) -> str:
 __all__ = [
     "build_base_user_contribution",
     "build_fins_default_subject_contribution",
+    "build_optional_fins_subject_contribution",
 ]

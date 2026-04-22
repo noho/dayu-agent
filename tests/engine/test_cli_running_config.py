@@ -3174,7 +3174,7 @@ def test_main_prompt_path_propagates_scene_manifest_prompt_assets_and_llm_model_
         lambda: "# BASE_USER_SLOT\n当前时间：测试时间。",
     )
     monkeypatch.setattr(
-        "dayu.services.prompt_service.build_fins_default_subject_contribution",
+        "dayu.services.prompt_service.build_optional_fins_subject_contribution",
         lambda **_kwargs: "# SUBJECT_SLOT\n你正在分析的是 AAPL。",
     )
     monkeypatch.setattr("dayu.host.executor.build_async_agent", _MockPromptAgentBuilder(recorder))

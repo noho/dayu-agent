@@ -20,7 +20,7 @@ from dayu.services.contracts import (
 from dayu.services.internal.session_coordinator import ServiceSessionCoordinator
 from dayu.services.prompt_contributions import (
     build_base_user_contribution,
-    build_fins_default_subject_contribution,
+    build_optional_fins_subject_contribution,
 )
 from dayu.services.protocols import ChatServiceProtocol
 from dayu.services.scene_execution_acceptance import AcceptedSceneExecution, SceneExecutionAcceptancePreparer
@@ -183,16 +183,12 @@ class ChatService(ChatServiceProtocol):
         prompt_contributions = {
             "base_user": build_base_user_contribution(),
         }
-        # 归一化 ticker：未提供时保持 None，提供时大写并去空白
-        ticker = str(request.ticker).strip().upper() if request.ticker else None
-        if ticker:
-            company_name = self.company_name_resolver(ticker) if self.company_name_resolver is not None else ""
-            subject_text = build_fins_default_subject_contribution(
-                ticker=ticker,
-                company_name=company_name,
-            )
-            if subject_text:
-                prompt_contributions["fins_default_subject"] = subject_text
+        subject_text = build_optional_fins_subject_contribution(
+            ticker=request.ticker,
+            company_name_resolver=self.company_name_resolver,
+        )
+        if subject_text:
+            prompt_contributions["fins_default_subject"] = subject_text
 
         execution_contract = prepare_execution_contract(
             service_name="chat_turn",

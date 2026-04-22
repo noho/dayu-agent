@@ -310,6 +310,30 @@ def test_interactive_command_rejects_non_interactive_session(tmp_path: Path) -> 
 
 
 @pytest.mark.unit
+def test_interactive_command_rejects_invalid_session_source_value(tmp_path: Path) -> None:
+    """验证 interactive 命令会拒绝非法 session source 字符串。"""
+
+    workspace = _build_workspace(tmp_path)
+    session = SessionAdminView(
+        session_id="interactive_existing",
+        source="invalid-source",
+        state="active",
+        scene_name="interactive",
+        created_at="2026-04-21T00:00:00+00:00",
+        last_activity_at="2026-04-21T00:00:00+00:00",
+    )
+    host_admin_service = SimpleNamespace(get_session=lambda _session_id: session)
+
+    resolved = interactive_command_module._resolve_interactive_session_id_from_args(
+        Namespace(session_id="interactive_existing", new_session=False),
+        workspace_dir=workspace,
+        host_admin_service=cast(Any, host_admin_service),
+    )
+
+    assert resolved is None
+
+
+@pytest.mark.unit
 def test_interactive_command_prints_restore_context_for_explicit_session(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

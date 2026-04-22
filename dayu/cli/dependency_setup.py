@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
 from dayu.cli.interactive_state import (
     FileInteractiveStateStore,
@@ -22,6 +22,7 @@ from dayu.cli.interactive_state import (
 from dayu.cli.graceful_shutdown import register_cli_shutdown_hook
 from dayu.contracts.infrastructure import ConfigLoaderProtocol, PromptAssetStoreProtocol
 from dayu.contracts.session import SessionSource
+from dayu.contracts.tool_configs import DocToolLimits, FinsToolLimits
 from dayu.execution.cli_execution_options import build_execution_options_from_args
 from dayu.execution.options import (
     ExecutionOptions,
@@ -136,8 +137,8 @@ class RunningConfig:
 
     runner_running_config: RunnerRuntimeConfig
     agent_running_config: AgentRuntimeConfig
-    doc_tool_limits: object | None
-    fins_tool_limits: object | None
+    doc_tool_limits: DocToolLimits | None
+    fins_tool_limits: FinsToolLimits | None
     web_tools_config: _WebToolsConfigLike
     tool_trace_config: TraceSettings
     model_name: str = ""

@@ -40,6 +40,15 @@ from dayu.services.contracts import FinsSubmitRequest
 from dayu.cli.command_names import FINS_COMMANDS
 from dayu.cli.dependency_setup import MODULE, _build_fins_ops_service, setup_loglevel
 
+_STREAMING_COMMANDS = frozenset(
+    {
+        FinsCommandName.DOWNLOAD,
+        FinsCommandName.PROCESS,
+        FinsCommandName.UPLOAD_FILING,
+        FinsCommandName.UPLOAD_MATERIAL,
+    }
+)
+
 
 def _build_fins_command(args: argparse.Namespace) -> FinsCommand:
     """将 argparse 参数转换为 `FinsCommand`。
@@ -54,9 +63,10 @@ def _build_fins_command(args: argparse.Namespace) -> FinsCommand:
         ValueError: 命令不支持时抛出。
     """
 
-    command_name = str(args.command)
-    if command_name not in FINS_COMMANDS:
-        raise ValueError(f"不是财报命令: {command_name}")
+    raw_command_name = str(args.command)
+    if raw_command_name not in FINS_COMMANDS:
+        raise ValueError(f"不是财报命令: {raw_command_name}")
+    command_name = FinsCommandName(raw_command_name)
     prepare_cli_args(args)
     if command_name == FinsCommandName.DOWNLOAD:
         payload = DownloadCommandPayload(
@@ -148,9 +158,9 @@ def _build_fins_command(args: argparse.Namespace) -> FinsCommand:
         )
     else:
         raise ValueError(f"不是财报命令: {command_name}")
-    stream_enabled = command_name in {"download", "process", "upload_filing", "upload_material"}
+    stream_enabled = command_name in _STREAMING_COMMANDS
     return FinsCommand(
-        name=FinsCommandName(command_name),
+        name=command_name,
         payload=payload,
         stream=stream_enabled,
     )

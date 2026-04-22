@@ -270,6 +270,89 @@ def test_host_admin_service_lists_runs_and_builds_status() -> None:
 
 
 @pytest.mark.unit
+def test_host_admin_service_status_uses_single_session_listing() -> None:
+    """状态汇总应基于一次 session 列表结果同时计算总数和活跃数。"""
+
+    list_sessions_calls: list[SessionState | None] = []
+
+    class _Host:
+        """记录 `list_sessions()` 调用次数的最小 Host。"""
+
+        def list_sessions(self, *, state: SessionState | None = None) -> list[SessionRecord]:
+            """返回固定 session 列表。"""
+
+            list_sessions_calls.append(state)
+            now = datetime(2026, 4, 21, 8, 0, tzinfo=timezone.utc)
+            return [
+                SessionRecord(
+                    session_id="active_1",
+                    source=SessionSource.WEB,
+                    state=SessionState.ACTIVE,
+                    scene_name="prompt",
+                    created_at=now,
+                    last_activity_at=now,
+                ),
+                SessionRecord(
+                    session_id="closed_1",
+                    source=SessionSource.WEB,
+                    state=SessionState.CLOSED,
+                    scene_name="prompt",
+                    created_at=now,
+                    last_activity_at=now,
+                ),
+            ]
+
+        def list_active_runs(self) -> list[RunRecord]:
+            """返回空运行列表。"""
+
+            return []
+
+        def get_all_lane_statuses(self) -> dict[str, LaneStatus]:
+            """返回空 lane 状态。"""
+
+            return {}
+
+    service = HostAdminService(host=cast(HostAdminOperationsProtocol, _Host()))
+
+    status = service.get_status()
+
+    assert status.active_session_count == 1
+    assert status.total_session_count == 2
+    assert list_sessions_calls == [None]
+
+
+@pytest.mark.unit
+def test_host_admin_service_formats_missing_timestamps_as_empty_string() -> None:
+    """管理视图中的空时间字段应输出为空字符串而不是字符串 `None`。"""
+
+    class _Host:
+        """返回缺失时间戳 session 的最小 Host。"""
+
+        def list_sessions(self, *, state: SessionState | None = None) -> list[SessionRecord]:
+            """返回单条缺失时间戳的 session。"""
+
+            del state
+            return [
+                SessionRecord(
+                    session_id="session_without_timestamps",
+                    source=SessionSource.WEB,
+                    state=SessionState.ACTIVE,
+                    scene_name="prompt",
+                    created_at=cast(datetime, None),
+                    last_activity_at=cast(datetime, None),
+                )
+            ]
+
+    service = HostAdminService(host=cast(HostAdminOperationsProtocol, _Host()))
+
+    sessions = service.list_sessions()
+
+    assert len(sessions) == 1
+    assert sessions[0].created_at == ""
+    assert sessions[0].last_activity_at == ""
+
+
+@pytest.mark.unit
 def test_host_admin_service_lists_interactive_session_summaries() -> None:
     """管理服务应只返回 CLI interactive 会话摘要。"""
 

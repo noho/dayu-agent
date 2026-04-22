@@ -640,17 +640,17 @@ class SSEStreamParser:
                     body=json.dumps({"tool_calls": tool_calls}, ensure_ascii=False, default=str),
                 )
                 return
-            for tc in tool_calls:
+            for index, tc in enumerate(tool_calls):
                 if not isinstance(tc, dict):
                     self._record_protocol_error(
                         "tool_call_incomplete",
                         "Tool call arguments incomplete or invalid",
                         body=json.dumps(
-                            ["tool_call entry is not object"],
+                            [f"tool_call entry at index {index} is not object"],
                             ensure_ascii=False,
                         ),
                     )
-                    return
+                    continue
                 async for event in self._handle_tool_call_delta(tc):
                     yield event
 

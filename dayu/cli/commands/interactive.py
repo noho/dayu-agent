@@ -15,7 +15,7 @@ from dayu.cli.dependency_setup import (
     setup_loglevel,
     setup_paths,
 )
-from dayu.contracts.session import SessionSource
+from dayu.contracts.session import SessionSource, SessionState
 from dayu.cli.interactive_ui import interactive
 from dayu.log import Log
 from dayu.services.host_admin_service import HostAdminService
@@ -25,8 +25,8 @@ from dayu.workspace_paths import build_interactive_state_dir
 
 MODULE = "APP.INTERACTIVE"
 _INTERACTIVE_SCENE_NAME = "interactive"
-_CLI_SESSION_SOURCE = SessionSource.CLI.value
-_ACTIVE_SESSION_STATE = "active"
+_CLI_SESSION_SOURCE = SessionSource.CLI
+_ACTIVE_SESSION_STATE = SessionState.ACTIVE
 _RESTORED_TURN_LIMIT = 1
 _RESTORED_MESSAGE_MAX_CHARS = 1200
 _RESTORED_MESSAGE_SUFFIX = "\n..."
@@ -140,10 +140,13 @@ def _resolve_interactive_session_id_from_args(
         if session is None:
             Log.error(f"interactive session 不存在: {raw_session_id}", module=MODULE)
             return None
-        if session.source != _CLI_SESSION_SOURCE or session.scene_name != _INTERACTIVE_SCENE_NAME:
+        if (
+            _parse_session_source_value(session.source) != _CLI_SESSION_SOURCE
+            or session.scene_name != _INTERACTIVE_SCENE_NAME
+        ):
             Log.error(f"session 不是 interactive 会话: {raw_session_id}", module=MODULE)
             return None
-        if session.state != _ACTIVE_SESSION_STATE:
+        if _parse_session_state_value(session.state) != _ACTIVE_SESSION_STATE:
             Log.error(f"interactive session 已关闭: {raw_session_id}", module=MODULE)
             return None
         return _bind_interactive_session_id(workspace_dir, raw_session_id)
@@ -151,6 +154,44 @@ def _resolve_interactive_session_id_from_args(
         workspace_dir,
         new_session=bool(getattr(args, "new_session", False)),
     )
+
+
+def _parse_session_source_value(value: str) -> SessionSource | None:
+    """把管理视图中的 session source 字符串解析为枚举值。
+
+    Args:
+        value: 管理视图中的 session source 字符串。
+
+    Returns:
+        解析成功时返回 `SessionSource`，否则返回 `None`。
+
+    Raises:
+        无。
+    """
+
+    try:
+        return SessionSource(str(value).strip().lower())
+    except ValueError:
+        return None
+
+
+def _parse_session_state_value(value: str) -> SessionState | None:
+    """把管理视图中的 session state 字符串解析为枚举值。
+
+    Args:
+        value: 管理视图中的 session state 字符串。
+
+    Returns:
+        解析成功时返回 `SessionState`，否则返回 `None`。
+
+    Raises:
+        无。
+    """
+
+    try:
+        return SessionState(str(value).strip().lower())
+    except ValueError:
+        return None
 
 
 def _print_interactive_session_restore_context(

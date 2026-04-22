@@ -761,10 +761,10 @@ class AsyncOpenAIRunner:
         meta["latency_ms"] = latency_ms
         tool_result["meta"] = meta
         success = is_tool_success(tool_result)
-        # 仅在成功时计算响应体积，用于日志显示
-        result_size = len(json.dumps(tool_result, ensure_ascii=False, default=str)) if success else 0
         summary = _result_summary(tool_result)
         if success:
+            # 仅在成功时计算响应体积，用于日志显示
+            result_size = len(json.dumps(tool_result, ensure_ascii=False, default=str))
             Log.debug(
                 f"{log_prefix} ✅ {tool_call['name']} → {summary} ({latency_ms}ms, {result_size}c)",
                 module=MODULE,

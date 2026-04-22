@@ -13,7 +13,7 @@ import argparse
 from pathlib import Path
 
 from dayu.contracts.toolset_config import ToolsetConfigSnapshot, build_toolset_config_snapshot
-from dayu.execution.options import ExecutionOptions
+from dayu.execution.options import ExecutionOptions, ExecutionOptionsOverridePayload
 
 
 def add_execution_option_arguments(parser: argparse.ArgumentParser) -> None:
@@ -146,8 +146,8 @@ def build_execution_options_from_args(args: argparse.Namespace) -> ExecutionOpti
 
 def _build_toolset_override_snapshots(
     *,
-    doc_limits: object | None,
-    fins_limits: object | None,
+    doc_limits: ExecutionOptionsOverridePayload | None,
+    fins_limits: ExecutionOptionsOverridePayload | None,
 ) -> tuple[ToolsetConfigSnapshot, ...]:
     """把 override 载荷收敛为通用 toolset 快照。
 
