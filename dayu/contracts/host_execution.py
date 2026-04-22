@@ -8,9 +8,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 from dayu.contracts.cancellation import CancellationToken
+from dayu.contracts.execution_metadata import (
+    ExecutionDeliveryContext,
+    empty_execution_delivery_context,
+    normalize_execution_delivery_context,
+)
 
 
 @dataclass(frozen=True)
@@ -21,7 +25,7 @@ class HostedRunSpec:
         operation_name: 操作名称，用于 run registry 标识。
         session_id: 关联的 Host session ID。
         scene_name: 关联的 scene 名称。
-        metadata: 非结构化元数据。
+        metadata: 结构化交付元数据。
         concurrency_lane: 并发 lane 名称。
         timeout_ms: 超时毫秒数。
         publish_events: 是否发布事件到 event bus。
@@ -31,11 +35,26 @@ class HostedRunSpec:
     operation_name: str
     session_id: str | None = None
     scene_name: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: ExecutionDeliveryContext = field(default_factory=empty_execution_delivery_context)
     concurrency_lane: str | None = None
     timeout_ms: int | None = None
     publish_events: bool = True
     error_summary_limit: int = 500
+
+    def __post_init__(self) -> None:
+        """规范化交付元数据。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        object.__setattr__(self, "metadata", normalize_execution_delivery_context(self.metadata))
 
 
 @dataclass(frozen=True)

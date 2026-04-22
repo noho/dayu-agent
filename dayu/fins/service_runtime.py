@@ -58,6 +58,7 @@ from dayu.fins.cli_support import (
     _validate_upload_material_args as validate_upload_material_args,
 )
 from dayu.fins.ingestion.process_events import ProcessEvent
+from dayu.fins.domain.document_models import CompanyMeta
 from dayu.fins.ingestion.factory import (
     IngestionServiceFactory,
     build_ingestion_manager_key,
@@ -190,6 +191,298 @@ def _build_pipeline(
         filing_maintenance_repository=filing_maintenance_repository,
         processor_registry=processor_registry,
     )
+
+
+@dataclass(frozen=True)
+class _PreparedDownloadArgs:
+    """下载命令的运行时准备参数。"""
+
+    ticker: str
+    form_type: str | list[str] | None
+    start_date: str | None
+    end_date: str | None
+    overwrite: bool
+    rebuild: bool
+    ticker_aliases: list[str] | None
+
+
+@dataclass(frozen=True)
+class _PreparedProcessArgs:
+    """处理命令的运行时准备参数。"""
+
+    ticker: str
+    document_ids: list[str] | None
+    overwrite: bool
+    ci: bool
+
+
+@dataclass(frozen=True)
+class _PreparedUploadFilingArgs:
+    """上传财报命令的运行时准备参数。"""
+
+    ticker: str
+    action: str | None
+    fiscal_year: int
+    fiscal_period: str
+    amended: bool
+    filing_date: str | None
+    report_date: str | None
+    company_id: str | None
+    company_name: str | None
+    ticker_aliases: list[str] | None
+    overwrite: bool
+
+
+@dataclass(frozen=True)
+class _PreparedUploadMaterialArgs:
+    """上传材料命令的运行时准备参数。"""
+
+    ticker: str
+    action: str | None
+    form_type: str
+    material_name: str
+    document_id: str | None
+    internal_document_id: str | None
+    fiscal_year: int | None
+    fiscal_period: str | None
+    filing_date: str | None
+    report_date: str | None
+    company_id: str | None
+    company_name: str | None
+    ticker_aliases: list[str] | None
+    overwrite: bool
+
+
+@dataclass(frozen=True)
+class _PreparedUploadFilingsFromArgs:
+    """批量上传脚本生成命令的运行时准备参数。"""
+
+    ticker: str
+    base: str
+    source_dir: str
+    action: str | None
+    output_script: str | None
+    recursive: bool
+    amended: bool
+    filing_date: str | None
+    report_date: str | None
+    company_id: str | None
+    company_name: str | None
+    infer: bool
+    overwrite: bool
+    material_forms: str | None
+    verbose: bool
+    debug: bool
+    info: bool
+    quiet: bool
+    log_level: str | None
+    ticker_aliases: list[str] | None
+    generated_ticker_csv: str
+
+    def to_cli_namespace(self) -> argparse.Namespace:
+        """转换为 CLI helper 兼容的命名空间。
+
+        Args:
+            无。
+
+        Returns:
+            供 `cli_support` 复用的命名空间对象。
+
+        Raises:
+            无。
+        """
+
+        return argparse.Namespace(
+            command="upload_filings_from",
+            ticker=self.ticker,
+            base=self.base,
+            source_dir=self.source_dir,
+            action=self.action,
+            output_script=self.output_script,
+            recursive=self.recursive,
+            amended=self.amended,
+            filing_date=self.filing_date,
+            report_date=self.report_date,
+            company_id=self.company_id,
+            company_name=self.company_name,
+            infer=self.infer,
+            overwrite=self.overwrite,
+            material_forms=self.material_forms,
+            verbose=self.verbose,
+            debug=self.debug,
+            info=self.info,
+            quiet=self.quiet,
+            log_level=self.log_level,
+            ticker_aliases=list(self.ticker_aliases) if self.ticker_aliases is not None else None,
+            generated_ticker_csv=self.generated_ticker_csv,
+        )
+
+
+def _optional_string_list(value: object) -> list[str] | None:
+    """把 Namespace 中的可选字符串序列收窄为 `list[str] | None`。
+
+    Args:
+        value: 原始属性值。
+
+    Returns:
+        规范化后的字符串列表；空值时返回 `None`。
+
+    Raises:
+        无。
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        normalized = [str(item).strip() for item in value if str(item).strip()]
+        return normalized or None
+    normalized_value = str(value).strip()
+    return [normalized_value] if normalized_value else None
+
+
+def _build_upload_filing_args(
+    payload: UploadFilingCommandPayload,
+    workspace_root: Path,
+) -> _PreparedUploadFilingArgs:
+    """为上传财报命令构建强类型准备参数。"""
+
+    namespace = _build_upload_filing_namespace(payload, workspace_root)
+    validate_upload_filing_args(namespace)
+    return _PreparedUploadFilingArgs(
+        ticker=str(namespace.ticker),
+        action=str(namespace.action).strip() or None if namespace.action is not None else None,
+        fiscal_year=int(namespace.fiscal_year),
+        fiscal_period=str(namespace.fiscal_period),
+        amended=bool(namespace.amended),
+        filing_date=str(namespace.filing_date).strip() or None if namespace.filing_date is not None else None,
+        report_date=str(namespace.report_date).strip() or None if namespace.report_date is not None else None,
+        company_id=str(namespace.company_id).strip() or None if namespace.company_id is not None else None,
+        company_name=str(namespace.company_name).strip() or None if namespace.company_name is not None else None,
+        ticker_aliases=_optional_string_list(getattr(namespace, "ticker_aliases", None)),
+        overwrite=bool(namespace.overwrite),
+    )
+
+
+def _build_download_args(
+    payload: DownloadCommandPayload,
+    workspace_root: Path,
+) -> _PreparedDownloadArgs:
+    """为下载命令构建强类型准备参数。"""
+
+    namespace = _build_download_namespace(payload, workspace_root)
+    return _PreparedDownloadArgs(
+        ticker=str(namespace.ticker),
+        form_type=namespace.form_type,
+        start_date=str(namespace.start_date).strip() or None if namespace.start_date is not None else None,
+        end_date=str(namespace.end_date).strip() or None if namespace.end_date is not None else None,
+        overwrite=bool(namespace.overwrite),
+        rebuild=bool(namespace.rebuild),
+        ticker_aliases=_optional_string_list(getattr(namespace, "ticker_aliases", None)),
+    )
+
+
+def _build_process_args(
+    payload: ProcessCommandPayload,
+    workspace_root: Path,
+) -> _PreparedProcessArgs:
+    """为处理命令构建强类型准备参数。"""
+
+    namespace = _build_process_namespace(payload, workspace_root)
+    return _PreparedProcessArgs(
+        ticker=str(namespace.ticker),
+        document_ids=_optional_string_list(namespace.document_ids),
+        overwrite=bool(namespace.overwrite),
+        ci=bool(namespace.ci),
+    )
+
+
+def _build_upload_material_args(
+    payload: UploadMaterialCommandPayload,
+    workspace_root: Path,
+) -> _PreparedUploadMaterialArgs:
+    """为上传材料命令构建强类型准备参数。"""
+
+    namespace = _build_upload_material_namespace(payload, workspace_root)
+    validate_upload_material_args(namespace)
+    return _PreparedUploadMaterialArgs(
+        ticker=str(namespace.ticker),
+        action=str(namespace.action).strip() or None if namespace.action is not None else None,
+        form_type=str(namespace.form_type),
+        material_name=str(namespace.material_name),
+        document_id=str(namespace.document_id).strip() or None if namespace.document_id is not None else None,
+        internal_document_id=(
+            str(namespace.internal_document_id).strip() or None
+            if namespace.internal_document_id is not None
+            else None
+        ),
+        fiscal_year=int(namespace.fiscal_year) if namespace.fiscal_year is not None else None,
+        fiscal_period=str(namespace.fiscal_period).strip() or None if namespace.fiscal_period is not None else None,
+        filing_date=str(namespace.filing_date).strip() or None if namespace.filing_date is not None else None,
+        report_date=str(namespace.report_date).strip() or None if namespace.report_date is not None else None,
+        company_id=str(namespace.company_id).strip() or None if namespace.company_id is not None else None,
+        company_name=str(namespace.company_name).strip() or None if namespace.company_name is not None else None,
+        ticker_aliases=_optional_string_list(getattr(namespace, "ticker_aliases", None)),
+        overwrite=bool(namespace.overwrite),
+    )
+
+
+def _build_upload_filings_from_args(
+    payload: UploadFilingsFromCommandPayload,
+    workspace_root: Path,
+) -> _PreparedUploadFilingsFromArgs:
+    """为批量上传脚本命令构建强类型准备参数。"""
+
+    namespace = _build_upload_filings_from_namespace(payload, workspace_root)
+    generated_ticker_csv = str(getattr(namespace, "generated_ticker_csv", "")).strip()
+    if not generated_ticker_csv:
+        raise ValueError("upload_filings_from 缺少 generated_ticker_csv")
+    return _PreparedUploadFilingsFromArgs(
+        ticker=str(namespace.ticker),
+        base=str(namespace.base),
+        source_dir=str(namespace.source_dir),
+        action=str(namespace.action).strip() or None if namespace.action is not None else None,
+        output_script=str(namespace.output_script).strip() or None if namespace.output_script is not None else None,
+        recursive=bool(namespace.recursive),
+        amended=bool(namespace.amended),
+        filing_date=str(namespace.filing_date).strip() or None if namespace.filing_date is not None else None,
+        report_date=str(namespace.report_date).strip() or None if namespace.report_date is not None else None,
+        company_id=str(namespace.company_id).strip() or None if namespace.company_id is not None else None,
+        company_name=str(namespace.company_name).strip() or None if namespace.company_name is not None else None,
+        infer=bool(namespace.infer),
+        overwrite=bool(namespace.overwrite),
+        material_forms=str(namespace.material_forms).strip() or None if namespace.material_forms is not None else None,
+        verbose=bool(namespace.verbose),
+        debug=bool(namespace.debug),
+        info=bool(namespace.info),
+        quiet=bool(namespace.quiet),
+        log_level=str(namespace.log_level).strip() or None if namespace.log_level is not None else None,
+        ticker_aliases=_optional_string_list(getattr(namespace, "ticker_aliases", None)),
+        generated_ticker_csv=generated_ticker_csv,
+    )
+
+
+def _load_company_meta_best_effort(
+    repository: CompanyMetaRepositoryProtocol,
+    *,
+    ticker: str,
+) -> CompanyMeta | None:
+    """以 best-effort 方式读取公司元数据。
+
+    Args:
+        repository: 公司元数据仓储。
+        ticker: 股票代码。
+
+    Returns:
+        公司元数据；不存在或底层读取失败时返回 `None`。
+
+    Raises:
+        无。
+    """
+
+    try:
+        return repository.get_company_meta(ticker)
+    except (FileNotFoundError, ValueError, OSError):
+        return None
 
 
 def _build_upload_filing_namespace(payload: UploadFilingCommandPayload, workspace_root: Path) -> argparse.Namespace:
@@ -1063,9 +1356,8 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
     def get_company_name(self, ticker: str) -> str:
         """返回公司名称。"""
 
-        try:
-            meta = self.company_repository.get_company_meta(ticker)
-        except Exception:
+        meta = _load_company_meta_best_effort(self.company_repository, ticker=ticker)
+        if meta is None:
             return ""
         return str(getattr(meta, "company_name", "")).strip()
 
@@ -1082,9 +1374,8 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
             无。
         """
 
-        try:
-            meta = self.company_repository.get_company_meta(ticker)
-        except Exception:
+        meta = _load_company_meta_best_effort(self.company_repository, ticker=ticker)
+        if meta is None:
             return {"ticker": ticker}
         return {
             "ticker": str(getattr(meta, "ticker", "") or ticker).strip(),
@@ -1136,10 +1427,10 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
             return
         if command.name == FinsCommandName.UPLOAD_FILINGS_FROM:
             typed_payload = _require_upload_filings_from_payload(command.payload)
-            _build_upload_filings_from_namespace(typed_payload, self.workspace_root)
+            prepared_args = _build_upload_filings_from_args(typed_payload, self.workspace_root)
             # namespace 构建仅做 ticker / CLI 规范化；source_dir 存在性在
             # generate_upload_filings_script 内才检查，必须在 preflight 提前卡住
-            source_dir = Path(typed_payload.source_dir).expanduser().resolve()
+            source_dir = Path(prepared_args.source_dir).expanduser().resolve()
             if not source_dir.exists() or not source_dir.is_dir():
                 raise FileNotFoundError(f"source_dir 不存在或不是目录: {source_dir}")
             return
@@ -1159,27 +1450,27 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
     def _prepare_download_execution(
         self,
         payload: DownloadCommandPayload,
-    ) -> tuple[argparse.Namespace, PipelineProtocol]:
+    ) -> tuple[_PreparedDownloadArgs, PipelineProtocol]:
         """准备 download 命令的已校验参数与 pipeline。"""
 
-        namespace = _build_download_namespace(payload, self.workspace_root)
-        pipeline = self._build_pipeline_for_ticker(namespace.ticker)
-        return namespace, pipeline
+        prepared_args = _build_download_args(payload, self.workspace_root)
+        pipeline = self._build_pipeline_for_ticker(prepared_args.ticker)
+        return prepared_args, pipeline
 
     def _prepare_process_execution(
         self,
         payload: ProcessCommandPayload,
-    ) -> tuple[argparse.Namespace, PipelineProtocol]:
+    ) -> tuple[_PreparedProcessArgs, PipelineProtocol]:
         """准备 process 命令的已校验参数与 pipeline。"""
 
-        namespace = _build_process_namespace(payload, self.workspace_root)
-        pipeline = self._build_pipeline_for_ticker(namespace.ticker)
-        return namespace, pipeline
+        prepared_args = _build_process_args(payload, self.workspace_root)
+        pipeline = self._build_pipeline_for_ticker(prepared_args.ticker)
+        return prepared_args, pipeline
 
     def _prepare_upload_filing_execution(
         self,
         payload: UploadFilingCommandPayload,
-    ) -> tuple[argparse.Namespace, PipelineProtocol]:
+    ) -> tuple[_PreparedUploadFilingArgs, PipelineProtocol]:
         """准备 upload_filing 命令的已校验参数与 pipeline。
 
         Args:
@@ -1192,15 +1483,14 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
             ValueError: 参数非法时抛出。
         """
 
-        namespace = _build_upload_filing_namespace(payload, self.workspace_root)
-        validate_upload_filing_args(namespace)
-        pipeline = self._build_pipeline_for_ticker(namespace.ticker)
-        return namespace, pipeline
+        prepared_args = _build_upload_filing_args(payload, self.workspace_root)
+        pipeline = self._build_pipeline_for_ticker(prepared_args.ticker)
+        return prepared_args, pipeline
 
     def _prepare_upload_material_execution(
         self,
         payload: UploadMaterialCommandPayload,
-    ) -> tuple[argparse.Namespace, PipelineProtocol]:
+    ) -> tuple[_PreparedUploadMaterialArgs, PipelineProtocol]:
         """准备 upload_material 命令的已校验参数与 pipeline。
 
         Args:
@@ -1213,10 +1503,9 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
             ValueError: 参数非法时抛出。
         """
 
-        namespace = _build_upload_material_namespace(payload, self.workspace_root)
-        validate_upload_material_args(namespace)
-        pipeline = self._build_pipeline_for_ticker(namespace.ticker)
-        return namespace, pipeline
+        prepared_args = _build_upload_material_args(payload, self.workspace_root)
+        pipeline = self._build_pipeline_for_ticker(prepared_args.ticker)
+        return prepared_args, pipeline
 
     def execute(
         self,
@@ -1243,69 +1532,71 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
         payload = command.payload
         if name == FinsCommandName.UPLOAD_FILINGS_FROM:
             typed_payload = _require_upload_filings_from_payload(payload)
-            namespace = _build_upload_filings_from_namespace(typed_payload, self.workspace_root)
-            return _build_upload_filings_from_result_data(generate_upload_filings_script(namespace))
+            prepared_args = _build_upload_filings_from_args(typed_payload, self.workspace_root)
+            return _build_upload_filings_from_result_data(
+                generate_upload_filings_script(prepared_args.to_cli_namespace())
+            )
 
         if name == FinsCommandName.DOWNLOAD:
             typed_payload = _require_download_payload(payload)
-            namespace, pipeline = self._prepare_download_execution(typed_payload)
+            prepared_args, pipeline = self._prepare_download_execution(typed_payload)
             raw_result = pipeline.download(
-                ticker=namespace.ticker,
-                form_type=_coerce_forms_input(namespace.form_type),
-                start_date=namespace.start_date,
-                end_date=namespace.end_date,
-                overwrite=namespace.overwrite,
-                rebuild=namespace.rebuild,
-                ticker_aliases=getattr(namespace, "ticker_aliases", None),
+                ticker=prepared_args.ticker,
+                form_type=_coerce_forms_input(prepared_args.form_type),
+                start_date=prepared_args.start_date,
+                end_date=prepared_args.end_date,
+                overwrite=prepared_args.overwrite,
+                rebuild=prepared_args.rebuild,
+                ticker_aliases=prepared_args.ticker_aliases,
             )
             return _build_download_result_data(raw_result)
         if name == FinsCommandName.UPLOAD_FILING:
             typed_payload = _require_upload_filing_payload(payload)
-            namespace, pipeline = self._prepare_upload_filing_execution(typed_payload)
+            prepared_args, pipeline = self._prepare_upload_filing_execution(typed_payload)
             raw_result = pipeline.upload_filing(
-                ticker=namespace.ticker,
-                action=namespace.action,
+                ticker=prepared_args.ticker,
+                action=prepared_args.action,
                 files=list(typed_payload.files),
-                fiscal_year=namespace.fiscal_year,
-                fiscal_period=namespace.fiscal_period,
-                amended=namespace.amended,
-                filing_date=namespace.filing_date,
-                report_date=namespace.report_date,
-                company_id=namespace.company_id,
-                company_name=namespace.company_name,
-                ticker_aliases=getattr(namespace, "ticker_aliases", None),
-                overwrite=namespace.overwrite,
+                fiscal_year=prepared_args.fiscal_year,
+                fiscal_period=prepared_args.fiscal_period,
+                amended=prepared_args.amended,
+                filing_date=prepared_args.filing_date,
+                report_date=prepared_args.report_date,
+                company_id=prepared_args.company_id,
+                company_name=prepared_args.company_name,
+                ticker_aliases=prepared_args.ticker_aliases,
+                overwrite=prepared_args.overwrite,
             )
             return _build_upload_filing_result_data(raw_result)
         if name == FinsCommandName.UPLOAD_MATERIAL:
             typed_payload = _require_upload_material_payload(payload)
-            namespace, pipeline = self._prepare_upload_material_execution(typed_payload)
+            prepared_args, pipeline = self._prepare_upload_material_execution(typed_payload)
             raw_result = pipeline.upload_material(
-                ticker=namespace.ticker,
-                action=namespace.action,
-                form_type=namespace.form_type,
-                material_name=namespace.material_name,
+                ticker=prepared_args.ticker,
+                action=prepared_args.action,
+                form_type=prepared_args.form_type,
+                material_name=prepared_args.material_name,
                 files=list(typed_payload.files),
-                document_id=namespace.document_id,
-                internal_document_id=namespace.internal_document_id,
-                fiscal_year=namespace.fiscal_year,
-                fiscal_period=namespace.fiscal_period,
-                filing_date=namespace.filing_date,
-                report_date=namespace.report_date,
-                company_id=namespace.company_id,
-                company_name=namespace.company_name,
-                ticker_aliases=getattr(namespace, "ticker_aliases", None),
-                overwrite=namespace.overwrite,
+                document_id=prepared_args.document_id,
+                internal_document_id=prepared_args.internal_document_id,
+                fiscal_year=prepared_args.fiscal_year,
+                fiscal_period=prepared_args.fiscal_period,
+                filing_date=prepared_args.filing_date,
+                report_date=prepared_args.report_date,
+                company_id=prepared_args.company_id,
+                company_name=prepared_args.company_name,
+                ticker_aliases=prepared_args.ticker_aliases,
+                overwrite=prepared_args.overwrite,
             )
             return _build_upload_material_result_data(raw_result)
         if name == FinsCommandName.PROCESS:
             typed_payload = _require_process_payload(payload)
-            namespace, pipeline = self._prepare_process_execution(typed_payload)
+            prepared_args, pipeline = self._prepare_process_execution(typed_payload)
             raw_result = pipeline.process(
-                ticker=namespace.ticker,
-                overwrite=namespace.overwrite,
-                ci=namespace.ci,
-                document_ids=_coerce_document_ids_input(namespace.document_ids),
+                ticker=prepared_args.ticker,
+                overwrite=prepared_args.overwrite,
+                ci=prepared_args.ci,
+                document_ids=_coerce_document_ids_input(prepared_args.document_ids),
             )
             return _build_process_result_data(raw_result)
         if name == FinsCommandName.PROCESS_FILING:
@@ -1340,15 +1631,15 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
 
         if name == FinsCommandName.DOWNLOAD:
             typed_payload = _require_download_payload(payload)
-            namespace, pipeline = self._prepare_download_execution(typed_payload)
+            prepared_args, pipeline = self._prepare_download_execution(typed_payload)
             stream = pipeline.download_stream(
-                ticker=namespace.ticker,
-                form_type=_coerce_forms_input(namespace.form_type),
-                start_date=namespace.start_date,
-                end_date=namespace.end_date,
-                overwrite=namespace.overwrite,
-                rebuild=namespace.rebuild,
-                ticker_aliases=getattr(namespace, "ticker_aliases", None),
+                ticker=prepared_args.ticker,
+                form_type=_coerce_forms_input(prepared_args.form_type),
+                start_date=prepared_args.start_date,
+                end_date=prepared_args.end_date,
+                overwrite=prepared_args.overwrite,
+                rebuild=prepared_args.rebuild,
+                ticker_aliases=prepared_args.ticker_aliases,
             )
             async for event in self._iter_stream_events(command_name=name, stream=stream, final_event_types={"pipeline_completed"}):
                 yield event
@@ -1356,12 +1647,12 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
 
         if name == FinsCommandName.PROCESS:
             typed_payload = _require_process_payload(payload)
-            namespace, pipeline = self._prepare_process_execution(typed_payload)
+            prepared_args, pipeline = self._prepare_process_execution(typed_payload)
             stream = pipeline.process_stream(
-                ticker=namespace.ticker,
-                overwrite=namespace.overwrite,
-                ci=namespace.ci,
-                document_ids=_coerce_document_ids_input(namespace.document_ids),
+                ticker=prepared_args.ticker,
+                overwrite=prepared_args.overwrite,
+                ci=prepared_args.ci,
+                document_ids=_coerce_document_ids_input(prepared_args.document_ids),
             )
             async for event in self._iter_stream_events(command_name=name, stream=stream, final_event_types={"pipeline_completed"}):
                 yield event
@@ -1369,20 +1660,20 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
 
         if name == FinsCommandName.UPLOAD_FILING:
             typed_payload = _require_upload_filing_payload(payload)
-            namespace, pipeline = self._prepare_upload_filing_execution(typed_payload)
+            prepared_args, pipeline = self._prepare_upload_filing_execution(typed_payload)
             stream = pipeline.upload_filing_stream(
-                ticker=namespace.ticker,
-                action=namespace.action,
+                ticker=prepared_args.ticker,
+                action=prepared_args.action,
                 files=list(typed_payload.files),
-                fiscal_year=namespace.fiscal_year,
-                fiscal_period=namespace.fiscal_period,
-                amended=namespace.amended,
-                filing_date=namespace.filing_date,
-                report_date=namespace.report_date,
-                company_id=namespace.company_id,
-                company_name=namespace.company_name,
-                ticker_aliases=getattr(namespace, "ticker_aliases", None),
-                overwrite=namespace.overwrite,
+                fiscal_year=prepared_args.fiscal_year,
+                fiscal_period=prepared_args.fiscal_period,
+                amended=prepared_args.amended,
+                filing_date=prepared_args.filing_date,
+                report_date=prepared_args.report_date,
+                company_id=prepared_args.company_id,
+                company_name=prepared_args.company_name,
+                ticker_aliases=prepared_args.ticker_aliases,
+                overwrite=prepared_args.overwrite,
             )
             async for event in self._iter_stream_events(
                 command_name=name,
@@ -1394,23 +1685,23 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
 
         if name == FinsCommandName.UPLOAD_MATERIAL:
             typed_payload = _require_upload_material_payload(payload)
-            namespace, pipeline = self._prepare_upload_material_execution(typed_payload)
+            prepared_args, pipeline = self._prepare_upload_material_execution(typed_payload)
             stream = pipeline.upload_material_stream(
-                ticker=namespace.ticker,
-                action=namespace.action,
-                form_type=namespace.form_type,
-                material_name=namespace.material_name,
+                ticker=prepared_args.ticker,
+                action=prepared_args.action,
+                form_type=prepared_args.form_type,
+                material_name=prepared_args.material_name,
                 files=list(typed_payload.files),
-                document_id=namespace.document_id,
-                internal_document_id=namespace.internal_document_id,
-                fiscal_year=namespace.fiscal_year,
-                fiscal_period=namespace.fiscal_period,
-                filing_date=namespace.filing_date,
-                report_date=namespace.report_date,
-                company_id=namespace.company_id,
-                company_name=namespace.company_name,
-                ticker_aliases=getattr(namespace, "ticker_aliases", None),
-                overwrite=namespace.overwrite,
+                document_id=prepared_args.document_id,
+                internal_document_id=prepared_args.internal_document_id,
+                fiscal_year=prepared_args.fiscal_year,
+                fiscal_period=prepared_args.fiscal_period,
+                filing_date=prepared_args.filing_date,
+                report_date=prepared_args.report_date,
+                company_id=prepared_args.company_id,
+                company_name=prepared_args.company_name,
+                ticker_aliases=prepared_args.ticker_aliases,
+                overwrite=prepared_args.overwrite,
             )
             async for event in self._iter_stream_events(
                 command_name=name,

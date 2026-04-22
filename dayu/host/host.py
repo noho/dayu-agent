@@ -359,11 +359,15 @@ class Host:
         self,
         *,
         state: SessionState | None = None,
+        source: SessionSource | None = None,
+        scene_name: str | None = None,
     ) -> list[SessionRecord]:
         """列出 Host Session。
 
         Args:
             state: 可选状态过滤。
+            source: 可选来源过滤。
+            scene_name: 可选 scene 名称过滤。
 
         Returns:
             匹配的 SessionRecord 列表。
@@ -372,7 +376,11 @@ class Host:
             无。
         """
 
-        return self._session_registry.list_sessions(state=state)
+        return self._session_registry.list_sessions(
+            state=state,
+            source=source,
+            scene_name=scene_name,
+        )
 
     def get_conversation_session_digest(self, session_id: str) -> ConversationSessionDigest:
         """读取指定 session 的 conversation 摘要。

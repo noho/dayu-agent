@@ -91,11 +91,15 @@ class SessionRegistryProtocol(Protocol):
         self,
         *,
         state: SessionState | None = None,
+        source: SessionSource | None = None,
+        scene_name: str | None = None,
     ) -> list[SessionRecord]:
         """列出 sessions。
 
         Args:
             state: 可选状态过滤。
+            source: 可选来源过滤。
+            scene_name: 可选 scene 名称过滤。
 
         Returns:
             匹配的 SessionRecord 列表。
@@ -649,6 +653,8 @@ class SessionOperationsProtocol(Protocol):
         self,
         *,
         state: SessionState | None = None,
+        source: SessionSource | None = None,
+        scene_name: str | None = None,
     ) -> list[SessionRecord]:
         """列出 Host session。"""
         ...

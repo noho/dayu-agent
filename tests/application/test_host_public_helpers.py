@@ -88,12 +88,22 @@ class _StubSessionHost:
         self.calls.append(("get", session_id))
         return self.sessions.get(session_id)
 
-    def list_sessions(self, *, state: SessionState | None = None) -> list[SessionRecord]:
+    def list_sessions(
+        self,
+        *,
+        state: SessionState | None = None,
+        source: SessionSource | None = None,
+        scene_name: str | None = None,
+    ) -> list[SessionRecord]:
         """列出会话。"""
 
-        if state is None:
-            return list(self.sessions.values())
-        return [record for record in self.sessions.values() if record.state == state]
+        return [
+            record
+            for record in self.sessions.values()
+            if (state is None or record.state == state)
+            and (source is None or record.source == source)
+            and (scene_name is None or record.scene_name == scene_name)
+        ]
 
     def touch_session(self, session_id: str) -> None:
         """刷新会话活跃时间。"""

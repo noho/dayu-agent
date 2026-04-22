@@ -160,19 +160,29 @@ class SQLiteSessionRegistry(SessionRegistryProtocol):
         self,
         *,
         state: SessionState | None = None,
+        source: SessionSource | None = None,
+        scene_name: str | None = None,
     ) -> list[SessionRecord]:
-        """列出 sessions，可选按状态过滤。"""
+        """列出 sessions，可选按状态/来源/scene 过滤。"""
 
         conn = self._host_store.get_connection()
+        where_clauses: list[str] = []
+        query_params: list[str] = []
         if state is not None:
-            rows = conn.execute(
-                "SELECT * FROM sessions WHERE state = ? ORDER BY created_at DESC",
-                (state.value,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM sessions ORDER BY created_at DESC",
-            ).fetchall()
+            where_clauses.append("state = ?")
+            query_params.append(state.value)
+        if source is not None:
+            where_clauses.append("source = ?")
+            query_params.append(source.value)
+        if scene_name is not None:
+            where_clauses.append("scene_name = ?")
+            query_params.append(scene_name)
+
+        sql = "SELECT * FROM sessions"
+        if where_clauses:
+            sql += f" WHERE {' AND '.join(where_clauses)}"
+        sql += " ORDER BY created_at DESC"
+        rows = conn.execute(sql, tuple(query_params)).fetchall()
         return [_row_to_record(dict(row)) for row in rows]
 
     def touch_session(self, session_id: str) -> None:

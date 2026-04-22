@@ -71,10 +71,22 @@ class _FakeSessionRegistry:
 
         return self.records.get(session_id)
 
-    def list_sessions(self, *, state: SessionState | None = None) -> list[SessionRecord]:
+    def list_sessions(
+        self,
+        *,
+        state: SessionState | None = None,
+        source: SessionSource | None = None,
+        scene_name: str | None = None,
+    ) -> list[SessionRecord]:
         """列出会话。"""
 
-        return [record for record in self.records.values() if state is None or record.state == state]
+        return [
+            record
+            for record in self.records.values()
+            if (state is None or record.state == state)
+            and (source is None or record.source == source)
+            and (scene_name is None or record.scene_name == scene_name)
+        ]
 
     def touch_session(self, session_id: str) -> None:
         """刷新活跃时间。"""
@@ -278,10 +290,18 @@ def test_host_admin_service_status_uses_single_session_listing() -> None:
     class _Host:
         """记录 `list_sessions()` 调用次数的最小 Host。"""
 
-        def list_sessions(self, *, state: SessionState | None = None) -> list[SessionRecord]:
+        def list_sessions(
+            self,
+            *,
+            state: SessionState | None = None,
+            source: SessionSource | None = None,
+            scene_name: str | None = None,
+        ) -> list[SessionRecord]:
             """返回固定 session 列表。"""
 
             list_sessions_calls.append(state)
+            assert source is None
+            assert scene_name is None
             now = datetime(2026, 4, 21, 8, 0, tzinfo=timezone.utc)
             return [
                 SessionRecord(
@@ -328,10 +348,16 @@ def test_host_admin_service_formats_missing_timestamps_as_empty_string() -> None
     class _Host:
         """返回缺失时间戳 session 的最小 Host。"""
 
-        def list_sessions(self, *, state: SessionState | None = None) -> list[SessionRecord]:
+        def list_sessions(
+            self,
+            *,
+            state: SessionState | None = None,
+            source: SessionSource | None = None,
+            scene_name: str | None = None,
+        ) -> list[SessionRecord]:
             """返回单条缺失时间戳的 session。"""
 
-            del state
+            del state, source, scene_name
             return [
                 SessionRecord(
                     session_id="session_without_timestamps",
@@ -361,7 +387,13 @@ def test_host_admin_service_lists_interactive_session_summaries() -> None:
     class _Host:
         """测试用最小 Host 管理面。"""
 
-        def list_sessions(self, *, state: SessionState | None = None) -> list[SessionRecord]:
+        def list_sessions(
+            self,
+            *,
+            state: SessionState | None = None,
+            source: SessionSource | None = None,
+            scene_name: str | None = None,
+        ) -> list[SessionRecord]:
             """返回多种来源的 session。"""
 
             records = [
@@ -390,9 +422,15 @@ def test_host_admin_service_lists_interactive_session_summaries() -> None:
                     last_activity_at=now,
                 ),
             ]
-            if state is None:
-                return records
-            return [record for record in records if record.state == state]
+            assert source == SessionSource.CLI
+            assert scene_name == "interactive"
+            return [
+                record
+                for record in records
+                if (state is None or record.state == state)
+                and record.source == source
+                and record.scene_name == scene_name
+            ]
 
         def get_conversation_session_digest(self, session_id: str) -> ConversationSessionDigest:
             """返回指定 session 的 conversation 摘要。"""

@@ -325,3 +325,58 @@ def test_execution_contract_snapshot_uses_trace_settings_dataclass_defaults_when
     assert restored.execution_options.doc_tool_limits is None
     assert restored.execution_options.fins_tool_limits is None
     assert restored.execution_options.web_tools_config is None
+
+
+@pytest.mark.unit
+def test_execution_contract_snapshot_drops_trace_settings_when_output_dir_missing() -> None:
+    """缺失 trace output_dir 时不应恢复为当前工作目录。"""
+
+    contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="interactive",
+        host_policy=ExecutionHostPolicy(
+            session_key="session-1",
+            concurrency_lane="llm_api",
+            timeout_ms=None,
+            resumable=True,
+        ),
+        preparation_spec=ScenePreparationSpec(
+            selected_toolsets=(),
+            execution_permissions=ExecutionPermissions(
+                web=ExecutionWebPermissions(allow_private_network_url=False),
+                doc=ExecutionDocPermissions(),
+            ),
+            prompt_contributions={},
+        ),
+        message_inputs=ExecutionMessageInputs(user_message="hello"),
+        accepted_execution_spec=AcceptedExecutionSpec(
+            model=AcceptedModelSpec(model_name="gpt-test", temperature=0.2),
+            runtime=AcceptedRuntimeSpec(agent_running_config={"max_iterations": 6}),
+            tools=AcceptedToolConfigSpec(toolset_configs=()),
+            infrastructure=AcceptedInfrastructureSpec(
+                trace_settings=TraceSettings(enabled=True, output_dir=Path("/tmp/trace")),
+                conversation_memory_settings=ConversationMemorySettings(),
+            ),
+        ),
+        execution_options=ExecutionOptions(),
+    )
+
+    snapshot = serialize_execution_contract_snapshot(contract)
+    accepted_execution_spec_payload = cast(
+        dict[str, ExecutionContractSnapshotValue],
+        snapshot["accepted_execution_spec"],
+    )
+    infrastructure_payload = dict(
+        cast(dict[str, ExecutionContractSnapshotValue], accepted_execution_spec_payload["infrastructure"])
+    )
+    trace_settings_payload = dict(
+        cast(dict[str, ExecutionContractSnapshotValue], infrastructure_payload["trace_settings"])
+    )
+    trace_settings_payload.pop("output_dir", None)
+    infrastructure_payload["trace_settings"] = trace_settings_payload
+    accepted_execution_spec_payload["infrastructure"] = infrastructure_payload
+    snapshot["accepted_execution_spec"] = accepted_execution_spec_payload
+
+    restored = deserialize_execution_contract_snapshot(snapshot)
+
+    assert restored.accepted_execution_spec.infrastructure.trace_settings is None

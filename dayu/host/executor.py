@@ -251,7 +251,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             operation_name=execution_contract.service_name,
             session_id=execution_contract.host_policy.session_key,
             scene_name=execution_contract.scene_name,
-            metadata=dict(execution_contract.metadata),
+            metadata=execution_contract.metadata,
             concurrency_lane=execution_contract.host_policy.concurrency_lane,
             timeout_ms=execution_contract.host_policy.timeout_ms,
         )
@@ -1157,7 +1157,7 @@ def _build_run_spec_from_prepared_turn(prepared_turn: PreparedAgentTurnSnapshot)
         operation_name=prepared_turn.service_name,
         session_id=session_id,
         scene_name=prepared_turn.scene_name,
-        metadata=dict(prepared_turn.metadata),
+        metadata=prepared_turn.metadata,
         concurrency_lane=prepared_turn.concurrency_lane,
         timeout_ms=prepared_turn.timeout_ms,
     )

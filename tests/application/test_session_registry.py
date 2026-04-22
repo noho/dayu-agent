@@ -135,6 +135,21 @@ class TestGetAndListSessions:
         assert len(closed) == 1
         assert closed[0].session_id == "s1"
 
+    @pytest.mark.unit
+    def test_list_sessions_filter_by_source_and_scene_name(self, registry: SQLiteSessionRegistry) -> None:
+        """按来源和 scene 名称过滤 session。"""
+
+        registry.create_session(SessionSource.CLI, session_id="interactive_1", scene_name="interactive")
+        registry.create_session(SessionSource.CLI, session_id="prompt_1", scene_name="prompt")
+        registry.create_session(SessionSource.WECHAT, session_id="wechat_1", scene_name="interactive")
+
+        sessions = registry.list_sessions(
+            source=SessionSource.CLI,
+            scene_name="interactive",
+        )
+
+        assert [session.session_id for session in sessions] == ["interactive_1"]
+
 
 class TestTouchSession:
     """touch_session 测试。"""

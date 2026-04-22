@@ -1026,7 +1026,7 @@ def _deserialize_accepted_execution_spec(
             trace_settings=(
                 TraceSettings(
                     enabled=bool(trace_enabled),
-                    output_dir=trace_output_dir if trace_output_dir is not None else Path("."),
+                    output_dir=trace_output_dir,
                     max_file_bytes=(
                         trace_max_file_bytes
                         if trace_max_file_bytes is not None

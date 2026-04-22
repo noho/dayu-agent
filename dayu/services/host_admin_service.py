@@ -313,11 +313,13 @@ class HostAdminService(HostAdminServiceProtocol):
         """
 
         parsed_state = _parse_session_state(state)
-        records = self.host.list_sessions(state=parsed_state)
+        records = self.host.list_sessions(
+            state=parsed_state,
+            source=SessionSource.CLI,
+            scene_name=_INTERACTIVE_SCENE_NAME,
+        )
         views: list[InteractiveSessionAdminView] = []
         for record in records:
-            if record.source != SessionSource.CLI or record.scene_name != _INTERACTIVE_SCENE_NAME:
-                continue
             digest = self.host.get_conversation_session_digest(record.session_id)
             views.append(
                 _to_interactive_session_view(

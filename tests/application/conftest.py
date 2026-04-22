@@ -75,9 +75,22 @@ class StubSessionRegistry:
         """查询 session。"""
         return self._sessions.get(session_id)
 
-    def list_sessions(self, *, state: SessionState | None = None) -> list[SessionRecord]:
+    def list_sessions(
+        self,
+        *,
+        state: SessionState | None = None,
+        source: SessionSource | None = None,
+        scene_name: str | None = None,
+    ) -> list[SessionRecord]:
         """列出 sessions。"""
-        return [s for s in self._sessions.values() if state is None or s.state == state]
+
+        return [
+            session
+            for session in self._sessions.values()
+            if (state is None or session.state == state)
+            and (source is None or session.source == source)
+            and (scene_name is None or session.scene_name == scene_name)
+        ]
 
     def touch_session(self, session_id: str) -> None:
         """更新最后活跃时间。"""

@@ -6,6 +6,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -34,6 +35,7 @@ from dayu.host.prepared_turn import PreparedAgentTurnSnapshot, PreparedConversat
 from dayu.host.scene_preparer import PreparedAgentExecution
 from dayu.contracts.events import AppEvent, AppEventType
 from dayu.contracts.cancellation import CancelledError
+from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.engine.events import EventType, StreamEvent
 from dayu.host.host_store import HostStore
 from dayu.host.run_registry import SQLiteRunRegistry
@@ -1561,3 +1563,27 @@ def test_host_executor_finish_cancel_and_pending_turn_reconcile_helpers() -> Non
         resumable=True,
     )
     assert pending_turn_store.list_pending_turns(session_id="s1", scene_name="interactive") == []
+
+
+@pytest.mark.unit
+def test_hosted_run_spec_normalizes_execution_delivery_context() -> None:
+    """HostedRunSpec 应只保留稳定交付上下文字段。"""
+
+    spec = HostedRunSpec(
+        operation_name="prompt",
+        metadata=cast(
+            ExecutionDeliveryContext,
+            {
+                "delivery_channel": " wechat ",
+                "delivery_target": " user-1 ",
+                "filtered": True,
+                "unexpected": "ignored",
+            },
+        ),
+    )
+
+    assert spec.metadata == {
+        "delivery_channel": "wechat",
+        "delivery_target": "user-1",
+        "filtered": True,
+    }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 from pathlib import Path
 from threading import Barrier, Thread
 from typing import Any, AsyncIterator, Optional, cast
@@ -416,10 +417,35 @@ def test_default_fins_runtime_helper_methods_cover_registry_and_company_meta_sum
         "company_id": "1",
     }
 
-    monkeypatch.setattr(runtime.company_repository, "get_company_meta", lambda _ticker: (_ for _ in ()).throw(RuntimeError("missing")))
+    monkeypatch.setattr(
+        runtime.company_repository,
+        "get_company_meta",
+        lambda _ticker: (_ for _ in ()).throw(ValueError("broken meta")),
+    )
 
     assert runtime.get_company_name("MSFT") == ""
     assert runtime.get_company_meta_summary("MSFT") == {"ticker": "MSFT"}
+
+
+@pytest.mark.unit
+def test_prepare_download_execution_returns_typed_runtime_args(tmp_path: Path) -> None:
+    """内部准备阶段应返回强类型参数对象而非 `argparse.Namespace`。"""
+
+    runtime = _make_runtime(tmp_path)
+
+    prepared_args, _pipeline = runtime._prepare_download_execution(
+        DownloadCommandPayload(
+            ticker="AAPL",
+            form_type=("10-K",),
+            ticker_aliases=("AAPL.US",),
+        )
+    )
+
+    assert not isinstance(prepared_args, argparse.Namespace)
+    assert prepared_args.ticker == "AAPL"
+    assert prepared_args.form_type == ["10-K"]
+    assert prepared_args.ticker_aliases is not None
+    assert all(isinstance(alias, str) for alias in prepared_args.ticker_aliases)
 
 
 @pytest.mark.unit
