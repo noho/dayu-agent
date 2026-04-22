@@ -239,7 +239,10 @@ def test_host_admin_service_lists_and_closes_sessions() -> None:
     closed_session, cancelled_run_ids = service.close_session("session_1")
 
     assert [session.session_id for session in sessions] == ["session_1"]
+    assert sessions[0].turn_count == 0
+    assert sessions[0].first_question_preview == ""
     assert closed_session.state == "closed"
+    assert closed_session.turn_count == 0
     assert cancelled_run_ids == ["run_1"]
 
     run = service.get_run("run_1")
@@ -270,10 +273,11 @@ def test_host_admin_service_lists_runs_and_builds_status() -> None:
 
 
 @pytest.mark.unit
-def test_host_admin_service_lists_interactive_session_summaries() -> None:
-    """管理服务应只返回 CLI interactive 会话摘要。"""
+def test_host_admin_service_lists_sessions_with_state_source_scene_filters() -> None:
+    """管理服务应支持 state/source/scene 组合过滤并返回 digest 视图。"""
 
     now = datetime(2026, 4, 21, 8, 0, tzinfo=timezone.utc)
+    digest_calls: list[str] = []
 
     class _Host:
         """测试用最小 Host 管理面。"""
@@ -294,7 +298,7 @@ def test_host_admin_service_lists_interactive_session_summaries() -> None:
                     session_id="prompt_1",
                     source=SessionSource.CLI,
                     state=SessionState.ACTIVE,
-                    scene_name="prompt",
+                    scene_name="prompt_mt",
                     created_at=now,
                     last_activity_at=now,
                 ),
@@ -302,6 +306,14 @@ def test_host_admin_service_lists_interactive_session_summaries() -> None:
                     session_id="wechat_1",
                     source=SessionSource.WECHAT,
                     state=SessionState.ACTIVE,
+                    scene_name="interactive",
+                    created_at=now,
+                    last_activity_at=now,
+                ),
+                SessionRecord(
+                    session_id="interactive_closed",
+                    source=SessionSource.CLI,
+                    state=SessionState.CLOSED,
                     scene_name="interactive",
                     created_at=now,
                     last_activity_at=now,
@@ -314,37 +326,77 @@ def test_host_admin_service_lists_interactive_session_summaries() -> None:
         def get_conversation_session_digest(self, session_id: str) -> ConversationSessionDigest:
             """返回指定 session 的 conversation 摘要。"""
 
-            assert session_id == "interactive_1"
+            digest_calls.append(session_id)
             return ConversationSessionDigest(
                 turn_count=2,
-                first_question_preview="第一问",
-                last_question_preview="最后一问",
-                conversation_summary="",
+                first_question_preview=f"{session_id}-first",
+                last_question_preview=f"{session_id}-last",
+                conversation_summary=f"{session_id}-summary",
             )
 
     service = HostAdminService(host=cast(HostAdminOperationsProtocol, _Host()))
 
-    sessions = service.list_interactive_sessions(state="active")
+    sessions = service.list_sessions(
+        state="active",
+        source="cli",
+        scene="interactive",
+    )
+    source_only_sessions = service.list_sessions(source="cli")
+    scene_only_sessions = service.list_sessions(scene="interactive")
+    closed_sessions = service.list_sessions(state="closed", scene="interactive")
 
     assert [session.session_id for session in sessions] == ["interactive_1"]
+    assert [session.session_id for session in source_only_sessions] == [
+        "interactive_1",
+        "prompt_1",
+        "interactive_closed",
+    ]
+    assert [session.session_id for session in scene_only_sessions] == [
+        "interactive_1",
+        "wechat_1",
+        "interactive_closed",
+    ]
+    assert [session.session_id for session in closed_sessions] == ["interactive_closed"]
     assert sessions[0].turn_count == 2
-    assert sessions[0].first_question_preview == "第一问"
-    assert sessions[0].last_question_preview == "最后一问"
+    assert sessions[0].source == "cli"
+    assert sessions[0].scene_name == "interactive"
+    assert sessions[0].first_question_preview == "interactive_1-first"
+    assert sessions[0].last_question_preview == "interactive_1-last"
+    assert sessions[0].conversation_summary == "interactive_1-summary"
+    assert digest_calls == [
+        "interactive_1",
+        "interactive_1",
+        "prompt_1",
+        "interactive_closed",
+        "interactive_1",
+        "wechat_1",
+        "interactive_closed",
+        "interactive_closed",
+    ]
 
 
 @pytest.mark.unit
-def test_host_admin_service_lists_interactive_recent_turns() -> None:
-    """管理服务应返回 interactive 最近对话轮次。
+def test_host_admin_service_returns_digest_for_sessions_without_transcript() -> None:
+    """管理服务应在 transcript 缺失时稳定返回空 digest 字段。"""
 
-    Args:
-        无。
+    service, _event_bus = _build_service()
 
-    Returns:
-        无。
+    sessions = service.list_sessions(state="active")
+    session = service.get_session("session_1")
 
-    Raises:
-        AssertionError: 断言失败时抛出。
-    """
+    assert len(sessions) == 1
+    assert sessions[0].turn_count == 0
+    assert sessions[0].first_question_preview == ""
+    assert sessions[0].last_question_preview == ""
+    assert sessions[0].conversation_summary == ""
+    assert session is not None
+    assert session.turn_count == 0
+    assert session.first_question_preview == ""
+
+
+@pytest.mark.unit
+def test_host_admin_service_lists_session_recent_turns() -> None:
+    """管理服务应返回任意已存在会话的最近对话轮次。"""
 
     class _Host:
         """测试用最小 Host 管理面。"""
@@ -352,13 +404,13 @@ def test_host_admin_service_lists_interactive_recent_turns() -> None:
         def get_session(self, session_id: str) -> SessionRecord | None:
             """返回指定 session。"""
 
-            assert session_id == "interactive_1"
+            assert session_id == "prompt_mt_1"
             now = datetime(2026, 4, 21, 8, 0, tzinfo=timezone.utc)
             return SessionRecord(
-                session_id="interactive_1",
+                session_id="prompt_mt_1",
                 source=SessionSource.CLI,
-                state=SessionState.ACTIVE,
-                scene_name="interactive",
+                state=SessionState.CLOSED,
+                scene_name="prompt_mt",
                 created_at=now,
                 last_activity_at=now,
             )
@@ -371,7 +423,7 @@ def test_host_admin_service_lists_interactive_recent_turns() -> None:
         ) -> list[ConversationSessionTurnExcerpt]:
             """返回指定 session 的最近 turn 摘录。"""
 
-            assert session_id == "interactive_1"
+            assert session_id == "prompt_mt_1"
             assert limit == 1
             return [
                 ConversationSessionTurnExcerpt(
@@ -383,7 +435,7 @@ def test_host_admin_service_lists_interactive_recent_turns() -> None:
 
     service = HostAdminService(host=cast(HostAdminOperationsProtocol, _Host()))
 
-    turns = service.list_interactive_session_recent_turns("interactive_1", limit=1)
+    turns = service.list_session_recent_turns("prompt_mt_1", limit=1)
 
     assert len(turns) == 1
     assert turns[0].user_text == "上一轮问题"
@@ -391,35 +443,17 @@ def test_host_admin_service_lists_interactive_recent_turns() -> None:
 
 
 @pytest.mark.unit
-def test_host_admin_service_rejects_non_interactive_recent_turns() -> None:
-    """管理服务不应为非 interactive session 返回对话摘录。
-
-    Args:
-        无。
-
-    Returns:
-        无。
-
-    Raises:
-        AssertionError: 断言失败时抛出。
-    """
+def test_host_admin_service_returns_empty_recent_turns_for_missing_session() -> None:
+    """管理服务在会话不存在时应稳定返回空摘录。"""
 
     class _Host:
         """测试用最小 Host 管理面。"""
 
         def get_session(self, session_id: str) -> SessionRecord | None:
-            """返回非 interactive session。"""
+            """返回缺失会话。"""
 
-            assert session_id == "prompt_1"
-            now = datetime(2026, 4, 21, 8, 0, tzinfo=timezone.utc)
-            return SessionRecord(
-                session_id="prompt_1",
-                source=SessionSource.CLI,
-                state=SessionState.ACTIVE,
-                scene_name="prompt",
-                created_at=now,
-                last_activity_at=now,
-            )
+            assert session_id == "missing_1"
+            return None
 
         def list_conversation_session_turn_excerpts(
             self,
@@ -427,13 +461,13 @@ def test_host_admin_service_rejects_non_interactive_recent_turns() -> None:
             *,
             limit: int,
         ) -> list[ConversationSessionTurnExcerpt]:
-            """非 interactive session 不应触达 Host transcript 摘录。"""
+            """缺失会话不应触达 transcript 摘录。"""
 
-            raise AssertionError("不应读取非 interactive session 的 conversation 摘录")
+            raise AssertionError("缺失会话不应读取 conversation 摘录")
 
     service = HostAdminService(host=cast(HostAdminOperationsProtocol, _Host()))
 
-    assert service.list_interactive_session_recent_turns("prompt_1", limit=1) == []
+    assert service.list_session_recent_turns("missing_1", limit=1) == []
 
 
 @pytest.mark.unit
@@ -534,11 +568,13 @@ def test_create_session_with_valid_source() -> None:
     assert view.source == "web"
     assert view.state == "active"
     assert view.scene_name == "test_scene"
+    assert view.turn_count == 0
+    assert view.first_question_preview == ""
 
 
 @pytest.mark.unit
 def test_list_sessions_with_state_none() -> None:
-    """list_sessions 不传 state 时应返回全部会话。"""
+    """list_sessions 不传 state 时应返回全部会话 digest。"""
 
     service, _event_bus = _build_service()
 
@@ -546,6 +582,7 @@ def test_list_sessions_with_state_none() -> None:
 
     assert len(sessions) == 1
     assert sessions[0].session_id == "session_1"
+    assert sessions[0].turn_count == 0
 
 
 @pytest.mark.unit

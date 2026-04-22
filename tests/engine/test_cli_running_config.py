@@ -2583,6 +2583,190 @@ def test_main_prompt_path_allows_missing_filings_dir(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.unit
+def test_run_prompt_command_routes_labeled_prompt_to_conversation_turn(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证带 label 的 prompt 会改走单轮 conversation turn。"""
+
+    workspace_config = WorkspaceConfig(
+        workspace_dir=tmp_path,
+        output_dir=tmp_path / "output",
+        config_loader=ConfigLoader(ConfigFileResolver(tmp_path / "config")),
+        prompt_asset_store=FilePromptAssetStore(ConfigFileResolver(tmp_path / "config")),
+        ticker="AAPL",
+        has_local_filings=False,
+    )
+    running_config = RunningConfig(
+        runner_running_config=AsyncOpenAIRunnerRunningConfig(),
+        agent_running_config=AgentRunningConfig(),
+        doc_tool_limits=DocToolLimits(),
+        fins_tool_limits=FinsToolLimits(),
+        web_tools_config=WebToolsConfig(provider="auto"),
+        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+    )
+    args = Namespace(
+        command="prompt",
+        prompt="请总结风险",
+        log_level=None,
+        debug=False,
+        verbose=False,
+        info=False,
+        quiet=False,
+        thinking=False,
+        model_name="deepseek-thinking",
+        label="apple",
+        label_session_id="cli_conv_apple",
+        label_scene_name=None,
+    )
+
+    prompt_kwargs: dict[str, object] = {}
+
+    def _capture_prompt(*_args: object, **kwargs: object) -> int:
+        """记录 conversation prompt 调用参数并返回固定退出码。"""
+
+        prompt_kwargs.update(kwargs)
+        return 11
+
+    monkeypatch.setattr("dayu.cli.commands.prompt.setup_loglevel", lambda _args: None)
+    monkeypatch.setattr("dayu.cli.commands.prompt.setup_paths", partial(_return_value, workspace_config))
+    monkeypatch.setattr(
+        "dayu.cli.commands.prompt._build_execution_options",
+        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+    )
+    fake_dependencies = _FakeCliHostDependencies(
+        running_config=running_config,
+        scene_model_names={"prompt_mt": "scene-prompt-mt-model"},
+    )
+    monkeypatch.setattr(
+        "dayu.cli.commands.prompt._prepare_cli_host_dependencies",
+        lambda **_kwargs: fake_dependencies.as_tuple(),
+    )
+    monkeypatch.setattr("dayu.cli.commands.prompt._build_chat_service", lambda **_kwargs: object())
+    monkeypatch.setattr("dayu.cli.commands.prompt.conversation_prompt_command", _capture_prompt)
+
+    assert run_prompt_command(args) == 11
+    prompt_execution_options = cast(Any, prompt_kwargs["execution_options"])
+    assert prompt_kwargs["session_id"] == "cli_conv_apple"
+    assert prompt_kwargs["scene_name"] == "prompt_mt"
+    assert prompt_kwargs["ticker"] == "AAPL"
+    assert prompt_kwargs["show_thinking"] is False
+    assert prompt_execution_options.model_name == "deepseek-thinking"
+
+
+@pytest.mark.unit
+def test_run_prompt_command_labeled_prompt_respects_existing_scene_name(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证带 label 的 prompt 恢复已有 registry scene 时严格沿用该 scene。"""
+
+    workspace_config = WorkspaceConfig(
+        workspace_dir=tmp_path,
+        output_dir=tmp_path / "output",
+        config_loader=ConfigLoader(ConfigFileResolver(tmp_path / "config")),
+        prompt_asset_store=FilePromptAssetStore(ConfigFileResolver(tmp_path / "config")),
+    )
+    running_config = RunningConfig(
+        runner_running_config=AsyncOpenAIRunnerRunningConfig(),
+        agent_running_config=AgentRunningConfig(),
+        doc_tool_limits=DocToolLimits(),
+        fins_tool_limits=FinsToolLimits(),
+        web_tools_config=WebToolsConfig(provider="auto"),
+        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+    )
+    args = Namespace(
+        command="prompt",
+        prompt="继续上次问题",
+        log_level=None,
+        debug=False,
+        verbose=False,
+        info=False,
+        quiet=False,
+        thinking=True,
+        model_name="deepseek-thinking",
+        label="apple",
+        label_session_id="cli_conv_apple",
+        label_scene_name="interactive",
+    )
+
+    prompt_kwargs: dict[str, object] = {}
+
+    def _capture_prompt(*_args: object, **kwargs: object) -> int:
+        """记录 conversation prompt 调用参数并返回固定退出码。"""
+
+        prompt_kwargs.update(kwargs)
+        return 12
+
+    monkeypatch.setattr("dayu.cli.commands.prompt.setup_loglevel", lambda _args: None)
+    monkeypatch.setattr("dayu.cli.commands.prompt.setup_paths", partial(_return_value, workspace_config))
+    monkeypatch.setattr(
+        "dayu.cli.commands.prompt._build_execution_options",
+        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+    )
+    fake_dependencies = _FakeCliHostDependencies(
+        running_config=running_config,
+        scene_model_names={"interactive": "scene-interactive-model"},
+    )
+    monkeypatch.setattr(
+        "dayu.cli.commands.prompt._prepare_cli_host_dependencies",
+        lambda **_kwargs: fake_dependencies.as_tuple(),
+    )
+    monkeypatch.setattr("dayu.cli.commands.prompt._build_chat_service", lambda **_kwargs: object())
+    monkeypatch.setattr("dayu.cli.commands.prompt.conversation_prompt_command", _capture_prompt)
+
+    assert run_prompt_command(args) == 12
+    assert prompt_kwargs["session_id"] == "cli_conv_apple"
+    assert prompt_kwargs["scene_name"] == "interactive"
+    assert prompt_kwargs["show_thinking"] is True
+
+
+@pytest.mark.unit
+def test_run_prompt_command_rejects_labeled_prompt_without_label_session_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证带 label 但缺少 session_id 时会明确报错并拒绝静默回退。"""
+
+    workspace_config = WorkspaceConfig(
+        workspace_dir=tmp_path,
+        output_dir=tmp_path / "output",
+        config_loader=ConfigLoader(ConfigFileResolver(tmp_path / "config")),
+        prompt_asset_store=FilePromptAssetStore(ConfigFileResolver(tmp_path / "config")),
+    )
+    args = Namespace(
+        command="prompt",
+        prompt="请总结风险",
+        log_level=None,
+        debug=False,
+        verbose=False,
+        info=False,
+        quiet=False,
+        thinking=False,
+        model_name="deepseek-thinking",
+        label="apple",
+        label_session_id=None,
+        label_scene_name=None,
+    )
+    errors: list[str] = []
+
+    monkeypatch.setattr("dayu.cli.commands.prompt.setup_loglevel", lambda _args: None)
+    monkeypatch.setattr("dayu.cli.commands.prompt.setup_paths", partial(_return_value, workspace_config))
+    monkeypatch.setattr(
+        "dayu.cli.commands.prompt._build_execution_options",
+        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+    )
+    monkeypatch.setattr("dayu.cli.commands.prompt.Log.error", lambda message, **_kwargs: errors.append(str(message)))
+    monkeypatch.setattr(
+        "dayu.cli.commands.prompt._prepare_cli_host_dependencies",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected host preparation")),
+    )
+
+    assert run_prompt_command(args) == 2
+    assert errors == ["labeled prompt 缺少 label_session_id，无法继续: label=apple"]
+
+
+@pytest.mark.unit
 def test_main_prompt_path_propagates_cli_options_to_mock_agent(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

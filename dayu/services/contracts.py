@@ -266,6 +266,10 @@ class SessionAdminView:
         scene_name: 首次使用的 scene 名称。
         created_at: 创建时间的 ISO 文本。
         last_activity_at: 最后活跃时间的 ISO 文本。
+        turn_count: 已持久化的 conversation turn 数量。
+        first_question_preview: 第一轮用户问题预览。
+        last_question_preview: 最后一轮用户问题预览。
+        conversation_summary: 会话概览；当前为空，预留给后续一次性摘要。
     """
 
     session_id: str
@@ -274,11 +278,33 @@ class SessionAdminView:
     scene_name: str | None
     created_at: str
     last_activity_at: str
+    turn_count: int = 0
+    first_question_preview: str = ""
+    last_question_preview: str = ""
+    conversation_summary: str = ""
+
+
+@dataclass(frozen=True)
+class SessionTurnExcerptView:
+    """宿主管理面的会话单轮对话摘录视图。
+
+    Attributes:
+        user_text: 用户输入文本。
+        assistant_text: 助手最终回答文本。
+        created_at: 该轮对话创建时间的 ISO 文本。
+    """
+
+    user_text: str
+    assistant_text: str
+    created_at: str
 
 
 @dataclass(frozen=True)
 class InteractiveSessionAdminView:
     """宿主管理面的 interactive 会话摘要视图。
+
+    该 DTO 仅为主代理尚未完成 CLI 接线前的最小过渡结构。
+    新的通用列表视图统一收敛到 ``SessionAdminView``。
 
     Attributes:
         session_id: 会话 ID。
@@ -301,19 +327,7 @@ class InteractiveSessionAdminView:
     conversation_summary: str = ""
 
 
-@dataclass(frozen=True)
-class InteractiveSessionTurnView:
-    """宿主管理面的 interactive 单轮对话视图。
-
-    Attributes:
-        user_text: 用户输入文本。
-        assistant_text: 助手最终回答文本。
-        created_at: 该轮对话创建时间的 ISO 文本。
-    """
-
-    user_text: str
-    assistant_text: str
-    created_at: str
+InteractiveSessionTurnView = SessionTurnExcerptView
 
 
 @dataclass(frozen=True)
@@ -413,6 +427,8 @@ __all__ = [
     "FinsSubmitRequest",
     "HostCleanupResult",
     "HostStatusView",
+    "InteractiveSessionAdminView",
+    "InteractiveSessionTurnView",
     "LaneStatusView",
     "PromptRequest",
     "PromptSubmission",
@@ -423,6 +439,7 @@ __all__ = [
     "SceneModelConfig",
     "SessionResolutionPolicy",
     "SessionAdminView",
+    "SessionTurnExcerptView",
     "WriteRequest",
     "WriteRunConfig",
 ]

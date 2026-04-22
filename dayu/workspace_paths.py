@@ -13,6 +13,7 @@ DAYU_INTERNAL_ROOT_RELATIVE_DIR = Path(".dayu")
 HOST_STORE_RELATIVE_PATH = DAYU_INTERNAL_ROOT_RELATIVE_DIR / "host" / "dayu_host.db"
 CONVERSATION_STORE_RELATIVE_DIR = DAYU_INTERNAL_ROOT_RELATIVE_DIR / "session"
 INTERACTIVE_STATE_RELATIVE_DIR = DAYU_INTERNAL_ROOT_RELATIVE_DIR / "interactive"
+CLI_CONVERSATION_REGISTRY_RELATIVE_DIR = DAYU_INTERNAL_ROOT_RELATIVE_DIR / "cli-conversations"
 SEC_CACHE_RELATIVE_DIR = DAYU_INTERNAL_ROOT_RELATIVE_DIR / "sec_cache"
 SEC_THROTTLE_RELATIVE_DIR = DAYU_INTERNAL_ROOT_RELATIVE_DIR / "sec_throttle"
 DEFAULT_WECHAT_INSTANCE_LABEL = "default"
@@ -81,6 +82,39 @@ def build_interactive_state_dir(workspace_root: Path) -> Path:
     """
 
     return _build_workspace_relative_path(workspace_root, INTERACTIVE_STATE_RELATIVE_DIR)
+
+
+def build_cli_conversation_registry_dir(workspace_root: Path) -> Path:
+    """构造 CLI label conversation registry 目录。
+
+    Args:
+        workspace_root: 工作区根目录。
+
+    Returns:
+        CLI label conversation registry 目录路径。
+
+    Raises:
+        无。
+    """
+
+    return _build_workspace_relative_path(workspace_root, CLI_CONVERSATION_REGISTRY_RELATIVE_DIR)
+
+
+def build_cli_conversation_label_record_path(workspace_root: Path, label: str) -> Path:
+    """构造指定 label 的 CLI conversation record 文件路径。
+
+    Args:
+        workspace_root: 工作区根目录。
+        label: conversation label。
+
+    Returns:
+        指定 label 对应的 record 文件路径。
+
+    Raises:
+        无。
+    """
+
+    return build_cli_conversation_registry_dir(workspace_root) / f"{label}.json"
 
 
 def build_sec_cache_dir(workspace_root: Path) -> Path:
@@ -209,6 +243,7 @@ __all__ = [
     "HOST_STORE_RELATIVE_PATH",
     "CONVERSATION_STORE_RELATIVE_DIR",
     "INTERACTIVE_STATE_RELATIVE_DIR",
+    "CLI_CONVERSATION_REGISTRY_RELATIVE_DIR",
     "SEC_CACHE_RELATIVE_DIR",
     "SEC_THROTTLE_RELATIVE_DIR",
     "DEFAULT_WECHAT_INSTANCE_LABEL",
@@ -217,6 +252,8 @@ __all__ = [
     "build_host_store_default_path",
     "build_conversation_store_dir",
     "build_interactive_state_dir",
+    "build_cli_conversation_registry_dir",
+    "build_cli_conversation_label_record_path",
     "build_sec_cache_dir",
     "build_sec_throttle_dir",
     "build_wechat_state_dir",

@@ -278,6 +278,8 @@ async def _consume_chat_turn_stream(
     state: _RenderState,
     *,
     session_id: str | None,
+    scene_name: str = "interactive",
+    ticker: str | None = None,
     execution_options: ExecutionOptions | None = None,
 ) -> tuple[str, str]:
     """消费单轮 chat 事件流并实时渲染。
@@ -287,6 +289,8 @@ async def _consume_chat_turn_stream(
         user_input: 用户输入文本。
         state: 渲染状态。
         session_id: 会话 ID；首轮可为空。
+        scene_name: 本轮执行使用的 scene 名称。
+        ticker: 股票代码。
         execution_options: 请求级执行覆盖参数。
 
     Returns:
@@ -300,8 +304,9 @@ async def _consume_chat_turn_stream(
     request = ChatTurnRequest(
         session_id=session_id,
         user_text=user_input,
+        ticker=ticker,
         execution_options=execution_options,
-        scene_name="interactive",
+        scene_name=scene_name,
         session_resolution_policy=SessionResolutionPolicy.ENSURE_DETERMINISTIC,
     )
     submission = await session.submit_turn(request)
@@ -387,6 +392,8 @@ def _run_chat_turn_stream(
     user_input: str,
     *,
     session_id: str | None,
+    scene_name: str = "interactive",
+    ticker: str | None = None,
     execution_options: ExecutionOptions | None = None,
     show_thinking: bool = False,
     show_waiting_spinner: bool = False,
@@ -397,6 +404,8 @@ def _run_chat_turn_stream(
         session: 聊天会话服务。
         user_input: 用户输入文本。
         session_id: 会话 ID；首轮可为空。
+        scene_name: 本轮执行使用的 scene 名称。
+        ticker: 股票代码。
         execution_options: 请求级执行覆盖参数。
         show_thinking: 是否回显 thinking 增量。
         show_waiting_spinner: 是否在首个可见输出前显示等待 spinner。
@@ -418,6 +427,8 @@ def _run_chat_turn_stream(
                 user_input,
                 state,
                 session_id=session_id,
+                scene_name=scene_name,
+                ticker=ticker,
                 execution_options=execution_options,
             )
         )
@@ -589,6 +600,54 @@ def prompt(
         _run_prompt_stream(
             prompt_service,
             user_input,
+            ticker=ticker,
+            execution_options=execution_options,
+            show_thinking=show_thinking,
+            show_waiting_spinner=not show_thinking,
+        )
+    except ValueError as exc:
+        Log.error(str(exc), module=MODULE)
+        return 2
+    except RuntimeError as exc:
+        Log.error(f"{exc}，退出 prompt 模式", module=MODULE)
+        return 2
+    return 0
+
+
+def conversation_prompt(
+    chat_service: ChatServiceProtocol,
+    user_input: str,
+    *,
+    session_id: str,
+    scene_name: str,
+    ticker: str | None = None,
+    execution_options: ExecutionOptions | None = None,
+    show_thinking: bool = False,
+) -> int:
+    """执行单轮 conversation prompt 命令。
+
+    Args:
+        chat_service: 已装配的聊天服务。
+        user_input: 单次输入文本。
+        session_id: label registry 解析得到的确定性会话 ID。
+        scene_name: 本轮 turn 使用的 scene 名称。
+        ticker: 股票代码。
+        execution_options: 请求级执行覆盖参数。
+        show_thinking: 是否回显 thinking 增量。
+
+    Returns:
+        退出码，``0`` 表示成功，``2`` 表示失败。
+
+    Raises:
+        无。
+    """
+
+    try:
+        _run_chat_turn_stream(
+            chat_service,
+            user_input,
+            session_id=session_id,
+            scene_name=scene_name,
             ticker=ticker,
             execution_options=execution_options,
             show_thinking=show_thinking,

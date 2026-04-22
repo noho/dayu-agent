@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from dayu.workspace_paths import (
+    build_cli_conversation_label_record_path,
+    build_cli_conversation_registry_dir,
     build_conversation_store_dir,
     build_dayu_root_path,
     build_host_store_default_path,
@@ -55,6 +57,24 @@ class TestBuildInteractiveStateDir:
         """应返回 .dayu/interactive 路径。"""
         result = build_interactive_state_dir(tmp_path)
         assert result == tmp_path / ".dayu" / "interactive"
+
+
+class TestBuildCliConversationRegistryDir:
+    """build_cli_conversation_registry_dir 测试。"""
+
+    def test_returns_cli_conversations_dir(self, tmp_path: Path) -> None:
+        """应返回 .dayu/cli-conversations 路径。"""
+        result = build_cli_conversation_registry_dir(tmp_path)
+        assert result == tmp_path / ".dayu" / "cli-conversations"
+
+
+class TestBuildCliConversationLabelRecordPath:
+    """build_cli_conversation_label_record_path 测试。"""
+
+    def test_returns_label_record_path(self, tmp_path: Path) -> None:
+        """应返回指定 label 的 json record 路径。"""
+        result = build_cli_conversation_label_record_path(tmp_path, "alpha_1")
+        assert result == tmp_path / ".dayu" / "cli-conversations" / "alpha_1.json"
 
 
 class TestBuildSecCacheDir:
