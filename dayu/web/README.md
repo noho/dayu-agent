@@ -62,8 +62,9 @@ Streamlit 路径的组合根是 `dayu/web/streamlit_app.py`，主线职责如下
 - `dayu/web/streamlit/pages/report_host_sync.py`：报告任务与 Host 运行态同步辅助。
 - `dayu/web/streamlit/stream_chat_events.py`：将 `AppEvent` 流折叠为可展示文本和侧边提示。
 - `dayu/web/streamlit/file_server.py`：提供受限本地只读文件访问能力（仅财报文件路径）。
-- `dayu/web/streamlit/components/sidebar.py`：自选股侧栏与持久化加载。
+- `dayu/web/streamlit/components/sidebar.py`：自选股侧栏与持久化加载，提供配置入口按钮。
 - `dayu/web/streamlit/components/watchlist_dialog.py`：自选股管理对话框。
+- `dayu/web/streamlit/components/config_dialog.py`：配置对话框，配置初始化与模型配置。
 
 ## 5. 页面职责与边界
 

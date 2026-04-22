@@ -22,8 +22,13 @@ from dataclasses import dataclass
 from pathlib import Path
 import urllib.error
 import urllib.request
-from dayu.cli.workspace_migrations import apply_all_workspace_migrations
 from dayu.startup.config_file_resolver import resolve_package_assets_path, resolve_package_config_path
+from dayu.startup.workspace_initializer import (
+    build_workspace_reset_targets,
+    initialize_workspace_configuration,
+    reset_workspace_init_targets,
+    update_manifest_default_models,
+)
 from dayu.contracts.env_keys import (
     FMP_API_KEY_ENV,
     SEC_USER_AGENT_ENV,
@@ -371,7 +376,7 @@ def _confirm_workspace_reset(base_dir: Path) -> bool:
         无。输入流中断时按未确认处理。
     """
 
-    targets = _build_workspace_reset_targets(base_dir)
+    targets = build_workspace_reset_targets(base_dir)
     target_lines = "\n".join(f"  - {target}" for target in targets)
     prompt = (
         "\n⚠️  --reset 将删除以下目录并重新初始化：\n"
@@ -1148,26 +1153,35 @@ def run_init_command(args: Namespace) -> int:
         if not _confirm_workspace_reset(base_dir):
             print("已取消工作区重置。")
             return 1
-        removed_targets = _reset_workspace_init_targets(base_dir)
+        removed_targets = reset_workspace_init_targets(base_dir)
         if removed_targets:
             removed_names = "、".join(path.name for path in removed_targets)
             print(f"✓ 已重置工作区初始化目录: {removed_names}")
         else:
-            target_names = "、".join(path.name for path in _build_workspace_reset_targets(base_dir))
+            target_names = "、".join(path.name for path in build_workspace_reset_targets(base_dir))
             print(f"✓ 已执行工作区重置：未发现需要删除的 {target_names}")
 
     is_first_workspace_init = reset or not (base_dir / "config").exists()
+    initialization_result = initialize_workspace_configuration(base_dir, overwrite=overwrite)
+    config_dir = initialization_result.config_dir
+    assets_dir = initialization_result.assets_dir
+
     # 1. 复制配置
-    config_dir = _copy_config(base_dir, overwrite=overwrite)
     print(f"✓ 配置已复制到: {config_dir}")
 
     # 1b. 复制 assets（定性分析模板等）
-    assets_dir = _copy_assets(base_dir, overwrite=overwrite)
     print(f"✓ assets 已复制到: {assets_dir}")
 
     # 1c. 对旧工作区应用一次性迁移（run.json、Host SQLite）。
     # 具体规则集中在 dayu.cli.workspace_migrations，避免混入 init 常规流程。
-    apply_all_workspace_migrations(base_dir=base_dir, config_dir=config_dir)
+    if initialization_result.migration_result.run_json_write_chapter_added:
+        print("✓ 工作区迁移: run.json 已补齐 host_config.lane.write_chapter=5")
+    if initialization_result.migration_result.host_store_lane_rows_rewritten > 0:
+        print(
+            "✓ 工作区迁移: Host SQLite pending turn 快照 "
+            "concurrency_lane → business_concurrency_lane（共 "
+            f"{initialization_result.migration_result.host_store_lane_rows_rewritten} 行）"
+        )
 
     # 2. 选择初始化模型方案 + 输入 API Key（已有则跳过）
     chosen_option_key = _prompt_provider_selection()
@@ -1222,7 +1236,11 @@ def run_init_command(args: Namespace) -> int:
     if main_key_persist_failed:
         print(f"\n⚠️  跳过 manifest 更新（{effective_api_key_name} 未持久化）")
     else:
-        updated_count = _update_manifest_default_models(config_dir, non_thinking, thinking)
+        updated_count = update_manifest_default_models(
+            config_dir,
+            non_thinking_model=non_thinking,
+            thinking_model=thinking,
+        )
         print(f"✓ 默认模型已设置为: {non_thinking} / {thinking}（更新了 {updated_count} 个 manifest）")
 
     should_run_prewarm = _should_run_init_prewarm(

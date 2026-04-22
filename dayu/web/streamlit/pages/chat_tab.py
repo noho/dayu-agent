@@ -5,12 +5,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from types import TracebackType
-from typing import Literal, Protocol, cast
-
-import streamlit as streamlit_module
+import streamlit as st
 
 from dayu.log import Log
+from dayu.services.protocols import ChatServiceProtocol
 from dayu.web.streamlit.components.sidebar import WatchlistItem
 from dayu.web.streamlit.pages.chat.chat_client import ChatServiceClient, create_chat_service_client
 from dayu.web.streamlit.pages.chat.chat_stream_bridge import (
@@ -36,155 +34,6 @@ _SCREENSHOT_COPY_EXPANDER_TITLE = "截图版（可复制 Markdown）"
 _SCREENSHOT_COPY_CODE_LANGUAGE = "markdown"
 _USER_MESSAGE_COLUMN_SPEC: list[int] = [1, 3]
 _ASSISTANT_MESSAGE_COLUMN_SPEC: list[int] = [4, 1]
-
-
-class _ChatMessageContextProtocol(Protocol):
-    """`st.chat_message` 返回的上下文协议。"""
-
-    def __enter__(self) -> "_ChatMessageContextProtocol":
-        """进入上下文。"""
-        ...
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> bool | None:
-        """退出上下文。"""
-        ...
-
-
-class _ExpanderContextProtocol(Protocol):
-    """`st.expander` 返回上下文协议。"""
-
-    def __enter__(self) -> "_ExpanderContextProtocol":
-        """进入上下文。"""
-        ...
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> bool | None:
-        """退出上下文。"""
-        ...
-
-
-class _MarkdownPlaceholderProtocol(Protocol):
-    """`st.empty` 占位符协议。"""
-
-    def markdown(self, body: str) -> None:
-        """在占位符中渲染 Markdown。"""
-        ...
-
-
-class _LayoutColumnProtocol(Protocol):
-    """`st.columns` 返回列容器协议。"""
-
-    def __enter__(self) -> "_LayoutColumnProtocol":
-        """进入列上下文。"""
-        ...
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> bool | None:
-        """退出列上下文。"""
-        ...
-
-
-class _ContainerContextProtocol(Protocol):
-    """`st.container` 返回上下文协议。"""
-
-    def __enter__(self) -> "_ContainerContextProtocol":
-        """进入容器上下文。"""
-        ...
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> bool | None:
-        """退出容器上下文。"""
-        ...
-
-
-class _StreamlitProtocol(Protocol):
-    """最小 Streamlit API 协议。"""
-
-    session_state: dict[str, object]
-
-    def info(self, body: str) -> None:
-        """展示信息。"""
-        ...
-
-    def warning(self, body: str) -> None:
-        """展示告警。"""
-        ...
-
-    def error(self, body: str) -> None:
-        """展示错误。"""
-        ...
-
-    def markdown(self, body: str) -> None:
-        """展示 Markdown。"""
-        ...
-
-    def code(self, body: str, language: str | None = None) -> None:
-        """展示代码块。"""
-        ...
-
-    def button(self, label: str, key: str | None = None, type: str | None = None) -> bool:
-        """渲染按钮并返回是否点击。"""
-        ...
-
-    def columns(
-        self,
-        spec: list[int],
-        vertical_alignment: Literal["top", "center", "bottom"] = "center",
-        *,
-        gap: Literal["small", "medium", "large"] = "small",
-    ) -> list[_LayoutColumnProtocol]:
-        """创建多列布局。"""
-        ...
-
-    def text_area(
-        self,
-        label: str,
-        key: str | None = None,
-        placeholder: str | None = None,
-        height: int | None = None,
-    ) -> str:
-        """渲染多行输入框。"""
-        ...
-
-    def chat_message(self, name: str) -> _ChatMessageContextProtocol:
-        """创建聊天消息上下文。"""
-        ...
-
-    def empty(self) -> _MarkdownPlaceholderProtocol:
-        """创建可重复刷新的占位符。"""
-        ...
-
-    def container(self) -> _ContainerContextProtocol:
-        """创建容器上下文。"""
-        ...
-
-    def expander(self, label: str, expanded: bool = False) -> _ExpanderContextProtocol:
-        """创建可折叠区域。"""
-        ...
-
-    def rerun(self) -> None:
-        """触发页面重跑。"""
-        ...
-
-
-st = cast(_StreamlitProtocol, streamlit_module)
 _StreamQueueItem = StreamQueueItem
 
 
@@ -271,7 +120,7 @@ def _render_copyable_screenshot_markdown(answer_markdown: str) -> None:
 
 
 def _sync_stream_via_asyncio(
-    chat_service: object,
+    chat_service: ChatServiceProtocol,
     *,
     user_text: str,
     session_id: str | None,
@@ -284,11 +133,9 @@ def _sync_stream_via_asyncio(
 ) -> Iterator[StreamQueueItem]:
     """兼容旧调用形态：返回迭代器。"""
 
-    from dayu.services.protocols import ChatServiceProtocol
-
     return iter(
         sync_stream_via_asyncio(
-            cast(ChatServiceProtocol, chat_service),
+            chat_service,
             user_text=user_text,
             session_id=session_id,
             ticker=ticker,

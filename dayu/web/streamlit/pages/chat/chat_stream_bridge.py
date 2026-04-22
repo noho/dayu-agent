@@ -8,9 +8,9 @@ import time
 from dataclasses import dataclass
 from queue import Empty, Queue
 from collections.abc import Iterator
-from typing import Literal, Protocol, cast
+from typing import Literal
 
-import streamlit as streamlit_module
+import streamlit as st
 
 from dayu.contracts.events import AppEvent, AppEventType
 from dayu.log import Log
@@ -25,21 +25,6 @@ _STREAM_FIRST_CHUNK_TIMEOUT_SECONDS = 90.0
 _STREAM_CHUNK_TIMEOUT_SECONDS = 45.0
 _STREAM_TIMEOUT_MESSAGE = "交互式分析等待模型输出超时，请检查模型 API Key、网络连接或稍后重试。"
 _STREAM_TEXT_KEYS: tuple[str, ...] = ("content", "text", "answer")
-
-
-class _StreamlitBridgeProtocol(Protocol):
-    """桥接模块所需最小 Streamlit 协议。"""
-
-    def warning(self, body: str) -> None:
-        """展示 warning。"""
-        ...
-
-    def info(self, body: str) -> None:
-        """展示 info。"""
-        ...
-
-
-st = cast(_StreamlitBridgeProtocol, streamlit_module)
 
 
 @dataclass(frozen=True)

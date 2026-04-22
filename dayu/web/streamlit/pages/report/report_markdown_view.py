@@ -6,10 +6,8 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from html import escape
-from types import TracebackType
-from typing import Protocol, cast
 
-import streamlit as streamlit_module
+import streamlit as st
 
 _MARKDOWN_HEADING_PATTERN = re.compile(r"^(?P<marks>#{1,6})\s+(?P<title>.+?)\s*$")
 _MARKDOWN_FENCE_PREFIXES = ("```", "~~~")
@@ -21,59 +19,6 @@ _REPORT_PANEL_BASE_HEIGHT_PX = 1200
 _REPORT_PANEL_HEIGHT_PER_CONTENT_LINE_PX = 0.2
 _REPORT_PANEL_HEIGHT_PER_HEADING_PX = 4
 _REPORT_PANEL_HEIGHT_CALIBRATION_FACTOR = 1.0
-
-
-class _ColumnContextProtocol(Protocol):
-    """列上下文协议。"""
-
-    def __enter__(self) -> "_ColumnContextProtocol":
-        """进入列上下文。"""
-        ...
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> bool | None:
-        """退出列上下文。"""
-        ...
-
-
-class _ContainerContextProtocol(Protocol):
-    """容器上下文协议。"""
-
-    def __enter__(self) -> "_ContainerContextProtocol":
-        """进入容器上下文。"""
-        ...
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> bool | None:
-        """退出容器上下文。"""
-        ...
-
-
-class _StreamlitMarkdownViewProtocol(Protocol):
-    """Markdown 展示最小 Streamlit 协议。"""
-
-    def columns(self, spec: list[int], *, gap: str = "small") -> list[_ColumnContextProtocol]:
-        """创建列。"""
-        ...
-
-    def markdown(self, body: str, unsafe_allow_html: bool = False) -> None:
-        """渲染 Markdown。"""
-        ...
-
-    def container(self, *, border: bool = False, height: int | None = None) -> _ContainerContextProtocol:
-        """创建容器。"""
-        ...
-
-
-st = cast(_StreamlitMarkdownViewProtocol, streamlit_module)
 
 
 @dataclass(frozen=True)

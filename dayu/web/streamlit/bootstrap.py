@@ -10,8 +10,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import streamlit as streamlit_module
-from typing import Protocol, cast
+import streamlit as st
 
 if TYPE_CHECKING:
     from dayu.services.startup_preparation import PreparedHostRuntimeDependencies
@@ -20,17 +19,6 @@ if TYPE_CHECKING:
     from dayu.web.streamlit.pages.chat.chat_client import ChatServiceClient
 
 
-class _StreamlitBootstrapProtocol(Protocol):
-    """bootstrap 所需的最小 Streamlit 协议。"""
-
-    session_state: dict[str, object]
-
-    def warning(self, body: str) -> None:
-        """展示 warning。"""
-        ...
-
-
-st = cast(_StreamlitBootstrapProtocol, streamlit_module)
 MODULE = "WEB.STREAMLIT.BOOTSTRAP"
 
 
