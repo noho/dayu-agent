@@ -331,7 +331,6 @@ def test_host_admin_service_lists_sessions_with_state_source_scene_filters() -> 
                 turn_count=2,
                 first_question_preview=f"{session_id}-first",
                 last_question_preview=f"{session_id}-last",
-                conversation_summary=f"{session_id}-summary",
             )
 
     service = HostAdminService(host=cast(HostAdminOperationsProtocol, _Host()))
@@ -362,7 +361,6 @@ def test_host_admin_service_lists_sessions_with_state_source_scene_filters() -> 
     assert sessions[0].scene_name == "interactive"
     assert sessions[0].first_question_preview == "interactive_1-first"
     assert sessions[0].last_question_preview == "interactive_1-last"
-    assert sessions[0].conversation_summary == "interactive_1-summary"
     assert digest_calls == [
         "interactive_1",
         "interactive_1",
@@ -388,7 +386,6 @@ def test_host_admin_service_returns_digest_for_sessions_without_transcript() -> 
     assert sessions[0].turn_count == 0
     assert sessions[0].first_question_preview == ""
     assert sessions[0].last_question_preview == ""
-    assert sessions[0].conversation_summary == ""
     assert session is not None
     assert session.turn_count == 0
     assert session.first_question_preview == ""

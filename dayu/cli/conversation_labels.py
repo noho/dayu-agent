@@ -145,6 +145,14 @@ class ConversationLabelRecord:
         }
 
 
+@dataclass(frozen=True)
+class ConversationLabelResolution:
+    """CLI label registry 解析结果。"""
+
+    record: ConversationLabelRecord
+    created: bool
+
+
 class FileConversationLabelRegistry:
     """基于工作区文件系统的 CLI conversation label registry。"""
 
@@ -199,7 +207,28 @@ class FileConversationLabelRegistry:
             return None
         return _load_record_from_path(record_path, expected_label=normalized_label)
 
-    def get_or_create_record(self, *, label: str, scene_name: str) -> ConversationLabelRecord:
+    def delete_record(self, label: str) -> bool:
+        """删除指定 label 的 registry record。
+
+        Args:
+            label: 待删除的 conversation label。
+
+        Returns:
+            实际删除了文件时返回 ``True``；record 不存在时返回 ``False``。
+
+        Raises:
+            ValueError: 当 label 非法时抛出。
+            OSError: 当删除文件失败时抛出。
+        """
+
+        normalized_label = validate_conversation_label(label)
+        record_path = build_cli_conversation_label_record_path(self._workspace_root, normalized_label)
+        if not record_path.exists():
+            return False
+        record_path.unlink()
+        return True
+
+    def get_or_create_record(self, *, label: str, scene_name: str) -> ConversationLabelResolution:
         """读取现有 record，若不存在则首次创建。
 
         Args:
@@ -207,7 +236,7 @@ class FileConversationLabelRegistry:
             scene_name: 调用方显式传入的 scene 名称。
 
         Returns:
-            已存在或新创建的 registry record。
+            已存在或新创建的 registry 解析结果。
 
         Raises:
             ValueError: 当 label 非法、scene_name 为空或 record 文件损坏时抛出。
@@ -216,7 +245,7 @@ class FileConversationLabelRegistry:
         normalized_label = validate_conversation_label(label)
         existing_record = self.get_record(normalized_label)
         if existing_record is not None:
-            return existing_record
+            return ConversationLabelResolution(record=existing_record, created=False)
         normalized_scene_name = _normalize_scene_name(scene_name)
         timestamp = build_registry_timestamp()
         created_record = ConversationLabelRecord(
@@ -228,7 +257,7 @@ class FileConversationLabelRegistry:
             updated_at=timestamp,
         )
         self._write_record(created_record)
-        return created_record
+        return ConversationLabelResolution(record=created_record, created=True)
 
     def list_records(self) -> tuple[ConversationLabelRecord, ...]:
         """按 label 升序列出全部 CLI conversation records。

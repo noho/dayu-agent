@@ -269,7 +269,6 @@ class SessionAdminView:
         turn_count: 已持久化的 conversation turn 数量。
         first_question_preview: 第一轮用户问题预览。
         last_question_preview: 最后一轮用户问题预览。
-        conversation_summary: 会话概览；当前为空，预留给后续一次性摘要。
     """
 
     session_id: str
@@ -281,7 +280,6 @@ class SessionAdminView:
     turn_count: int = 0
     first_question_preview: str = ""
     last_question_preview: str = ""
-    conversation_summary: str = ""
 
 
 @dataclass(frozen=True)

@@ -310,7 +310,6 @@ def test_run_sessions_command_renders_generic_session_digest(
         turn_count=2,
         first_question_preview="第一问",
         last_question_preview="最后一问",
-        conversation_summary="",
     )
     list_calls: list[dict[str, object | None]] = []
     fake_runtime = SimpleNamespace(

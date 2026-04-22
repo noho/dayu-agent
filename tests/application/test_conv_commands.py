@@ -51,7 +51,6 @@ def _build_session_view(
         turn_count=1,
         first_question_preview=first_question_preview,
         last_question_preview=last_question_preview,
-        conversation_summary="不会被 conv overview 采用",
     )
 
 
@@ -81,25 +80,42 @@ def test_run_conv_list_prints_empty_message_when_registry_is_empty(
     assert "无 labeled conversation 记录" in captured.out
 
 
-def test_run_conv_list_renders_registry_rows_and_missing_session_stably(
+def test_run_conv_list_only_renders_active_rows_and_prunes_missing_registry_records(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
-    """`conv list` 应展示命中 session，并对缺失 session 输出稳定占位值。"""
+    """`conv list` 默认只显示 active，并清理已漂移的 registry record。"""
 
     registry = FileConversationLabelRegistry(tmp_path)
-    apple = registry.get_or_create_record(label="apple", scene_name="interactive")
-    ghost = registry.get_or_create_record(label="ghost", scene_name="prompt_mt")
+    apple = registry.get_or_create_record(label="apple", scene_name="interactive").record
+    ghost = registry.get_or_create_record(label="ghost", scene_name="prompt_mt").record
+    closed = registry.get_or_create_record(label="closed", scene_name="interactive").record
     matched_session = _build_session_view(
         session_id=apple.session_id,
         scene_name="interactive",
         first_question_preview="苹果这季度增长来自哪里？",
         last_question_preview="这句不应优先展示",
     )
+    closed_session = _build_session_view(
+        session_id=closed.session_id,
+        state="closed",
+        scene_name="interactive",
+        first_question_preview="这条默认不该显示",
+    )
     service = cast(
         HostAdminServiceProtocol,
-        SimpleNamespace(list_sessions=lambda **_kwargs: [matched_session]),
+        SimpleNamespace(
+            list_sessions=lambda **kwargs: (
+                [matched_session]
+                if kwargs == {"state": "active", "source": "cli"}
+                else [matched_session, closed_session]
+            ),
+            get_session=lambda session_id: {
+                apple.session_id: matched_session,
+                closed.session_id: closed_session,
+            }.get(session_id),
+        ),
     )
     monkeypatch.setattr(
         conv_commands_module,
@@ -108,20 +124,69 @@ def test_run_conv_list_renders_registry_rows_and_missing_session_stably(
     )
 
     exit_code = conv_commands_module._run_conv_list_command(
-        argparse.Namespace(base=str(tmp_path), config=None)
+        argparse.Namespace(base=str(tmp_path), config=None, show_all=False)
     )
 
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "LABEL" in captured.out
-    assert "SESSION_ID" in captured.out
     assert "apple" in captured.out
-    assert apple.session_id in captured.out
+    assert apple.session_id not in captured.out
     assert "苹果这季度增长来自哪里？" in captured.out
     assert "这句不应优先展示" not in captured.out
-    assert "ghost" in captured.out
-    assert ghost.session_id in captured.out
-    assert "missing" in captured.out
+    assert "closed" not in captured.out
+    assert "ghost" not in captured.out
+    assert ghost.session_id not in captured.out
+    assert registry.get_record("ghost") is None
+
+
+def test_run_conv_list_with_all_renders_closed_rows_but_still_prunes_missing_records(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """`conv --all list` 应显示 closed，但仍不显示漂移 registry record。"""
+
+    registry = FileConversationLabelRegistry(tmp_path)
+    apple = registry.get_or_create_record(label="apple", scene_name="interactive").record
+    closed = registry.get_or_create_record(label="closed", scene_name="interactive").record
+    registry.get_or_create_record(label="ghost", scene_name="prompt_mt")
+    active_session = _build_session_view(session_id=apple.session_id, first_question_preview="active")
+    closed_session = _build_session_view(
+        session_id=closed.session_id,
+        state="closed",
+        first_question_preview="closed",
+    )
+    service = cast(
+        HostAdminServiceProtocol,
+        SimpleNamespace(
+            list_sessions=lambda **kwargs: (
+                [active_session, closed_session]
+                if kwargs == {"state": None, "source": "cli"}
+                else []
+            ),
+            get_session=lambda session_id: {
+                apple.session_id: active_session,
+                closed.session_id: closed_session,
+            }.get(session_id),
+        ),
+    )
+    monkeypatch.setattr(
+        conv_commands_module,
+        "_build_host_runtime",
+        lambda _args: _build_runtime(tmp_path, service=service),
+    )
+
+    exit_code = conv_commands_module._run_conv_list_command(
+        argparse.Namespace(base=str(tmp_path), config=None, show_all=True)
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "apple" in captured.out
+    assert "closed" in captured.out
+    assert "ghost" not in captured.out
+    assert registry.get_record("ghost") is None
 
 
 def test_run_conv_status_renders_matched_label(
@@ -132,7 +197,7 @@ def test_run_conv_status_renders_matched_label(
     """`conv status --label` 命中时应展示对应单条记录。"""
 
     registry = FileConversationLabelRegistry(tmp_path)
-    record = registry.get_or_create_record(label="alpha", scene_name="interactive")
+    record = registry.get_or_create_record(label="alpha", scene_name="interactive").record
     session = _build_session_view(
         session_id=record.session_id,
         first_question_preview="",
@@ -154,9 +219,9 @@ def test_run_conv_status_renders_matched_label(
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "alpha" in captured.out
-    assert record.session_id in captured.out
-    assert "最后一问预览" in captured.out
+    assert "LABEL: alpha" in captured.out
+    assert f"SESSION_ID: {record.session_id}" in captured.out
+    assert "OVERVIEW: 最后一问预览" in captured.out
 
 
 def test_run_conv_status_returns_error_when_label_is_missing(
@@ -185,15 +250,15 @@ def test_run_conv_status_returns_error_when_label_is_missing(
     assert "label 不存在: missing" in captured.err
 
 
-def test_run_conv_status_keeps_working_when_host_session_is_missing(
+def test_run_conv_status_prunes_missing_registry_record_and_returns_not_found(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
-    """registry 存在但 Host session 缺失时，`conv status` 仍应输出稳定占位值。"""
+    """registry 命中漂移 record 时，`conv status` 应清理后按不存在处理。"""
 
     registry = FileConversationLabelRegistry(tmp_path)
-    record = registry.get_or_create_record(label="orphan", scene_name="interactive")
+    record = registry.get_or_create_record(label="orphan", scene_name="interactive").record
     service = cast(
         HostAdminServiceProtocol,
         SimpleNamespace(get_session=lambda _session_id: None),
@@ -209,8 +274,7 @@ def test_run_conv_status_keeps_working_when_host_session_is_missing(
     )
 
     captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "orphan" in captured.out
-    assert record.session_id in captured.out
-    assert "missing" in captured.out
+    assert exit_code == 1
+    assert f"label 不存在: {record.label}" in captured.err
+    assert registry.get_record("orphan") is None
     assert build_cli_conversation_session_id("orphan") == record.session_id

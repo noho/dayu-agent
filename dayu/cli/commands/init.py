@@ -339,7 +339,10 @@ def _copy_config(base_dir: Path, *, overwrite: bool) -> Path:
     dst = (base_dir / "config").resolve()
 
     if dst.exists() and not overwrite:
+        synced_count = _sync_missing_prompt_assets(src, dst)
         print(f"配置目录已存在: {dst}（使用 --overwrite 覆盖）")
+        if synced_count > 0:
+            print(f"已补齐 {synced_count} 个缺失 prompt 资产")
         return dst
 
     if dst.exists() and overwrite:
@@ -347,6 +350,42 @@ def _copy_config(base_dir: Path, *, overwrite: bool) -> Path:
 
     shutil.copytree(src, dst)
     return dst
+
+
+def _sync_missing_prompt_assets(package_config_dir: Path, workspace_config_dir: Path) -> int:
+    """为已有工作区增量补齐缺失的 prompt 资产。
+
+    仅同步 ``config/prompts`` 子树中包内新增、而工作区当前不存在的文件。
+    已存在的工作区文件一律保留，不做覆盖，以避免破坏用户本地定制配置。
+
+    Args:
+        package_config_dir: 包内默认配置根目录。
+        workspace_config_dir: 工作区配置根目录。
+
+    Returns:
+        实际补齐的文件数量。
+
+    Raises:
+        无。
+    """
+
+    package_prompts_dir = package_config_dir / "prompts"
+    workspace_prompts_dir = workspace_config_dir / "prompts"
+    if not package_prompts_dir.exists():
+        return 0
+
+    created_count = 0
+    for source_file in sorted(package_prompts_dir.rglob("*")):
+        if not source_file.is_file():
+            continue
+        relative_path = source_file.relative_to(package_prompts_dir)
+        target_file = workspace_prompts_dir / relative_path
+        if target_file.exists():
+            continue
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_file, target_file)
+        created_count += 1
+    return created_count
 
 
 def _copy_assets(base_dir: Path, *, overwrite: bool) -> Path:

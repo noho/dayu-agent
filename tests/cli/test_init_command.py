@@ -197,7 +197,7 @@ class TestCopyConfig:
         assert (result / "run.json").exists()
 
     def test_skip_existing_without_overwrite(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """已存在时不覆盖。"""
+        """已存在时不覆盖非 prompt 配置。"""
         src = tmp_path / "pkg_config"
         src.mkdir()
         (src / "new.json").write_text("{}", encoding="utf-8")
@@ -215,6 +215,55 @@ class TestCopyConfig:
 
         assert (result / "old.json").exists()
         assert not (result / "new.json").exists()
+
+    def test_backfills_missing_prompt_assets_without_overwrite(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """已有 config 时补齐缺失 prompt 资产，但不覆盖已有 prompt 文件。"""
+
+        src = tmp_path / "pkg_config"
+        pkg_manifests = src / "prompts" / "manifests"
+        pkg_scenes = src / "prompts" / "scenes"
+        pkg_manifests.mkdir(parents=True)
+        pkg_scenes.mkdir(parents=True)
+        (pkg_manifests / "prompt.json").write_text(
+            json.dumps({"scene": "prompt", "model": {"default_name": "mimo-v2-pro-thinking-plan"}}),
+            encoding="utf-8",
+        )
+        (pkg_manifests / "prompt_mt.json").write_text(
+            json.dumps({"scene": "prompt_mt", "model": {"default_name": "mimo-v2-pro-thinking-plan"}}),
+            encoding="utf-8",
+        )
+        (pkg_scenes / "prompt.md").write_text("# prompt old", encoding="utf-8")
+        (pkg_scenes / "prompt_mt.md").write_text("# prompt_mt new", encoding="utf-8")
+        monkeypatch.setattr(
+            "dayu.cli.commands.init.resolve_package_config_path",
+            lambda: src,
+        )
+
+        base = tmp_path / "workspace"
+        config_dir = base / "config"
+        manifests_dir = config_dir / "prompts" / "manifests"
+        scenes_dir = config_dir / "prompts" / "scenes"
+        manifests_dir.mkdir(parents=True)
+        scenes_dir.mkdir(parents=True)
+        (manifests_dir / "prompt.json").write_text(
+            json.dumps({"scene": "prompt", "model": {"default_name": "kimi-k2.5"}}),
+            encoding="utf-8",
+        )
+        (scenes_dir / "prompt.md").write_text("# prompt customized", encoding="utf-8")
+
+        result = _copy_config(base, overwrite=False)
+
+        assert result == config_dir
+        assert json.loads((manifests_dir / "prompt.json").read_text(encoding="utf-8"))["model"][
+            "default_name"
+        ] == "kimi-k2.5"
+        assert (manifests_dir / "prompt_mt.json").exists()
+        assert (scenes_dir / "prompt.md").read_text(encoding="utf-8") == "# prompt customized"
+        assert (scenes_dir / "prompt_mt.md").read_text(encoding="utf-8") == "# prompt_mt new"
 
     def test_overwrite_replaces(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """--overwrite 时替换。"""

@@ -578,7 +578,6 @@ class ConversationSessionDigest:
     turn_count: int
     first_question_preview: str
     last_question_preview: str
-    conversation_summary: str = ""
 
 
 @dataclass(frozen=True)

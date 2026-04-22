@@ -25,7 +25,7 @@
     }
   },
   "version": "v1",
-  "description": "带标签的可恢复财报问答场景",
+  "description": "多轮财报分析场景",
   "extends": [],
   "conversation": {
     "enabled": true

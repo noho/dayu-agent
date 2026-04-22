@@ -16,6 +16,8 @@ from dayu.cli.dependency_setup import (
     setup_paths,
 )
 from dayu.cli.interactive_ui import interactive
+from dayu.cli.labeled_conversations import resolve_labeled_conversation_target
+from dayu.contracts.infrastructure import PromptAssetStoreProtocol
 from dayu.log import Log
 from dayu.services.host_admin_service import HostAdminService
 from dayu.services.protocols import HostAdminServiceProtocol
@@ -67,16 +69,6 @@ def run_interactive_command(args: argparse.Namespace) -> int:
         fins_runtime=fins_runtime,
     )
     host_admin_service = HostAdminService(host=host)
-    interactive_model = scene_execution_acceptance_preparer.resolve_scene_model(
-        "interactive",
-        execution_options,
-    )
-    Log.info(
-        "使用模型: "
-        f"{json.dumps(interactive_model, ensure_ascii=False, sort_keys=True)}",
-        module=MODULE,
-    )
-    Log.info("进入交互模式... 按 Ctrl+D 发送 prompt... 按 Enter 换行... 按两次 Ctrl+D 退出...", module=MODULE)
     instance_lock = StateDirSingleInstanceLock(
         state_dir=build_interactive_state_dir(paths_config.workspace_dir),
         lock_file_name=".interactive.lock",
@@ -89,13 +81,40 @@ def run_interactive_command(args: argparse.Namespace) -> int:
         return 1
     try:
         try:
-            interactive_session_id, interactive_scene_name, should_print_restore_context = _resolve_interactive_target(
+            (
+                interactive_session_id,
+                interactive_scene_name,
+                should_print_restore_context,
+                label_created,
+            ) = _resolve_interactive_target(
                 args,
                 workspace_dir=paths_config.workspace_dir,
+                prompt_asset_store=getattr(paths_config, "prompt_asset_store", None),
+                host_admin_service=host_admin_service,
             )
         except ValueError as exc:
             Log.error(str(exc), module=MODULE)
             return 2
+        interactive_model = scene_execution_acceptance_preparer.resolve_scene_model(
+            interactive_scene_name,
+            execution_options,
+        )
+        Log.info(
+            "使用模型: "
+            f"{json.dumps(interactive_model, ensure_ascii=False, sort_keys=True)}",
+            module=MODULE,
+        )
+        Log.info("进入交互模式... 按 Ctrl+D 发送 prompt... 按 Enter 换行... 按两次 Ctrl+D 退出...", module=MODULE)
+        label = _resolve_interactive_label(args)
+        if label is not None:
+            Log.info(
+                (
+                    f"执行带标签 interactive，新创建标签: {label}"
+                    if label_created
+                    else f"执行带标签 interactive，恢复标签: {label}"
+                ),
+                module=MODULE,
+            )
         if should_print_restore_context:
             _print_interactive_session_restore_context(
                 host_admin_service=host_admin_service,
@@ -117,15 +136,19 @@ def _resolve_interactive_target(
     args: argparse.Namespace,
     *,
     workspace_dir: Path,
-) -> tuple[str, str, bool]:
+    prompt_asset_store: PromptAssetStoreProtocol | None = None,
+    host_admin_service: HostAdminServiceProtocol | None = None,
+) -> tuple[str, str, bool, bool]:
     """根据 CLI 参数解析 interactive 应进入的 session。
 
     Args:
         args: 解析后的命令行参数。
         workspace_dir: 工作区根目录。
+        prompt_asset_store: 可选 prompt 资产仓储；提供时会校验 scene 是否允许多轮会话。
+        host_admin_service: 可选 HostAdmin service；提供时会清理漂移 registry record。
 
     Returns:
-        三元组 ``(session_id, scene_name, should_print_restore_context)``。
+        四元组 ``(session_id, scene_name, should_print_restore_context, label_created)``。
 
     Raises:
         ValueError: 当 label 非法或 registry record 非法时抛出。
@@ -133,18 +156,21 @@ def _resolve_interactive_target(
 
     label = _resolve_interactive_label(args)
     if label is not None:
-        session_id, scene_name = _resolve_labeled_interactive_target(
+        session_id, scene_name, created = _resolve_labeled_interactive_target(
             args,
             workspace_dir=workspace_dir,
             label=label,
+            prompt_asset_store=prompt_asset_store,
+            host_admin_service=host_admin_service,
         )
-        return session_id, scene_name, True
+        return session_id, scene_name, True, created
     return (
         _resolve_interactive_session_id(
             workspace_dir,
             new_session=bool(getattr(args, "new_session", False)),
         ),
         _INTERACTIVE_SCENE_NAME,
+        False,
         False,
     )
 
@@ -173,16 +199,20 @@ def _resolve_labeled_interactive_target(
     *,
     workspace_dir: Path,
     label: str,
-) -> tuple[str, str]:
+    prompt_asset_store: PromptAssetStoreProtocol | None = None,
+    host_admin_service: HostAdminServiceProtocol | None = None,
+) -> tuple[str, str, bool]:
     """解析带 label 的 interactive 会话目标。
 
     Args:
         args: 解析后的命令行参数。
         workspace_dir: 工作区根目录。
         label: 已规范化的 conversation label。
+        prompt_asset_store: 可选 prompt 资产仓储；提供时会校验 scene 是否允许多轮会话。
+        host_admin_service: 可选 HostAdmin service；提供时会清理漂移 registry record。
 
     Returns:
-        二元组 ``(session_id, scene_name)``。
+        三元组 ``(session_id, scene_name, created)``。
 
     Raises:
         ValueError: 当 label 非法或 registry record 非法时抛出。
@@ -191,13 +221,18 @@ def _resolve_labeled_interactive_target(
     explicit_session_id = _resolve_label_session_id(args)
     explicit_scene_name = _resolve_label_scene_name(args)
     if explicit_session_id is not None:
-        return explicit_session_id, explicit_scene_name
+        return explicit_session_id, explicit_scene_name, False
     registry = FileConversationLabelRegistry(workspace_dir)
-    record = registry.get_or_create_record(
+    target = resolve_labeled_conversation_target(
+        registry=registry,
+        prompt_asset_store=prompt_asset_store,
         label=label,
-        scene_name=_INTERACTIVE_SCENE_NAME,
+        default_scene_name=_INTERACTIVE_SCENE_NAME,
+        explicit_session_id=explicit_session_id,
+        explicit_scene_name=explicit_scene_name,
+        host_admin_service=host_admin_service,
     )
-    return record.session_id, record.scene_name
+    return target.session_id, target.scene_name, target.created
 
 
 def _resolve_label_session_id(args: argparse.Namespace) -> str | None:

@@ -17,8 +17,11 @@ from dayu.cli.dependency_setup import (
 from dayu.cli.conversation_labels import FileConversationLabelRegistry
 from dayu.cli.interactive_ui import conversation_prompt as conversation_prompt_command
 from dayu.cli.interactive_ui import prompt as prompt_command
+from dayu.cli.labeled_conversations import resolve_labeled_conversation_target
 from dayu.execution.options import ExecutionOptions
 from dayu.log import Log
+from dayu.services.host_admin_service import HostAdminService
+from dayu.services.protocols import HostAdminServiceProtocol
 
 MODULE = "APP.PROMPT"
 _DEFAULT_LABELED_PROMPT_SCENE_NAME = "prompt_mt"
@@ -42,20 +45,9 @@ def run_prompt_command(args: argparse.Namespace) -> int:
     execution_options = _build_execution_options(args)
     label = _resolve_prompt_label(args)
     if label is not None:
-        try:
-            label_session_id, scene_name = _resolve_labeled_prompt_target(
-                args,
-                workspace_config=paths_config,
-                label=label,
-            )
-        except ValueError as exc:
-            Log.error(str(exc), module=MODULE)
-            return 2
         return _run_labeled_prompt_command(
             args,
             label=label,
-            label_session_id=label_session_id,
-            scene_name=scene_name,
             paths_config=paths_config,
             execution_options=execution_options,
         )
@@ -131,8 +123,6 @@ def _run_labeled_prompt_command(
     args: argparse.Namespace,
     *,
     label: str,
-    label_session_id: str,
-    scene_name: str,
     paths_config: WorkspaceConfig,
     execution_options: ExecutionOptions,
 ) -> int:
@@ -141,8 +131,6 @@ def _run_labeled_prompt_command(
     Args:
         args: 解析后的命令行参数。
         label: 用户显式提供的 label。
-        label_session_id: registry 解析得到的会话 ID。
-        scene_name: 当前 label 对应的 scene。
         paths_config: 已解析的路径配置。
         execution_options: 请求级执行覆盖参数。
 
@@ -175,6 +163,17 @@ def _run_labeled_prompt_command(
         scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
         fins_runtime=fins_runtime,
     )
+    host_admin_service = HostAdminService(host=host)
+    try:
+        label_session_id, scene_name, label_created = _resolve_labeled_prompt_target(
+            args,
+            workspace_config=paths_config,
+            label=label,
+            host_admin_service=host_admin_service,
+        )
+    except ValueError as exc:
+        Log.error(str(exc), module=MODULE)
+        return 2
     prompt_model = scene_execution_acceptance_preparer.resolve_scene_model(
         scene_name,
         execution_options,
@@ -185,12 +184,17 @@ def _run_labeled_prompt_command(
         module=MODULE,
     )
     Log.info(
-        f"执行带标签 prompt: label={label}, session_id={label_session_id}, scene={scene_name}",
+        (
+            f"执行带标签 prompt，新创建标签: {label}"
+            if label_created
+            else f"执行带标签 prompt，恢复标签: {label}"
+        ),
         module=MODULE,
     )
     return conversation_prompt_command(
         service,
         args.prompt,
+        label=label,
         session_id=label_session_id,
         scene_name=scene_name,
         ticker=paths_config.ticker,
@@ -242,16 +246,18 @@ def _resolve_labeled_prompt_target(
     *,
     workspace_config: WorkspaceConfig,
     label: str,
-) -> tuple[str, str]:
+    host_admin_service: HostAdminServiceProtocol | None = None,
+) -> tuple[str, str, bool]:
     """解析 labeled prompt 对应的 session 与 scene。
 
     Args:
         args: 解析后的命令行参数。
         workspace_config: 已解析的工作区配置。
         label: 已规范化的 conversation label。
+        host_admin_service: 可选 HostAdmin service；提供时会清理漂移 registry record。
 
     Returns:
-        二元组 `(session_id, scene_name)`。
+        三元组 `(session_id, scene_name, created)`。
 
     Raises:
         ValueError: 当 label 非法或 registry record 非法时抛出。
@@ -260,13 +266,18 @@ def _resolve_labeled_prompt_target(
     explicit_session_id = _resolve_label_session_id(args)
     explicit_scene_name = _resolve_labeled_prompt_scene_name(args)
     if explicit_session_id is not None:
-        return explicit_session_id, explicit_scene_name
+        return explicit_session_id, explicit_scene_name, False
     registry = FileConversationLabelRegistry(workspace_config.workspace_dir)
-    record = registry.get_or_create_record(
+    target = resolve_labeled_conversation_target(
+        registry=registry,
+        prompt_asset_store=workspace_config.prompt_asset_store,
         label=label,
-        scene_name=_DEFAULT_LABELED_PROMPT_SCENE_NAME,
+        default_scene_name=_DEFAULT_LABELED_PROMPT_SCENE_NAME,
+        explicit_session_id=explicit_session_id,
+        explicit_scene_name=explicit_scene_name,
+        host_admin_service=host_admin_service,
     )
-    return record.session_id, record.scene_name
+    return target.session_id, target.scene_name, target.created
 
 
 def _resolve_labeled_prompt_scene_name(args: argparse.Namespace) -> str:

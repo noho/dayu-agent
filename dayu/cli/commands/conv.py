@@ -28,14 +28,12 @@ from dayu.services.protocols import HostAdminServiceProtocol
 
 
 _LABEL_COLUMN_WIDTH = 20
-_SESSION_ID_COLUMN_WIDTH = 36
 _SOURCE_COLUMN_WIDTH = 10
 _SCENE_COLUMN_WIDTH = 16
 _STATE_COLUMN_WIDTH = 10
 _LAST_ACTIVITY_COLUMN_WIDTH = 20
 _OVERVIEW_COLUMN_WIDTH = 48
 _MISSING_VALUE = "-"
-_MISSING_SESSION_STATE = "missing"
 _EMPTY_LIST_MESSAGE = "无 labeled conversation 记录"
 
 
@@ -88,19 +86,30 @@ def _run_conv_list_command(args: argparse.Namespace) -> int:
     """
 
     registry, service = _build_conv_dependencies(args)
-    records = registry.list_records()
+    records = _load_existing_conv_records(
+        registry=registry,
+        service=service,
+    )
     if not records:
         print(_EMPTY_LIST_MESSAGE)
         return 0
 
+    show_all = bool(getattr(args, "show_all", False))
     sessions_by_id = {
         session.session_id: session
-        for session in service.list_sessions(source="cli")
+        for session in service.list_sessions(
+            state=None if show_all else "active",
+            source="cli",
+        )
     }
     rows = tuple(
-        _build_conversation_row(record=record, session=sessions_by_id.get(record.session_id))
+        _build_conversation_row(record=record, session=sessions_by_id[record.session_id])
         for record in records
+        if record.session_id in sessions_by_id
     )
+    if not rows:
+        print(_EMPTY_LIST_MESSAGE)
+        return 0
     _print_conversation_rows(rows)
     return 0
 
@@ -120,16 +129,25 @@ def _run_conv_status_command(args: argparse.Namespace) -> int:
 
     registry, service = _build_conv_dependencies(args)
     label = validate_conversation_label(str(getattr(args, "label", "") or ""))
-    record = registry.get_record(label)
+    record = _load_existing_conv_record(
+        registry=registry,
+        service=service,
+        label=label,
+    )
     if record is None:
+        print(f"label 不存在: {label}", file=sys.stderr)
+        return 1
+    session = service.get_session(record.session_id)
+    if session is None:
+        registry.delete_record(label)
         print(f"label 不存在: {label}", file=sys.stderr)
         return 1
 
     row = _build_conversation_row(
         record=record,
-        session=service.get_session(record.session_id),
+        session=session,
     )
-    _print_conversation_rows((row,))
+    _print_conversation_status(row)
     return 0
 
 
@@ -174,13 +192,13 @@ def _resolve_workspace_root(workspace_root: Path) -> Path:
 def _build_conversation_row(
     *,
     record: ConversationLabelRecord,
-    session: SessionAdminView | None,
+    session: SessionAdminView,
 ) -> ConversationRow:
     """把 registry record 与可选 Host session 拼装为渲染行。
 
     Args:
         record: CLI label registry 记录。
-        session: Host session 视图；缺失时为 `None`。
+        session: Host session 视图。
 
     Returns:
         可直接用于 CLI 表格输出的一行数据。
@@ -189,16 +207,6 @@ def _build_conversation_row(
         无。
     """
 
-    if session is None:
-        return ConversationRow(
-            label=record.label,
-            session_id=record.session_id,
-            source=record.source,
-            scene_name=record.scene_name,
-            state=_MISSING_SESSION_STATE,
-            last_activity_at=_MISSING_VALUE,
-            overview=_MISSING_VALUE,
-        )
     return ConversationRow(
         label=record.label,
         session_id=record.session_id,
@@ -208,6 +216,65 @@ def _build_conversation_row(
         last_activity_at=session.last_activity_at,
         overview=_resolve_conversation_overview(session),
     )
+
+
+def _load_existing_conv_records(
+    *,
+    registry: FileConversationLabelRegistry,
+    service: HostAdminServiceProtocol,
+) -> tuple[ConversationLabelRecord, ...]:
+    """加载并清理 registry 中仍对应 Host session 的 label 记录。
+
+    Args:
+        registry: CLI label registry。
+        service: HostAdmin service。
+
+    Returns:
+        仅包含仍有对应 Host session 的 registry record。
+
+    Raises:
+        ValueError: registry record 非法时抛出。
+        OSError: 清理漂移 record 失败时抛出。
+    """
+
+    records = registry.list_records()
+    matched_records: list[ConversationLabelRecord] = []
+    for record in records:
+        if service.get_session(record.session_id) is None:
+            registry.delete_record(record.label)
+            continue
+        matched_records.append(record)
+    return tuple(matched_records)
+
+
+def _load_existing_conv_record(
+    *,
+    registry: FileConversationLabelRegistry,
+    service: HostAdminServiceProtocol,
+    label: str,
+) -> ConversationLabelRecord | None:
+    """读取指定 label，并在命中漂移 record 时立即清理。
+
+    Args:
+        registry: CLI label registry。
+        service: HostAdmin service。
+        label: 待读取的 label。
+
+    Returns:
+        仍对应真实 Host session 的 registry record；不存在时返回 ``None``。
+
+    Raises:
+        ValueError: label 或 registry record 非法时抛出。
+        OSError: 清理漂移 record 失败时抛出。
+    """
+
+    record = registry.get_record(label)
+    if record is None:
+        return None
+    if service.get_session(record.session_id) is not None:
+        return record
+    registry.delete_record(label)
+    return None
 
 
 def _resolve_conversation_overview(session: SessionAdminView) -> str:
@@ -241,7 +308,6 @@ def _print_conversation_rows(rows: tuple[ConversationRow, ...]) -> None:
 
     header = (
         f"{_format_table_cell('LABEL', _LABEL_COLUMN_WIDTH)} "
-        f"{'SESSION_ID':<{_SESSION_ID_COLUMN_WIDTH}} "
         f"{'SOURCE':<{_SOURCE_COLUMN_WIDTH}} "
         f"{_format_table_cell('SCENE', _SCENE_COLUMN_WIDTH)} "
         f"{'STATE':<{_STATE_COLUMN_WIDTH}} "
@@ -253,10 +319,31 @@ def _print_conversation_rows(rows: tuple[ConversationRow, ...]) -> None:
     for row in rows:
         print(
             f"{_format_table_cell(row.label, _LABEL_COLUMN_WIDTH)} "
-            f"{row.session_id:<{_SESSION_ID_COLUMN_WIDTH}} "
             f"{row.source:<{_SOURCE_COLUMN_WIDTH}} "
             f"{_format_table_cell(row.scene_name, _SCENE_COLUMN_WIDTH)} "
             f"{row.state:<{_STATE_COLUMN_WIDTH}} "
             f"{_format_datetime_iso(row.last_activity_at):<{_LAST_ACTIVITY_COLUMN_WIDTH}} "
             f"{_format_table_cell(row.overview, _OVERVIEW_COLUMN_WIDTH)}"
         )
+
+
+def _print_conversation_status(row: ConversationRow) -> None:
+    """打印单个 labeled conversation 的明细视图。
+
+    Args:
+        row: 待打印的 conversation 行。
+
+    Returns:
+        无。
+
+    Raises:
+        无。
+    """
+
+    print(f"LABEL: {row.label}")
+    print(f"SESSION_ID: {row.session_id}")
+    print(f"SOURCE: {row.source}")
+    print(f"SCENE: {row.scene_name}")
+    print(f"STATE: {row.state}")
+    print(f"LAST_ACTIVITY: {_format_datetime_iso(row.last_activity_at)}")
+    print(f"OVERVIEW: {row.overview}")

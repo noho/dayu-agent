@@ -127,7 +127,6 @@ def _empty_conversation_session_digest() -> ConversationSessionDigest:
         turn_count=0,
         first_question_preview="",
         last_question_preview="",
-        conversation_summary="",
     )
 
 
@@ -395,7 +394,6 @@ class Host:
             turn_count=len(transcript.turns),
             first_question_preview=_truncate_conversation_preview(first_turn.user_text),
             last_question_preview=_truncate_conversation_preview(last_turn.user_text),
-            conversation_summary="",
         )
 
     def list_conversation_session_turn_excerpts(

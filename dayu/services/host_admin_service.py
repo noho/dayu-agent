@@ -125,7 +125,6 @@ def _to_session_view(
     turn_count: int,
     first_question_preview: str,
     last_question_preview: str,
-    conversation_summary: str,
 ) -> SessionAdminView:
     """把 Host 会话记录与 conversation 摘要转换为管理视图。
 
@@ -134,8 +133,6 @@ def _to_session_view(
         turn_count: 已持久化的 conversation turn 数量。
         first_question_preview: 第一轮问题预览。
         last_question_preview: 最后一轮问题预览。
-        conversation_summary: 会话概览。
-
     Returns:
         管理面会话视图。
 
@@ -159,7 +156,6 @@ def _to_session_view(
         turn_count=turn_count,
         first_question_preview=first_question_preview,
         last_question_preview=last_question_preview,
-        conversation_summary=conversation_summary,
     )
 
 
@@ -282,7 +278,6 @@ class HostAdminService(HostAdminServiceProtocol):
             turn_count=digest.turn_count,
             first_question_preview=digest.first_question_preview,
             last_question_preview=digest.last_question_preview,
-            conversation_summary=digest.conversation_summary,
         )
 
     def create_session(self, *, source: str = "web", scene_name: str | None = None) -> SessionAdminView:

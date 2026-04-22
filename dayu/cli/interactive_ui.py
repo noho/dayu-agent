@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -23,6 +24,7 @@ from dayu.services.contracts import ChatResumeRequest, ChatTurnRequest, PromptRe
 from dayu.services.protocols import ChatServiceProtocol, PromptServiceProtocol
 
 MODULE = "APP.INTERACTIVE"
+_WIDE_EAST_ASIAN_WIDTHS = frozenset(("F", "W"))
 
 
 
@@ -90,6 +92,46 @@ class _RenderState:
     line_open: bool = False
     final_content: str = ""
     filtered: bool = False
+
+
+def _measure_display_width(text: str) -> int:
+    """计算文本在等宽终端中的显示宽度。
+
+    Args:
+        text: 待计算文本。
+
+    Returns:
+        终端显示宽度；全角/宽字符按 2 列计算，其余字符按 1 列计算。
+
+    Raises:
+        无。
+    """
+
+    return sum(2 if unicodedata.east_asian_width(char) in _WIDE_EAST_ASIAN_WIDTHS else 1 for char in text)
+
+
+def _print_label_hint_box(label: str) -> None:
+    """在 prompt 输出末尾打印可恢复标签提示框。
+
+    Args:
+        label: 当前 conversation label。
+
+    Returns:
+        无。
+
+    Raises:
+        无。
+    """
+
+    line = f"标签: {label}"
+    line_width = _measure_display_width(line)
+    content_width = line_width + 2
+    trailing_padding_width = content_width - 1 - line_width
+    top_bottom = f"+{'-' * content_width}+"
+    middle = f"| {line}{' ' * trailing_padding_width}|"
+    print(top_bottom)
+    print(middle)
+    print(top_bottom)
 
 
 def _stop_spinner_if_needed(state: _RenderState) -> None:
@@ -623,6 +665,7 @@ def conversation_prompt(
     chat_service: ChatServiceProtocol,
     user_input: str,
     *,
+    label: str,
     session_id: str,
     scene_name: str,
     ticker: str | None = None,
@@ -634,6 +677,7 @@ def conversation_prompt(
     Args:
         chat_service: 已装配的聊天服务。
         user_input: 单次输入文本。
+        label: 当前可恢复对话标签。
         session_id: label registry 解析得到的确定性会话 ID。
         scene_name: 本轮 turn 使用的 scene 名称。
         ticker: 股票代码。
@@ -658,6 +702,7 @@ def conversation_prompt(
             show_thinking=show_thinking,
             show_waiting_spinner=not show_thinking,
         )
+        _print_label_hint_box(label)
     except ValueError as exc:
         Log.error(str(exc), module=MODULE)
         return 2

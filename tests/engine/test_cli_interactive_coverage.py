@@ -25,6 +25,8 @@ from dayu.cli import interactive_ui as app_interactive
 from dayu.cli.commands import interactive as interactive_command_module
 from dayu.cli.arg_parsing import _create_parser
 from dayu.cli.dependency_setup import setup_loglevel, setup_paths
+from dayu.startup.config_file_resolver import ConfigFileResolver
+from dayu.startup.prompt_assets import FilePromptAssetStore
 from dayu.contracts.events import AppEvent, AppEventType
 from dayu.execution.options import ExecutionOptions
 from dayu.engine.events import EventType, StreamEvent
@@ -248,7 +250,7 @@ def test_interactive_command_with_label_creates_registry_record(
 
     workspace = _build_workspace(tmp_path)
 
-    session_id, scene_name = interactive_command_module._resolve_labeled_interactive_target(
+    session_id, scene_name, created = interactive_command_module._resolve_labeled_interactive_target(
         Namespace(label="apple", label_session_id=None, label_scene_name=None),
         workspace_dir=workspace,
         label="apple",
@@ -258,6 +260,7 @@ def test_interactive_command_with_label_creates_registry_record(
     assert record is not None
     assert session_id == record.session_id
     assert scene_name == "interactive"
+    assert created is True
     assert record.scene_name == "interactive"
 
 
@@ -269,9 +272,9 @@ def test_interactive_command_with_label_reuses_existing_prompt_mt_scene(
 
     workspace = _build_workspace(tmp_path)
     registry = FileConversationLabelRegistry(workspace)
-    record = registry.get_or_create_record(label="apple", scene_name="prompt_mt")
+    record = registry.get_or_create_record(label="apple", scene_name="prompt_mt").record
 
-    session_id, scene_name = interactive_command_module._resolve_labeled_interactive_target(
+    session_id, scene_name, created = interactive_command_module._resolve_labeled_interactive_target(
         Namespace(label="apple", label_session_id=None, label_scene_name=None),
         workspace_dir=workspace,
         label="apple",
@@ -279,6 +282,81 @@ def test_interactive_command_with_label_reuses_existing_prompt_mt_scene(
 
     assert session_id == record.session_id
     assert scene_name == "prompt_mt"
+    assert created is False
+
+
+@pytest.mark.unit
+def test_interactive_command_with_label_prunes_missing_record_and_recreates_it(
+    tmp_path: Path,
+) -> None:
+    """验证 interactive 带 label 命中漂移 record 时会清理并按新建处理。"""
+
+    workspace = _build_workspace(tmp_path)
+    registry = FileConversationLabelRegistry(workspace)
+    stale_record = registry.get_or_create_record(label="apple", scene_name="prompt_mt").record
+
+    session_id, scene_name, created = interactive_command_module._resolve_labeled_interactive_target(
+        Namespace(label="apple", label_session_id=None, label_scene_name=None),
+        workspace_dir=workspace,
+        label="apple",
+        host_admin_service=cast(Any, SimpleNamespace(get_session=lambda _session_id: None)),
+    )
+    refreshed_record = registry.get_record("apple")
+
+    assert refreshed_record is not None
+    assert session_id == stale_record.session_id
+    assert session_id == refreshed_record.session_id
+    assert scene_name == "interactive"
+    assert refreshed_record.scene_name == "interactive"
+    assert created is True
+
+
+@pytest.mark.unit
+def test_interactive_command_with_label_rejects_non_conversational_scene(
+    tmp_path: Path,
+) -> None:
+    """验证 interactive 带 label 命中未开启多轮的 scene 时会直接报错。"""
+
+    workspace = _build_workspace(tmp_path)
+    config_root = workspace / "config"
+    manifests_dir = config_root / "prompts" / "manifests"
+    manifests_dir.mkdir(parents=True, exist_ok=True)
+    (manifests_dir / "prompt_mt.json").write_text(
+        json.dumps(
+            {
+                "scene": "prompt_mt",
+                "model": {
+                    "default_name": "mimo-v2-pro-thinking-plan",
+                    "allowed_names": ["mimo-v2-pro-thinking-plan"],
+                    "temperature_profile": "prompt",
+                },
+                "version": "v1",
+                "description": "bad prompt_mt",
+                "fragments": [
+                    {
+                        "id": "prompt_scene",
+                        "type": "SCENE",
+                        "path": "scenes/prompt_mt.md",
+                        "required": True,
+                        "order": 100,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry = FileConversationLabelRegistry(workspace)
+    registry.get_or_create_record(label="apple", scene_name="prompt_mt")
+    prompt_asset_store = FilePromptAssetStore(ConfigFileResolver(config_root))
+
+    with pytest.raises(ValueError, match="conversation.enabled=true"):
+        interactive_command_module._resolve_labeled_interactive_target(
+            Namespace(label="apple", label_session_id=None, label_scene_name=None),
+            workspace_dir=workspace,
+            label="apple",
+            prompt_asset_store=prompt_asset_store,
+            host_admin_service=None,
+        )
 
 
 @pytest.mark.unit
@@ -289,11 +367,11 @@ def test_interactive_command_without_label_keeps_state_json_restore(
 
     workspace = _build_workspace(tmp_path)
 
-    first_session_id, first_scene_name, first_should_print = interactive_command_module._resolve_interactive_target(
+    first_session_id, first_scene_name, first_should_print, first_created = interactive_command_module._resolve_interactive_target(
         Namespace(label=None, new_session=False, session_id=None),
         workspace_dir=workspace,
     )
-    second_session_id, second_scene_name, second_should_print = interactive_command_module._resolve_interactive_target(
+    second_session_id, second_scene_name, second_should_print, second_created = interactive_command_module._resolve_interactive_target(
         Namespace(label=None, new_session=False, session_id="ignored_session"),
         workspace_dir=workspace,
     )
@@ -303,6 +381,8 @@ def test_interactive_command_without_label_keeps_state_json_restore(
     assert second_scene_name == "interactive"
     assert first_should_print is False
     assert second_should_print is False
+    assert first_created is False
+    assert second_created is False
 
 
 @pytest.mark.unit
@@ -321,7 +401,7 @@ def test_interactive_command_ignores_session_id_path_without_label(
         lambda _workspace_dir, *, new_session: resolved_calls.append(new_session) or "state_session",
     )
 
-    session_id, scene_name, should_print_restore_context = interactive_command_module._resolve_interactive_target(
+    session_id, scene_name, should_print_restore_context, label_created = interactive_command_module._resolve_interactive_target(
         Namespace(label=None, new_session=False, session_id="interactive_existing"),
         workspace_dir=workspace,
     )
@@ -329,6 +409,7 @@ def test_interactive_command_ignores_session_id_path_without_label(
     assert session_id == "state_session"
     assert scene_name == "interactive"
     assert should_print_restore_context is False
+    assert label_created is False
     assert resolved_calls == [False]
 
 
@@ -354,7 +435,7 @@ def test_interactive_command_prints_restore_context_for_labeled_session(
 
     workspace = _build_workspace(tmp_path)
     registry = FileConversationLabelRegistry(workspace)
-    record = registry.get_or_create_record(label="apple", scene_name="prompt_mt")
+    record = registry.get_or_create_record(label="apple", scene_name="prompt_mt").record
     turn = SessionTurnExcerptView(
         user_text="上一轮问题",
         assistant_text="上一轮回答",
@@ -362,8 +443,99 @@ def test_interactive_command_prints_restore_context_for_labeled_session(
     )
     recent_turn_calls: list[tuple[str, int]] = []
     host_admin_service = SimpleNamespace(
+        get_session=lambda session_id: record if session_id == record.session_id else None,
         list_session_recent_turns=lambda session_id, *, limit: recent_turn_calls.append((session_id, limit)) or [turn],
     )
+    info_logs: list[str] = []
+    resolved_scene_names: list[str] = []
+    monkeypatch.setattr(interactive_command_module, "setup_loglevel", lambda _args: None)
+    monkeypatch.setattr(
+        interactive_command_module,
+        "setup_paths",
+        lambda _args: SimpleNamespace(workspace_dir=workspace),
+    )
+    monkeypatch.setattr(
+        interactive_command_module,
+        "_build_execution_options",
+        lambda _args: ExecutionOptions(),
+    )
+    monkeypatch.setattr(
+        interactive_command_module,
+        "_prepare_cli_host_dependencies",
+        lambda **_kwargs: (
+            None,
+            None,
+            SimpleNamespace(
+                resolve_scene_model=lambda scene_name, *_args: (
+                    resolved_scene_names.append(str(scene_name)) or {"name": f"{scene_name}-model"}
+                )
+            ),
+            object(),
+            None,
+        ),
+    )
+    monkeypatch.setattr(interactive_command_module, "_build_chat_service", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        interactive_command_module,
+        "HostAdminService",
+        lambda **_kwargs: host_admin_service,
+    )
+    monkeypatch.setattr(
+        interactive_command_module,
+        "StateDirSingleInstanceLock",
+        lambda **_kwargs: SimpleNamespace(acquire=lambda: None, release=lambda: None),
+    )
+    interactive_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        interactive_command_module,
+        "interactive",
+        lambda *_args, **kwargs: interactive_calls.append(dict(kwargs)),
+    )
+    monkeypatch.setattr(interactive_command_module.Log, "info", lambda message, **_kwargs: info_logs.append(str(message)))
+
+    exit_code = interactive_command_module.run_interactive_command(
+        Namespace(
+            label="apple",
+            label_session_id=None,
+            label_scene_name=None,
+            session_id="interactive_existing",
+            new_session=False,
+            thinking=False,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert recent_turn_calls == [(record.session_id, 1)]
+    assert interactive_calls == [
+        {
+            "session_id": record.session_id,
+            "scene_name": "prompt_mt",
+            "execution_options": ExecutionOptions(),
+            "show_thinking": False,
+        }
+    ]
+    assert "上一轮对话" in captured.out
+    assert "上一轮问题" in captured.out
+    assert "上一轮回答" in captured.out
+    assert "对话恢复" in captured.out
+    assert resolved_scene_names == ["prompt_mt"]
+    assert any("执行带标签 interactive，恢复标签: apple" in item for item in info_logs)
+    assert any('使用模型: {"name": "prompt_mt-model"}' in item for item in info_logs)
+
+
+@pytest.mark.unit
+def test_interactive_command_logs_create_label_for_new_labeled_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证 interactive 首次创建 label 时会打印新创建标签提示。"""
+
+    workspace = _build_workspace(tmp_path)
+    info_logs: list[str] = []
+    interactive_calls: list[dict[str, object]] = []
+    host_admin_service = SimpleNamespace(list_session_recent_turns=lambda _session_id, *, limit: [])
+
     monkeypatch.setattr(interactive_command_module, "setup_loglevel", lambda _args: None)
     monkeypatch.setattr(
         interactive_command_module,
@@ -397,39 +569,27 @@ def test_interactive_command_prints_restore_context_for_labeled_session(
         "StateDirSingleInstanceLock",
         lambda **_kwargs: SimpleNamespace(acquire=lambda: None, release=lambda: None),
     )
-    interactive_calls: list[dict[str, object]] = []
     monkeypatch.setattr(
         interactive_command_module,
         "interactive",
         lambda *_args, **kwargs: interactive_calls.append(dict(kwargs)),
     )
+    monkeypatch.setattr(interactive_command_module.Log, "info", lambda message, **_kwargs: info_logs.append(str(message)))
 
     exit_code = interactive_command_module.run_interactive_command(
         Namespace(
-            label="apple",
+            label="fresh",
             label_session_id=None,
             label_scene_name=None,
-            session_id="interactive_existing",
+            session_id=None,
             new_session=False,
             thinking=False,
         )
     )
 
-    captured = capsys.readouterr()
     assert exit_code == 0
-    assert recent_turn_calls == [(record.session_id, 1)]
-    assert interactive_calls == [
-        {
-            "session_id": record.session_id,
-            "scene_name": "prompt_mt",
-            "execution_options": ExecutionOptions(),
-            "show_thinking": False,
-        }
-    ]
-    assert "上一轮对话" in captured.out
-    assert "上一轮问题" in captured.out
-    assert "上一轮回答" in captured.out
-    assert "对话恢复" in captured.out
+    assert interactive_calls
+    assert any("执行带标签 interactive，新创建标签: fresh" in item for item in info_logs)
 
 
 @pytest.mark.unit
@@ -1466,6 +1626,41 @@ def test_prompt_passes_execution_options_into_prompt_request(
     assert result == 0
     assert len(fake_session_cls.request_log) == 1
     assert fake_session_cls.request_log[0].execution_options == execution_options
+
+
+@pytest.mark.unit
+def test_conversation_prompt_prints_label_hint_box(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """验证带标签的 conversation prompt 会在结尾打印标签提示框。"""
+
+    fake_session_cls = _build_event_session(
+        [
+            StreamEvent(type=EventType.FINAL_ANSWER, data={"content": "done", "degraded": False}, metadata={}),
+        ]
+    )
+    agent_session = fake_session_cls.create()
+
+    monkeypatch.setattr(
+        app_interactive,
+        "_SpinnerController",
+        lambda label="Waiting": SimpleNamespace(start=lambda: None, stop=lambda: None),
+    )
+
+    result = app_interactive.conversation_prompt(
+        agent_session,
+        "测试问题",
+        label="ppmt",
+        session_id="cli_conv_ppmt",
+        scene_name="prompt_mt",
+    )
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "done" in captured.out
+    assert "+------------+" in captured.out
+    assert "| 标签: ppmt |" in captured.out
 
 
 @pytest.mark.unit

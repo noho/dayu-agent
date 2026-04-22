@@ -146,6 +146,8 @@ dayu-cli init
 6. 自动检测 HuggingFace 官方 Hub 连通性：不可达时默认启用镜像加速（`HF_ENDPOINT`），可达时默认跳过；均可手动选择。可选配置 `HF_TOKEN` 提升下载稳定性。
 7. 首次初始化完成后，自动预热一次 CLI 运行时；若预热失败，不影响工作区初始化成功，但后续首次运行 `prompt` / `interactive` / `write` 时可能更慢。
 
+如果工作区已经存在 `config/` 且你没有传 `--overwrite`，`init` 不会重置现有配置；但会增量补齐包内后来新增、而本地尚未存在的 `workspace/config/prompts/**` 资产。这个路径适合给老 workspace 补 `prompt_mt.json`、`prompt_mt.md` 之类的新 prompt 资产，同时保留你本地已经改过的模型配置。
+
 可选参数：
 
 ```bash
@@ -265,7 +267,7 @@ dayu-cli <subcommand> [参数]
 说明：
 - `--log-level`、`--debug`、`--verbose`、`--info`、`--quiet` 是同一组日志参数，使用其一即可。
 - `prompt`、`interactive`、`write` 还支持更多 Agent 运行参数，例如 `--tool-timeout-seconds`、`--max-iterations`、`--doc-limits-json`、`--fins-limits-json`；需要时可用 `dayu-cli <subcommand> --help` 查看完整列表。
-- 宿主管理命令同样支持 `--base` / `--config` / 日志参数；例如 `dayu-cli host --base ./workspace status`、`dayu-cli sessions --base ./workspace --source cli --scene interactive`、`dayu-cli conv list --base ./workspace`。
+- 宿主管理命令同样支持 `--base` / `--config` / 日志参数；例如 `dayu-cli host --base ./workspace status`、`dayu-cli sessions --base ./workspace --source cli --scene interactive`、`dayu-cli conv --base ./workspace list`。
 - `interactive` 默认会续接本地绑定的同一个多轮会话；如果上一次回答还没完整回显到终端，重启 CLI 会先把那次回答补完，再进入新的输入循环。
 
 ### 2.2 WeChat 入口
@@ -519,7 +521,9 @@ dayu-cli interactive --verbose
 - `interactive` 会把当前会话绑定保存在 `<workspace>/.dayu/interactive/state.json`，重新启动时默认续接上一次会话历史。
 - 如果你想从头开始一轮新的对话，显式传 `--new-session`；它会丢弃本地保存的旧会话绑定，改为新开一个会话。
 - 如果你想显式复用某条长期对话，使用 `--label`。同一个 label 可在 `prompt --label` 与 `interactive --label` 之间互通；第一次通过 `prompt --label` 创建的会话底层 scene 为 `prompt_mt`，第一次通过 `interactive --label` 创建的会话底层 scene 为 `interactive`，之后恢复时沿用首次创建时的 scene。
-- 如果你想查看底层 Host session，可用 `dayu-cli sessions --source cli --scene interactive` 或 `dayu-cli sessions --source cli --scene prompt_mt`；如果你想查看 label 到会话的映射，使用 `dayu-cli conv list` 和 `dayu-cli conv status --label <label>`。
+- 带 `--label` 的 CLI 启动时，会明确提示当前是“新创建标签”还是“恢复标签”；`prompt --label` 在回答末尾还会再次打印标签提示框，方便你后续继续复用同一个 label。
+- 如果你在 workspace 本地覆写了 `prompt_mt` 或其他带 label 会命中的 scene manifest，必须保留 `conversation.enabled=true`；否则 CLI 会直接拒绝执行该 labeled conversation。
+- 如果你想查看底层 Host session，可用 `dayu-cli sessions --source cli --scene interactive` 或 `dayu-cli sessions --source cli --scene prompt_mt`；如果你想查看 label 到会话的映射，使用 `dayu-cli conv list`、`dayu-cli conv --all list` 和 `dayu-cli conv status --label <label>`。其中 `conv list` 默认只展示 active 的 labeled conversation，`conv --all list` 额外包含已关闭对话；若某个 label 的 registry record 已漂移到不存在的 Host session，CLI 会先自动清理再继续执行，不再展示 `missing`。若你需要诊断底层 `session_id`，请用 `conv status --label <label>` 或直接查看 `sessions`。
 - 默认不回显模型思考过程；如需在终端查看，显式传 `--thinking`。
 
 ### 3.5 微信对话 daemon：
@@ -1117,6 +1121,7 @@ dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.html
 
 - `workspace/config/prompts/manifests/prompt.json`
 - `workspace/config/prompts/manifests/interactive.json`
+- `workspace/config/prompts/manifests/prompt_mt.json`
 - `workspace/config/prompts/manifests/write.json`
 - `workspace/config/prompts/manifests/audit.json`
 - `workspace/config/prompts/manifests/confirm.json`

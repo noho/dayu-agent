@@ -78,13 +78,14 @@ def test_registry_get_or_create_creates_record_and_get_record_reuses_it(tmp_path
     created = registry.get_or_create_record(label="apple-1", scene_name="prompt_mt")
     loaded = registry.get_record("apple-1")
 
-    assert loaded == created
-    assert created.label == "apple-1"
-    assert created.session_id == build_cli_conversation_session_id("apple-1")
-    assert created.source == CLI_CONVERSATION_SOURCE
-    assert created.scene_name == "prompt_mt"
-    assert created.created_at == created.updated_at
-    assert created.created_at.endswith("Z")
+    assert loaded == created.record
+    assert created.created is True
+    assert created.record.label == "apple-1"
+    assert created.record.session_id == build_cli_conversation_session_id("apple-1")
+    assert created.record.source == CLI_CONVERSATION_SOURCE
+    assert created.record.scene_name == "prompt_mt"
+    assert created.record.created_at == created.record.updated_at
+    assert created.record.created_at.endswith("Z")
 
 
 def test_registry_get_or_create_returns_existing_record_without_overwriting_scene(tmp_path: Path) -> None:
@@ -95,8 +96,10 @@ def test_registry_get_or_create_returns_existing_record_without_overwriting_scen
     first = registry.get_or_create_record(label="apple", scene_name="interactive")
     second = registry.get_or_create_record(label="apple", scene_name="prompt_mt")
 
-    assert second == first
-    assert second.scene_name == "interactive"
+    assert first.created is True
+    assert second.created is False
+    assert second.record == first.record
+    assert second.record.scene_name == "interactive"
 
 
 def test_registry_list_records_returns_label_sorted_result(tmp_path: Path) -> None:
@@ -110,6 +113,28 @@ def test_registry_list_records_returns_label_sorted_result(tmp_path: Path) -> No
     records = registry.list_records()
 
     assert tuple(record.label for record in records) == ("alpha", "bravo", "charlie")
+
+
+def test_registry_delete_record_removes_existing_label(tmp_path: Path) -> None:
+    """delete_record 命中现有 label 时应删除对应文件。"""
+
+    registry = FileConversationLabelRegistry(tmp_path)
+    registry.get_or_create_record(label="alpha", scene_name="interactive")
+
+    deleted = registry.delete_record("alpha")
+
+    assert deleted is True
+    assert registry.get_record("alpha") is None
+
+
+def test_registry_delete_record_returns_false_when_label_is_absent(tmp_path: Path) -> None:
+    """delete_record 命中缺失 label 时应返回 False。"""
+
+    registry = FileConversationLabelRegistry(tmp_path)
+
+    deleted = registry.delete_record("alpha")
+
+    assert deleted is False
 
 
 def test_registry_rejects_invalid_label_when_loading(tmp_path: Path) -> None:
