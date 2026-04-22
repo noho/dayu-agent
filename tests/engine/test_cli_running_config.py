@@ -15,6 +15,7 @@ import pytest
 
 from dayu.contracts.cancellation import CancelledError
 from dayu.cli.arg_parsing import parse_arguments
+from dayu.cli.conversation_labels import FileConversationLabelRegistry
 from dayu.cli.commands.interactive import run_interactive_command
 from dayu.cli.commands.prompt import run_prompt_command
 from dayu.cli.commands.write import run_write_command
@@ -685,6 +686,17 @@ def test_main_dispatches_host_command(monkeypatch: pytest.MonkeyPatch, tmp_path:
 
 
 @pytest.mark.unit
+def test_main_dispatches_conv_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`conv` 子命令应直接分发到 conv 命令入口。"""
+
+    args = Namespace(command="conv")
+    monkeypatch.setattr("dayu.cli.main.parse_arguments", partial(_return_value, args))
+    monkeypatch.setattr("dayu.cli.commands.conv.run_conv_command", lambda _args: 13)
+
+    assert main() == 13
+
+
+@pytest.mark.unit
 def test_main_dispatches_init_without_runtime_setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """`init` 子命令不应触发运行时装配路径。"""
 
@@ -1350,6 +1362,29 @@ def test_parse_arguments_supports_prompt_command(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.unit
+def test_parse_arguments_supports_prompt_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 prompt 子命令支持 `--label`。"""
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cli.py",
+            "prompt",
+            "继续追问",
+            "--label",
+            "apple",
+        ],
+    )
+
+    parsed = parse_arguments()
+
+    assert parsed.command == "prompt"
+    assert parsed.prompt == "继续追问"
+    assert parsed.label == "apple"
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     ("argv", "ticker"),
     [
@@ -1444,6 +1479,51 @@ def test_parse_arguments_supports_no_thinking_for_interactive(monkeypatch: pytes
     assert getattr(parsed, "ticker", None) is None
     assert parsed.thinking is False
     assert parsed.model_name is None
+
+
+@pytest.mark.unit
+def test_parse_arguments_supports_interactive_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 interactive 子命令支持 `--label`。"""
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cli.py",
+            "interactive",
+            "--label",
+            "alpha",
+        ],
+    )
+
+    parsed = parse_arguments()
+
+    assert parsed.command == "interactive"
+    assert parsed.label == "alpha"
+    assert parsed.new_session is False
+
+
+@pytest.mark.unit
+def test_parse_arguments_supports_conv_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 conv 子命令支持 `status --label`。"""
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cli.py",
+            "conv",
+            "status",
+            "--label",
+            "alpha",
+        ],
+    )
+
+    parsed = parse_arguments()
+
+    assert parsed.command == "conv"
+    assert parsed.conv_action == "status"
+    assert parsed.label == "alpha"
 
 
 @pytest.mark.unit
@@ -2722,11 +2802,11 @@ def test_run_prompt_command_labeled_prompt_respects_existing_scene_name(
 
 
 @pytest.mark.unit
-def test_run_prompt_command_rejects_labeled_prompt_without_label_session_id(
+def test_run_prompt_command_labeled_prompt_resolves_registry_when_session_id_missing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """验证带 label 但缺少 session_id 时会明确报错并拒绝静默回退。"""
+    """验证带 label 且未注入 session_id 时会通过 registry 自动解析。"""
 
     workspace_config = WorkspaceConfig(
         workspace_dir=tmp_path,
@@ -2748,7 +2828,13 @@ def test_run_prompt_command_rejects_labeled_prompt_without_label_session_id(
         label_session_id=None,
         label_scene_name=None,
     )
-    errors: list[str] = []
+    prompt_kwargs: dict[str, object] = {}
+
+    def _capture_prompt(*_args: object, **kwargs: object) -> int:
+        """记录 conversation prompt 调用参数并返回固定退出码。"""
+
+        prompt_kwargs.update(kwargs)
+        return 14
 
     monkeypatch.setattr("dayu.cli.commands.prompt.setup_loglevel", lambda _args: None)
     monkeypatch.setattr("dayu.cli.commands.prompt.setup_paths", partial(_return_value, workspace_config))
@@ -2756,14 +2842,29 @@ def test_run_prompt_command_rejects_labeled_prompt_without_label_session_id(
         "dayu.cli.commands.prompt._build_execution_options",
         lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
     )
-    monkeypatch.setattr("dayu.cli.commands.prompt.Log.error", lambda message, **_kwargs: errors.append(str(message)))
+    fake_dependencies = _FakeCliHostDependencies(
+        running_config=RunningConfig(
+            runner_running_config=AsyncOpenAIRunnerRunningConfig(),
+            agent_running_config=AgentRunningConfig(),
+            doc_tool_limits=DocToolLimits(),
+            fins_tool_limits=FinsToolLimits(),
+            web_tools_config=WebToolsConfig(provider="auto"),
+            tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        ),
+        scene_model_names={"prompt_mt": "scene-prompt-mt-model"},
+    )
     monkeypatch.setattr(
         "dayu.cli.commands.prompt._prepare_cli_host_dependencies",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected host preparation")),
+        lambda **_kwargs: fake_dependencies.as_tuple(),
     )
+    monkeypatch.setattr("dayu.cli.commands.prompt._build_chat_service", lambda **_kwargs: object())
+    monkeypatch.setattr("dayu.cli.commands.prompt.conversation_prompt_command", _capture_prompt)
 
-    assert run_prompt_command(args) == 2
-    assert errors == ["labeled prompt 缺少 label_session_id，无法继续: label=apple"]
+    assert run_prompt_command(args) == 14
+    record = FileConversationLabelRegistry(tmp_path).get_record("apple")
+    assert record is not None
+    assert prompt_kwargs["session_id"] == record.session_id
+    assert prompt_kwargs["scene_name"] == "prompt_mt"
 
 
 @pytest.mark.unit

@@ -17,17 +17,12 @@ from dayu.host.protocols import EventSubscription, HostAdminOperationsProtocol
 from dayu.services.contracts import (
     HostCleanupResult,
     HostStatusView,
-    InteractiveSessionAdminView,
-    InteractiveSessionTurnView,
     LaneStatusView,
     RunAdminView,
     SessionAdminView,
     SessionTurnExcerptView,
 )
 from dayu.services.protocols import HostAdminServiceProtocol
-
-
-_INTERACTIVE_SCENE_NAME = "interactive"
 
 
 def _parse_session_state(state: str | None) -> SessionState | None:
@@ -192,31 +187,6 @@ def _to_session_turn_excerpt_view(
         user_text=user_text,
         assistant_text=assistant_text,
         created_at=created_at,
-    )
-
-
-def _to_interactive_session_view(view: SessionAdminView) -> InteractiveSessionAdminView:
-    """把通用会话 digest 视图收缩为旧 interactive 视图。
-
-    Args:
-        view: 通用会话 digest 视图。
-
-    Returns:
-        旧 interactive 视图。
-
-    Raises:
-        无。
-    """
-
-    return InteractiveSessionAdminView(
-        session_id=view.session_id,
-        state=view.state,
-        created_at=view.created_at,
-        last_activity_at=view.last_activity_at,
-        turn_count=view.turn_count,
-        first_question_preview=view.first_question_preview,
-        last_question_preview=view.last_question_preview,
-        conversation_summary=view.conversation_summary,
     )
 
 
@@ -399,49 +369,6 @@ class HostAdminService(HostAdminServiceProtocol):
             )
             for excerpt in excerpts
         ]
-
-    def list_interactive_sessions(self, *, state: str | None = None) -> list[InteractiveSessionAdminView]:
-        """列出 interactive 会话摘要。
-
-        Args:
-            state: 可选状态过滤。
-
-        Returns:
-            interactive 会话摘要视图列表。
-
-        Raises:
-            ValueError: 状态值非法时抛出。
-        """
-
-        return [
-            _to_interactive_session_view(view)
-            for view in self.list_sessions(
-                state=state,
-                source=SessionSource.CLI.value,
-                scene=_INTERACTIVE_SCENE_NAME,
-            )
-        ]
-
-    def list_interactive_session_recent_turns(
-        self,
-        session_id: str,
-        *,
-        limit: int = 1,
-    ) -> list[InteractiveSessionTurnView]:
-        """列出 interactive 会话最近对话轮次。
-
-        Args:
-            session_id: 会话 ID。
-            limit: 最多返回的轮次数量。
-
-        Returns:
-            最近对话轮次，按时间从旧到新排列。
-
-        Raises:
-            无。
-        """
-
-        return self.list_session_recent_turns(session_id, limit=limit)
 
     def get_session(self, session_id: str) -> SessionAdminView | None:
         """获取单个宿主会话。

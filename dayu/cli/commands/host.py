@@ -28,10 +28,11 @@ from dayu.workspace_paths import build_conversation_store_dir
 
 _SESSION_ID_COLUMN_WIDTH = 36
 _SESSION_SOURCE_COLUMN_WIDTH = 10
+_SESSION_SCENE_COLUMN_WIDTH = 14
 _SESSION_STATE_COLUMN_WIDTH = 10
 _SESSION_DATETIME_COLUMN_WIDTH = 20
-_INTERACTIVE_TURNS_COLUMN_WIDTH = 5
-_INTERACTIVE_OVERVIEW_COLUMN_WIDTH = 48
+_SESSION_TURNS_COLUMN_WIDTH = 5
+_SESSION_OVERVIEW_COLUMN_WIDTH = 48
 _TABLE_TRUNCATION_SUFFIX = "..."
 _WIDE_EAST_ASIAN_WIDTHS = frozenset(("F", "W"))
 
@@ -165,13 +166,11 @@ def _run_sessions_command(args: argparse.Namespace) -> int:
         print(f"已关闭 session {session_id}，取消了 {len(cancelled_run_ids)} 个活跃 run")
         return 0
 
-    if bool(getattr(args, "interactive", False)):
-        return _run_interactive_sessions_command(args, service)
-
-    if args.show_all:
-        sessions = service.list_sessions()
-    else:
-        sessions = service.list_sessions(state="active")
+    sessions = service.list_sessions(
+        state=None if args.show_all else "active",
+        source=getattr(args, "source", None),
+        scene=getattr(args, "scene", None),
+    )
 
     if not sessions:
         print("无会话记录")
@@ -180,81 +179,39 @@ def _run_sessions_command(args: argparse.Namespace) -> int:
     header = (
         f"{'SESSION_ID':<{_SESSION_ID_COLUMN_WIDTH}} "
         f"{'SOURCE':<{_SESSION_SOURCE_COLUMN_WIDTH}} "
+        f"{_format_table_cell('SCENE', _SESSION_SCENE_COLUMN_WIDTH)} "
         f"{'STATE':<{_SESSION_STATE_COLUMN_WIDTH}} "
-        f"{'CREATED':<{_SESSION_DATETIME_COLUMN_WIDTH}} "
-        f"{'LAST_ACTIVITY':<{_SESSION_DATETIME_COLUMN_WIDTH}}"
-    )
-    print(header)
-    print("-" * len(header))
-    for session in sessions:
-        print(
-            f"{session.session_id:<{_SESSION_ID_COLUMN_WIDTH}} "
-            f"{session.source:<{_SESSION_SOURCE_COLUMN_WIDTH}} "
-            f"{session.state:<{_SESSION_STATE_COLUMN_WIDTH}} "
-            f"{_format_datetime_iso(session.created_at):<{_SESSION_DATETIME_COLUMN_WIDTH}} "
-            f"{_format_datetime_iso(session.last_activity_at):<{_SESSION_DATETIME_COLUMN_WIDTH}}"
-        )
-    return 0
-
-
-def _run_interactive_sessions_command(
-    args: argparse.Namespace,
-    service: HostAdminServiceProtocol,
-) -> int:
-    """执行 interactive 会话列表展示。
-
-    Args:
-        args: 命令行参数。
-        service: 宿主管理服务。
-
-    Returns:
-        退出码。
-
-    Raises:
-        无。
-    """
-
-    sessions = service.list_interactive_sessions(
-        state=None if bool(getattr(args, "show_all", False)) else "active"
-    )
-    if not sessions:
-        print("无 interactive 会话记录")
-        return 0
-    header = (
-        f"{'SESSION_ID':<{_SESSION_ID_COLUMN_WIDTH}} "
-        f"{'STATE':<{_SESSION_STATE_COLUMN_WIDTH}} "
-        f"{'TURNS':>{_INTERACTIVE_TURNS_COLUMN_WIDTH}} "
+        f"{'TURNS':>{_SESSION_TURNS_COLUMN_WIDTH}} "
         f"{'LAST_ACTIVITY':<{_SESSION_DATETIME_COLUMN_WIDTH}} "
-        f"{_format_table_cell('OVERVIEW', _INTERACTIVE_OVERVIEW_COLUMN_WIDTH)}"
+        f"{_format_table_cell('OVERVIEW', _SESSION_OVERVIEW_COLUMN_WIDTH)}"
     )
     print(header)
     print("-" * len(header))
     for session in sessions:
-        overview = _resolve_interactive_session_overview(
-            conversation_summary=session.conversation_summary,
+        overview = _resolve_session_overview(
             first_question_preview=session.first_question_preview,
             last_question_preview=session.last_question_preview,
         )
         print(
             f"{session.session_id:<{_SESSION_ID_COLUMN_WIDTH}} "
+            f"{session.source:<{_SESSION_SOURCE_COLUMN_WIDTH}} "
+            f"{_format_table_cell(session.scene_name or '-', _SESSION_SCENE_COLUMN_WIDTH)} "
             f"{session.state:<{_SESSION_STATE_COLUMN_WIDTH}} "
-            f"{session.turn_count:>{_INTERACTIVE_TURNS_COLUMN_WIDTH}} "
+            f"{session.turn_count:>{_SESSION_TURNS_COLUMN_WIDTH}} "
             f"{_format_datetime_iso(session.last_activity_at):<{_SESSION_DATETIME_COLUMN_WIDTH}} "
-            f"{_format_table_cell(overview, _INTERACTIVE_OVERVIEW_COLUMN_WIDTH)}"
+            f"{_format_table_cell(overview, _SESSION_OVERVIEW_COLUMN_WIDTH)}"
         )
     return 0
 
 
-def _resolve_interactive_session_overview(
+def _resolve_session_overview(
     *,
-    conversation_summary: str,
     first_question_preview: str,
     last_question_preview: str,
 ) -> str:
-    """解析 interactive 会话列表中的概览文本。
+    """解析会话列表中的概览文本。
 
     Args:
-        conversation_summary: 会话摘要文本。
         first_question_preview: 首轮用户问题预览。
         last_question_preview: 最后一轮用户问题预览。
 
@@ -265,7 +222,7 @@ def _resolve_interactive_session_overview(
         无。
     """
 
-    return conversation_summary or first_question_preview or last_question_preview or "-"
+    return first_question_preview or last_question_preview or "-"
 
 
 def _format_table_cell(text: str, width: int) -> str:

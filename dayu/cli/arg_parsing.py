@@ -589,15 +589,15 @@ def _create_parser() -> argparse.ArgumentParser:
     _add_thinking_args(interactive_parser)
     interactive_session_group = interactive_parser.add_mutually_exclusive_group()
     interactive_session_group.add_argument(
+        "--label",
+        type=str,
+        default=None,
+        help="恢复或创建指定 label 的可复用对话。",
+    )
+    interactive_session_group.add_argument(
         "--new-session",
         action="store_true",
         help="删除当前 interactive 会话绑定，并从新会话开始。",
-    )
-    interactive_session_group.add_argument(
-        "--session-id",
-        type=str,
-        default=None,
-        help="恢复并绑定指定的历史 interactive session。",
     )
 
     prompt_parser = subparsers.add_parser("prompt", help="执行单次 prompt 并输出结果")
@@ -612,6 +612,12 @@ def _create_parser() -> argparse.ArgumentParser:
         "prompt",
         type=str,
         help="单次执行的 prompt 文本",
+    )
+    prompt_parser.add_argument(
+        "--label",
+        type=str,
+        default=None,
+        help="把本次 prompt 绑定到指定 label 的可复用对话。",
     )
     _add_model_name_arg(
         prompt_parser,
@@ -692,7 +698,8 @@ def _register_host_subcommands(subparsers: argparse._SubParsersAction[DayuCliArg
     sessions_parser = subparsers.add_parser("sessions", help="管理会话")
     _add_global_args(sessions_parser)
     sessions_parser.add_argument("--all", action="store_true", dest="show_all", help="列出全部会话（含已关闭）")
-    sessions_parser.add_argument("--interactive", action="store_true", help="只列出 interactive 会话并显示摘要")
+    sessions_parser.add_argument("--source", type=str, default=None, help="按 source 过滤会话")
+    sessions_parser.add_argument("--scene", type=str, default=None, help="按 scene 过滤会话")
     sessions_subparsers = sessions_parser.add_subparsers(dest="sessions_action")
     close_parser = sessions_subparsers.add_parser("close", help="关闭会话")
     close_parser.add_argument("session_id", help="要关闭的 session ID")
@@ -712,6 +719,13 @@ def _register_host_subcommands(subparsers: argparse._SubParsersAction[DayuCliArg
     host_subparsers = host_parser.add_subparsers(dest="host_action")
     host_subparsers.add_parser("cleanup", help="清理孤儿 run 和过期 permit")
     host_subparsers.add_parser("status", help="显示宿主状态")
+
+    conv_parser = subparsers.add_parser("conv", help="管理带 label 的可恢复对话")
+    _add_global_args(conv_parser)
+    conv_subparsers = conv_parser.add_subparsers(dest="conv_action", required=True)
+    conv_subparsers.add_parser("list", help="列出全部 label 对话")
+    status_parser = conv_subparsers.add_parser("status", help="查看指定 label 对话状态")
+    status_parser.add_argument("--label", required=True, help="要查看的对话 label")
 
 
 def parse_arguments() -> argparse.Namespace:

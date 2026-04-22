@@ -17,7 +17,7 @@ from dayu.host.executor import DefaultHostExecutor
 from dayu.host.host import Host
 from dayu.host.host_store import HostStore
 from dayu.host.session_registry import SQLiteSessionRegistry
-from dayu.services.contracts import InteractiveSessionAdminView, RunAdminView, SessionAdminView
+from dayu.services.contracts import RunAdminView, SessionAdminView
 from dayu.services.host_admin_service import HostAdminService
 from dayu.services.protocols import HostAdminServiceProtocol
 
@@ -85,13 +85,14 @@ def test_register_host_subcommands_can_attach_global_args() -> None:
 
     host_args = parser.parse_args(["host", "status"])
     sessions_args = parser.parse_args(["sessions"])
-    interactive_sessions_args = parser.parse_args(["sessions", "--interactive"])
+    filtered_sessions_args = parser.parse_args(["sessions", "--source", "cli", "--scene", "interactive"])
 
     assert host_args.base == "./workspace"
     assert host_args.log_level is None
     assert sessions_args.base == "./workspace"
     assert sessions_args.config is None
-    assert interactive_sessions_args.interactive is True
+    assert filtered_sessions_args.source == "cli"
+    assert filtered_sessions_args.scene == "interactive"
 
 
 @pytest.mark.unit
@@ -275,6 +276,8 @@ def test_run_sessions_command_does_not_render_ticker_column(
         argparse.Namespace(
             show_all=True,
             sessions_action=None,
+            source=None,
+            scene=None,
             base="./workspace",
             config=None,
         )
@@ -285,18 +288,23 @@ def test_run_sessions_command_does_not_render_ticker_column(
     assert "TICKER" not in captured.out
     assert "SESSION_ID" in captured.out
     assert "SOURCE" in captured.out
+    assert "SCENE" in captured.out
+    assert "TURNS" in captured.out
+    assert "OVERVIEW" in captured.out
 
 
 @pytest.mark.unit
-def test_run_sessions_command_renders_interactive_summary(
+def test_run_sessions_command_renders_generic_session_digest(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`sessions --interactive` 应展示 interactive 摘要视图。"""
+    """`sessions` 应展示通用会话摘要视图。"""
 
-    session = InteractiveSessionAdminView(
+    session = SessionAdminView(
         session_id="interactive_test",
+        source="cli",
         state="active",
+        scene_name="interactive",
         created_at="2026-04-03T08:00:00+00:00",
         last_activity_at="2026-04-03T08:05:00+00:00",
         turn_count=2,
@@ -304,9 +312,10 @@ def test_run_sessions_command_renders_interactive_summary(
         last_question_preview="最后一问",
         conversation_summary="",
     )
+    list_calls: list[dict[str, object | None]] = []
     fake_runtime = SimpleNamespace(
         host_admin_service=SimpleNamespace(
-            list_interactive_sessions=lambda **_kwargs: [session],
+            list_sessions=lambda **kwargs: list_calls.append(kwargs) or [session],
         )
     )
     monkeypatch.setattr(host_commands_module, "_build_host_runtime", lambda _args: fake_runtime)
@@ -314,8 +323,9 @@ def test_run_sessions_command_renders_interactive_summary(
     exit_code = host_commands_module._run_sessions_command(
         argparse.Namespace(
             show_all=True,
-            interactive=True,
             sessions_action=None,
+            source="cli",
+            scene="interactive",
             base="./workspace",
             config=None,
         )
@@ -323,13 +333,49 @@ def test_run_sessions_command_renders_interactive_summary(
 
     captured = capsys.readouterr()
     assert exit_code == 0
+    assert list_calls == [{"state": None, "source": "cli", "scene": "interactive"}]
     assert "SESSION_ID" in captured.out
+    assert "SOURCE" in captured.out
+    assert "SCENE" in captured.out
     assert "TURNS" in captured.out
     assert "OVERVIEW" in captured.out
-    assert "LAST_QUESTION" not in captured.out
     assert "interactive_test" in captured.out
+    assert "cli" in captured.out
+    assert "interactive" in captured.out
     assert "第一问" in captured.out
     assert "最后一问" not in captured.out
+
+
+@pytest.mark.unit
+def test_run_sessions_command_filters_active_sessions_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`sessions` 未传 `--all` 时应默认只请求 active 会话。"""
+
+    list_calls: list[dict[str, object | None]] = []
+    fake_runtime = SimpleNamespace(
+        host_admin_service=SimpleNamespace(
+            list_sessions=lambda **kwargs: list_calls.append(kwargs) or [],
+        )
+    )
+    monkeypatch.setattr(host_commands_module, "_build_host_runtime", lambda _args: fake_runtime)
+
+    exit_code = host_commands_module._run_sessions_command(
+        argparse.Namespace(
+            show_all=False,
+            sessions_action=None,
+            source="cli",
+            scene="prompt_mt",
+            base="./workspace",
+            config=None,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert list_calls == [{"state": "active", "source": "cli", "scene": "prompt_mt"}]
+    assert "无会话记录" in captured.out
 
 
 @pytest.mark.unit

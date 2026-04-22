@@ -55,6 +55,11 @@ def main() -> int:
         from dayu.cli.commands.prompt import run_prompt_command
 
         return run_prompt_command(args)
+    if args.command == "conv":
+        # conv 需要读取 CLI label registry 与 Host 管理面，按需导入保持主入口轻量。
+        from dayu.cli.commands.conv import run_conv_command
+
+        return run_conv_command(args)
     if args.command == "write":
         # write 依赖写作 pipeline 与 Host 运行时，仅在需要时导入。
         from dayu.cli.commands.write import run_write_command

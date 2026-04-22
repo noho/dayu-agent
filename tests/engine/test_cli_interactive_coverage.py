@@ -19,11 +19,12 @@ from dayu.cli.interactive_state import (
     build_interactive_session_id,
     resolve_interactive_session_id,
 )
+from dayu.cli.conversation_labels import FileConversationLabelRegistry
 from dayu.cli import main as app_cli_main
 from dayu.cli import interactive_ui as app_interactive
 from dayu.cli.commands import interactive as interactive_command_module
 from dayu.cli.arg_parsing import _create_parser
-from dayu.cli.dependency_setup import _bind_interactive_session_id, setup_loglevel, setup_paths
+from dayu.cli.dependency_setup import setup_loglevel, setup_paths
 from dayu.contracts.events import AppEvent, AppEventType
 from dayu.execution.options import ExecutionOptions
 from dayu.engine.events import EventType, StreamEvent
@@ -36,8 +37,7 @@ from dayu.services.contracts import (
     PromptRequest,
     PromptSubmission,
     SessionResolutionPolicy,
-    SessionAdminView,
-    InteractiveSessionTurnView,
+    SessionTurnExcerptView,
 )
 
 
@@ -183,27 +183,25 @@ def test_interactive_accepts_new_session_flag(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
-def test_interactive_accepts_explicit_session_id(tmp_path: Path) -> None:
-    """验证 interactive 子命令支持显式恢复指定 session。"""
+def test_interactive_accepts_label_flag(tmp_path: Path) -> None:
+    """验证 interactive 子命令支持 `--label`。"""
 
     workspace = _build_workspace(tmp_path)
 
-    parsed = _create_parser().parse_args(["interactive", "--base", str(workspace), "--session-id", "interactive_abc"])
+    parsed = _create_parser().parse_args(["interactive", "--base", str(workspace), "--label", "apple"])
 
     assert parsed.command == "interactive"
-    assert parsed.session_id == "interactive_abc"
+    assert parsed.label == "apple"
 
 
 @pytest.mark.unit
-def test_interactive_session_id_conflicts_with_new_session(tmp_path: Path) -> None:
-    """验证 `--session-id` 与 `--new-session` 互斥。"""
+def test_interactive_rejects_explicit_session_id(tmp_path: Path) -> None:
+    """验证 interactive 子命令不再接受 `--session-id`。"""
 
     workspace = _build_workspace(tmp_path)
 
     with pytest.raises(SystemExit):
-        _create_parser().parse_args(
-            ["interactive", "--base", str(workspace), "--new-session", "--session-id", "interactive_abc"]
-        )
+        _create_parser().parse_args(["interactive", "--base", str(workspace), "--session-id", "interactive_abc"])
 
 
 @pytest.mark.unit
@@ -243,79 +241,101 @@ def test_interactive_state_store_supports_explicit_session_binding(tmp_path: Pat
 
 
 @pytest.mark.unit
-def test_bind_interactive_session_id_persists_explicit_binding(tmp_path: Path) -> None:
-    """验证 CLI 装配 helper 会把指定 session 写入 interactive 状态。"""
+def test_interactive_command_with_label_creates_registry_record(
+    tmp_path: Path,
+) -> None:
+    """验证 interactive 带 label 首次创建时会写入 registry，scene 固定为 interactive。"""
 
     workspace = _build_workspace(tmp_path)
 
-    resolved = _bind_interactive_session_id(workspace, "interactive_existing")
-    store = FileInteractiveStateStore(workspace / ".dayu" / "interactive")
-    state = store.load()
-
-    assert resolved == "interactive_existing"
-    assert state is not None
-    assert resolve_interactive_session_id(state) == "interactive_existing"
-
-
-@pytest.mark.unit
-def test_interactive_command_binds_valid_explicit_session(tmp_path: Path) -> None:
-    """验证 interactive 命令会校验并绑定显式 session。"""
-
-    workspace = _build_workspace(tmp_path)
-    session = SessionAdminView(
-        session_id="interactive_existing",
-        source="cli",
-        state="active",
-        scene_name="interactive",
-        created_at="2026-04-21T00:00:00+00:00",
-        last_activity_at="2026-04-21T00:00:00+00:00",
-    )
-    host_admin_service = SimpleNamespace(get_session=lambda _session_id: session)
-
-    resolved = interactive_command_module._resolve_interactive_session_id_from_args(
-        Namespace(session_id="interactive_existing", new_session=False),
+    session_id, scene_name = interactive_command_module._resolve_labeled_interactive_target(
+        Namespace(label="apple", label_session_id=None, label_scene_name=None),
         workspace_dir=workspace,
-        host_admin_service=cast(Any, host_admin_service),
+        label="apple",
     )
-    store = FileInteractiveStateStore(workspace / ".dayu" / "interactive")
-    state = store.load()
+    record = FileConversationLabelRegistry(workspace).get_record("apple")
 
-    assert resolved == "interactive_existing"
-    assert state is not None
-    assert resolve_interactive_session_id(state) == "interactive_existing"
+    assert record is not None
+    assert session_id == record.session_id
+    assert scene_name == "interactive"
+    assert record.scene_name == "interactive"
 
 
 @pytest.mark.unit
-def test_interactive_command_rejects_non_interactive_session(tmp_path: Path) -> None:
-    """验证 interactive 命令拒绝绑定非 interactive session。"""
+def test_interactive_command_with_label_reuses_existing_prompt_mt_scene(
+    tmp_path: Path,
+) -> None:
+    """验证 interactive 带 label 恢复已有 prompt_mt conversation 时尊重 registry scene。"""
 
     workspace = _build_workspace(tmp_path)
-    session = SessionAdminView(
-        session_id="prompt_session",
-        source="cli",
-        state="active",
-        scene_name="prompt",
-        created_at="2026-04-21T00:00:00+00:00",
-        last_activity_at="2026-04-21T00:00:00+00:00",
-    )
-    host_admin_service = SimpleNamespace(get_session=lambda _session_id: session)
+    registry = FileConversationLabelRegistry(workspace)
+    record = registry.get_or_create_record(label="apple", scene_name="prompt_mt")
 
-    resolved = interactive_command_module._resolve_interactive_session_id_from_args(
-        Namespace(session_id="prompt_session", new_session=False),
+    session_id, scene_name = interactive_command_module._resolve_labeled_interactive_target(
+        Namespace(label="apple", label_session_id=None, label_scene_name=None),
         workspace_dir=workspace,
-        host_admin_service=cast(Any, host_admin_service),
+        label="apple",
     )
 
-    assert resolved is None
+    assert session_id == record.session_id
+    assert scene_name == "prompt_mt"
 
 
 @pytest.mark.unit
-def test_interactive_command_prints_restore_context_for_explicit_session(
+def test_interactive_command_without_label_keeps_state_json_restore(
+    tmp_path: Path,
+) -> None:
+    """验证 interactive 无 label 时仍走旧的 state.json 恢复路径。"""
+
+    workspace = _build_workspace(tmp_path)
+
+    first_session_id, first_should_print = interactive_command_module._resolve_interactive_target(
+        Namespace(label=None, new_session=False, session_id=None),
+        workspace_dir=workspace,
+    )
+    second_session_id, second_should_print = interactive_command_module._resolve_interactive_target(
+        Namespace(label=None, new_session=False, session_id="ignored_session"),
+        workspace_dir=workspace,
+    )
+
+    assert first_session_id == second_session_id
+    assert first_should_print is False
+    assert second_should_print is False
+
+
+@pytest.mark.unit
+def test_interactive_command_ignores_session_id_path_without_label(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证 interactive 命令实现不再依赖 args.session_id 恢复会话。"""
+
+    workspace = _build_workspace(tmp_path)
+    resolved_calls: list[bool] = []
+
+    monkeypatch.setattr(
+        interactive_command_module,
+        "_resolve_interactive_session_id",
+        lambda _workspace_dir, *, new_session: resolved_calls.append(new_session) or "state_session",
+    )
+
+    session_id, should_print_restore_context = interactive_command_module._resolve_interactive_target(
+        Namespace(label=None, new_session=False, session_id="interactive_existing"),
+        workspace_dir=workspace,
+    )
+
+    assert session_id == "state_session"
+    assert should_print_restore_context is False
+    assert resolved_calls == [False]
+
+
+@pytest.mark.unit
+def test_interactive_command_prints_restore_context_for_labeled_session(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """验证显式恢复 session 时会打印上一轮对话提示。
+    """验证 labeled conversation 恢复时会用通用 recent turns 打印上一轮对话提示。
 
     Args:
         monkeypatch: pytest monkeypatch 工具。
@@ -330,22 +350,16 @@ def test_interactive_command_prints_restore_context_for_explicit_session(
     """
 
     workspace = _build_workspace(tmp_path)
-    session = SessionAdminView(
-        session_id="interactive_existing",
-        source="cli",
-        state="active",
-        scene_name="interactive",
-        created_at="2026-04-21T00:00:00+00:00",
-        last_activity_at="2026-04-21T00:00:00+00:00",
-    )
-    turn = InteractiveSessionTurnView(
+    registry = FileConversationLabelRegistry(workspace)
+    record = registry.get_or_create_record(label="apple", scene_name="prompt_mt")
+    turn = SessionTurnExcerptView(
         user_text="上一轮问题",
         assistant_text="上一轮回答",
         created_at="2026-04-21T00:01:00+00:00",
     )
+    recent_turn_calls: list[tuple[str, int]] = []
     host_admin_service = SimpleNamespace(
-        get_session=lambda _session_id: session,
-        list_interactive_session_recent_turns=lambda _session_id, **_kwargs: [turn],
+        list_session_recent_turns=lambda session_id, *, limit: recent_turn_calls.append((session_id, limit)) or [turn],
     )
     monkeypatch.setattr(interactive_command_module, "setup_loglevel", lambda _args: None)
     monkeypatch.setattr(
@@ -384,6 +398,9 @@ def test_interactive_command_prints_restore_context_for_explicit_session(
 
     exit_code = interactive_command_module.run_interactive_command(
         Namespace(
+            label="apple",
+            label_session_id=None,
+            label_scene_name=None,
             session_id="interactive_existing",
             new_session=False,
             thinking=False,
@@ -392,6 +409,7 @@ def test_interactive_command_prints_restore_context_for_explicit_session(
 
     captured = capsys.readouterr()
     assert exit_code == 0
+    assert recent_turn_calls == [(record.session_id, 1)]
     assert "上一轮对话" in captured.out
     assert "上一轮问题" in captured.out
     assert "上一轮回答" in captured.out

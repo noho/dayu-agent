@@ -14,6 +14,7 @@ from dayu.cli.dependency_setup import (
     setup_loglevel,
     setup_paths,
 )
+from dayu.cli.conversation_labels import FileConversationLabelRegistry
 from dayu.cli.interactive_ui import conversation_prompt as conversation_prompt_command
 from dayu.cli.interactive_ui import prompt as prompt_command
 from dayu.execution.options import ExecutionOptions
@@ -41,14 +42,15 @@ def run_prompt_command(args: argparse.Namespace) -> int:
     execution_options = _build_execution_options(args)
     label = _resolve_prompt_label(args)
     if label is not None:
-        label_session_id = _resolve_label_session_id(args)
-        if label_session_id is None:
-            Log.error(
-                f"labeled prompt 缺少 label_session_id，无法继续: label={label}",
-                module=MODULE,
+        try:
+            label_session_id, scene_name = _resolve_labeled_prompt_target(
+                args,
+                workspace_config=paths_config,
+                label=label,
             )
+        except ValueError as exc:
+            Log.error(str(exc), module=MODULE)
             return 2
-        scene_name = _resolve_labeled_prompt_scene_name(args)
         return _run_labeled_prompt_command(
             args,
             label=label,
@@ -233,6 +235,38 @@ def _resolve_label_session_id(args: argparse.Namespace) -> str | None:
     if not normalized_session_id:
         return None
     return normalized_session_id
+
+
+def _resolve_labeled_prompt_target(
+    args: argparse.Namespace,
+    *,
+    workspace_config: WorkspaceConfig,
+    label: str,
+) -> tuple[str, str]:
+    """解析 labeled prompt 对应的 session 与 scene。
+
+    Args:
+        args: 解析后的命令行参数。
+        workspace_config: 已解析的工作区配置。
+        label: 已规范化的 conversation label。
+
+    Returns:
+        二元组 `(session_id, scene_name)`。
+
+    Raises:
+        ValueError: 当 label 非法或 registry record 非法时抛出。
+    """
+
+    explicit_session_id = _resolve_label_session_id(args)
+    explicit_scene_name = _resolve_labeled_prompt_scene_name(args)
+    if explicit_session_id is not None:
+        return explicit_session_id, explicit_scene_name
+    registry = FileConversationLabelRegistry(workspace_config.workspace_dir)
+    record = registry.get_or_create_record(
+        label=label,
+        scene_name=_DEFAULT_LABELED_PROMPT_SCENE_NAME,
+    )
+    return record.session_id, record.scene_name
 
 
 def _resolve_labeled_prompt_scene_name(args: argparse.Namespace) -> str:

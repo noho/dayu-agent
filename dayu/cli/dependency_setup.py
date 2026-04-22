@@ -306,32 +306,6 @@ def _resolve_interactive_session_id(workspace_dir: Path, *, new_session: bool) -
     return resolve_interactive_state_session_id(state)
 
 
-def _bind_interactive_session_id(workspace_dir: Path, session_id: str) -> str:
-    """把 interactive 本地绑定切换到指定 Host session。
-
-    Args:
-        workspace_dir: 工作区根目录。
-        session_id: 目标 Host session ID。
-
-    Returns:
-        已绑定的 Host session ID。
-
-    Raises:
-        ValueError: 当 `session_id` 为空时抛出。
-    """
-
-    normalized_session_id = str(session_id or "").strip()
-    if not normalized_session_id:
-        raise ValueError("session_id 不能为空")
-    store = _build_interactive_state_store(workspace_dir)
-    state = InteractiveSessionState(
-        interactive_key=build_interactive_key(),
-        session_id=normalized_session_id,
-    )
-    store.save(state)
-    return normalized_session_id
-
-
 def setup_paths(args: argparse.Namespace) -> WorkspaceConfig:
     """处理并验证工作区路径。
 
