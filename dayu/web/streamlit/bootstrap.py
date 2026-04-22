@@ -14,7 +14,7 @@ import streamlit as streamlit_module
 from typing import Protocol, cast
 
 if TYPE_CHECKING:
-    from dayu.host.host import Host
+    from dayu.services.startup_preparation import PreparedHostRuntimeDependencies
     from dayu.services.protocols import ChatServiceProtocol, FinsServiceProtocol, WriteServiceProtocol
     from dayu.web.streamlit.file_server import FileServerHandle
     from dayu.web.streamlit.pages.chat.chat_client import ChatServiceClient
@@ -31,6 +31,7 @@ class _StreamlitBootstrapProtocol(Protocol):
 
 
 st = cast(_StreamlitBootstrapProtocol, streamlit_module)
+MODULE = "WEB.STREAMLIT.BOOTSTRAP"
 
 
 def initialize_services() -> tuple[Path, FinsServiceProtocol | None, WriteServiceProtocol | None, ChatServiceClient | None]:
@@ -47,33 +48,44 @@ def initialize_services() -> tuple[Path, FinsServiceProtocol | None, WriteServic
     """
 
     workspace_root = resolve_workspace_root()
-    fins_service = None
+    prepared_runtime_dependencies: PreparedHostRuntimeDependencies | None = None
     try:
-        fins_service = _create_fins_service(workspace_root)
+        prepared_runtime_dependencies = _prepare_host_runtime_dependencies(workspace_root)
     except Exception as exception:  # noqa: BLE001
-        st.warning(f"财报服务初始化失败（部分功能不可用）: {exception}")
+        st.warning(f"Host 运行时依赖初始化失败（功能不可用）: {exception}")
+
+    fins_service = None
+    host_admin_service = None
+    if prepared_runtime_dependencies is not None:
+        try:
+            fins_service = _create_fins_service(prepared_runtime_dependencies)
+        except Exception as exception:  # noqa: BLE001
+            st.warning(f"财报服务初始化失败（部分功能不可用）: {exception}")
+
+        from dayu.services.host_admin_service import HostAdminService
+
+        host_admin_service = HostAdminService(host=prepared_runtime_dependencies.host)
 
     write_service = None
     chat_service_client = None
-    host_admin_service = None
-    try:
-        write_service, chat_service, host = _create_write_service_and_chat_service(workspace_root)
+    if prepared_runtime_dependencies is not None:
+        try:
+            write_service, chat_service = _create_write_service_and_chat_service(prepared_runtime_dependencies)
+            from dayu.services.reply_delivery_service import ReplyDeliveryService
 
-        from dayu.services.host_admin_service import HostAdminService
-        from dayu.services.reply_delivery_service import ReplyDeliveryService
+            if host_admin_service is None:
+                raise RuntimeError("Host 管理服务未初始化")
+            reply_delivery_service = ReplyDeliveryService(host=prepared_runtime_dependencies.host)
 
-        host_admin_service = HostAdminService(host=host)
-        reply_delivery_service = ReplyDeliveryService(host=host)
+            from dayu.web.streamlit.pages.chat.chat_client import create_chat_service_client
 
-        from dayu.web.streamlit.pages.chat.chat_client import create_chat_service_client
-
-        chat_service_client = create_chat_service_client(
-            chat_service=chat_service,
-            host_admin_service=host_admin_service,
-            reply_delivery_service=reply_delivery_service,
-        )
-    except Exception as exception:  # noqa: BLE001
-        st.warning(f"写作服务和聊天服务初始化失败（分析报告和交互式分析功能不可用）: {exception}")
+            chat_service_client = create_chat_service_client(
+                chat_service=chat_service,
+                host_admin_service=host_admin_service,
+                reply_delivery_service=reply_delivery_service,
+            )
+        except Exception as exception:  # noqa: BLE001
+            st.warning(f"写作服务和聊天服务初始化失败（分析报告和交互式分析功能不可用）: {exception}")
 
     st.session_state["host_admin_service"] = host_admin_service
     return workspace_root, fins_service, write_service, chat_service_client
@@ -132,11 +144,35 @@ def start_file_server_safely(workspace_root: Path) -> FileServerHandle | None:
         return None
 
 
-def _create_fins_service(workspace_root: Path) -> FinsServiceProtocol:
-    """创建财报服务实例。
+def _prepare_host_runtime_dependencies(workspace_root: Path) -> PreparedHostRuntimeDependencies:
+    """准备 Streamlit 共享 Host 运行时依赖。
 
     参数:
         workspace_root: 工作区根目录。
+
+    返回值:
+        Streamlit 各 Service 共享的 Host 运行时依赖。
+
+    异常:
+        Exception: 启动依赖准备失败时抛出。
+    """
+
+    from dayu.services import prepare_host_runtime_dependencies
+
+    return prepare_host_runtime_dependencies(
+        workspace_root=workspace_root,
+        config_root=None,
+        execution_options=None,
+        runtime_label="Streamlit Host runtime",
+        log_module=MODULE,
+    )
+
+
+def _create_fins_service(prepared_runtime_dependencies: PreparedHostRuntimeDependencies) -> FinsServiceProtocol:
+    """创建财报服务实例。
+
+    参数:
+        prepared_runtime_dependencies: 共享 Host 运行时依赖。
 
     返回值:
         财报服务实例。
@@ -145,91 +181,44 @@ def _create_fins_service(workspace_root: Path) -> FinsServiceProtocol:
         Exception: 初始化依赖失败时抛出。
     """
 
-    from dayu.host.host import Host
     from dayu.services import FinsService
-    from dayu.startup.dependencies import prepare_fins_runtime
 
-    fins_runtime = prepare_fins_runtime(workspace_root=workspace_root)
-    host = Host(
-        host_store_path=workspace_root / ".host",
-        lane_config={
-            "sec_download": 2,
-        },
+    return FinsService(
+        host=prepared_runtime_dependencies.host,
+        fins_runtime=prepared_runtime_dependencies.fins_runtime,
     )
-    return FinsService(host=host, fins_runtime=fins_runtime)
 
 
-def _create_write_service_and_chat_service(workspace_root: Path) -> tuple[WriteServiceProtocol, ChatServiceProtocol, Host]:
-    """创建写作服务、聊天服务及共享 Host。
+def _create_write_service_and_chat_service(
+    prepared_runtime_dependencies: PreparedHostRuntimeDependencies,
+) -> tuple[WriteServiceProtocol, ChatServiceProtocol]:
+    """创建写作服务与聊天服务。
 
     参数:
-        workspace_root: 工作区根目录。
+        prepared_runtime_dependencies: 共享 Host 运行时依赖。
 
     返回值:
-        三元组：`(write_service, chat_service, host)`。
+        二元组：`(write_service, chat_service)`。
 
     异常:
         Exception: 依赖准备或实例化失败时抛出。
     """
 
     from dayu.contracts.session import SessionSource
-    from dayu.host.host import Host
-    from dayu.services import ChatService, WriteService, prepare_scene_execution_acceptance_preparer
-    from dayu.startup.dependencies import (
-        prepare_config_file_resolver,
-        prepare_config_loader,
-        prepare_default_execution_options,
-        prepare_fins_runtime,
-        prepare_model_catalog,
-        prepare_prompt_asset_store,
-        prepare_startup_paths,
-        prepare_workspace_resources,
-    )
-
-    startup_paths = prepare_startup_paths(workspace_root=workspace_root, config_root=None)
-    resolver = prepare_config_file_resolver(config_root=startup_paths.config_root)
-    config_loader = prepare_config_loader(resolver=resolver)
-    prompt_asset_store = prepare_prompt_asset_store(resolver=resolver)
-    workspace = prepare_workspace_resources(
-        paths=startup_paths,
-        config_loader=config_loader,
-        prompt_asset_store=prompt_asset_store,
-    )
-    model_catalog = prepare_model_catalog(config_loader=config_loader)
-    default_execution_options = prepare_default_execution_options(
-        workspace_root=startup_paths.workspace_root,
-        config_loader=config_loader,
-        execution_options=None,
-    )
-    scene_execution_acceptance_preparer = prepare_scene_execution_acceptance_preparer(
-        workspace_root=startup_paths.workspace_root,
-        default_execution_options=default_execution_options,
-        model_catalog=model_catalog,
-        prompt_asset_store=prompt_asset_store,
-    )
-    fins_runtime = prepare_fins_runtime(workspace_root=workspace_root)
-
-    host = Host(
-        workspace=workspace,
-        model_catalog=model_catalog,
-        default_execution_options=default_execution_options,
-        host_store_path=workspace_root / ".host",
-        lane_config={
-            "llm_api": 3,
-        },
-    )
+    from dayu.services import ChatService, WriteService
 
     write_service = WriteService(
-        host=host,
-        workspace=workspace,
-        scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
-        company_name_resolver=fins_runtime.get_company_name,
-        company_meta_summary_resolver=fins_runtime.get_company_meta_summary,
+        host=prepared_runtime_dependencies.host,
+        host_governance=prepared_runtime_dependencies.host,
+        workspace=prepared_runtime_dependencies.workspace,
+        scene_execution_acceptance_preparer=prepared_runtime_dependencies.scene_execution_acceptance_preparer,
+        company_name_resolver=prepared_runtime_dependencies.fins_runtime.get_company_name,
+        company_meta_summary_resolver=prepared_runtime_dependencies.fins_runtime.get_company_meta_summary,
     )
     chat_service = ChatService(
-        host=host,
-        scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
-        company_name_resolver=fins_runtime.get_company_name,
+        host=prepared_runtime_dependencies.host,
+        scene_execution_acceptance_preparer=prepared_runtime_dependencies.scene_execution_acceptance_preparer,
+        company_name_resolver=prepared_runtime_dependencies.fins_runtime.get_company_name,
         session_source=SessionSource.WEB,
     )
-    return write_service, chat_service, host
+    return write_service, chat_service

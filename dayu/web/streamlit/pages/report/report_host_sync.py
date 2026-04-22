@@ -332,7 +332,6 @@ __all__ = [
     "HostSyncTaskProtocol",
     "bind_write_task_run_id_from_host",
     "collect_occupied_run_ids",
-    "get_host_admin_service_from_session",
     "parse_iso_datetime",
     "request_cancel_via_host",
     "select_best_run",

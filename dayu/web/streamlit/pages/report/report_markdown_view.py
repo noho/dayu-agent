@@ -16,11 +16,11 @@ _MARKDOWN_FENCE_PREFIXES = ("```", "~~~")
 _REPORT_LAYOUT_COLUMN_WIDTHS = [1, 3]
 _TOC_INDENT_REM = 1.0
 _REPORT_PANEL_MIN_HEIGHT_PX = 1200
-_REPORT_PANEL_MAX_HEIGHT_PX = 6000
+_REPORT_PANEL_MAX_HEIGHT_PX = 4800
 _REPORT_PANEL_BASE_HEIGHT_PX = 1200
-_REPORT_PANEL_HEIGHT_PER_CONTENT_LINE_PX = 2
-_REPORT_PANEL_HEIGHT_PER_HEADING_PX = 24
-_REPORT_PANEL_HEIGHT_CALIBRATION_FACTOR = 0.6
+_REPORT_PANEL_HEIGHT_PER_CONTENT_LINE_PX = 0.2
+_REPORT_PANEL_HEIGHT_PER_HEADING_PX = 4
+_REPORT_PANEL_HEIGHT_CALIBRATION_FACTOR = 1.0
 
 
 class _ColumnContextProtocol(Protocol):
@@ -160,21 +160,24 @@ def slugify_markdown_heading(title: str) -> str:
 def build_report_toc_html(headings: list[MarkdownHeading]) -> str:
     """构建报告目录 HTML。"""
 
-    if not headings:
+    toc_headings = [heading for heading in headings if heading.level <= 4]
+    if not toc_headings:
         return (
             '<div style="font-size: 0.875rem; color: #6b7280;">'
             "当前报告未检测到可展示的 Markdown 目录。"
             "</div>"
         )
 
-    base_level = min(heading.level for heading in headings)
+    base_level = min(heading.level for heading in toc_headings)
     html_lines = [
         (
             '<div class="report-toc-root" '
-            'style="font-weight: 600; margin-bottom: 0.35rem; overflow-anchor: none;"></div>'
+            'style="font-weight: 600; margin-bottom: 0.35rem; overflow-anchor: none;">'
+            "点击条目可跳转到对应章节"
+            "</div>"
         ),
     ]
-    for heading in headings:
+    for heading in toc_headings:
         padding_left = max(heading.level - base_level, 0) * _TOC_INDENT_REM
         html_lines.append(
             (

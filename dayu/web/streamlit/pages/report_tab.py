@@ -449,9 +449,9 @@ def _clamp_report_panel_height_px(estimated_height_px: int) -> int:
 def _init_write_task_state() -> None:
     """初始化 Write 任务会话状态。"""
     if "active_write_tasks" not in st.session_state:
-        st.session_state.active_write_tasks = {}
+        st.session_state["active_write_tasks"] = {}
     if "write_task_settings" not in st.session_state:
-        st.session_state.write_task_settings = {}
+        st.session_state["write_task_settings"] = {}
 
 
 def _get_ticker_active_write_task(ticker: str) -> WriteTaskState | None:
@@ -465,10 +465,11 @@ def _get_ticker_active_write_task(ticker: str) -> WriteTaskState | None:
     """
     _init_write_task_state()
     key = f"write_task_{ticker}"
-    if key not in st.session_state.active_write_tasks:
+    active_write_tasks = cast(dict[str, dict[str, object]], st.session_state["active_write_tasks"])
+    if key not in active_write_tasks:
         return None
 
-    task_data = st.session_state.active_write_tasks[key]
+    task_data = active_write_tasks[key]
     task = WriteTaskState.from_dict(task_data)
 
     return task
@@ -489,7 +490,8 @@ def _add_active_write_task(ticker: str) -> WriteTaskState:
         status=_TASK_STATUS_PENDING,
         started_at=datetime.now().isoformat(),
     )
-    st.session_state.active_write_tasks[key] = task.to_dict()
+    active_write_tasks = cast(dict[str, dict[str, object]], st.session_state["active_write_tasks"])
+    active_write_tasks[key] = task.to_dict()
     return task
 
 
@@ -502,10 +504,11 @@ def _update_write_task(ticker: str, **kwargs: Any) -> None:
     """
     _init_write_task_state()
     key = f"write_task_{ticker}"
-    if key in st.session_state.active_write_tasks:
-        task_data = st.session_state.active_write_tasks[key]
+    active_write_tasks = cast(dict[str, dict[str, object]], st.session_state["active_write_tasks"])
+    if key in active_write_tasks:
+        task_data = active_write_tasks[key]
         task_data.update(kwargs)
-        st.session_state.active_write_tasks[key] = task_data
+        active_write_tasks[key] = task_data
 
 
 def _add_task_log(ticker: str, message: str, level: str = "info") -> None:
@@ -518,9 +521,11 @@ def _add_task_log(ticker: str, message: str, level: str = "info") -> None:
     """
     _init_write_task_state()
     key = f"write_task_{ticker}"
-    if key in st.session_state.active_write_tasks:
-        task_data = st.session_state.active_write_tasks[key]
-        logs = task_data.get("logs", [])
+    active_write_tasks = cast(dict[str, dict[str, object]], st.session_state["active_write_tasks"])
+    if key in active_write_tasks:
+        task_data = active_write_tasks[key]
+        raw_logs = task_data.get("logs")
+        logs = cast(list[dict[str, str]], raw_logs) if isinstance(raw_logs, list) else []
         logs.append({
             "timestamp": datetime.now().isoformat(),
             "message": message,
@@ -530,7 +535,7 @@ def _add_task_log(ticker: str, message: str, level: str = "info") -> None:
         if len(logs) > 200:
             logs = logs[-200:]
         task_data["logs"] = logs
-        st.session_state.active_write_tasks[key] = task_data
+        active_write_tasks[key] = task_data
 
 
 def _estimate_template_chapter_count(template_path: Path) -> int | None:
@@ -724,8 +729,9 @@ def _remove_active_write_task(ticker: str) -> None:
     """
     _init_write_task_state()
     key = f"write_task_{ticker}"
-    if key in st.session_state.active_write_tasks:
-        del st.session_state.active_write_tasks[key]
+    active_write_tasks = cast(dict[str, dict[str, object]], st.session_state["active_write_tasks"])
+    if key in active_write_tasks:
+        del active_write_tasks[key]
 
 
 def _format_time(time_str: str | None) -> str:
@@ -904,16 +910,17 @@ def _get_task_settings(ticker: str) -> dict[str, Any]:
     """
     _init_write_task_state()
     key = f"settings_{ticker}"
-    if key not in st.session_state.write_task_settings:
+    write_task_settings = cast(dict[str, dict[str, object]], st.session_state["write_task_settings"])
+    if key not in write_task_settings:
         # 默认设置
-        st.session_state.write_task_settings[key] = {
+        write_task_settings[key] = {
             "template_path": _DEFAULT_TEMPLATE_PATH,
             "write_max_retries": 2,
             "resume": True,
             "fast": True,
             "force": False,
         }
-    return st.session_state.write_task_settings[key]
+    return write_task_settings[key]
 
 
 def _generation_mode_label(mode: str) -> str:
@@ -977,9 +984,10 @@ def _update_task_settings(ticker: str, **kwargs: Any) -> None:
     """
     _init_write_task_state()
     key = f"settings_{ticker}"
-    settings = st.session_state.write_task_settings.get(key, {})
+    write_task_settings = cast(dict[str, dict[str, object]], st.session_state["write_task_settings"])
+    settings = write_task_settings.get(key, {})
     settings.update(kwargs)
-    st.session_state.write_task_settings[key] = settings
+    write_task_settings[key] = settings
 
 
 def _start_write_task(
