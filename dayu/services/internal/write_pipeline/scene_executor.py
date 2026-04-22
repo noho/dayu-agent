@@ -20,6 +20,7 @@ from typing import Any, Callable, Protocol, TypeVar
 from dayu.contracts.agent_execution import ExecutionContract
 from dayu.contracts.cancellation import CancelledError
 from dayu.contracts.events import AppEvent, AppEventType, AppResult
+from dayu.execution.runtime_config import OpenAIRunnerRuntimeConfig
 from dayu.log import Log
 from dayu.services.internal.write_pipeline.audit_formatting import (
     _extract_markdown_content,
@@ -63,6 +64,75 @@ _LLM_RETRY_LIMIT = 1
 _LLM_RETRY_DELAY_SECONDS = 3
 
 _RetryResult = TypeVar("_RetryResult")
+
+
+def _resolve_scene_tool_timeout_seconds(prepared_scene: AcceptedSceneExecution) -> float | None:
+    """解析 scene 生效的工具超时秒数。
+
+    Args:
+        prepared_scene: 已解析的 scene 执行信息。
+
+    Returns:
+        工具超时秒数；当前 runner 不支持时返回 ``None``。
+
+    Raises:
+        无。
+    """
+
+    runner_running_config = prepared_scene.resolved_execution_options.runner_running_config
+    if isinstance(runner_running_config, OpenAIRunnerRuntimeConfig):
+        return runner_running_config.tool_timeout_seconds
+    return None
+
+
+def _build_scene_dispatch_debug_message(*, prepared_scene: AcceptedSceneExecution) -> str:
+    """构造 scene 调用开始调试日志。
+
+    Args:
+        prepared_scene: 已解析的 scene 执行信息。
+
+    Returns:
+        统一格式的调试日志文本。
+
+    Raises:
+        无。
+    """
+
+    return (
+        "开始执行 scene contract: "
+        f"scene_name={prepared_scene.scene_name}, "
+        f"model_name={prepared_scene.accepted_execution_spec.model.model_name}, "
+        f"temperature={prepared_scene.resolved_temperature}, "
+        f"max_iterations={prepared_scene.resolved_execution_options.agent_running_config.max_iterations}, "
+        f"tool_timeout_seconds={_resolve_scene_tool_timeout_seconds(prepared_scene)}, "
+        f"resumable={prepared_scene.default_resumable}"
+    )
+
+
+def _build_scene_result_debug_message(
+    *,
+    prepared_scene: AcceptedSceneExecution,
+    result: AppResult,
+) -> str:
+    """构造 scene 返回结果调试日志。
+
+    Args:
+        prepared_scene: 已解析的 scene 执行信息。
+        result: 当前调用返回结果。
+
+    Returns:
+        统一格式的调试日志文本。
+
+    Raises:
+        无。
+    """
+
+    return (
+        "scene contract 执行完成: "
+        f"scene_name={prepared_scene.scene_name}, "
+        f"errors_count={len(result.errors)}, warnings_count={len(result.warnings)}, "
+        f"degraded={result.degraded}, filtered={result.filtered}"
+    )
 
 
 class ScenePromptRunner:
@@ -118,16 +188,34 @@ class ScenePromptRunner:
             聚合后的应用层结果。
         """
 
-        if self._prompt_agent is not None:
-            return await self._collect_prompt_result_via_test_seam(
-                prepared_scene=prepared_scene,
-                prompt_text=prompt_text,
-            )
         execution_contract = self._preparer.build_execution_contract(
             prepared_scene=prepared_scene,
             prompt_text=prompt_text,
         )
-        return await self._contract_executor(execution_contract)
+        if self._prompt_agent is not None:
+            Log.debug(
+                _build_scene_dispatch_debug_message(prepared_scene=prepared_scene),
+                module=MODULE,
+            )
+            result = await self._collect_prompt_result_via_test_seam(
+                prepared_scene=prepared_scene,
+                prompt_text=prompt_text,
+            )
+            Log.debug(
+                _build_scene_result_debug_message(prepared_scene=prepared_scene, result=result),
+                module=MODULE,
+            )
+            return result
+        Log.debug(
+            _build_scene_dispatch_debug_message(prepared_scene=prepared_scene),
+            module=MODULE,
+        )
+        result = await self._contract_executor(execution_contract)
+        Log.debug(
+            _build_scene_result_debug_message(prepared_scene=prepared_scene, result=result),
+            module=MODULE,
+        )
+        return result
 
     def run_prepared_scene_prompt(self, *, prepared_scene: AcceptedSceneExecution, prompt_text: str) -> AppResult:
         """同步执行一次单轮 Agent 子执行。

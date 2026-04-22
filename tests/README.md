@@ -171,6 +171,7 @@ python -m pytest tests --cov=dayu --cov-report=term --cov-branch
 - 上述 pending `conversation turn` 关键状态迁移与恢复分支还应保持 Host 侧 verbose 可观测性，至少覆盖 accepted/prepared/sent_to_llm 三阶段，以及 accepted/prepared 两条恢复入口。
 - Host SQLite schema 发生非兼容变更时，测试要守住“启动期直接失败并提示删库重建”，不要把旧库残留留到运行中第一次读写某张表时才以 SQL 异常形式延迟爆炸。
 - Host 与多轮会话的关键生命周期日志也属于稳定可观测性契约，至少要守住 session create/ensure/close、run register/start/cancel、transcript load/save，以及 conversation compaction 的调度与写回日志。
+- `test_host_executor.py`、`test_run_registry.py`、`test_host_store.py` 与 `test_write_pipeline.py` 还要共同守住这次新增的可观测性边界：Host/RunRegistry 必须稳定输出 run 启动、收敛与建连日志；write pipeline 侧也必须稳定输出 scene 接受、scene cache、ExecutionContract 构建、scene dispatch/result 与章节 scene 摘要日志，避免后续再退回到只能按时间猜测关键执行链路。
 - 涉及 `AsyncAgent` 轮次命名时，Engine 测试要区分 `agent iteration` 与 `conversation turn`：`AsyncAgent` 事件、Tool Trace 与 `utils/analyze_tool_trace.py` 都应以 `iteration_id` / `iteration_*` 字段作为真源，禁止再把 Engine 内部轮次写成 `turn_id`。
 - `test_cli_running_config.py` 负责守住 CLI 显式参数、`run.json`、`llm_models.json`、scene manifest、`toolset_registrars.json` 与 prompt assets 能否真正贯通到 `Service -> Host -> scene preparation -> Agent`，包括 `accepted_execution_spec`、最终 `AgentCreateArgs`、system prompt、`execution_permissions` 以及 toolset registrar adapter 到叶子 `register_*_tools` 参数的落地；这类测试应优先在 `build_async_agent` 边界替换 `MockAgent`，并在 registrar adapter 边界观察 `context.toolset_config` 与真实工具注册，而不是重新 mock 掉整条 runtime。
 - `test_write_pipeline.py` 还要守住 write pipeline 的 scene 级环境变量闸门：模型环境变量校验必须收口在 `SceneContractPreparer` 这类 Service 内部真源，并按实际创建的 scene 惰性执行；未使用的 scene 不得提前阻断轻量模式。

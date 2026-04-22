@@ -111,6 +111,31 @@ CREATE INDEX IF NOT EXISTS idx_permits_lane ON permits(lane);
 """
 
 
+def _build_connection_debug_message(*, db_path: Path, conn: sqlite3.Connection) -> str:
+    """构造 HostStore 首次建连调试日志。
+
+    Args:
+        db_path: SQLite 数据库路径。
+        conn: 当前线程首次创建的连接对象。
+
+    Returns:
+        统一格式的调试日志文本。
+
+    Raises:
+        无。
+    """
+
+    current_thread = threading.current_thread()
+    thread_ident = current_thread.ident
+    thread_name = current_thread.name
+    return (
+        "HostStore 创建线程连接: "
+        f"db_path={db_path}, "
+        f"thread_ident={thread_ident if thread_ident is not None else 'unknown'}, "
+        f"thread_name={thread_name}, conn_id=0x{id(conn):x}"
+    )
+
+
 class HostStore:
     """宿主层 SQLite 存储。线程安全，支持多进程并发访问。
 
@@ -159,6 +184,10 @@ class HostStore:
             return conn
 
         conn = _create_connection(self._db_path)
+        Log.debug(
+            _build_connection_debug_message(db_path=self._db_path, conn=conn),
+            module=MODULE,
+        )
         self._local.conn = conn
         return conn
 

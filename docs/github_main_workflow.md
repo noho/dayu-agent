@@ -608,7 +608,7 @@ pip install --upgrade https://github.com/noho/dayu-agent/releases/download/v0.1.
 
 ## 离线安装
 
-从 [Releases](https://github.com/noho/dayu-agent/releases/tag/v0.1.2) 页面下载对应平台的离线安装包：
+从 [Releases](https://github.com/noho/dayu-agent/releases) 页面下载对应平台的离线安装包：
 
 - macOS ARM64: `dayu-agent-0.1.2-macos-arm64-offline.tar.gz`
 - macOS x64: `dayu-agent-0.1.2-macos-x64-offline.tar.gz`

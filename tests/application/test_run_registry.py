@@ -360,9 +360,15 @@ def test_run_registry_emits_lifecycle_logs(tmp_path: Path, monkeypatch: pytest.M
     debug_messages = [call.args[0] for call in debug_mock.call_args_list]
     info_messages = [call.args[0] for call in info_mock.call_args_list]
 
-    assert any("注册 run" in message for message in debug_messages)
-    assert any("run 状态迁移" in message and "to_state=running" in message for message in debug_messages)
-    assert any("run 状态迁移" in message and "to_state=cancelled" in message for message in debug_messages)
+    assert any("注册 run" in message and "owner_pid=" in message and "db_path=" in message for message in debug_messages)
+    assert any(
+        "run 状态迁移" in message and "to_state=running" in message and "db_path=" in message
+        for message in debug_messages
+    )
+    assert any(
+        "run 状态迁移" in message and "to_state=cancelled" in message and "db_path=" in message
+        for message in debug_messages
+    )
     assert any("登记 run 取消请求" in message for message in info_messages)
 
 

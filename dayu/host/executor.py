@@ -50,6 +50,97 @@ MODULE = "HOST.EXECUTOR"
 _DEFAULT_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS = 300.0
 
 
+def _format_run_identity(
+    *,
+    run_id: str,
+    session_id: str | None,
+    scene_name: str | None,
+    service_type: str,
+) -> str:
+    """格式化 run 基本身份信息。
+
+    Args:
+        run_id: Host run ID。
+        session_id: 宿主会话 ID。
+        scene_name: scene 名称。
+        service_type: 服务类型。
+
+    Returns:
+        统一格式的 run 身份摘要。
+
+    Raises:
+        无。
+    """
+
+    return (
+        f"run_id={run_id}, session_id={session_id or ''}, "
+        f"scene_name={scene_name or ''}, service_type={service_type}"
+    )
+
+
+def _build_agent_run_start_debug_message(
+    *,
+    run_id: str,
+    session_id: str | None,
+    scene_name: str | None,
+    service_type: str,
+    timeout_ms: int | None,
+    business_lane: str | None,
+    resumable: bool,
+) -> str:
+    """构造 Agent 子执行启动调试日志。
+
+    Args:
+        run_id: Host run ID。
+        session_id: 宿主会话 ID。
+        scene_name: scene 名称。
+        service_type: 服务类型。
+        timeout_ms: run 超时毫秒数。
+        business_lane: 业务 lane。
+        resumable: 当前 scene 是否允许恢复。
+
+    Returns:
+        启动调试日志文本。
+
+    Raises:
+        无。
+    """
+
+    return (
+        "Host 启动 agent run: "
+        f"{_format_run_identity(run_id=run_id, session_id=session_id, scene_name=scene_name, service_type=service_type)}, "
+        f"timeout_ms={timeout_ms}, business_lane={business_lane or ''}, resumable={resumable}"
+    )
+
+
+def _build_agent_settle_debug_message(
+    *,
+    phase: str,
+    run_id: str,
+    pending_turn_id: str | None,
+    resumable: bool,
+) -> str:
+    """构造 Agent 收敛路径调试日志。
+
+    Args:
+        phase: 当前收敛路径名称。
+        run_id: Host run ID。
+        pending_turn_id: 当前 pending turn ID。
+        resumable: 当前 scene 是否允许恢复。
+
+    Returns:
+        收敛路径调试日志文本。
+
+    Raises:
+        无。
+    """
+
+    return (
+        "Host 收敛 agent run: "
+        f"phase={phase}, run_id={run_id}, pending_turn_id={pending_turn_id or ''}, resumable={resumable}"
+    )
+
+
 def _resolve_concurrency_acquire_timeout_seconds(timeout_ms: int | None) -> float:
     """解析并发 permit 获取超时。
 
@@ -303,6 +394,18 @@ class DefaultHostExecutor(HostExecutorProtocol):
             run_id=run.run_id,
         )
         resumable = bool(execution_contract.host_policy.resumable)
+        Log.debug(
+            _build_agent_run_start_debug_message(
+                run_id=run.run_id,
+                session_id=spec.session_id,
+                scene_name=spec.scene_name,
+                service_type=spec.operation_name,
+                timeout_ms=spec.timeout_ms,
+                business_lane=spec.business_concurrency_lane,
+                resumable=resumable,
+            ),
+            module=MODULE,
+        )
         try:
             prepared_execution = await self.scene_preparation.prepare(execution_contract, context)
             if resumable and prepared_execution.resume_snapshot is None:
@@ -363,6 +466,18 @@ class DefaultHostExecutor(HostExecutorProtocol):
         )
         pending_turn_id = self._register_prepared_pending_turn(prepared_turn=prepared_turn, run_id=run.run_id)
         resumable = bool(prepared_turn.resumable)
+        Log.debug(
+            _build_agent_run_start_debug_message(
+                run_id=run.run_id,
+                session_id=spec.session_id,
+                scene_name=spec.scene_name,
+                service_type=spec.operation_name,
+                timeout_ms=spec.timeout_ms,
+                business_lane=spec.business_concurrency_lane,
+                resumable=resumable,
+            ),
+            module=MODULE,
+        )
         try:
             agent_input = await self.scene_preparation.restore_prepared_execution(prepared_turn, context)
             async for event in self._run_prepared_agent_stream(
@@ -971,6 +1086,15 @@ class DefaultHostExecutor(HostExecutorProtocol):
             需要 yield 到事件流的取消事件。
         """
 
+        Log.debug(
+            _build_agent_settle_debug_message(
+                phase="cancel",
+                run_id=run_id,
+                pending_turn_id=pending_turn_id,
+                resumable=resumable,
+            ),
+            module=MODULE,
+        )
         cancelled_run = self._finalize_cancelled(run_id)
         self._reconcile_pending_turn_after_terminal_run(
             pending_turn_id=pending_turn_id,
@@ -1004,6 +1128,15 @@ class DefaultHostExecutor(HostExecutorProtocol):
             取消路径返回需要 yield 的取消事件；其它路径返回 ``None``。
         """
 
+        Log.debug(
+            _build_agent_settle_debug_message(
+                phase="complete",
+                run_id=run_id,
+                pending_turn_id=pending_turn_id,
+                resumable=resumable,
+            ),
+            module=MODULE,
+        )
         if self._is_run_succeeded(run_id):
             self._delete_pending_turn_best_effort(run_id=run_id, pending_turn_id=pending_turn_id)
             return None
@@ -1044,6 +1177,15 @@ class DefaultHostExecutor(HostExecutorProtocol):
             失败路径返回 ``None``，调用方应 raise。
         """
 
+        Log.debug(
+            _build_agent_settle_debug_message(
+                phase="fail",
+                run_id=run_id,
+                pending_turn_id=pending_turn_id,
+                resumable=resumable,
+            ),
+            module=MODULE,
+        )
         if self._is_cancelled(run_id=run_id, token=token):
             return self._settle_agent_cancelled(
                 run_id=run_id,
