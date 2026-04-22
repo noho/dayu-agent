@@ -383,42 +383,6 @@ class AcceptedExecutionSpec:
         object.__setattr__(self, "tools", tools or AcceptedToolConfigSpec())
         object.__setattr__(self, "infrastructure", infrastructure or AcceptedInfrastructureSpec())
 
-    @property
-    def model_name(self) -> str:
-        """返回兼容旧调用点的模型名。"""
-
-        return self.model.model_name
-
-    @property
-    def temperature(self) -> float | None:
-        """返回兼容旧调用点的 temperature。"""
-
-        return self.model.temperature
-
-    @property
-    def runner_running_config(self) -> RunnerRunningConfigSnapshot:
-        """返回兼容旧调用点的 runner 运行配置快照。"""
-
-        return self.runtime.runner_running_config
-
-    @property
-    def agent_running_config(self) -> AgentRunningConfigSnapshot:
-        """返回兼容旧调用点的 agent 运行配置快照。"""
-
-        return self.runtime.agent_running_config
-
-    @property
-    def trace_settings(self) -> TraceSettings | None:
-        """返回兼容旧调用点的工具追踪配置。"""
-
-        return self.infrastructure.trace_settings
-
-    @property
-    def conversation_memory_settings(self) -> ConversationMemorySettings | None:
-        """返回兼容旧调用点的会话记忆配置。"""
-
-        return self.infrastructure.conversation_memory_settings
-
 
 @dataclass(frozen=True)
 class ExecutionHostPolicy:
