@@ -72,6 +72,13 @@ class _StubGovernor:
         self.acquire_timeouts.append(timeout)
         return _Permit(permit_id=f"permit-{lane}", lane=lane)
 
+    def acquire_many(
+        self, lanes: list[str], *, timeout: float | None = None
+    ) -> list[_Permit]:
+        """一次性拿齐多 lane 的测试实现：转发给 acquire 逐个累积。"""
+
+        return [self.acquire(lane_name, timeout=timeout) for lane_name in lanes]
+
     def try_acquire(self, lane: str):
         del lane
         return None

@@ -65,6 +65,93 @@ class SQLiteConcurrencyGovernor(ConcurrencyGovernorProtocol):
                 )
             time.sleep(_POLL_INTERVAL)
 
+    def acquire_many(
+        self,
+        lanes: list[str],
+        *,
+        timeout: float | None = None,
+    ) -> list[ConcurrencyPermit]:
+        """原子获取多 lane 许可：单事务内全部检查+全部写入，要么全拿要么全不拿。
+
+        单 lane 场景退化为单 INSERT，与 :meth:`try_acquire` 语义一致。
+        """
+
+        if not lanes:
+            return []
+        for lane_name in lanes:
+            if lane_name not in self._lane_config:
+                raise ValueError(f"未配置的并发通道: {lane_name}")
+
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            permits = self._try_acquire_many(lanes)
+            if permits is not None:
+                return permits
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"获取多 lane 并发许可超时: lanes={lanes}, timeout={timeout}s"
+                )
+            time.sleep(_POLL_INTERVAL)
+
+    def _try_acquire_many(self, lanes: list[str]) -> list[ConcurrencyPermit] | None:
+        """在单个 BEGIN IMMEDIATE 事务内尝试一次性拿齐全部 lane。
+
+        Args:
+            lanes: 已校验为合法 lane 名的列表。
+
+        Returns:
+            全部 lane 都有额度时返回 permit 列表（与 ``lanes`` 同序）；
+            任一 lane 额度不足时返回 ``None`` 并回滚事务。
+
+        Raises:
+            sqlite3.Error: SQLite 层异常会原样抛出；事务已回滚。
+        """
+
+        conn = self._host_store.get_connection()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            # 先统一点名：任意一个不够就全部放弃。
+            # 不同 lane 的 COUNT 查询在同一事务内读到的是一致快照，
+            # 避免"先拿到 A、检查 B 时 A 的名额被抢"的逻辑漏洞。
+            for lane_name in lanes:
+                max_concurrent = self._lane_config[lane_name]
+                row = conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM permits WHERE lane = ?",
+                    (lane_name,),
+                ).fetchone()
+                if row["cnt"] >= max_concurrent:
+                    conn.execute("ROLLBACK")
+                    return None
+
+            now = _now_utc()
+            now_iso = now.isoformat()
+            pid = os.getpid()
+            permits: list[ConcurrencyPermit] = []
+            for lane_name in lanes:
+                permit_id = f"permit_{uuid.uuid4().hex[:12]}"
+                conn.execute(
+                    """
+                    INSERT INTO permits (permit_id, lane, owner_pid, acquired_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (permit_id, lane_name, pid, now_iso),
+                )
+                permits.append(
+                    ConcurrencyPermit(
+                        permit_id=permit_id,
+                        lane=lane_name,
+                        acquired_at=now,
+                    )
+                )
+            conn.execute("COMMIT")
+            return permits
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:  # noqa: BLE001, S110
+                pass
+            raise
+
     def try_acquire(self, lane: str) -> ConcurrencyPermit | None:
         """尝试立即获取并发许可（非阻塞）。"""
 

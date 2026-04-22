@@ -41,6 +41,25 @@ class _RecordingGovernor:
         self.acquired.append(lane)
         return _Permit(permit_id=f"permit-{lane}", lane=lane)
 
+    def acquire_many(
+        self, lanes: list[str], *, timeout: float | None = None
+    ) -> list[_Permit]:
+        """原子多 lane acquire 的测试实现。
+
+        任何 lane 触发 ``acquire_failure`` 视为整体失败：既不记录已获取的 lane，
+        也不返回 permit，语义对齐 SQLite 实现"要么全拿要么全不拿"。
+        """
+
+        del timeout
+        for lane_name in lanes:
+            if self._acquire_failure(lane_name):
+                raise TimeoutError(f"模拟 acquire_many 失败: {lane_name}")
+        permits: list[_Permit] = []
+        for lane_name in lanes:
+            self.acquired.append(lane_name)
+            permits.append(_Permit(permit_id=f"permit-{lane_name}", lane=lane_name))
+        return permits
+
     def try_acquire(self, lane: str):
         """非阻塞尝试占位实现。"""
 
@@ -148,8 +167,14 @@ def test_required_lanes_raises_when_business_lane_equals_host_agent_lane() -> No
 
 
 @pytest.mark.unit
-def test_start_run_rolls_back_first_permit_when_second_acquire_fails() -> None:
-    """两步 acquire 第二步失败时，第一步 permit 必须被回滚释放。"""
+def test_start_run_propagates_timeout_without_leaking_permits() -> None:
+    """acquire_many 失败时 executor 不自己回滚；governor 原子保证无 permit 残留。
+
+    新 contract：多 lane 获取由 governor 在单事务内完成，要么全拿要么全不拿。
+    executor 层只需把 TimeoutError 透传上去，不再承担 permit 回滚。
+    `_RecordingGovernor.acquire_many` 实现对齐 SQLite：任一 lane 失败就整体抛错、
+    不记录任何 lane；该断言同时锁住"executor 不再重复调用 release"。
+    """
 
     def _fail_on_write_chapter(lane: str) -> bool:
         return lane == "write_chapter"
@@ -166,10 +191,9 @@ def test_start_run_rolls_back_first_permit_when_second_acquire_fails() -> None:
         business_concurrency_lane="write_chapter",
     )
 
-    # 直接触发 _start_run：include_agent_lane=True 会先拿 llm_api 再拿 write_chapter。
-    # 第二步失败时必须回滚 llm_api。
     with pytest.raises(TimeoutError):
         executor._start_run(spec=spec, run_id="run-rollback", include_agent_lane=True)
 
-    assert governor.acquired == [HOST_AGENT_LANE]
-    assert governor.released == [HOST_AGENT_LANE]
+    # acquire_many 原子失败：governor 没记录任何 lane，executor 也不会调用 release。
+    assert governor.acquired == []
+    assert governor.released == []

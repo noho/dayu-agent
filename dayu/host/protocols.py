@@ -452,6 +452,31 @@ class ConcurrencyGovernorProtocol(Protocol):
         """
         ...
 
+    def acquire_many(
+        self,
+        lanes: list[str],
+        *,
+        timeout: float | None = None,
+    ) -> list[ConcurrencyPermit]:
+        """原子获取多个 lane 的并发许可，要么全拿要么全不拿。
+
+        实现必须在单个持久化事务内完成"所有 lane 额度检查 + 所有 permit 写入"，
+        保证进程被 SIGKILL / OOM 杀死于两步 acquire 之间时不会残留 permit。
+
+        Args:
+            lanes: 需要 acquire 的 lane 名列表；调用方应保证已去重并按字母序排序，
+                以在跨 run 之间使用一致的顺序，规避潜在死锁。
+            timeout: 最大等待秒数，None 表示无限等待。
+
+        Returns:
+            与 ``lanes`` 对应顺序的许可列表。
+
+        Raises:
+            TimeoutError: 等待超时；此时不持有任何 permit。
+            ValueError: 出现未配置的 lane 名时抛出；此时不持有任何 permit。
+        """
+        ...
+
     def try_acquire(self, lane: str) -> ConcurrencyPermit | None:
         """尝试立即获取并发许可（非阻塞）。
 

@@ -883,7 +883,7 @@ Host 是 Dayu 的通用托管执行层。它的价值不在于“帮 Service 调
 
 - `Service` 只在 `ExecutionHostPolicy.business_concurrency_lane`（以及 `HostedRunSpec.business_concurrency_lane`）里声明这次执行要占用的**业务** lane，例如 `write_chapter`、`sec_download`。
 - Host 自治 lane `llm_api` 由 `DefaultHostExecutor` 根据调用路径自动叠加（`run_agent_stream` / `run_prepared_turn_stream` 路径必叠加；`run_operation_*` 路径不叠加），Service 代码不出现 `"llm_api"` 字面量、也不参与是否加 llm_api 的业务判断。
-- 同一次 run 可能同时持有多条 lane 的 permit：`DefaultHostExecutor` 在 run 启动时按字母序依次 `acquire` 所有必需 lane，结束时逆序释放；任一步 acquire 失败时会回滚已获取的 permit。
+- 同一次 run 可能同时持有多条 lane 的 permit：`DefaultHostExecutor` 在 run 启动时把全部必需 lane 按字母序传给 `ConcurrencyGovernorProtocol.acquire_many`，由 governor 在**单个持久化事务**内完成"全部 lane 额度检查 + 全部 permit 写入"，要么全拿要么全不拿；结束时按逆序释放。进程在 acquire_many 期间被 SIGKILL / OOM 杀死时，事务未 COMMIT 等于未写，不会残留半截 permit。executor 层不再承担多 lane 之间的 permit 回滚逻辑。
 - `ConcurrencyGovernor` 的 lane 配置由 Host 启动期聚合：Host 默认（只含 `llm_api`）→ Service 业务默认（`SERVICE_DEFAULT_LANE_CONFIG`，含 `write_chapter`、`sec_download`）→ `run.json.host_config.lane` → 显式覆盖，后者覆盖前者。
 - 业务层要读取 lane 上限时走 `HostGovernanceProtocol.get_all_lane_statuses()`（例如写作流水线读 `write_chapter.max_concurrent` 作为 in-process ThreadPoolExecutor 的 worker 上限，保持进程内并发与跨进程 permit 数同源）。
 

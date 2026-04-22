@@ -636,21 +636,14 @@ class DefaultHostExecutor(HostExecutorProtocol):
         permits: list[ConcurrencyPermit] = []
         if self.concurrency_governor is not None:
             lanes = _required_lanes_for_spec(spec, include_agent_lane=include_agent_lane)
-            acquire_timeout = _resolve_concurrency_acquire_timeout_seconds(spec.timeout_ms)
-            governor = self.concurrency_governor
-            try:
-                for lane_name in lanes:
-                    permits.append(governor.acquire(lane_name, timeout=acquire_timeout))
-            except BaseException:
-                for acquired in reversed(permits):
-                    try:
-                        governor.release(acquired)
-                    except Exception:  # noqa: BLE001
-                        Log.warn(
-                            f"[{run_id}] 回滚 permit 释放失败: lane={acquired.lane}",
-                            module=MODULE,
-                        )
-                raise
+            if lanes:
+                acquire_timeout = _resolve_concurrency_acquire_timeout_seconds(spec.timeout_ms)
+                # 走 acquire_many：单事务原子拿齐全部 lane；
+                # 进程若在两步 acquire 之间被 SIGKILL，SQLite 事务未 COMMIT 等于没写，
+                # 不会残留半截 permit，无需 executor 层 try/except 回滚。
+                permits = self.concurrency_governor.acquire_many(
+                    lanes, timeout=acquire_timeout
+                )
         return HostedRunContext(run_id=run_id, cancellation_token=token), bridge, deadline_watcher, permits
 
     def _finish_run(
