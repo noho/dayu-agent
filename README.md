@@ -28,7 +28,7 @@
 - 位于 Engine 的 web tools 现在的对抗challenge能力很弱，很多网站无法访问。
 - 位于 Fins 的港股、A股财报下载功能尚未实现。
 - **GUI 尚未实现**；
-- **Web UI 目前仍只有 FastAPI 骨架**。
+- **Web UI 已有 Streamlit 实现 和 FastAPI 骨架**。
 - **WeChat UI 仅支持文本消息首版，还可添加更多好玩的功能**。
 - 财报电话会议记录音频转录文字后信息提取（起码要区分信息来自提问还是回答）尚未实现。
 - 财报presentation信息提取尚未实现。
@@ -113,11 +113,12 @@ pip install -e ".[test,dev,browser]" -c constraints/lock-macos-arm64-py311.txt
 playwright install chromium
 ```
 
-如需渲染 PDF，可选安装 `pandoc`：
+如需渲染 PDF，可选安装 `pandoc`, 需为 `3.0+` 版本（推荐最新稳定版）：
 
 - macOS：`brew install pandoc`
 - Ubuntu / Debian：`sudo apt-get install pandoc`
 - Windows：`choco install pandoc` 或从 [pandoc 官网](https://pandoc.org/installing.html) 下载安装
+
 
 ### 1.2 验证安装
 
@@ -270,7 +271,51 @@ dayu-cli <subcommand> [参数]
 - 宿主管理命令同样支持 `--base` / `--config` / 日志参数；例如 `dayu-cli host --base ./workspace status`、`dayu-cli sessions --base ./workspace --source cli --scene interactive`、`dayu-cli conv --base ./workspace list`。
 - `interactive` 默认会续接本地绑定的同一个多轮会话；如果上一次回答还没完整回显到终端，重启 CLI 会先把那次回答补完，再进入新的输入循环。
 
-### 2.2 WeChat 入口
+### 2.2 Web 入口（Streamlit）
+
+基于 Streamlit 的 Web UI：
+
+```bash
+dayu-web
+```
+
+`dayu-web` 内部会执行与下列命令等价的启动链路：
+
+```bash
+python -m streamlit run dayu/web/streamlit_app.py
+```
+
+也可以用模块入口启动（等价）：
+
+```bash
+python -m dayu.web
+```
+
+默认使用 `./workspace` 作为工作区，也可通过 `--workspace` 参数指定：
+
+```bash
+dayu-web --workspace /path/to/workspace
+```
+
+或通过环境变量设置：
+
+```bash
+export DAYU_WORKSPACE=/path/to/workspace
+dayu-web
+```
+
+功能：
+- 左侧自选股列表管理（添加、删除、编辑）
+- 选中股票后展示财报管理、交互式分析、分析报告三个 Tab
+- 财报管理：展示已下载财报列表；点击「下载财报」按钮在页面内展开下载设置（表单类型、日期范围等），提交后实时显示下载进度，完成后提示刷新列表；选中一行后可在新标签预览主文件
+- 交互式分析：默认引导「你对公司有什么问题？」与示例问题，可一键填入首屏输入框；首条发送后进入会话态，支持流式展示助手回复与同一标的下的多轮追问（按标的隔离会话状态）
+
+附带的本地文件服务：
+- Streamlit 应用启动时会在 `127.0.0.1` 上随机端口启动一个只读 HTTP 子服务，仅暴露 `workspace/portfolio/<ticker>/filings/<document_id>/` 范围内的财报文件。
+- 端口随机分配，无需配置；启动失败时仅会禁用「在新标签打开文件」入口，不影响其他功能。
+- 服务仅监听本地回环地址，禁止目录列表与路径穿越。
+
+### 2.3 WeChat 入口
 
 统一入口：
 
@@ -1081,8 +1126,9 @@ dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.html
 - `.pdf`
 
 说明：
-- 生成 PDF 需要 `pandoc + Chrome`
+- 生成 PDF 需要 `pandoc(3.0+) + Chrome`
 - 若 Chrome 不在标准位置，可设置 `PUPPETEER_EXECUTABLE_PATH`
+- PDF 渲染已内置中文字体回退栈；若仍显示方块或乱码，请在系统安装 `Noto Sans CJK SC` 或 `Source Han Sans SC`
 - 渲染器会保留 Markdown 里的普通换行；例如列表项里单独一行的“标签”与下一行正文，在 `.docx` 中会继续换行显示
 
 ## 7. 配置文件从哪里改
@@ -1249,6 +1295,7 @@ dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.html
 
 - 用户手册（当前文档）：[README.md](README.md)
 - 开发手册总览：[dayu/README.md](dayu/README.md)
+- Web 适配层设计说明：[dayu/web/README.md](dayu/web/README.md)
 - Engine 包开发手册：[dayu/engine/README.md](dayu/engine/README.md)
 - Fins 包开发手册：[dayu/fins/README.md](dayu/fins/README.md)
 - 配置说明手册：[dayu/config/README.md](dayu/config/README.md)

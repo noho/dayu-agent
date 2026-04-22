@@ -21,6 +21,7 @@
 - [engine/README.md](engine/README.md)
 - [fins/README.md](fins/README.md)
 - [config/README.md](config/README.md)
+- [web/README.md](web/README.md)（Streamlit/FastAPI Web 适配层设计说明）
 
 ## 0.1 开发环境安装
 
@@ -62,7 +63,7 @@ playwright install chromium
   - 同一行业里，不同公司写出公司自己的特殊结构变量。
 - 位于 Engine 的 web tools 现在的对抗challenge能力很弱，很多网站无法访问。
 - 位于 Fins 的港股、A股财报下载功能尚未实现。
-- GUI 尚未实现；Web UI 目前仍只有 FastAPI 骨架。
+- Web UI 已有 Streamlit 实现（dayu-web）和 FastAPI 骨架。
 - WeChat UI 仅支持文本消息首版，还可添加更多好玩的功能。
 - 财报电话会议记录音频转录文字后信息提取（起码要区分信息来自提问还是回答）尚未实现。
 - 财报presentation信息提取尚未实现。
