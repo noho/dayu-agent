@@ -264,6 +264,14 @@ sequenceDiagram
 - 把 `Execution Contract` 收敛为 `Agent` 可执行输入
 - 为 direct operation 提供统一取消语义；同步路径只向上暴露 `HostedRunContext` 这类稳定窄边界，由 Service/Runtime 协作下传取消检查，不能把 Host 内部取消桥接细节泄漏给业务实现
 
+`cancel_session` 的执行顺序与防御链：
+
+1. 先 `close_session` 推进 session 到 `CLOSED`，把仓储层写入屏障立起来；
+2. 再批量取消该 session 下的活跃 run；
+3. 最后做一次幂等 delete sweep 清理 `reply_outbox` 与 `pending_turn`。
+
+Host 在仓储层对 `pending_turn_store.upsert_pending_turn / update_state / record_resume_attempt / record_resume_failure` 与 `reply_outbox_store.submit_reply` 施加 session 活性屏障：当目标 session 不存在或已 `CLOSED`，写入路径会抛 `SessionClosedError`。`DefaultHostExecutor` 在登记 pending turn 时吸收该异常并降级为 no-op，从而杜绝 `cancel_session` 窗口期内 executor 迟到写入产生的孤儿数据。
+
 它不负责：
 
 - 理解 `ticker`、写作、审计、修复等业务语义

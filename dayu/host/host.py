@@ -227,8 +227,18 @@ class Host:
             self._session_registry = session_registry
             self._run_registry = run_registry
             self._concurrency_governor = concurrency_governor
-            self._pending_turn_store = pending_turn_store or InMemoryPendingConversationTurnStore()
-            self._reply_outbox_store = reply_outbox_store or InMemoryReplyOutboxStore()
+            # 显式注入路径：若调用方未提供 store，则装配携带 session 活性屏障的默认
+            # 内存 store，让 cancel_session 的写入屏障语义与默认装配路径保持一致。
+            self._pending_turn_store = (
+                pending_turn_store
+                if pending_turn_store is not None
+                else InMemoryPendingConversationTurnStore(session_activity=session_registry)
+            )
+            self._reply_outbox_store = (
+                reply_outbox_store
+                if reply_outbox_store is not None
+                else InMemoryReplyOutboxStore(session_activity=session_registry)
+            )
             self._event_bus = event_bus
             self._pending_turn_resume_max_attempts = pending_turn_resume_max_attempts
             self._conversation_store = conversation_store or _build_default_conversation_store(workspace)
@@ -607,13 +617,14 @@ class Host:
         session = self.get_session(session_id)
         if session is None:
             raise KeyError(f"session 不存在: {session_id}")
+        # 先 close session，把仓储层的写入屏障立起来；即使 cancel 流程内有并发
+        # executor 正在登记 pending turn / reply outbox，屏障会让其 SessionClosedError
+        # 降级为 no-op，避免产生孤儿数据。
+        self._session_registry.close_session(session_id)
         cancelled_ids = self.cancel_session_runs(session_id)
-        # 清理该 session 关联的待交付回复和待处理对话轮次，
-        # 在 runs 已取消但 session 尚未 close 的窗口内执行，
-        # 避免产生孤儿数据。
+        # 再做一次幂等 delete sweep，兜底回收 close_session 之前已成功写入的记录。
         self._reply_outbox_store.delete_by_session_id(session_id)
         self._pending_turn_store.delete_by_session_id(session_id)
-        self._session_registry.close_session(session_id)
         updated = self.get_session(session_id)
         if updated is None:
             raise KeyError(f"session 不存在: {session_id}")
@@ -1341,8 +1352,14 @@ def _build_default_host_components(
     session_registry = SQLiteSessionRegistry(host_store)
     run_registry = SQLiteRunRegistry(host_store)
     concurrency_governor = SQLiteConcurrencyGovernor(host_store, lane_config=lane_config)
-    pending_turn_store = SQLitePendingConversationTurnStore(host_store)
-    reply_outbox_store = SQLiteReplyOutboxStore(host_store)
+    # 注入 session_registry 作为 session activity 查询源，让仓储层可以在 session
+    # 已关闭时以 SessionClosedError 屏障 executor 的迟到写入。
+    pending_turn_store = SQLitePendingConversationTurnStore(
+        host_store, session_activity=session_registry,
+    )
+    reply_outbox_store = SQLiteReplyOutboxStore(
+        host_store, session_activity=session_registry,
+    )
     scene_preparation = _build_default_scene_preparation(
         workspace=workspace,
         model_catalog=model_catalog,
