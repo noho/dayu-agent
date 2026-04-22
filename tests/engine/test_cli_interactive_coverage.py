@@ -604,13 +604,6 @@ def _build_event_session(*event_sequences: list[StreamEvent], fail_with: Excepti
             for event in event_sequences[index]:
                 yield event
 
-        async def stream(self, request: PromptRequest) -> AsyncIterator[StreamEvent]:
-            """返回单轮 prompt 预置事件流。"""
-
-            request_log.append(request)
-            async for event in self._yield_events(request.user_text):
-                yield event
-
         async def submit(self, request: PromptRequest) -> PromptSubmission:
             """按 PromptServiceProtocol 返回提交结果。"""
 
@@ -729,11 +722,6 @@ def test_run_prompt_stream_uses_submit_protocol_only(monkeypatch: pytest.MonkeyP
                 session_id=request.session_id or "prompt-session",
                 event_stream=_stream(),
             )
-
-        async def stream(self, request: PromptRequest) -> AsyncIterator[StreamEvent]:
-            """旧兼容接口不应被 interactive 使用。"""
-
-            raise AssertionError(f"unexpected stream call: {request}")
 
     monkeypatch.setattr(
         app_interactive,

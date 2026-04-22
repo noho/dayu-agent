@@ -48,24 +48,6 @@ class PromptService(PromptServiceProtocol):
             event_stream=self._stream_in_session(request=request, session_id=session.session_id),
         )
 
-    async def stream(self, request: PromptRequest) -> AsyncIterator[AppEvent]:
-        """兼容旧调用方的单轮 Prompt 流式接口。
-
-        Args:
-            request: Prompt 请求。
-
-        Yields:
-            应用层事件。
-
-        Raises:
-            ValueError: 输入为空时抛出。
-            KeyError: 显式续聊但 session 不存在时抛出。
-        """
-
-        submission = await self.submit(request)
-        async for event in submission.event_stream:
-            yield event
-
     def _resolve_session(self, request: PromptRequest):
         """解析 Prompt 请求对应的 Host session。"""
 
