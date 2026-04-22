@@ -21,6 +21,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
@@ -150,10 +151,13 @@ def main() -> None:
 
     # 从会话状态获取工作区路径和服务
     workspace_root_raw = st.session_state["workspace_root"]
-    if not isinstance(workspace_root_raw, Path):
+    config_dir = f"{workspace_root_raw}/config"
+    assets_dir = f"{workspace_root_raw}/assets"
+    if not isinstance(workspace_root_raw, Path) or not workspace_root_raw.exists() or not os.path.exists(config_dir) or not os.path.exists(assets_dir):
         st.error("工作区路径未初始化，请先运行初始化配置。")
         st.stop()
         return
+
     workspace_root = workspace_root_raw
     fins_service = cast("FinsServiceProtocol | None", st.session_state["fins_service"])
     write_service = cast("WriteServiceProtocol | None", st.session_state["write_service"])

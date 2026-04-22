@@ -512,21 +512,21 @@ class TestTaskSettings:
     def test_default_task_settings(self) -> None:
         """测试默认任务设置。"""
         expected_defaults = {
-            "template_path": "定性分析模板.md",
+            "template_path": "workspace/assets/定性分析模板.md",
             "write_max_retries": 2,
             "resume": True,
             "fast": True,
             "force": False,
         }
 
-        assert expected_defaults["template_path"] == "定性分析模板.md"
+        assert expected_defaults["template_path"] == "workspace/assets/定性分析模板.md"
         assert expected_defaults["write_max_retries"] == 2
         assert expected_defaults["resume"] is True
 
     def test_task_settings_update(self) -> None:
         """测试更新任务设置。"""
         settings = {
-            "template_path": "定性分析模板.md",
+            "template_path": "workspace/assets/定性分析模板.md",
             "write_max_retries": 2,
             "resume": True,
         }

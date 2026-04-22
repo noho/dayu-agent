@@ -35,8 +35,8 @@ _TASK_STATUS_COMPLETED = "completed"
 _TASK_STATUS_FAILED = "failed"
 _TASK_STATUS_CANCELLED = "cancelled"
 
-# 默认模板路径
-_DEFAULT_TEMPLATE_PATH = "定性分析模板.md"
+# 默认模板
+_DEFAULT_TEMPLATE_NAME = "定性分析模板.md"
 
 # 报告文件名格式
 _REPORT_FILE_NAME_FORMAT = "{ticker}_qual_report.md"
@@ -244,6 +244,11 @@ def _load_report_state(workspace_root: Path, ticker: str) -> ReportState:
 
     return state
 
+def _get_default_template_path() -> str:
+    """获取默认模板路径。"""
+    workspace_root = st.session_state["workspace_root"]
+    assets_dir = Path(f"{workspace_root}/assets")
+    return str(assets_dir / _DEFAULT_TEMPLATE_NAME)
 
 def _load_report_content(report_path: Path) -> str | None:
     """加载报告内容。
@@ -909,12 +914,13 @@ def _get_task_settings(ticker: str) -> dict[str, Any]:
         任务设置字典。
     """
     _init_write_task_state()
+    default_template_path = _get_default_template_path()
     key = f"settings_{ticker}"
     write_task_settings = cast(dict[str, dict[str, object]], st.session_state["write_task_settings"])
     if key not in write_task_settings:
         # 默认设置
         write_task_settings[key] = {
-            "template_path": _DEFAULT_TEMPLATE_PATH,
+            "template_path": default_template_path,
             "write_max_retries": 2,
             "resume": True,
             "fast": True,
@@ -1203,13 +1209,14 @@ def _render_state1_no_report_no_task(selected_stock: WatchlistItem) -> None:
     st.warning("当前股票尚未生成分析报告，请点击“生成”按钮启动任务。")
 
     settings = _get_task_settings(ticker)
+    default_template_path = _get_default_template_path()    
     template_path = st.text_input(
         "模板路径",
-        value=settings.get("template_path", _DEFAULT_TEMPLATE_PATH),
+        value=settings.get("template_path", default_template_path),
         key=f"template_path_{ticker}",
+        disabled=True,
+
     )
-    if str(settings.get("template_path", _DEFAULT_TEMPLATE_PATH)) != template_path:
-        _update_task_settings(ticker, template_path=template_path)
 
 
     default_mode = _fast_to_generation_mode(bool(settings.get("fast", True)))
@@ -1227,7 +1234,7 @@ def _render_state1_no_report_no_task(selected_stock: WatchlistItem) -> None:
     st.caption("快速生成仅写作，深度生成包含审计、确认、修复流程。")
 
     # 引导卡片
-    guide_headings = _extract_template_guide_headings(template_path or _DEFAULT_TEMPLATE_PATH)
+    guide_headings = _extract_template_guide_headings(template_path or default_template_path)
     st.info(_build_state1_guide_card_content(guide_headings))
 
     st.caption("任务参数使用已保存设置或默认配置。")
@@ -1385,7 +1392,7 @@ def _render_state3_has_report_no_task(
 
     # 加载报告状态
     report_state = _load_report_state(workspace_root, ticker)
-
+    default_template_path = _get_default_template_path()
     # 重新生成设置区域（置于基本信息之前）
     if st.session_state.get(f"show_regenerate_settings_{ticker}", False):
         st.markdown("---")
@@ -1395,7 +1402,7 @@ def _render_state3_has_report_no_task(
 
         template_path = st.text_input(
             "分析模板路径",
-            value=settings.get("template_path", _DEFAULT_TEMPLATE_PATH),
+            value=settings.get("template_path", default_template_path),
             key=f"regen_template_{ticker}",
         )
 
@@ -1424,15 +1431,12 @@ def _render_state3_has_report_no_task(
             st.caption("覆盖模式默认关闭（不覆盖）；开启后将重跑并覆盖已完成章节。")
             
 
-        # 确保template_path是字符串
-        template_path_str = str(template_path) if template_path else _DEFAULT_TEMPLATE_PATH
-
         col5, col6 = st.columns(2)
         with col5:
             if st.button("🔄 重新生成", type="primary", use_container_width=True, key=f"confirm_regen_{ticker}"):
                 _update_task_settings(
                     ticker,
-                    template_path=template_path_str,
+                    template_path=default_template_path,
                     write_max_retries=int(settings.get("write_max_retries", 2)),
                     resume=resume,
                     fast=fast,
@@ -1443,7 +1447,7 @@ def _render_state3_has_report_no_task(
                     company_name=company_name,
                     workspace_root=workspace_root,
                     write_service=write_service,
-                    template_path=template_path_str,
+                    template_path=default_template_path,
                     write_max_retries=int(settings.get("write_max_retries", 2)),
                     resume=resume,
                     fast=fast,
@@ -1622,13 +1626,13 @@ def _start_report_generation_from_saved_settings(
         return
 
     settings = _get_task_settings(ticker)
-    template_path = str(settings.get("template_path", _DEFAULT_TEMPLATE_PATH))
+    default_template_path = _get_default_template_path()
     write_max_retries = int(settings.get("write_max_retries", 2))
     resume = bool(settings.get("resume", True))
     fast = bool(settings.get("fast", True))
     force = bool(settings.get("force", False))
 
-    template = _resolve_template_path(template_path)
+    template = _resolve_template_path(default_template_path)
     if not template.exists():
         st.error(f"模板文件不存在，无法启动任务: {template}")
         return
