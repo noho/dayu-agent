@@ -14,6 +14,7 @@ HOST_STORE_RELATIVE_PATH = DAYU_INTERNAL_ROOT_RELATIVE_DIR / "host" / "dayu_host
 CONVERSATION_STORE_RELATIVE_DIR = DAYU_INTERNAL_ROOT_RELATIVE_DIR / "session"
 INTERACTIVE_STATE_RELATIVE_DIR = DAYU_INTERNAL_ROOT_RELATIVE_DIR / "interactive"
 CLI_CONVERSATION_REGISTRY_RELATIVE_DIR = DAYU_INTERNAL_ROOT_RELATIVE_DIR / "cli-conversations"
+CLI_CONVERSATION_LOCKS_RELATIVE_DIR = CLI_CONVERSATION_REGISTRY_RELATIVE_DIR / "locks"
 SEC_CACHE_RELATIVE_DIR = DAYU_INTERNAL_ROOT_RELATIVE_DIR / "sec_cache"
 SEC_THROTTLE_RELATIVE_DIR = DAYU_INTERNAL_ROOT_RELATIVE_DIR / "sec_throttle"
 DEFAULT_WECHAT_INSTANCE_LABEL = "default"
@@ -115,6 +116,26 @@ def build_cli_conversation_label_record_path(workspace_root: Path, label: str) -
     """
 
     return build_cli_conversation_registry_dir(workspace_root) / f"{label}.json"
+
+
+def build_cli_conversation_label_lock_dir(workspace_root: Path, label: str) -> Path:
+    """构造指定 label 的 CLI conversation 锁目录。
+
+    Args:
+        workspace_root: 工作区根目录。
+        label: conversation label。
+
+    Returns:
+        指定 label 对应的锁目录路径。
+
+    Raises:
+        无。
+    """
+
+    return _build_workspace_relative_path(
+        workspace_root,
+        CLI_CONVERSATION_LOCKS_RELATIVE_DIR / label,
+    )
 
 
 def build_sec_cache_dir(workspace_root: Path) -> Path:
@@ -244,6 +265,7 @@ __all__ = [
     "CONVERSATION_STORE_RELATIVE_DIR",
     "INTERACTIVE_STATE_RELATIVE_DIR",
     "CLI_CONVERSATION_REGISTRY_RELATIVE_DIR",
+    "CLI_CONVERSATION_LOCKS_RELATIVE_DIR",
     "SEC_CACHE_RELATIVE_DIR",
     "SEC_THROTTLE_RELATIVE_DIR",
     "DEFAULT_WECHAT_INSTANCE_LABEL",
@@ -254,6 +276,7 @@ __all__ = [
     "build_interactive_state_dir",
     "build_cli_conversation_registry_dir",
     "build_cli_conversation_label_record_path",
+    "build_cli_conversation_label_lock_dir",
     "build_sec_cache_dir",
     "build_sec_throttle_dir",
     "build_wechat_state_dir",

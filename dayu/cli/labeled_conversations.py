@@ -2,7 +2,7 @@
 
 本模块只承载 `prompt --label` / `interactive --label` 共用的
 UI 层辅助逻辑：
-- 清理漂移的 label registry record
+- 清理已漂移或已关闭的 label registry record
 - 校验带标签对话绑定的 scene 必须启用多轮会话
 - 解析最终使用的 `(session_id, scene_name, created)`
 """
@@ -24,6 +24,7 @@ class LabeledConversationTarget:
     session_id: str
     scene_name: str
     created: bool
+    recreated_from_closed: bool = False
 
 
 def resolve_labeled_conversation_target(
@@ -45,14 +46,14 @@ def resolve_labeled_conversation_target(
         default_scene_name: 首次创建 label 时采用的默认 scene。
         explicit_session_id: 可选显式 session_id。
         explicit_scene_name: 显式 scene 名或调用方默认 scene。
-        host_admin_service: 可选 HostAdmin service；提供时会清理漂移 record。
+        host_admin_service: 可选 HostAdmin service；提供时会清理不可恢复 record。
 
     Returns:
         解析后的带标签对话目标。
 
     Raises:
         ValueError: 当 scene 不存在、scene 未启用 conversation，或 registry record 非法时抛出。
-        OSError: 清理漂移 record 失败时抛出。
+        OSError: 清理不可恢复 record 失败时抛出。
     """
 
     if explicit_session_id is not None:
@@ -62,7 +63,7 @@ def resolve_labeled_conversation_target(
             scene_name=explicit_scene_name,
             created=False,
         )
-    prune_missing_label_record(
+    recreated_from_closed = prune_unavailable_label_record(
         registry=registry,
         host_admin_service=host_admin_service,
         label=label,
@@ -76,16 +77,17 @@ def resolve_labeled_conversation_target(
         session_id=resolution.record.session_id,
         scene_name=resolution.record.scene_name,
         created=resolution.created,
+        recreated_from_closed=recreated_from_closed and resolution.created,
     )
 
 
-def prune_missing_label_record(
+def prune_unavailable_label_record(
     *,
     registry: FileConversationLabelRegistry,
     host_admin_service: HostAdminServiceProtocol | None,
     label: str,
-) -> None:
-    """删除已漂移到不存在 Host session 的 label record。
+) -> bool:
+    """删除已不可恢复的 label record。
 
     Args:
         registry: CLI label registry。
@@ -93,21 +95,23 @@ def prune_missing_label_record(
         label: 已规范化的 conversation label。
 
     Returns:
-        无。
+        若因命中 closed session 而清理返回 ``True``；其它情况返回 ``False``。
 
     Raises:
         ValueError: registry record 非法时抛出。
-        OSError: 清理漂移 record 失败时抛出。
+        OSError: 清理不可恢复 record 失败时抛出。
     """
 
     if host_admin_service is None:
-        return
+        return False
     record = registry.get_record(label)
     if record is None:
-        return
-    if host_admin_service.get_session(record.session_id) is not None:
-        return
+        return False
+    session = host_admin_service.get_session(record.session_id)
+    if session is not None and session.state != "closed":
+        return False
     registry.delete_record(label)
+    return session is not None and session.state == "closed"
 
 
 def _ensure_labeled_scene_is_conversational(
@@ -145,6 +149,6 @@ def _ensure_labeled_scene_is_conversational(
 
 __all__ = [
     "LabeledConversationTarget",
-    "prune_missing_label_record",
+    "prune_unavailable_label_record",
     "resolve_labeled_conversation_target",
 ]

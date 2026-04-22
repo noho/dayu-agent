@@ -10,6 +10,7 @@ from typing import cast
 import pytest
 
 from dayu.cli.commands import conv as conv_commands_module
+from dayu.cli.conversation_label_locks import ConversationLabelLease
 from dayu.cli.conversation_labels import FileConversationLabelRegistry, build_cli_conversation_session_id
 from dayu.services.contracts import SessionAdminView
 from dayu.services.protocols import HostAdminServiceProtocol
@@ -278,3 +279,103 @@ def test_run_conv_status_prunes_missing_registry_record_and_returns_not_found(
     assert f"label 不存在: {record.label}" in captured.err
     assert registry.get_record("orphan") is None
     assert build_cli_conversation_session_id("orphan") == record.session_id
+
+
+def test_run_conv_remove_closes_session_and_deletes_label(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """`conv remove --label` 应关闭底层 session 并删除 registry record。"""
+
+    registry = FileConversationLabelRegistry(tmp_path)
+    record = registry.get_or_create_record(label="alpha", scene_name="interactive").record
+    session = _build_session_view(session_id=record.session_id)
+    closed_session_ids: list[str] = []
+    service = cast(
+        HostAdminServiceProtocol,
+        SimpleNamespace(
+            get_session=lambda session_id: session if session_id == record.session_id else None,
+            close_session=lambda session_id: (
+                closed_session_ids.append(session_id) or (session, [])
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        conv_commands_module,
+        "_build_host_runtime",
+        lambda _args: _build_runtime(tmp_path, service=service),
+    )
+
+    exit_code = conv_commands_module._run_conv_remove_command(
+        argparse.Namespace(base=str(tmp_path), config=None, label="alpha")
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "已移除 label: alpha" in captured.out
+    assert closed_session_ids == [record.session_id]
+    assert registry.get_record("alpha") is None
+
+
+def test_run_conv_remove_deletes_orphaned_label_without_closing_session(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """`conv remove` 命中漂移 record 时应直接删除 label。"""
+
+    registry = FileConversationLabelRegistry(tmp_path)
+    registry.get_or_create_record(label="ghost", scene_name="prompt_mt")
+    service = cast(
+        HostAdminServiceProtocol,
+        SimpleNamespace(get_session=lambda _session_id: None),
+    )
+    monkeypatch.setattr(
+        conv_commands_module,
+        "_build_host_runtime",
+        lambda _args: _build_runtime(tmp_path, service=service),
+    )
+
+    exit_code = conv_commands_module._run_conv_remove_command(
+        argparse.Namespace(base=str(tmp_path), config=None, label="ghost")
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "已移除 label: ghost" in captured.out
+    assert registry.get_record("ghost") is None
+
+
+def test_run_conv_remove_rejects_busy_label(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """`conv remove` 命中占用中的 label 时应明确失败。"""
+
+    registry = FileConversationLabelRegistry(tmp_path)
+    registry.get_or_create_record(label="alpha", scene_name="interactive")
+    service = cast(
+        HostAdminServiceProtocol,
+        SimpleNamespace(get_session=lambda _session_id: None),
+    )
+    monkeypatch.setattr(
+        conv_commands_module,
+        "_build_host_runtime",
+        lambda _args: _build_runtime(tmp_path, service=service),
+    )
+
+    busy_lease = ConversationLabelLease(tmp_path, "alpha")
+    busy_lease.acquire()
+    try:
+        exit_code = conv_commands_module._run_conv_remove_command(
+            argparse.Namespace(base=str(tmp_path), config=None, label="alpha")
+        )
+    finally:
+        busy_lease.release()
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "label 正在使用中: alpha" in captured.err
+    assert registry.get_record("alpha") is not None

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from dayu.workspace_paths import (
+    build_cli_conversation_label_lock_dir,
     build_cli_conversation_label_record_path,
     build_cli_conversation_registry_dir,
     build_conversation_store_dir,
@@ -75,6 +76,16 @@ class TestBuildCliConversationLabelRecordPath:
         """应返回指定 label 的 json record 路径。"""
         result = build_cli_conversation_label_record_path(tmp_path, "alpha_1")
         assert result == tmp_path / ".dayu" / "cli-conversations" / "alpha_1.json"
+
+
+class TestBuildCliConversationLabelLockDir:
+    """build_cli_conversation_label_lock_dir 测试。"""
+
+    def test_returns_label_lock_dir(self, tmp_path: Path) -> None:
+        """应返回指定 label 的锁目录路径。"""
+
+        result = build_cli_conversation_label_lock_dir(tmp_path, "alpha_1")
+        assert result == tmp_path / ".dayu" / "cli-conversations" / "locks" / "alpha_1"
 
 
 class TestBuildSecCacheDir:

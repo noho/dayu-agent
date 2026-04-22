@@ -13,6 +13,7 @@ from dayu.cli.conversation_labels import (
     build_cli_conversation_session_id,
     validate_conversation_label,
 )
+from dayu.cli.conversation_label_locks import ConversationLabelLease
 from dayu.workspace_paths import build_cli_conversation_label_record_path
 
 pytestmark = pytest.mark.unit
@@ -191,3 +192,20 @@ def test_registry_rejects_corrupted_record_on_list(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="JSON 对象"):
         registry.list_records()
+
+
+def test_conversation_label_lease_rejects_second_acquire_until_release(tmp_path: Path) -> None:
+    """同一个 label 的第二次获取应被拒绝，释放后可再次获取。"""
+
+    first = ConversationLabelLease(tmp_path, "alpha")
+    second = ConversationLabelLease(tmp_path, "alpha")
+
+    first.acquire()
+    try:
+        with pytest.raises(RuntimeError, match="label 正在使用中: alpha"):
+            second.acquire()
+    finally:
+        first.release()
+
+    second.acquire()
+    second.release()

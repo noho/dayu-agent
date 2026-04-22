@@ -744,6 +744,12 @@ def _register_host_subcommands(subparsers: argparse._SubParsersAction[DayuCliArg
         description="查看指定 label 对话的明细状态。",
     )
     status_parser.add_argument("--label", required=True, help="要查看的对话 label")
+    remove_parser = conv_subparsers.add_parser(
+        "remove",
+        help="移除指定 label 对话",
+        description="关闭底层 session 并释放指定 label 的可恢复映射。",
+    )
+    remove_parser.add_argument("--label", required=True, help="要移除的对话 label")
 
 
 def parse_arguments() -> argparse.Namespace:

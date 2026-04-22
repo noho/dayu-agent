@@ -15,6 +15,7 @@ from dayu.cli.dependency_setup import (
     setup_loglevel,
     setup_paths,
 )
+from dayu.cli.conversation_label_locks import ConversationLabelLease
 from dayu.cli.interactive_ui import interactive
 from dayu.cli.labeled_conversations import resolve_labeled_conversation_target
 from dayu.contracts.infrastructure import PromptAssetStoreProtocol
@@ -53,22 +54,8 @@ def run_interactive_command(args: argparse.Namespace) -> int:
     paths_config = setup_paths(args)
     execution_options = _build_execution_options(args)
     Log.info(f"工作目录: {paths_config.workspace_dir}", module=MODULE)
-    (
-        _workspace,
-        _default_execution_options,
-        scene_execution_acceptance_preparer,
-        host,
-        fins_runtime,
-    ) = _prepare_cli_host_dependencies(
-        workspace_config=paths_config,
-        execution_options=execution_options,
-    )
-    service = _build_chat_service(
-        host=host,
-        scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
-        fins_runtime=fins_runtime,
-    )
-    host_admin_service = HostAdminService(host=host)
+    label = _resolve_interactive_label(args)
+    label_lease: ConversationLabelLease | None = None
     instance_lock = StateDirSingleInstanceLock(
         state_dir=build_interactive_state_dir(paths_config.workspace_dir),
         lock_file_name=".interactive.lock",
@@ -80,12 +67,36 @@ def run_interactive_command(args: argparse.Namespace) -> int:
         Log.error(str(exc), module=MODULE)
         return 1
     try:
+        if label is not None:
+            try:
+                label_lease = ConversationLabelLease(paths_config.workspace_dir, label)
+                label_lease.acquire()
+            except RuntimeError as exc:
+                Log.error(str(exc), module=MODULE)
+                return 2
+        (
+            _workspace,
+            _default_execution_options,
+            scene_execution_acceptance_preparer,
+            host,
+            fins_runtime,
+        ) = _prepare_cli_host_dependencies(
+            workspace_config=paths_config,
+            execution_options=execution_options,
+        )
+        service = _build_chat_service(
+            host=host,
+            scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
+            fins_runtime=fins_runtime,
+        )
+        host_admin_service = HostAdminService(host=host)
         try:
             (
                 interactive_session_id,
                 interactive_scene_name,
                 should_print_restore_context,
                 label_created,
+                recreated_from_closed,
             ) = _resolve_interactive_target(
                 args,
                 workspace_dir=paths_config.workspace_dir,
@@ -104,8 +115,12 @@ def run_interactive_command(args: argparse.Namespace) -> int:
             f"{json.dumps(interactive_model, ensure_ascii=False, sort_keys=True)}",
             module=MODULE,
         )
+        if label is not None and recreated_from_closed:
+            Log.info(
+                f"label 对应的旧对话已关闭，现将基于同名 label 创建新对话: {label}",
+                module=MODULE,
+            )
         Log.info("进入交互模式... 按 Ctrl+D 发送 prompt... 按 Enter 换行... 按两次 Ctrl+D 退出...", module=MODULE)
-        label = _resolve_interactive_label(args)
         if label is not None:
             Log.info(
                 (
@@ -129,6 +144,8 @@ def run_interactive_command(args: argparse.Namespace) -> int:
         )
         return 0
     finally:
+        if label_lease is not None:
+            label_lease.release()
         instance_lock.release()
 
 
@@ -138,17 +155,17 @@ def _resolve_interactive_target(
     workspace_dir: Path,
     prompt_asset_store: PromptAssetStoreProtocol | None = None,
     host_admin_service: HostAdminServiceProtocol | None = None,
-) -> tuple[str, str, bool, bool]:
+) -> tuple[str, str, bool, bool, bool]:
     """根据 CLI 参数解析 interactive 应进入的 session。
 
     Args:
         args: 解析后的命令行参数。
         workspace_dir: 工作区根目录。
         prompt_asset_store: 可选 prompt 资产仓储；提供时会校验 scene 是否允许多轮会话。
-        host_admin_service: 可选 HostAdmin service；提供时会清理漂移 registry record。
+        host_admin_service: 可选 HostAdmin service；提供时会清理不可恢复 registry record。
 
     Returns:
-        四元组 ``(session_id, scene_name, should_print_restore_context, label_created)``。
+        五元组 ``(session_id, scene_name, should_print_restore_context, label_created, recreated_from_closed)``。
 
     Raises:
         ValueError: 当 label 非法或 registry record 非法时抛出。
@@ -156,20 +173,21 @@ def _resolve_interactive_target(
 
     label = _resolve_interactive_label(args)
     if label is not None:
-        session_id, scene_name, created = _resolve_labeled_interactive_target(
+        session_id, scene_name, created, recreated_from_closed = _resolve_labeled_interactive_target(
             args,
             workspace_dir=workspace_dir,
             label=label,
             prompt_asset_store=prompt_asset_store,
             host_admin_service=host_admin_service,
         )
-        return session_id, scene_name, True, created
+        return session_id, scene_name, True, created, recreated_from_closed
     return (
         _resolve_interactive_session_id(
             workspace_dir,
             new_session=bool(getattr(args, "new_session", False)),
         ),
         _INTERACTIVE_SCENE_NAME,
+        False,
         False,
         False,
     )
@@ -201,7 +219,7 @@ def _resolve_labeled_interactive_target(
     label: str,
     prompt_asset_store: PromptAssetStoreProtocol | None = None,
     host_admin_service: HostAdminServiceProtocol | None = None,
-) -> tuple[str, str, bool]:
+) -> tuple[str, str, bool, bool]:
     """解析带 label 的 interactive 会话目标。
 
     Args:
@@ -209,10 +227,10 @@ def _resolve_labeled_interactive_target(
         workspace_dir: 工作区根目录。
         label: 已规范化的 conversation label。
         prompt_asset_store: 可选 prompt 资产仓储；提供时会校验 scene 是否允许多轮会话。
-        host_admin_service: 可选 HostAdmin service；提供时会清理漂移 registry record。
+        host_admin_service: 可选 HostAdmin service；提供时会清理不可恢复 registry record。
 
     Returns:
-        三元组 ``(session_id, scene_name, created)``。
+        四元组 ``(session_id, scene_name, created, recreated_from_closed)``。
 
     Raises:
         ValueError: 当 label 非法或 registry record 非法时抛出。
@@ -221,7 +239,7 @@ def _resolve_labeled_interactive_target(
     explicit_session_id = _resolve_label_session_id(args)
     explicit_scene_name = _resolve_label_scene_name(args)
     if explicit_session_id is not None:
-        return explicit_session_id, explicit_scene_name, False
+        return explicit_session_id, explicit_scene_name, False, False
     registry = FileConversationLabelRegistry(workspace_dir)
     target = resolve_labeled_conversation_target(
         registry=registry,
@@ -232,7 +250,7 @@ def _resolve_labeled_interactive_target(
         explicit_scene_name=explicit_scene_name,
         host_admin_service=host_admin_service,
     )
-    return target.session_id, target.scene_name, target.created
+    return target.session_id, target.scene_name, target.created, target.recreated_from_closed
 
 
 def _resolve_label_session_id(args: argparse.Namespace) -> str | None:

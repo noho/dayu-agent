@@ -1332,9 +1332,11 @@ Host Session
 - 默认重启 interactive 会续接上一条多轮会话。
 - 显式传 `--new-session` 时，UI 会删除旧绑定并生成新的 `interactive_key`。
 - 显式传 `--label` 时，UI 会先在 label registry 中恢复或创建会话：`interactive --label` 首次创建 `scene=interactive`，`prompt --label` 首次创建 `scene=prompt_mt`；后续无论从 `prompt` 还是 `interactive` 入口恢复，都沿用 registry 已记录的 `session_id + scene_name`，不按入口覆盖 scene。
+- CLI 对 labeled conversation 额外维护 label 独占锁：`prompt --label` 在本轮完成前持锁，`interactive --label` 在整个 REPL 生命周期内持锁；同一个 label 被占用时，其它 CLI 进程只能显式失败，不能并发复用同一条 conversation。
 - 带 label 的 scene 必须继续满足 `conversation.enabled=true`；若 workspace 本地覆写的 manifest 关闭了多轮模式，CLI 会在 `prompt --label` / `interactive --label` 入口直接拒绝执行，而不是静默退化成伪多轮。
+- 若 label registry 命中的 Host session 已经是 `closed`，CLI 会先删除旧 record，再以同名 label 重建一条全新的 conversation，并向用户打印“旧对话已关闭，现创建新对话”的提示；只有用户显式执行 `conv remove --label` 后的重新创建不会额外提示。
 - 带 label 的 interactive 进入 REPL 前，CLI 会通过 `HostAdminService.list_session_recent_turns()` 读取最近一轮 conversation 摘录并打印恢复分隔提示。
-- `dayu-cli conv list/status` 管理的是 CLI label registry；`dayu-cli sessions --source/--scene` 管理的是 Host session。两者职责分离：前者回答“哪些 label 可恢复”，后者回答“Host 当前有哪些 session”。当 label registry 指向的 Host session 已不存在时，CLI 会在 `conv` / `prompt --label` / `interactive --label` 入口先清理漂移 record，再按正常恢复或新建路径继续。
+- `dayu-cli conv list/status/remove` 管理的是 CLI label registry；`dayu-cli sessions --source/--scene` 管理的是 Host session。两者职责分离：前者回答“哪些 label 可恢复/释放”，后者回答“Host 当前有哪些 session”。当 label registry 指向的 Host session 已不存在时，CLI 会在 `conv` / `prompt --label` / `interactive --label` 入口先清理漂移 record，再按正常恢复或新建路径继续；`conv remove --label` 则会在 label 未被占用时关闭底层 session 并删除 registry record。
 - `dayu-cli sessions` 当前统一通过 `HostAdminService.list_sessions(state/source/scene)` 列出 Host session digest，并展示 `SCENE / TURNS / OVERVIEW`；`OVERVIEW` 首版只按 `first_question -> last_question -> "-"` 选择文本。
 - Host 不负责决定“上一次 interactive 是哪个 session”，它只接收 UI 已解析并校验过的 `session_id`。
 - CLI / WeChat 在完成 Host runtime 装配后，会先统一执行一次 Host-owned 启动恢复：清理 orphan run 与 stale permit；interactive 进入 REPL 前只负责恢复上一轮 pending turn，本身不再直接持有宿主管理依赖。

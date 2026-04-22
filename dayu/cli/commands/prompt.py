@@ -14,6 +14,7 @@ from dayu.cli.dependency_setup import (
     setup_loglevel,
     setup_paths,
 )
+from dayu.cli.conversation_label_locks import ConversationLabelLease
 from dayu.cli.conversation_labels import FileConversationLabelRegistry
 from dayu.cli.interactive_ui import conversation_prompt as conversation_prompt_command
 from dayu.cli.interactive_ui import prompt as prompt_command
@@ -148,59 +149,68 @@ def _run_labeled_prompt_command(
             Log.info("财报目录: 已检测到本地财报", module=MODULE)
         else:
             Log.info("财报目录: 无本地财报", module=MODULE)
-    (
-        _workspace,
-        _default_execution_options,
-        scene_execution_acceptance_preparer,
-        host,
-        fins_runtime,
-    ) = _prepare_cli_host_dependencies(
-        workspace_config=paths_config,
-        execution_options=execution_options,
-    )
-    service = _build_chat_service(
-        host=host,
-        scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
-        fins_runtime=fins_runtime,
-    )
-    host_admin_service = HostAdminService(host=host)
     try:
-        label_session_id, scene_name, label_created = _resolve_labeled_prompt_target(
-            args,
-            workspace_config=paths_config,
-            label=label,
-            host_admin_service=host_admin_service,
-        )
+        with ConversationLabelLease(paths_config.workspace_dir, label):
+            (
+                _workspace,
+                _default_execution_options,
+                scene_execution_acceptance_preparer,
+                host,
+                fins_runtime,
+            ) = _prepare_cli_host_dependencies(
+                workspace_config=paths_config,
+                execution_options=execution_options,
+            )
+            service = _build_chat_service(
+                host=host,
+                scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
+                fins_runtime=fins_runtime,
+            )
+            host_admin_service = HostAdminService(host=host)
+            label_session_id, scene_name, label_created, recreated_from_closed = _resolve_labeled_prompt_target(
+                args,
+                workspace_config=paths_config,
+                label=label,
+                host_admin_service=host_admin_service,
+            )
+            prompt_model = scene_execution_acceptance_preparer.resolve_scene_model(
+                scene_name,
+                execution_options,
+            )
+            Log.info(
+                "使用模型: "
+                f"{json.dumps(prompt_model, ensure_ascii=False, sort_keys=True)}",
+                module=MODULE,
+            )
+            if recreated_from_closed:
+                Log.info(
+                    f"label 对应的旧对话已关闭，现将基于同名 label 创建新对话: {label}",
+                    module=MODULE,
+                )
+            Log.info(
+                (
+                    f"执行带标签 prompt，新创建标签: {label}"
+                    if label_created
+                    else f"执行带标签 prompt，恢复标签: {label}"
+                ),
+                module=MODULE,
+            )
+            return conversation_prompt_command(
+                service,
+                args.prompt,
+                label=label,
+                session_id=label_session_id,
+                scene_name=scene_name,
+                ticker=paths_config.ticker,
+                execution_options=execution_options,
+                show_thinking=bool(getattr(args, "thinking", False)),
+            )
     except ValueError as exc:
         Log.error(str(exc), module=MODULE)
         return 2
-    prompt_model = scene_execution_acceptance_preparer.resolve_scene_model(
-        scene_name,
-        execution_options,
-    )
-    Log.info(
-        "使用模型: "
-        f"{json.dumps(prompt_model, ensure_ascii=False, sort_keys=True)}",
-        module=MODULE,
-    )
-    Log.info(
-        (
-            f"执行带标签 prompt，新创建标签: {label}"
-            if label_created
-            else f"执行带标签 prompt，恢复标签: {label}"
-        ),
-        module=MODULE,
-    )
-    return conversation_prompt_command(
-        service,
-        args.prompt,
-        label=label,
-        session_id=label_session_id,
-        scene_name=scene_name,
-        ticker=paths_config.ticker,
-        execution_options=execution_options,
-        show_thinking=bool(getattr(args, "thinking", False)),
-    )
+    except RuntimeError as exc:
+        Log.error(str(exc), module=MODULE)
+        return 2
 
 
 def _resolve_prompt_label(args: argparse.Namespace) -> str | None:
@@ -247,7 +257,7 @@ def _resolve_labeled_prompt_target(
     workspace_config: WorkspaceConfig,
     label: str,
     host_admin_service: HostAdminServiceProtocol | None = None,
-) -> tuple[str, str, bool]:
+) -> tuple[str, str, bool, bool]:
     """解析 labeled prompt 对应的 session 与 scene。
 
     Args:
@@ -257,7 +267,7 @@ def _resolve_labeled_prompt_target(
         host_admin_service: 可选 HostAdmin service；提供时会清理漂移 registry record。
 
     Returns:
-        三元组 `(session_id, scene_name, created)`。
+        四元组 `(session_id, scene_name, created, recreated_from_closed)`。
 
     Raises:
         ValueError: 当 label 非法或 registry record 非法时抛出。
@@ -266,7 +276,7 @@ def _resolve_labeled_prompt_target(
     explicit_session_id = _resolve_label_session_id(args)
     explicit_scene_name = _resolve_labeled_prompt_scene_name(args)
     if explicit_session_id is not None:
-        return explicit_session_id, explicit_scene_name, False
+        return explicit_session_id, explicit_scene_name, False, False
     registry = FileConversationLabelRegistry(workspace_config.workspace_dir)
     target = resolve_labeled_conversation_target(
         registry=registry,
@@ -277,7 +287,7 @@ def _resolve_labeled_prompt_target(
         explicit_scene_name=explicit_scene_name,
         host_admin_service=host_admin_service,
     )
-    return target.session_id, target.scene_name, target.created
+    return target.session_id, target.scene_name, target.created, target.recreated_from_closed
 
 
 def _resolve_labeled_prompt_scene_name(args: argparse.Namespace) -> str:

@@ -1,6 +1,6 @@
 """CLI labeled conversation 管理命令。
 
-提供 `conv list` 与 `conv status` 两个子命令，
+提供 `conv list`、`conv status` 与 `conv remove` 三个子命令，
 用于读取 CLI label registry，并联查 Host session 的状态与摘要信息。
 """
 
@@ -17,6 +17,7 @@ from dayu.cli.commands.host import (
     _format_table_cell,
     _resolve_host_admin_service,
 )
+from dayu.cli.conversation_label_locks import ConversationLabelLease
 from dayu.cli.conversation_labels import (
     ConversationLabelRecord,
     FileConversationLabelRegistry,
@@ -69,6 +70,8 @@ def run_conv_command(args: argparse.Namespace) -> int:
         return _run_conv_list_command(args)
     if action == "status":
         return _run_conv_status_command(args)
+    if action == "remove":
+        return _run_conv_remove_command(args)
     return 1
 
 
@@ -85,7 +88,7 @@ def _run_conv_list_command(args: argparse.Namespace) -> int:
         ValueError: registry record 非法时抛出。
     """
 
-    registry, service = _build_conv_dependencies(args)
+    _workspace_root, registry, service = _build_conv_dependencies(args)
     records = _load_existing_conv_records(
         registry=registry,
         service=service,
@@ -127,7 +130,7 @@ def _run_conv_status_command(args: argparse.Namespace) -> int:
         ValueError: label 或 registry record 非法时抛出。
     """
 
-    registry, service = _build_conv_dependencies(args)
+    _workspace_root, registry, service = _build_conv_dependencies(args)
     label = validate_conversation_label(str(getattr(args, "label", "") or ""))
     record = _load_existing_conv_record(
         registry=registry,
@@ -151,16 +154,51 @@ def _run_conv_status_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_conv_remove_command(args: argparse.Namespace) -> int:
+    """执行 `conv remove --label <label>`。
+
+    Args:
+        args: 命令行参数。
+
+    Returns:
+        命令退出码。
+
+    Raises:
+        ValueError: label 或 registry record 非法时抛出。
+    """
+
+    workspace_root, registry, service = _build_conv_dependencies(args)
+    label = validate_conversation_label(str(getattr(args, "label", "") or ""))
+    try:
+        with ConversationLabelLease(workspace_root, label):
+            record = registry.get_record(label)
+            if record is None:
+                print(f"label 不存在: {label}", file=sys.stderr)
+                return 1
+            session = service.get_session(record.session_id)
+            if session is not None:
+                try:
+                    service.close_session(record.session_id)
+                except KeyError:
+                    pass
+            registry.delete_record(label)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(f"已移除 label: {label}")
+    return 0
+
+
 def _build_conv_dependencies(
     args: argparse.Namespace,
-) -> tuple[FileConversationLabelRegistry, HostAdminServiceProtocol]:
+) -> tuple[Path, FileConversationLabelRegistry, HostAdminServiceProtocol]:
     """构造 `conv` 命令所需的 registry 与 HostAdmin service。
 
     Args:
         args: 命令行参数。
 
     Returns:
-        二元组 `(registry, service)`。
+        三元组 `(workspace_root, registry, service)`。
 
     Raises:
         AttributeError: 运行时缺少 `host_admin_service` 时抛出。
@@ -170,7 +208,7 @@ def _build_conv_dependencies(
     workspace_root = _resolve_workspace_root(runtime.paths.workspace_root)
     registry = FileConversationLabelRegistry(workspace_root)
     service = _resolve_host_admin_service(runtime)
-    return registry, service
+    return workspace_root, registry, service
 
 
 def _resolve_workspace_root(workspace_root: Path) -> Path:
