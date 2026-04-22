@@ -1,7 +1,7 @@
 """Streamlit 自选股管理对话框组件。
 
 在表格内完成自选股的添加、删除、编辑，保存后写入本地 JSON。
-存储路径：workspace/streamlit_watchlist.json。
+存储路径：workspace/.dayu/streamlit/watchlist.json。
 """
 
 from __future__ import annotations
@@ -219,6 +219,23 @@ def _apply_table_to_storage(
     return True, f"已保存 {len(rows_out)} 条自选股。"
 
 
+def _trigger_sidebar_refresh() -> None:
+    """标记并触发整页重跑，确保左侧自选股导航栏立即刷新。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        无。`st.rerun()` 的控制流异常由 Streamlit 内部处理。
+    """
+
+    st.session_state["watchlist_needs_refresh"] = True
+    st.rerun()
+
+
 @st.dialog("自选股管理", width="large")
 def render_watchlist_manager(workspace_root: Path) -> None:
     """弹出对话框：在表格内添加、删除、编辑自选股，保存后写回文件。
@@ -279,7 +296,6 @@ def render_watchlist_manager(workspace_root: Path) -> None:
         ok, msg = _apply_table_to_storage(workspace_root, df, editor_state, previous)
         if ok:
             st.success(msg)
-            # 设置刷新标记，下次渲染时会清除 data_editor 状态并重新加载数据
-            st.session_state["watchlist_needs_refresh"] = True
+            _trigger_sidebar_refresh()
         else:
             st.error(msg)

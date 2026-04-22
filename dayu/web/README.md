@@ -96,7 +96,7 @@ Streamlit 路径的组合根是 `dayu/web/streamlit_app.py`，主线职责如下
 
 - 左侧栏负责展示自选股列表与当前选中标的，管理入口由对话框组件承载。
 - 用户可在对话框中新增、编辑、删除自选股；保存后侧栏刷新并保持当前选择一致性。
-- 自选股持久化文件固定为 `workspace/streamlit_watchlist.json`，页面刷新后不会丢失。
+- 自选股持久化文件固定为 `workspace/.dayu/streamlit/watchlist.json`，页面刷新后不会丢失。
 
 ## 6. 会话状态约定（`st.session_state`）
 
@@ -136,7 +136,7 @@ flowchart LR
 
 ## 8. 路径与文件约定
 
-- 自选股文件：`workspace/streamlit_watchlist.json`
+- 自选股文件：`workspace/.dayu/streamlit/watchlist.json`
 - 报告目录：`workspace/draft/<ticker>/`
   - 常见产物：`run_summary.json`、`<ticker>_qual_report.md`、`manifest.json`、`chapters/`
 - 财报文件目录：`workspace/portfolio/<ticker>/filings/<document_id>/...`

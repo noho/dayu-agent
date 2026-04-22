@@ -1,7 +1,7 @@
 """Streamlit 侧边栏组件。
 
 提供自选股列表展示和选择功能，并展示当前工作区目录。
-使用本地JSON文件存储（workspace/streamlit_watchlist.json），刷新不丢失。
+使用本地JSON文件存储（workspace/.dayu/streamlit/watchlist.json），刷新不丢失。
 """
 
 from __future__ import annotations
@@ -31,6 +31,22 @@ class WatchlistItem:
     updated_at: str
 
 
+def _watchlist_storage_path(workspace_root: Path) -> Path:
+    """返回自选股持久化文件路径。
+
+    Args:
+        workspace_root: 工作区根目录。
+
+    Returns:
+        自选股 JSON 文件绝对路径。
+
+    Raises:
+        无。
+    """
+
+    return workspace_root / ".dayu" / "streamlit" / "watchlist.json"
+
+
 def load_watchlist_items(workspace_root: Path) -> list[WatchlistItem]:
     """从本地 JSON 文件加载自选股列表。
 
@@ -44,7 +60,7 @@ def load_watchlist_items(workspace_root: Path) -> list[WatchlistItem]:
         无：解析失败时返回空列表，不向调用方抛出。
     """
 
-    storage_path = workspace_root / "streamlit_watchlist.json"
+    storage_path = _watchlist_storage_path(workspace_root)
     if not storage_path.exists():
         return []
 
@@ -77,8 +93,8 @@ def save_watchlist_items(workspace_root: Path, items: list[WatchlistItem]) -> No
         OSError: 无法创建目录或写入文件时抛出。
     """
 
-    workspace_root.mkdir(parents=True, exist_ok=True)
-    storage_path = workspace_root / "streamlit_watchlist.json"
+    storage_path = _watchlist_storage_path(workspace_root)
+    storage_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "items": [
             {

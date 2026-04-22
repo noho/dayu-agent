@@ -3,7 +3,7 @@
 大禹 Agent 的 Web UI 实现，基于 Streamlit 框架。
 提供自选股管理、财报下载、财务分析等功能。
 
-自选股数据存储于 workspace/streamlit_watchlist.json，刷新不丢失。
+自选股数据存储于 workspace/.dayu/streamlit/watchlist.json，刷新不丢失。
 
 页面布局：
 - 左侧边栏：自选股列表 + 管理按钮
@@ -33,7 +33,7 @@ sys.path.insert(0, str(project_root))
 
 if TYPE_CHECKING:
     from dayu.web.streamlit.components.sidebar import WatchlistItem
-    from dayu.web.streamlit.pages.chat_client import ChatServiceClient
+    from dayu.web.streamlit.pages.chat.chat_client import ChatServiceClient
 from dayu.web.streamlit.bootstrap import initialize_services, start_file_server_safely
 
 
