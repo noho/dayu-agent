@@ -108,7 +108,7 @@ python -m pytest tests --cov=dayu --cov-report=term --cov-branch
 - `test_web_routes.py` 负责守住 Web 依赖装配已经收口到 `fastapi_app` 的显式窄依赖注入，router 工厂不再回退到全局 service locator 或旧 `Application` API。
 - `test_chat_service.py`、`test_fins_service.py` 与 `test_web_routes.py` 还要共同守住请求受理时机：`Service.submit_*()` 必须在返回 submission 前完成同步校验，校验失败时不得创建新的 Host session，Web 入口也不得返回 `202 Accepted` 或启动后台消费任务。
 - `tests/application/test_console_output.py` 负责守住 CLI / WeChat / render 入口的标准流容错边界：在非 UTF-8 终端里打印中文 help 或错误文案时不得因 `UnicodeEncodeError` 崩溃。
-- `tests/cli/test_init_command.py` 还要守住 `dayu-cli init` 的交互输入边界：测试不得隐式依赖开发机已有的 `SEC_USER_AGENT` 等环境变量短路交互流程，凡是验证完整 `run_init_command()` 路径的用例，都应显式 `delenv/setenv` 相关变量并提供完整输入序列。
+- `tests/cli/test_init_command.py` 还要守住 `dayu-cli init` 的交互输入边界：测试不得隐式依赖开发机已有的 `SEC_USER_AGENT` 等环境变量短路交互流程，凡是验证完整 `run_init_command()` 路径的用例，都应显式 `delenv/setenv` 相关变量并提供完整输入序列；`--reset` 这类破坏性开关还必须验证二次确认语义，且直接回车默认按 `N` 取消。
 - `tests/application/test_cancellation_bridge.py` 与 `tests/engine/test_async_openai_runner_utils.py` 这类并发/超时测试，不得把 0.08s、0.2s 这类固定 sleep 当成必然成立的完成信号；应使用带超时的轮询等待来守住语义，避免 CI runner 时序抖动造成伪失败。
 - `test_web_routes.py` 还要守住 Web 的客户端错误语义：像 `PromptService.submit()` 这类已经在 Service 边界同步抛出的 `ValueError`，router 必须映射成 `4xx`，不能漏成 `500`。
 - `test_web_routes.py` 还要守住 `/api/write` 的未支持语义：当 Web 当前不支持在线写作时，route 必须显式返回 `501`，不能再用 `202` / `accepted=true` 伪装成已受理。

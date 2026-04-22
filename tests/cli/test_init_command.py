@@ -22,11 +22,13 @@ from dayu.cli.commands.init import (
     _ROLE_NON_THINKING,
     _ROLE_THINKING,
     _classify_model_role,
+    _confirm_workspace_reset,
     _copy_assets,
     _copy_config,
     _detect_shell_profile,
     _is_hf_hub_reachable,
     _persist_env_var,
+    _reset_workspace_init_targets,
     _prompt_api_key,
     _prompt_custom_openai_config,
     _prompt_huggingface_config,
@@ -305,6 +307,103 @@ class TestCopyAssets:
         result = _copy_assets(base, overwrite=True)
 
         assert (result / "定性分析模板.md").read_text(encoding="utf-8") == "# 新模板"
+
+
+# --------------------------------------------------------------------------- #
+#  _confirm_workspace_reset
+# --------------------------------------------------------------------------- #
+
+
+class TestConfirmWorkspaceReset:
+    """工作区 reset 二次确认测试。"""
+
+    def test_prompt_lists_targets_from_reset_definition(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """确认提示应列出 reset 真源中的全部目标。"""
+
+        captured_prompt: list[str] = []
+
+        def _capture_input(prompt: str = "") -> str:
+            captured_prompt.append(prompt)
+            return "n"
+
+        base_dir = tmp_path / "workspace"
+        monkeypatch.setattr("builtins.input", _capture_input)
+
+        assert _confirm_workspace_reset(base_dir) is False
+        assert len(captured_prompt) == 1
+        assert str(base_dir / ".dayu") in captured_prompt[0]
+        assert str(base_dir / "config") in captured_prompt[0]
+        assert str(base_dir / "assets") in captured_prompt[0]
+
+    def test_yes_confirms_reset(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """输入 y 时返回 True。"""
+        monkeypatch.setattr("builtins.input", lambda *_args: "y")
+
+        assert _confirm_workspace_reset(tmp_path / "workspace") is True
+
+    def test_enter_defaults_to_no(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """直接回车时按 N 处理。"""
+        monkeypatch.setattr("builtins.input", lambda *_args: "")
+
+        assert _confirm_workspace_reset(tmp_path / "workspace") is False
+
+    def test_keyboard_interrupt_defaults_to_no(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """中断输入时按未确认处理。"""
+
+        def _raise_keyboard_interrupt(*_args: str) -> str:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr("builtins.input", _raise_keyboard_interrupt)
+
+        assert _confirm_workspace_reset(tmp_path / "workspace") is False
+
+
+# --------------------------------------------------------------------------- #
+#  _reset_workspace_init_targets
+# --------------------------------------------------------------------------- #
+
+
+class TestResetWorkspaceInitTargets:
+    """工作区 reset 目标删除测试。"""
+
+    def test_reset_removes_dayu_config_and_assets_dirs(self, tmp_path: Path) -> None:
+        """应删除 `.dayu`、`config`、`assets` 三个目录。"""
+        base = tmp_path / "workspace"
+        dayu_dir = base / ".dayu"
+        config_dir = base / "config"
+        assets_dir = base / "assets"
+        (dayu_dir / "host").mkdir(parents=True)
+        config_dir.mkdir(parents=True)
+        assets_dir.mkdir(parents=True)
+
+        removed = _reset_workspace_init_targets(base)
+
+        assert removed == (dayu_dir, config_dir, assets_dir)
+        assert not dayu_dir.exists()
+        assert not config_dir.exists()
+        assert not assets_dir.exists()
+
+    def test_reset_also_removes_file_targets(self, tmp_path: Path) -> None:
+        """若目标被错误占成文件，也应删除以便重新初始化。"""
+        base = tmp_path / "workspace"
+        dayu_file = base / ".dayu"
+        config_file = base / "config"
+        assets_file = base / "assets"
+        base.mkdir()
+        dayu_file.write_text("state", encoding="utf-8")
+        config_file.write_text("config", encoding="utf-8")
+        assets_file.write_text("assets", encoding="utf-8")
+
+        removed = _reset_workspace_init_targets(base)
+
+        assert removed == (dayu_file, config_file, assets_file)
+        assert not dayu_file.exists()
+        assert not config_file.exists()
+        assert not assets_file.exists()
 
 
 # --------------------------------------------------------------------------- #
@@ -1591,6 +1690,102 @@ class TestInitPrewarm:
         monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
         assert run_init_command(Namespace(base=str(base), overwrite=True)) == 0
         assert len(prewarm_calls) == 1
+
+    def test_run_init_reset_rebuilds_workspace_and_runs_prewarm(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """`--reset` 应清空旧工作区后按首次初始化重新预热。"""
+
+        base = self._prepare_run_init_environment(tmp_path, monkeypatch)
+        assert run_init_command(Namespace(base=str(base), overwrite=False, reset=False)) == 0
+
+        stale_config_file = base / "config" / "stale.json"
+        stale_assets_file = base / "assets" / "stale.md"
+        stale_dayu_file = base / ".dayu" / "interactive" / "state.json"
+        stale_config_file.write_text("{}", encoding="utf-8")
+        stale_assets_file.write_text("# stale", encoding="utf-8")
+        stale_dayu_file.parent.mkdir(parents=True, exist_ok=True)
+        stale_dayu_file.write_text("{}", encoding="utf-8")
+
+        prewarm_calls: list[tuple[Path, Path]] = []
+
+        def _capture_prewarm(*, base_dir: Path, config_dir: Path) -> tuple[bool, str]:
+            prewarm_calls.append((base_dir, config_dir))
+            return True, ""
+
+        monkeypatch.setattr("dayu.cli.commands.init._run_init_prewarm", _capture_prewarm)
+        monkeypatch.setattr("builtins.input", lambda *_args: "y")
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-already-set-123456")
+        monkeypatch.setenv("TAVILY_API_KEY", "tvly-xxx")
+        monkeypatch.setenv("SERPER_API_KEY", "sp-xxx")
+        monkeypatch.setenv("FMP_API_KEY", "fmp-xxx")
+        monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com")
+        monkeypatch.setenv("HF_TOKEN", "hf-test-xxx")
+        monkeypatch.setenv(SEC_USER_AGENT_ENV, "Demo demo@example.com")
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+
+        assert run_init_command(Namespace(base=str(base), overwrite=False, reset=True)) == 0
+        assert prewarm_calls == [(base.resolve(), (base / "config").resolve())]
+        assert not stale_config_file.exists()
+        assert not stale_assets_file.exists()
+        assert not stale_dayu_file.exists()
+
+    def test_run_init_reset_cancelled_by_default_no(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """`--reset` 直接回车时应取消，不删除已有目录。"""
+
+        base = self._prepare_run_init_environment(tmp_path, monkeypatch)
+        (base / "config").mkdir(parents=True, exist_ok=True)
+        (base / "assets").mkdir(parents=True, exist_ok=True)
+        (base / ".dayu").mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr("builtins.input", lambda *_args: "")
+
+        prewarm_calls: list[tuple[Path, Path]] = []
+
+        def _capture_prewarm(*, base_dir: Path, config_dir: Path) -> tuple[bool, str]:
+            prewarm_calls.append((base_dir, config_dir))
+            return True, ""
+
+        monkeypatch.setattr("dayu.cli.commands.init._run_init_prewarm", _capture_prewarm)
+
+        assert run_init_command(Namespace(base=str(base), overwrite=False, reset=True)) == 1
+        assert (base / "config").exists()
+        assert (base / "assets").exists()
+        assert (base / ".dayu").exists()
+        assert prewarm_calls == []
+
+    def test_run_init_reset_noop_message_uses_reset_targets(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """空 reset 时提示文案应基于 reset 目标列表生成。"""
+
+        base = self._prepare_run_init_environment(tmp_path, monkeypatch)
+        monkeypatch.setattr("builtins.input", lambda *_args: "y")
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-already-set-123456")
+        monkeypatch.setenv("TAVILY_API_KEY", "tvly-xxx")
+        monkeypatch.setenv("SERPER_API_KEY", "sp-xxx")
+        monkeypatch.setenv("FMP_API_KEY", "fmp-xxx")
+        monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com")
+        monkeypatch.setenv("HF_TOKEN", "hf-test-xxx")
+        monkeypatch.setenv(SEC_USER_AGENT_ENV, "Demo demo@example.com")
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._run_init_prewarm",
+            lambda **_kwargs: (True, ""),
+        )
+
+        assert run_init_command(Namespace(base=str(base), overwrite=False, reset=True)) == 0
+
+        captured = capsys.readouterr()
+        assert "未发现需要删除的 .dayu、config、assets" in captured.out
 
     def test_run_init_prewarm_failure_only_warns(
         self,

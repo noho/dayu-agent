@@ -259,6 +259,23 @@ def _add_overwrite_arg(parser: argparse.ArgumentParser, *, help_text: str) -> No
     parser.add_argument("--overwrite", action="store_true", help=help_text)
 
 
+def _add_reset_arg(parser: argparse.ArgumentParser, *, help_text: str) -> None:
+    """追加重置开关参数。
+
+    Args:
+        parser: 子命令解析器。
+        help_text: 帮助文案。
+
+    Returns:
+        无。
+
+    Raises:
+        无。
+    """
+
+    parser.add_argument("--reset", action="store_true", help=help_text)
+
+
 def _add_ci_arg(parser: argparse.ArgumentParser) -> None:
     """追加 CI 快照导出开关。
 
@@ -665,6 +682,10 @@ def _create_parser() -> argparse.ArgumentParser:
         type=str,
         default="./workspace",
         help="工作区根目录（默认 ./workspace）",
+    )
+    _add_reset_arg(
+        init_parser,
+        help_text="删除工作区下的 .dayu、config、assets 后重新初始化",
     )
     _add_overwrite_arg(init_parser, help_text="覆盖已有配置文件")
 

@@ -30,6 +30,7 @@ from dayu.contracts.env_keys import (
     SERPER_API_KEY_ENV,
     TAVILY_API_KEY_ENV,
 )
+from dayu.workspace_paths import build_dayu_root_path
 
 MODULE = "CLI.INIT"
 
@@ -330,6 +331,102 @@ def _persist_env_var(key: str, value: str) -> tuple[str, bool]:
     except OSError:
         return str(profile), False
     return str(profile), True
+
+
+# --------------------------------------------------------------------------- #
+#  工作区重置
+# --------------------------------------------------------------------------- #
+
+
+def _build_workspace_reset_targets(base_dir: Path) -> tuple[Path, ...]:
+    """构造 `init --reset` 需要处理的工作区目标路径列表。
+
+    Args:
+        base_dir: 工作区根目录。
+
+    Returns:
+        需要参与 reset 的目标路径元组。
+
+    Raises:
+        无。
+    """
+
+    return (
+        build_dayu_root_path(base_dir),
+        base_dir / "config",
+        base_dir / "assets",
+    )
+
+
+def _confirm_workspace_reset(base_dir: Path) -> bool:
+    """交互确认是否执行工作区重置。
+
+    Args:
+        base_dir: 工作区根目录。
+
+    Returns:
+        用户明确输入 ``y`` / ``yes`` 时返回 `True`；其余输入（含回车）返回 `False`。
+
+    Raises:
+        无。输入流中断时按未确认处理。
+    """
+
+    targets = _build_workspace_reset_targets(base_dir)
+    target_lines = "\n".join(f"  - {target}" for target in targets)
+    prompt = (
+        "\n⚠️  --reset 将删除以下目录并重新初始化：\n"
+        f"{target_lines}\n"
+        "是否继续？(y/N): "
+    )
+    try:
+        answer = input(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    return answer in ("y", "yes")
+
+
+def _remove_workspace_target(target: Path) -> bool:
+    """删除工作区中的单个初始化目标路径。
+
+    Args:
+        target: 需要删除的目标路径，可能是目录、文件或符号链接。
+
+    Returns:
+        若目标存在且已删除则返回 `True`；若目标原本不存在则返回 `False`。
+
+    Raises:
+        OSError: 当文件系统删除失败时抛出。
+    """
+
+    if target.is_symlink() or target.is_file():
+        target.unlink()
+        return True
+    if target.is_dir():
+        shutil.rmtree(target)
+        return True
+    return False
+
+
+def _reset_workspace_init_targets(base_dir: Path) -> tuple[Path, ...]:
+    """删除 `init` 管理的工作区初始化产物与运行时状态。
+
+    Args:
+        base_dir: 工作区根目录。
+
+    Returns:
+        实际被删除的目标路径元组，顺序与删除顺序一致。
+
+    Raises:
+        OSError: 当任一目标删除失败时抛出。
+    """
+
+    targets = _build_workspace_reset_targets(base_dir)
+    removed_targets: list[Path] = []
+    for target in targets:
+        if _remove_workspace_target(target):
+            removed_targets.append(target)
+    return tuple(removed_targets)
 
 
 # --------------------------------------------------------------------------- #
@@ -996,7 +1093,8 @@ def run_init_command(args: Namespace) -> int:
     """执行 ``dayu-cli init`` 子命令。
 
     Args:
-        args: 解析后的命令行参数，包含 ``base``（工作区目录）和 ``overwrite``（是否覆盖）。
+        args: 解析后的命令行参数，包含 ``base``（工作区目录）、
+            ``overwrite``（是否覆盖已有配置）与 ``reset``（是否先重置工作区状态）。
 
     Returns:
         退出码，0 表示成功。
@@ -1006,8 +1104,21 @@ def run_init_command(args: Namespace) -> int:
     """
 
     base_dir = Path(args.base).resolve()
-    overwrite: bool = getattr(args, "overwrite", False)
-    is_first_workspace_init = not (base_dir / "config").exists()
+    overwrite: bool = bool(getattr(args, "overwrite", False))
+    reset: bool = bool(getattr(args, "reset", False))
+    if reset:
+        if not _confirm_workspace_reset(base_dir):
+            print("已取消工作区重置。")
+            return 1
+        removed_targets = _reset_workspace_init_targets(base_dir)
+        if removed_targets:
+            removed_names = "、".join(path.name for path in removed_targets)
+            print(f"✓ 已重置工作区初始化目录: {removed_names}")
+        else:
+            target_names = "、".join(path.name for path in _build_workspace_reset_targets(base_dir))
+            print(f"✓ 已执行工作区重置：未发现需要删除的 {target_names}")
+
+    is_first_workspace_init = reset or not (base_dir / "config").exists()
     # 1. 复制配置
     config_dir = _copy_config(base_dir, overwrite=overwrite)
     print(f"✓ 配置已复制到: {config_dir}")

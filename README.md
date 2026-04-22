@@ -150,6 +150,7 @@ dayu-cli init
 
 ```bash
 dayu-cli init --base ./my_workspace    # 指定工作区目录（默认 ./workspace）
+dayu-cli init --reset                  # 删除 .dayu / config / assets 后重新初始化
 dayu-cli init --overwrite              # 覆盖已有配置
 ```
 
@@ -165,6 +166,8 @@ API Key 申请地址：
 - 海外用户选Mimo Token Plan SG。
 - `MIMO_API_KEY` 可在 `init` 中分别选择 `Mimo Pro` 或 `Mimo Flash` 作为默认模型方案。
 - 如需接入 OpenRouter 等聚合服务，可在 `init` 中选择“自定义 OpenAI 兼容 API”，填写 `CUSTOM_OPENAI_API_KEY`、Base URL 与模型 ID。
+- `--reset` 会先弹出二次确认；只有输入 `y/yes` 才会继续，直接回车默认按 `N` 取消。
+- `--reset` 确认后会删除 `workspace/.dayu/`、`workspace/config/`、`workspace/assets/`，再按首次初始化流程重建；它比 `--overwrite` 更强，会一并清空运行时状态。
 - 联网搜索默认可走 `auto`，若配置了 Tavily / Serper，会优先使用对应 provider。
 - 若运行环境需要访问 `localhost`、私网 IP 或内网域名，可在 `workspace/config/run.json` 的 `web_tools_config.allow_private_network_url` 中显式打开内网访问开关。
 - `workspace/config/llm_models.json` 当前只允许 `openai_compatible` 模型配置；CLI runner 已禁用。
