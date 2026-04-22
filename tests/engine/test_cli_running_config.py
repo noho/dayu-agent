@@ -2372,6 +2372,7 @@ def test_main_interactive_path_returns_zero(monkeypatch: pytest.MonkeyPatch, tmp
     assert state is not None
     interactive_execution_options = cast(Any, interactive_kwargs["execution_options"])
     assert interactive_kwargs["session_id"] == build_interactive_session_id(state.interactive_key)
+    assert interactive_kwargs["scene_name"] == "interactive"
     assert interactive_kwargs["show_thinking"] is True
     assert interactive_execution_options.model_name == "deepseek-thinking"
     assert any('使用模型: {"name": "scene-interactive-model", "temperature": null}' in item for item in collector.info_logs)

@@ -289,16 +289,18 @@ def test_interactive_command_without_label_keeps_state_json_restore(
 
     workspace = _build_workspace(tmp_path)
 
-    first_session_id, first_should_print = interactive_command_module._resolve_interactive_target(
+    first_session_id, first_scene_name, first_should_print = interactive_command_module._resolve_interactive_target(
         Namespace(label=None, new_session=False, session_id=None),
         workspace_dir=workspace,
     )
-    second_session_id, second_should_print = interactive_command_module._resolve_interactive_target(
+    second_session_id, second_scene_name, second_should_print = interactive_command_module._resolve_interactive_target(
         Namespace(label=None, new_session=False, session_id="ignored_session"),
         workspace_dir=workspace,
     )
 
     assert first_session_id == second_session_id
+    assert first_scene_name == "interactive"
+    assert second_scene_name == "interactive"
     assert first_should_print is False
     assert second_should_print is False
 
@@ -319,12 +321,13 @@ def test_interactive_command_ignores_session_id_path_without_label(
         lambda _workspace_dir, *, new_session: resolved_calls.append(new_session) or "state_session",
     )
 
-    session_id, should_print_restore_context = interactive_command_module._resolve_interactive_target(
+    session_id, scene_name, should_print_restore_context = interactive_command_module._resolve_interactive_target(
         Namespace(label=None, new_session=False, session_id="interactive_existing"),
         workspace_dir=workspace,
     )
 
     assert session_id == "state_session"
+    assert scene_name == "interactive"
     assert should_print_restore_context is False
     assert resolved_calls == [False]
 
@@ -394,7 +397,12 @@ def test_interactive_command_prints_restore_context_for_labeled_session(
         "StateDirSingleInstanceLock",
         lambda **_kwargs: SimpleNamespace(acquire=lambda: None, release=lambda: None),
     )
-    monkeypatch.setattr(interactive_command_module, "interactive", lambda *_args, **_kwargs: None)
+    interactive_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        interactive_command_module,
+        "interactive",
+        lambda *_args, **kwargs: interactive_calls.append(dict(kwargs)),
+    )
 
     exit_code = interactive_command_module.run_interactive_command(
         Namespace(
@@ -410,6 +418,14 @@ def test_interactive_command_prints_restore_context_for_labeled_session(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert recent_turn_calls == [(record.session_id, 1)]
+    assert interactive_calls == [
+        {
+            "session_id": record.session_id,
+            "scene_name": "prompt_mt",
+            "execution_options": ExecutionOptions(),
+            "show_thinking": False,
+        }
+    ]
     assert "上一轮对话" in captured.out
     assert "上一轮问题" in captured.out
     assert "上一轮回答" in captured.out
@@ -706,6 +722,105 @@ def test_run_chat_turn_stream_uses_submit_turn_protocol_only(monkeypatch: pytest
 
     assert final_content == "ok"
     assert resolved_session_id == "chat-session"
+
+
+@pytest.mark.unit
+def test_interactive_uses_custom_scene_for_pending_turn_restore_and_new_turns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证 interactive 会把自定义 scene 同时用于 pending turn 恢复和新一轮 turn。"""
+
+    prompts = iter(["问题一", None, None])
+    resumed_requests: list[ChatResumeRequest] = []
+    pending_turn_scene_names: list[str | None] = []
+    new_turn_scene_names: list[str] = []
+
+    class _Session:
+        """记录 scene 传播的测试桩。"""
+
+        def list_resumable_pending_turns(
+            self,
+            *,
+            session_id: str | None = None,
+            scene_name: str | None = None,
+        ) -> list[ChatPendingTurnView]:
+            del session_id
+            if scene_name is None:
+                raise AssertionError("scene_name 不应为空")
+            pending_turn_scene_names.append(scene_name)
+            return [
+                ChatPendingTurnView(
+                    pending_turn_id="pending-1",
+                    session_id="test-session",
+                    scene_name="prompt_mt",
+                    user_text="上一轮问题",
+                    source_run_id="run-old",
+                    resumable=True,
+                    state="sent_to_llm",
+                    metadata={"delivery_channel": "interactive"},
+                )
+            ]
+
+        async def resume_pending_turn(self, request: ChatResumeRequest) -> ChatTurnSubmission:
+            resumed_requests.append(request)
+
+            async def _stream() -> AsyncIterator[AppEvent]:
+                yield AppEvent(
+                    type=AppEventType.FINAL_ANSWER,
+                    payload={"content": "已恢复", "degraded": False},
+                    meta={},
+                )
+
+            return ChatTurnSubmission(session_id=request.session_id, event_stream=_stream())
+
+        async def submit_turn(self, request: ChatTurnRequest) -> ChatTurnSubmission:
+            if request.scene_name is None:
+                raise AssertionError("request.scene_name 不应为空")
+            new_turn_scene_names.append(request.scene_name)
+
+            async def _stream() -> AsyncIterator[AppEvent]:
+                yield AppEvent(
+                    type=AppEventType.FINAL_ANSWER,
+                    payload={"content": "done", "degraded": False},
+                    meta={},
+                )
+
+            return ChatTurnSubmission(session_id=request.session_id or "test-session", event_stream=_stream())
+
+    monkeypatch.setattr(
+        app_interactive,
+        "_SpinnerController",
+        lambda label="Waiting": SimpleNamespace(start=lambda: None, stop=lambda: None),
+    )
+    monkeypatch.setattr(app_interactive.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(app_interactive.Log, "error", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(builtins, "print", lambda *args, **kwargs: None)
+
+    class DummyKeyBindings:
+        def add(self, *_args: Any, **_kwargs: Any):
+            def _decorator(func):
+                return func
+            return _decorator
+
+    class DummySession:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def prompt(self, _text: str) -> str | None:
+            return next(prompts)
+
+    monkeypatch.setitem(sys.modules, "prompt_toolkit", SimpleNamespace(PromptSession=DummySession))
+    monkeypatch.setitem(sys.modules, "prompt_toolkit.key_binding", SimpleNamespace(KeyBindings=DummyKeyBindings))
+
+    app_interactive.interactive(
+        cast(Any, _Session()),
+        session_id="test-session",
+        scene_name="prompt_mt",
+    )
+
+    assert pending_turn_scene_names == ["prompt_mt"]
+    assert resumed_requests == [ChatResumeRequest(session_id="test-session", pending_turn_id="pending-1")]
+    assert new_turn_scene_names == ["prompt_mt"]
 
 
 @pytest.mark.unit

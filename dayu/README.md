@@ -1324,14 +1324,17 @@ Host Session
 
 当前实现里，interactive UI 会把本地会话绑定持久化在
 `<workspace>/.dayu/interactive/state.json`。默认路径只保存 UI 自己拥有的
-`interactive_key`，并在每次启动时把它确定性映射为 `session_id`；显式传
-`--session-id` 时，UI 会先通过宿主管理服务校验该 session，再把显式
-`session_id` 写入同一个本地绑定文件。因此：
+`interactive_key`，并在每次启动时把它确定性映射为 `session_id`。带
+`--label` 的 CLI conversation 另走独立的 UI 层 label registry：
+`<workspace>/.dayu/cli-conversations/<label>.json`。registry 只保存
+`label -> session_id + scene_name` 的映射，不进入 Host schema。因此：
 
 - 默认重启 interactive 会续接上一条多轮会话。
 - 显式传 `--new-session` 时，UI 会删除旧绑定并生成新的 `interactive_key`。
-- 显式传 `--session-id` 时，UI 只接受仍处于 active 状态、来源为 CLI、scene 为 `interactive` 的 Host session，并把它绑定为后续默认 interactive session；进入 REPL 前，CLI 会通过 `HostAdminService` 读取最近一轮 conversation 摘录并打印恢复分隔提示。
-- `dayu-cli sessions --interactive` 通过 `HostAdminService` 列出历史 interactive session，并从 Host conversation transcript 读取 turn 数、首个问题预览、最后问题预览和当前 summary 字段；CLI 当前只展示单列 `OVERVIEW`，按 `summary -> 首个问题 -> 最后问题` 的优先级选择文本。
+- 显式传 `--label` 时，UI 会先在 label registry 中恢复或创建会话：`interactive --label` 首次创建 `scene=interactive`，`prompt --label` 首次创建 `scene=prompt_mt`；后续无论从 `prompt` 还是 `interactive` 入口恢复，都沿用 registry 已记录的 `session_id + scene_name`，不按入口覆盖 scene。
+- 带 label 的 interactive 进入 REPL 前，CLI 会通过 `HostAdminService.list_session_recent_turns()` 读取最近一轮 conversation 摘录并打印恢复分隔提示。
+- `dayu-cli conv list/status` 管理的是 CLI label registry；`dayu-cli sessions --source/--scene` 管理的是 Host session。两者职责分离：前者回答“哪些 label 可恢复”，后者回答“Host 当前有哪些 session”。
+- `dayu-cli sessions` 当前统一通过 `HostAdminService.list_sessions(state/source/scene)` 列出 Host session digest，并展示 `SCENE / TURNS / OVERVIEW`；`OVERVIEW` 首版只按 `first_question -> last_question -> "-"` 选择文本。
 - Host 不负责决定“上一次 interactive 是哪个 session”，它只接收 UI 已解析并校验过的 `session_id`。
 - CLI / WeChat 在完成 Host runtime 装配后，会先统一执行一次 Host-owned 启动恢复：清理 orphan run 与 stale permit；interactive 进入 REPL 前只负责恢复上一轮 pending turn，本身不再直接持有宿主管理依赖。
 - CLI interactive 与 WeChat daemon 都按各自 `state_dir` 持有单实例锁，避免同一 workspace / label 下两个前台进程并发共享本地状态目录。
@@ -1352,12 +1355,15 @@ sequenceDiagram
     UI->>Startup: resolve_startup_paths / ConfigLoader / prepare_host_runtime_dependencies(...)
     Startup-->>UI: workspace/model/runtime/default execution options/Host 稳定依赖
     UI->>Service: new ChatService(host, scene_execution_acceptance_preparer, ...)
-    opt 显式 --session-id
-      UI->>Admin: get_session(session_id)
-      Admin->>Host: get_session(session_id)
-      UI->>UI: 校验并更新 interactive 本地绑定
+    alt 带 --label
+      UI->>UI: 读取/创建 CLI label registry record
+      UI->>UI: 解析 session_id + scene_name
+      UI->>Admin: list_session_recent_turns(session_id)
+      Admin->>Host: list_conversation_session_turn_excerpts(session_id)
+    else 无 --label
+      UI->>UI: 从 interactive state 解析默认 session_id
     end
-    UI->>Service: list_resumable_pending_turns(session_id, "interactive")
+    UI->>Service: list_resumable_pending_turns(session_id, scene_name)
     Service->>Host: list_pending_turns(resumable_only=True)
     alt 存在可恢复 pending turn
       UI->>Service: resume_pending_turn(session_id, pending_turn_id)

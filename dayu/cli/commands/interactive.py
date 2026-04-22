@@ -89,7 +89,7 @@ def run_interactive_command(args: argparse.Namespace) -> int:
         return 1
     try:
         try:
-            interactive_session_id, should_print_restore_context = _resolve_interactive_target(
+            interactive_session_id, interactive_scene_name, should_print_restore_context = _resolve_interactive_target(
                 args,
                 workspace_dir=paths_config.workspace_dir,
             )
@@ -104,6 +104,7 @@ def run_interactive_command(args: argparse.Namespace) -> int:
         interactive(
             service,
             session_id=interactive_session_id,
+            scene_name=interactive_scene_name,
             execution_options=execution_options,
             show_thinking=bool(getattr(args, "thinking", False)),
         )
@@ -116,7 +117,7 @@ def _resolve_interactive_target(
     args: argparse.Namespace,
     *,
     workspace_dir: Path,
-) -> tuple[str, bool]:
+) -> tuple[str, str, bool]:
     """根据 CLI 参数解析 interactive 应进入的 session。
 
     Args:
@@ -124,7 +125,7 @@ def _resolve_interactive_target(
         workspace_dir: 工作区根目录。
 
     Returns:
-        二元组 ``(session_id, should_print_restore_context)``。
+        三元组 ``(session_id, scene_name, should_print_restore_context)``。
 
     Raises:
         ValueError: 当 label 非法或 registry record 非法时抛出。
@@ -132,17 +133,18 @@ def _resolve_interactive_target(
 
     label = _resolve_interactive_label(args)
     if label is not None:
-        session_id, _ = _resolve_labeled_interactive_target(
+        session_id, scene_name = _resolve_labeled_interactive_target(
             args,
             workspace_dir=workspace_dir,
             label=label,
         )
-        return session_id, True
+        return session_id, scene_name, True
     return (
         _resolve_interactive_session_id(
             workspace_dir,
             new_session=bool(getattr(args, "new_session", False)),
         ),
+        _INTERACTIVE_SCENE_NAME,
         False,
     )
 

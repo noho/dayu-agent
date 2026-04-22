@@ -234,10 +234,11 @@ dayu-cli <subcommand> [参数]
 | `process` | 全量预处理（最终用户可无视） |
 | `process_filing` | 预处理单份 filing（最终用户可无视） |
 | `process_material` | 预处理单份 material（最终用户可无视） |
+| `conv` | 管理带 label 的可恢复 CLI 对话（最终用户可无视） |
 | `sessions` | 列出或关闭宿主会话（最终用户可无视） |
 | `runs` | 列出运行记录（最终用户可无视） |
 | `cancel` | 取消运行中的 run（最终用户可无视） |
-| `host` | 宿主维护（清理孤儿运行/查看状态（最终用户可无视） |
+| `host` | 宿主维护（清理孤儿运行/查看状态，最终用户可无视） |
 > 注：预处理命令仅供开发使用，最终用户可忽略。
 
 共享参数：
@@ -254,8 +255,8 @@ dayu-cli <subcommand> [参数]
 | `--quiet` | 全部主命令 | 把日志级别设为 `ERROR` |
 | `--model-name` | `prompt` `interactive` `write` | 指定模型配置名称 |
 | `--temperature` | `prompt` `interactive` `write` | 覆盖模型 temperature |
+| `--label` | `prompt` `interactive` | 把当前对话绑定到可恢复 label；`prompt` 会进入 labeled multi-turn，对应 scene 为 `prompt_mt` |
 | `--new-session` | `interactive` | 不续接上一次 interactive 多轮会话，改为从头开始一个新会话 |
-| `--session-id` | `interactive` | 恢复并绑定指定的历史 interactive session；与 `--new-session` 互斥 |
 | `--web-provider` | `prompt` `interactive` `write` | 指定联网检索 provider，如 `auto`、`tavily`、`serper`、`duckduckgo` |
 | `--enable-tool-trace` | `prompt` `interactive` `write` | 开启工具调用追踪，覆盖 `run.json` 中的 trace 配置 |
 | `--tool-trace-dir` | `prompt` `interactive` `write` | 指定 trace 输出目录，覆盖 `run.json` 中的 trace 配置 |
@@ -264,7 +265,7 @@ dayu-cli <subcommand> [参数]
 说明：
 - `--log-level`、`--debug`、`--verbose`、`--info`、`--quiet` 是同一组日志参数，使用其一即可。
 - `prompt`、`interactive`、`write` 还支持更多 Agent 运行参数，例如 `--tool-timeout-seconds`、`--max-iterations`、`--doc-limits-json`、`--fins-limits-json`；需要时可用 `dayu-cli <subcommand> --help` 查看完整列表。
-- 宿主管理命令同样支持 `--base` / `--config` / 日志参数；例如 `dayu-cli host --base ./workspace status`、`dayu-cli sessions --base ./workspace`、`dayu-cli sessions --interactive`。
+- 宿主管理命令同样支持 `--base` / `--config` / 日志参数；例如 `dayu-cli host --base ./workspace status`、`dayu-cli sessions --base ./workspace --source cli --scene interactive`、`dayu-cli conv list --base ./workspace`。
 - `interactive` 默认会续接本地绑定的同一个多轮会话；如果上一次回答还没完整回显到终端，重启 CLI 会先把那次回答补完，再进入新的输入循环。
 
 ### 2.2 WeChat 入口
@@ -449,6 +450,7 @@ dayu-cli upload_material \
 |------|------|
 | `prompt` | 必填，单次执行的问题文本 |
 | `--ticker` | 可选，指定研究对象 |
+| `--label` | 可选，把本次提问绑定到可恢复 conversation；首次创建时 scene 为 `prompt_mt` |
 | `--model-name` | 可选，指定模型配置 |
 | `--temperature` | 可选，覆盖模型 temperature |
 | `--thinking` / `--no-thinking` | 可选，控制是否回显模型思考过程 |
@@ -465,6 +467,7 @@ dayu-cli prompt "总结苹果最新财报中的主要风险"
 ```bash
 dayu-cli prompt "总结最新财报中的主要风险" --ticker AAPL
 dayu-cli prompt "总结苹果最新财报中的主要风险" --thinking
+dayu-cli prompt --label apple "先总结苹果最新财报中的主要风险"
 dayu-cli prompt "总结苹果最新财报中的主要风险" --model-name mimo-v2-flash
 dayu-cli prompt "总结苹果最新财报中的主要风险" --debug
 ```
@@ -472,6 +475,7 @@ dayu-cli prompt "总结苹果最新财报中的主要风险" --debug
 命令说明：
 - 使用之前请先下载/上传财报。
 - 两种写法都可以：要么在问题里直接写公司名或股票代码，要么用 `--ticker` 明确指定研究对象；一般不需要两边重复写。
+- 不带 `--label` 时，`prompt` 保持 one-shot，不承诺后续恢复；带 `--label` 时，本次提问会挂到该 label 对应的可恢复 conversation 上，后续可继续用 `prompt --label <label>` 或 `interactive --label <label>` 接着问。
 - 默认不回显模型思考过程；如需在终端查看，显式传 `--thinking`。
 
 ### 3.4 交互式对话：`interactive`
@@ -486,8 +490,8 @@ dayu-cli prompt "总结苹果最新财报中的主要风险" --debug
 | `--model-name` | 可选，指定模型配置 |
 | `--temperature` | 可选，覆盖模型 temperature |
 | `--thinking` / `--no-thinking` | 可选，控制是否回显模型思考过程 |
+| `--label` | 可选，恢复或创建指定 label 的可复用 conversation；首次创建时 scene 为 `interactive` |
 | `--new-session` | 可选，不续接上一次多轮会话，改为从头开始一个新会话 |
-| `--session-id` | 可选，恢复并绑定指定的历史 interactive session；与 `--new-session` 互斥 |
 | `--debug` / `--verbose` | 可选，仅调整日志级别，不改变会话行为 |
 
 命令示例：
@@ -502,9 +506,10 @@ dayu-cli interactive
 dayu-cli interactive --model-name mimo-v2-flash
 dayu-cli interactive --temperature 0.2
 dayu-cli interactive --thinking
+dayu-cli interactive --label apple
 dayu-cli interactive --new-session
-dayu-cli sessions --interactive
-dayu-cli interactive --session-id interactive_xxxxxxxxxxxxxxxx
+dayu-cli sessions --source cli --scene interactive
+dayu-cli conv status --label apple
 dayu-cli interactive --verbose
 ```
 
@@ -513,7 +518,8 @@ dayu-cli interactive --verbose
 - `interactive` 默认每次进入都会续接同一个多轮会话，适合连续追问。
 - `interactive` 会把当前会话绑定保存在 `<workspace>/.dayu/interactive/state.json`，重新启动时默认续接上一次会话历史。
 - 如果你想从头开始一轮新的对话，显式传 `--new-session`；它会丢弃本地保存的旧会话绑定，改为新开一个会话。
-- 如果你想回到某条历史 interactive 会话，先用 `dayu-cli sessions --interactive` 查看历史会话摘要，再用 `dayu-cli interactive --session-id <session_id>` 绑定并进入该会话；进入 REPL 前会展示上一轮已持久化对话并打印恢复分隔提示。
+- 如果你想显式复用某条长期对话，使用 `--label`。同一个 label 可在 `prompt --label` 与 `interactive --label` 之间互通；第一次通过 `prompt --label` 创建的会话底层 scene 为 `prompt_mt`，第一次通过 `interactive --label` 创建的会话底层 scene 为 `interactive`，之后恢复时沿用首次创建时的 scene。
+- 如果你想查看底层 Host session，可用 `dayu-cli sessions --source cli --scene interactive` 或 `dayu-cli sessions --source cli --scene prompt_mt`；如果你想查看 label 到会话的映射，使用 `dayu-cli conv list` 和 `dayu-cli conv status --label <label>`。
 - 默认不回显模型思考过程；如需在终端查看，显式传 `--thinking`。
 
 ### 3.5 微信对话 daemon：

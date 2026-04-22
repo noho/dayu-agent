@@ -318,6 +318,7 @@ def _resume_interactive_pending_turn_if_needed(
     session: ChatServiceProtocol,
     *,
     session_id: str | None,
+    scene_name: str,
     show_thinking: bool,
 ) -> None:
     """在进入 REPL 前恢复当前 interactive session 的 pending turn。"""
@@ -326,7 +327,7 @@ def _resume_interactive_pending_turn_if_needed(
         return
     pending_turns = session.list_resumable_pending_turns(
         session_id=session_id,
-        scene_name="interactive",
+        scene_name=scene_name,
     )
     if not pending_turns:
         return
@@ -486,6 +487,7 @@ def interactive(
     agent_session: ChatServiceProtocol,
     *,
     session_id: str | None = None,
+    scene_name: str = "interactive",
     execution_options: ExecutionOptions | None = None,
     show_thinking: bool = False,
 ) -> None:
@@ -494,6 +496,7 @@ def interactive(
     Args:
         agent_session: 已装配的聊天会话服务。
         session_id: 可选初始会话 ID。
+        scene_name: 本轮 turn 使用的 scene 名称。
         execution_options: 请求级执行覆盖参数。
         show_thinking: 是否回显 thinking 增量。
 
@@ -534,6 +537,7 @@ def interactive(
     _resume_interactive_pending_turn_if_needed(
         agent_session,
         session_id=session_id,
+        scene_name=scene_name,
         show_thinking=show_thinking,
     )
 
@@ -560,6 +564,7 @@ def interactive(
                 agent_session,
                 user_input,
                 session_id=session_id,
+                scene_name=scene_name,
                 execution_options=execution_options,
                 show_thinking=show_thinking,
                 show_waiting_spinner=not show_thinking,

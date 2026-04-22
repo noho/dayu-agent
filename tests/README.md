@@ -50,23 +50,29 @@ pip install -r requirements.txt
 
 其中 `requirements.txt` 已包含异步测试所需的 `pytest-asyncio`，以及覆盖率报告所需的 `pytest-cov`。
 
-如果当前 shell 无法直接找到 `pytest` 命令，统一使用 `python -m pytest` 形式运行。
+本仓库默认在项目自带的 `.venv` 中运行测试和类型检查。
 
 常用命令：
 
 ```bash
-python -m pytest tests/application -q
-python -m pytest tests/engine -q
-python -m pytest tests/fins -q
-python -m pytest tests/integration -q
-python -m pytest tests/architecture -q
-python -m pytest tests -q
+.venv/bin/pytest tests/application -q
+.venv/bin/pytest tests/engine -q
+.venv/bin/pytest tests/fins -q
+.venv/bin/pytest tests/integration -q
+.venv/bin/pytest tests/architecture -q
+.venv/bin/pytest tests -q
 ```
 
 查看覆盖率：
 
 ```bash
-python -m pytest tests --cov=dayu --cov-report=term --cov-branch
+.venv/bin/pytest tests --cov=dayu --cov-report=term --cov-branch
+```
+
+类型检查：
+
+```bash
+.venv/bin/pyright --pythonpath .venv/bin/python
 ```
 
 ## 3. 维护规则
@@ -119,8 +125,9 @@ python -m pytest tests --cov=dayu --cov-report=term --cov-branch
 - `test_ui_host_boundary.py` 负责守住 UI 请求期不再直接访问 `dependencies.host`、WeChat daemon 不再自持 `ensure_chat_session`、CLI interactive 不再自己创建 Host session。
 - `test_cli_interactive_coverage.py` 与 `test_interactive_resume.py` 还要共同守住 interactive UI 的服务消费边界：chat 只走 `submit_turn()/resume_pending_turn()/list_resumable_pending_turns()`，prompt 只走 `submit()`，不能再回退到 `stream_turn()` / `stream()` 或 `hasattr` 兼容分支；interactive 只消费已经完成统一 Host 启动恢复的 runtime，本身不再注入 `HostAdminService` 或自行 cleanup orphan run。
 - `test_host_commands.py` 负责守住 startup 链路是否继续吃到 `run.json` 里的 `host_config`，例如 `host_config.store.path`、`host_config.lane` 与 `host_config.pending_turn_resume.max_attempts`；同时 CLI 宿主管理命令在请求期只能消费 `HostAdminService`，不能再保留 `runtime.host` 兜底或直接调用 Host 方法。
-- `test_cli_interactive_coverage.py` 负责守住 interactive 的本地状态绑定模式，包括默认 `interactive_key -> session_id` 的确定性映射、`--new-session` 的行为、显式 `--session-id` 只绑定合法 active CLI interactive session、恢复时展示上一轮对话提示，以及 interactive 请求继续走 `ENSURE_DETERMINISTIC`。
-- `test_host_commands.py` 与 `test_host_admin_service.py` 负责守住 interactive 管理面边界：CLI 只能消费 `HostAdminService.list_interactive_sessions()` / `list_interactive_session_recent_turns()`，Service 只能通过 Host 公开协议读取 conversation digest / turn excerpt，不能让 UI 直接读取 transcript 文件。
+- `test_cli_interactive_coverage.py` 负责守住 interactive 的两条恢复路径：无 label 时继续使用 `interactive_key -> session_id` 的本地状态绑定并支持 `--new-session`，带 `--label` 时改走 CLI label registry；恢复时仍要展示上一轮对话提示，且 interactive 请求继续走 `ENSURE_DETERMINISTIC`。
+- `test_host_commands.py` 与 `test_host_admin_service.py` 负责守住会话管理面边界：CLI 只能消费 `HostAdminService.list_sessions()` / `list_session_recent_turns()` 这组通用 digest 接口，并通过 `--source/--scene` 过滤；Service 只能通过 Host 公开协议读取 conversation digest / turn excerpt，不能让 UI 直接读取 transcript 文件。
+- `test_conv_commands.py` 负责守住 CLI label registry 的管理面：`conv list/status` 只管理 label 到 Host session 的映射，不直接替代 Host session 列表，也不把普通 one-shot `scene=prompt` 会话纳入可恢复 conversation。
 - `test_cli_running_config.py` 还要守住 interactive 的 `state_dir` 单实例锁：同一 workspace 下第二个 interactive 进程必须显式失败，不能并发共享 `.dayu/interactive`。
 - Host 默认 SQLite、conversation transcript、interactive 绑定、SEC cache/throttle 与 WeChat 默认状态目录都属于 workspace 内部运行时状态，默认路径应统一落在 `workspace/.dayu/` 下；涉及这些默认值的测试不要再把 `.host`、`.session`、`.interactive`、`.sec_cache`、`.sec_throttle`、`.wechat` 当成真源。
 - `test_dependency_boundaries.py` 还要守住 `startup` 只能依赖 `services/host` 暴露的 public preparation API，不能再直接 import `SceneDefinitionReader`、`ConversationPolicyReader`、`SceneExecutionAcceptancePreparer` 或 `DEFAULT_LANE_CONFIG`。
