@@ -354,6 +354,25 @@ sequenceDiagram
 - 决定 prompt contributions
 - 创建 Session 或 Run
 
+### 3.8 workspace migrations
+
+`workspace migrations` 是 `dayu-cli init` 在启动期针对**旧工作区**执行的一次性修复脚本集合，集中在 `dayu/cli/workspace_migrations/`。它与 §3.5 `startup preparation` 并列——都只服务于启动期、不进入请求期调用链——但职责是一次性的"把旧工作区就地升级到当前 schema"，而不是"为本次运行准备依赖"。
+
+它负责：
+
+- 向后扫描 `workspace/config/run.json`，在缺少新 schema 要求的 key 时补齐默认值，已有取值一律保留
+- 向后扫描 `.dayu/host/dayu_host.db` 中的 `pending_conversation_turns.resume_source_json`，按当前 schema 原地改名旧 JSON key
+- 每条规则一个模块、一个幂等函数，通过 `apply_all_workspace_migrations` 统一调度
+- 只在规则实际生效时打印一行，供用户感知
+
+它不负责：
+
+- 维护数据库 schema 本身（`CREATE TABLE` 仍在 `dayu.host.host_store`）
+- 保留旧 schema 的兼容读取路径——规则按 CLAUDE.md "全新 schema 起库"约束，**只向前迁移**
+- 进入请求期——`dayu-cli` 任何非 `init` 命令都不会触发该目录
+
+扩展约束：新增一次性迁移时，只在 `dayu/cli/workspace_migrations/` 下新增模块 + 登记到 runner，禁止把规则写回 `dayu/cli/commands/init.py`。
+
 ## 4. 核心契约
 
 Dayu 在 Agent 路径上稳定使用五类数据契约：

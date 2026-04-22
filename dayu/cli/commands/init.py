@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import urllib.error
 import urllib.request
+from dayu.cli.workspace_migrations import apply_all_workspace_migrations
 from dayu.startup.config_file_resolver import resolve_package_assets_path, resolve_package_config_path
 from dayu.contracts.env_keys import (
     FMP_API_KEY_ENV,
@@ -1014,6 +1015,10 @@ def run_init_command(args: Namespace) -> int:
     # 1b. 复制 assets（定性分析模板等）
     assets_dir = _copy_assets(base_dir, overwrite=overwrite)
     print(f"✓ assets 已复制到: {assets_dir}")
+
+    # 1c. 对旧工作区应用一次性迁移（run.json、Host SQLite）。
+    # 具体规则集中在 dayu.cli.workspace_migrations，避免混入 init 常规流程。
+    apply_all_workspace_migrations(base_dir=base_dir, config_dir=config_dir)
 
     # 2. 选择初始化模型方案 + 输入 API Key（已有则跳过）
     chosen_option_key = _prompt_provider_selection()
