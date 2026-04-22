@@ -44,11 +44,6 @@ class _FakeChatService:
         for event in turn.events:
             yield event
 
-    async def stream_turn(self, request: ChatTurnRequest) -> AsyncIterator[AppEvent]:
-        """旧兼容接口不应再被 WeChat daemon 调用。"""
-
-        raise AssertionError(f"unexpected stream_turn call: {request}")
-
     async def submit_turn(self, request: ChatTurnRequest) -> ChatTurnSubmission:
         """按 ChatServiceProtocol 返回提交句柄。"""
 

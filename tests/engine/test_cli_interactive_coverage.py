@@ -611,13 +611,6 @@ def _build_event_session(*event_sequences: list[StreamEvent], fail_with: Excepti
             async for event in self._yield_events(request.user_text):
                 yield event
 
-        async def stream_turn(self, request: ChatTurnRequest) -> AsyncIterator[StreamEvent]:
-            """返回聊天轮次预置事件流。"""
-
-            request_log.append(request)
-            async for event in self._yield_events(request.user_text):
-                yield event
-
         async def submit(self, request: PromptRequest) -> PromptSubmission:
             """按 PromptServiceProtocol 返回提交结果。"""
 
@@ -697,11 +690,6 @@ def test_run_chat_turn_stream_uses_submit_turn_protocol_only(monkeypatch: pytest
             """该测试不应走恢复路径。"""
 
             raise AssertionError(f"unexpected resume_pending_turn call: {request}")
-
-        async def stream_turn(self, request: ChatTurnRequest) -> AsyncIterator[StreamEvent]:
-            """旧兼容接口不应被 interactive 使用。"""
-
-            raise AssertionError(f"unexpected stream_turn call: {request}")
 
     monkeypatch.setattr(
         app_interactive,

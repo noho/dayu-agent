@@ -118,24 +118,6 @@ class ChatService(ChatServiceProtocol):
             )
         ]
 
-    async def stream_turn(self, request: ChatTurnRequest) -> AsyncIterator[AppEvent]:
-        """兼容旧调用方的聊天单轮流式接口。
-
-        Args:
-            request: 聊天单轮请求。
-
-        Yields:
-            应用层事件。
-
-        Raises:
-            ValueError: 用户输入为空时抛出。
-            KeyError: 显式续聊但 session 不存在时抛出。
-        """
-
-        submission = await self.submit_turn(request)
-        async for event in submission.event_stream:
-            yield event
-
     def _session_coordinator(self) -> ServiceSessionCoordinator:
         """构造当前服务使用的会话协调器。"""
 
