@@ -1551,6 +1551,28 @@ def test_parse_arguments_supports_conv_status(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.unit
+def test_parse_arguments_supports_conv_list_all(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 conv 列表命令支持 `conv list --all`。"""
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cli.py",
+            "conv",
+            "list",
+            "--all",
+        ],
+    )
+
+    parsed = parse_arguments()
+
+    assert parsed.command == "conv"
+    assert parsed.conv_action == "list"
+    assert parsed.show_all is True
+
+
+@pytest.mark.unit
 def test_resolve_interactive_session_id_reuses_saved_interactive_key(tmp_path: Path) -> None:
     """验证 interactive 会话解析会复用状态文件中的 interactive_key。"""
 
@@ -2456,7 +2478,54 @@ def test_main_interactive_path_rejects_second_instance(monkeypatch: pytest.Monke
     monkeypatch.setattr("dayu.cli.commands.interactive.interactive", lambda *_args, **_kwargs: pytest.fail("不应进入 interactive"))
 
     assert run_interactive_command(args) == 1
-    assert any("interactive 单实例锁" in message for message in error_logs)
+    assert any("当前已有 interactive 在运行" in message for message in error_logs)
+    assert all("prompt --label" not in message for message in error_logs)
+
+
+@pytest.mark.unit
+def test_main_interactive_label_path_rejects_second_instance_with_label_specific_hint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证 `interactive --label` 命中单实例锁时给出 label 场景专属提示。"""
+
+    workspace_config = WorkspaceConfig(
+        workspace_dir=tmp_path,
+        output_dir=tmp_path / "output",
+        config_loader=ConfigLoader(ConfigFileResolver(tmp_path / "config")),
+        prompt_asset_store=FilePromptAssetStore(ConfigFileResolver(tmp_path / "config")),
+    )
+    args = Namespace(
+        command="interactive",
+        label="apple",
+        label_session_id=None,
+        label_scene_name=None,
+        new_session=False,
+        thinking=False,
+        log_level=None,
+        debug=False,
+        verbose=False,
+        info=False,
+        quiet=False,
+    )
+    error_logs: list[str] = []
+
+    monkeypatch.setattr("dayu.cli.commands.interactive.setup_loglevel", lambda _args: None)
+    monkeypatch.setattr("dayu.cli.commands.interactive.setup_paths", partial(_return_value, workspace_config))
+    monkeypatch.setattr(
+        "dayu.cli.commands.interactive._build_execution_options",
+        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+    )
+    monkeypatch.setattr(
+        "dayu.cli.commands.interactive.StateDirSingleInstanceLock.acquire",
+        lambda self: (_ for _ in ()).throw(RuntimeError("同一个 state_dir 已有运行中的 interactive 单实例锁")),
+    )
+    monkeypatch.setattr("dayu.cli.commands.interactive.Log.error", lambda message, **_kwargs: error_logs.append(str(message)))
+    monkeypatch.setattr("dayu.cli.commands.interactive.interactive", lambda *_args, **_kwargs: pytest.fail("不应进入 interactive"))
+
+    assert run_interactive_command(args) == 1
+    assert any("当前已有 interactive 在运行" in message for message in error_logs)
+    assert any("prompt --label" in message for message in error_logs)
 
 
 @pytest.mark.unit
@@ -2983,9 +3052,9 @@ def test_run_prompt_command_labeled_prompt_prunes_missing_record_before_recreati
     assert run_prompt_command(args) == 15
     refreshed_record = FileConversationLabelRegistry(tmp_path).get_record("apple")
     assert refreshed_record is not None
-    assert refreshed_record.session_id == stale_record.session_id
+    assert refreshed_record.session_id != stale_record.session_id
     assert refreshed_record.scene_name == "prompt_mt"
-    assert prompt_kwargs["session_id"] == stale_record.session_id
+    assert prompt_kwargs["session_id"] == refreshed_record.session_id
     assert prompt_kwargs["scene_name"] == "prompt_mt"
     assert any("执行带标签 prompt，新创建标签: apple" in item for item in info_logs)
     assert all("旧对话已关闭" not in item for item in info_logs)
@@ -3067,9 +3136,9 @@ def test_run_prompt_command_labeled_prompt_recreates_closed_label_with_warning(
     assert run_prompt_command(args) == 16
     refreshed_record = FileConversationLabelRegistry(tmp_path).get_record("apple")
     assert refreshed_record is not None
-    assert refreshed_record.session_id == closed_record.session_id
+    assert refreshed_record.session_id != closed_record.session_id
     assert refreshed_record.scene_name == "prompt_mt"
-    assert prompt_kwargs["session_id"] == closed_record.session_id
+    assert prompt_kwargs["session_id"] == refreshed_record.session_id
     assert prompt_kwargs["scene_name"] == "prompt_mt"
     assert any("label 对应的旧对话已关闭，现将基于同名 label 创建新对话: apple" in item for item in info_logs)
     assert any("执行带标签 prompt，新创建标签: apple" in item for item in info_logs)

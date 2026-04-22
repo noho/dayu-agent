@@ -64,8 +64,14 @@ def run_interactive_command(args: argparse.Namespace) -> int:
     )
     try:
         instance_lock.acquire()
-    except RuntimeError as exc:
-        Log.error(str(exc), module=MODULE)
+    except RuntimeError:
+        Log.error(
+            _build_interactive_instance_busy_message(
+                workspace_dir=paths_config.workspace_dir,
+                label=label,
+            ),
+            module=MODULE,
+        )
         return 1
     try:
         if label is not None:
@@ -211,6 +217,32 @@ def _resolve_interactive_label(args: argparse.Namespace) -> str | None:
     if not normalized_label:
         return None
     return normalized_label
+
+
+def _build_interactive_instance_busy_message(*, workspace_dir: Path, label: str | None) -> str:
+    """构造 interactive 单实例锁冲突时的用户提示。
+
+    Args:
+        workspace_dir: 当前工作区根目录。
+        label: 本次命令是否显式提供了 label。
+
+    Returns:
+        面向 CLI 用户的稳定错误提示。
+
+    Raises:
+        无。
+    """
+
+    if label is None:
+        return (
+            "当前已有 interactive 在运行: "
+            f"state_dir={build_interactive_state_dir(workspace_dir)}"
+        )
+    return (
+        "当前已有 interactive 在运行，不能再启动第二个 interactive --label: "
+        f"state_dir={build_interactive_state_dir(workspace_dir)}。"
+        "请等待其退出后重试；如果只是想并发发起带标签对话，请改用 prompt --label"
+    )
 
 
 def _resolve_labeled_interactive_target(

@@ -308,7 +308,7 @@ def test_interactive_command_with_label_prunes_missing_record_and_recreates_it(
     refreshed_record = registry.get_record("apple")
 
     assert refreshed_record is not None
-    assert session_id == stale_record.session_id
+    assert session_id != stale_record.session_id
     assert session_id == refreshed_record.session_id
     assert scene_name == "interactive"
     assert refreshed_record.scene_name == "interactive"
@@ -393,10 +393,10 @@ def test_interactive_command_with_label_recreates_closed_record_with_warning(
     assert exit_code == 0
     refreshed_record = registry.get_record("apple")
     assert refreshed_record is not None
-    assert refreshed_record.session_id == closed_record.session_id
+    assert refreshed_record.session_id != closed_record.session_id
     assert refreshed_record.scene_name == "interactive"
     assert interactive_calls
-    assert interactive_calls[0]["session_id"] == closed_record.session_id
+    assert interactive_calls[0]["session_id"] == refreshed_record.session_id
     assert interactive_calls[0]["scene_name"] == "interactive"
     assert any("label 对应的旧对话已关闭，现将基于同名 label 创建新对话: apple" in item for item in info_logs)
     assert any("执行带标签 interactive，新创建标签: apple" in item for item in info_logs)

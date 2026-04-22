@@ -748,17 +748,17 @@ def _register_host_subcommands(subparsers: argparse._SubParsersAction[DayuCliArg
         description="管理 CLI label registry，查看哪些 label 当前可恢复。",
     )
     _add_global_args(conv_parser)
-    conv_parser.add_argument(
+    conv_subparsers = conv_parser.add_subparsers(dest="conv_action", required=True)
+    conv_list_parser = conv_subparsers.add_parser(
+        "list",
+        help="列出当前 active 的 label 对话",
+        description="列出当前 workspace 下 active 的可恢复 label 对话。",
+    )
+    conv_list_parser.add_argument(
         "--all",
         action="store_true",
         dest="show_all",
         help="额外包含已关闭的 label 对话",
-    )
-    conv_subparsers = conv_parser.add_subparsers(dest="conv_action", required=True)
-    conv_subparsers.add_parser(
-        "list",
-        help="列出当前 active 的 label 对话",
-        description="列出当前 workspace 下 active 的可恢复 label 对话。",
     )
     status_parser = conv_subparsers.add_parser(
         "status",

@@ -11,7 +11,7 @@ import pytest
 
 from dayu.cli.commands import conv as conv_commands_module
 from dayu.cli.conversation_label_locks import ConversationLabelLease
-from dayu.cli.conversation_labels import FileConversationLabelRegistry, build_cli_conversation_session_id
+from dayu.cli.conversation_labels import FileConversationLabelRegistry
 from dayu.services.contracts import SessionAdminView
 from dayu.services.protocols import HostAdminServiceProtocol
 
@@ -146,7 +146,7 @@ def test_run_conv_list_with_all_renders_closed_rows_but_still_prunes_missing_rec
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
-    """`conv --all list` 应显示 closed，但仍不显示漂移 registry record。"""
+    """`conv list --all` 应显示 closed，但仍不显示漂移 registry record。"""
 
     registry = FileConversationLabelRegistry(tmp_path)
     apple = registry.get_or_create_record(label="apple", scene_name="interactive").record
@@ -278,7 +278,7 @@ def test_run_conv_status_prunes_missing_registry_record_and_returns_not_found(
     assert exit_code == 1
     assert f"label 不存在: {record.label}" in captured.err
     assert registry.get_record("orphan") is None
-    assert build_cli_conversation_session_id("orphan") == record.session_id
+    assert record.session_id.startswith("cli_conv_")
 
 
 def test_run_conv_remove_closes_session_and_deletes_label(

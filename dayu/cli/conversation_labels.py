@@ -1,7 +1,7 @@
 """CLI label conversation registry。
 
 本模块实现 CLI 层自有的 labeled conversation registry 持久化能力，
-用于把用户可读 label 绑定到稳定的 CLI session 标识与 scene 信息。
+用于把用户可读 label 绑定到具体的 CLI session 标识与 scene 信息。
 
 该模块只服务于 CLI，不向 Service、Host、Agent 暴露依赖，也不参与
 底层 session schema 设计。
@@ -9,11 +9,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
 import tempfile
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,22 +52,41 @@ def validate_conversation_label(label: str) -> str:
     return normalized_label
 
 
-def build_cli_conversation_session_id(label: str) -> str:
-    """根据 label 生成稳定的 CLI conversation session_id。
+def generate_cli_conversation_session_id() -> str:
+    """生成新的 CLI conversation session_id。
 
     Args:
-        label: 已由用户提供的 conversation label。
+        无。
 
     Returns:
-        稳定的 CLI conversation session_id。
+        新生成的 CLI conversation session_id。
 
     Raises:
-        ValueError: 当 label 非法时抛出。
+        无。
     """
 
-    normalized_label = validate_conversation_label(label)
-    digest = hashlib.sha1(normalized_label.encode("utf-8")).hexdigest()[:16]
-    return f"{CLI_CONVERSATION_SESSION_ID_PREFIX}{digest}"
+    return f"{CLI_CONVERSATION_SESSION_ID_PREFIX}{uuid.uuid4().hex}"
+
+
+def _validate_conversation_session_id(session_id: str) -> str:
+    """校验 CLI conversation session_id。
+
+    Args:
+        session_id: 待校验的 session_id。
+
+    Returns:
+        去除首尾空白后的合法 session_id。
+
+    Raises:
+        ValueError: 当 session_id 为空或不满足前缀约束时抛出。
+    """
+
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_session_id:
+        raise ValueError("record.session_id 不能为空")
+    if not normalized_session_id.startswith(CLI_CONVERSATION_SESSION_ID_PREFIX):
+        raise ValueError("record.session_id 必须以 cli_conv_ 开头")
+    return normalized_session_id
 
 
 def build_registry_timestamp() -> str:
@@ -110,9 +129,8 @@ class ConversationLabelRecord:
             ValueError: 当任一字段不满足约束时抛出。
         """
 
-        normalized_label = validate_conversation_label(self.label)
-        if self.session_id != build_cli_conversation_session_id(normalized_label):
-            raise ValueError("record.session_id 与 label 不一致")
+        validate_conversation_label(self.label)
+        _validate_conversation_session_id(self.session_id)
         if self.source != CLI_CONVERSATION_SOURCE:
             raise ValueError("record.source 必须为 cli")
         if not str(self.scene_name or "").strip():
@@ -250,7 +268,7 @@ class FileConversationLabelRegistry:
         timestamp = build_registry_timestamp()
         created_record = ConversationLabelRecord(
             label=normalized_label,
-            session_id=build_cli_conversation_session_id(normalized_label),
+            session_id=generate_cli_conversation_session_id(),
             source=CLI_CONVERSATION_SOURCE,
             scene_name=normalized_scene_name,
             created_at=timestamp,

@@ -10,7 +10,7 @@ import pytest
 from dayu.cli.conversation_labels import (
     CLI_CONVERSATION_SOURCE,
     FileConversationLabelRegistry,
-    build_cli_conversation_session_id,
+    generate_cli_conversation_session_id,
     validate_conversation_label,
 )
 from dayu.cli.conversation_label_locks import ConversationLabelLease
@@ -53,14 +53,15 @@ def test_validate_conversation_label_rejects_invalid_inputs(raw_label: str) -> N
         validate_conversation_label(raw_label)
 
 
-def test_build_cli_conversation_session_id_is_stable() -> None:
-    """同一 label 应稳定生成同一 session_id。"""
+def test_generate_cli_conversation_session_id_returns_prefixed_unique_value() -> None:
+    """每次生成都应返回新的 CLI session_id。"""
 
-    first = build_cli_conversation_session_id("alpha")
-    second = build_cli_conversation_session_id("alpha")
+    first = generate_cli_conversation_session_id()
+    second = generate_cli_conversation_session_id()
 
-    assert first == second
+    assert first != second
     assert first.startswith("cli_conv_")
+    assert second.startswith("cli_conv_")
 
 
 def test_registry_get_record_returns_none_when_missing(tmp_path: Path) -> None:
@@ -72,7 +73,7 @@ def test_registry_get_record_returns_none_when_missing(tmp_path: Path) -> None:
 
 
 def test_registry_get_or_create_creates_record_and_get_record_reuses_it(tmp_path: Path) -> None:
-    """首次创建后应可重复读取，并保持稳定 session_id。"""
+    """首次创建后应可重复读取，并保持同一条 record 的 session_id。"""
 
     registry = FileConversationLabelRegistry(tmp_path)
 
@@ -82,7 +83,7 @@ def test_registry_get_or_create_creates_record_and_get_record_reuses_it(tmp_path
     assert loaded == created.record
     assert created.created is True
     assert created.record.label == "apple-1"
-    assert created.record.session_id == build_cli_conversation_session_id("apple-1")
+    assert created.record.session_id.startswith("cli_conv_")
     assert created.record.source == CLI_CONVERSATION_SOURCE
     assert created.record.scene_name == "prompt_mt"
     assert created.record.created_at == created.record.updated_at
@@ -128,6 +129,20 @@ def test_registry_delete_record_removes_existing_label(tmp_path: Path) -> None:
     assert registry.get_record("alpha") is None
 
 
+def test_registry_recreate_same_label_allocates_new_session_id(tmp_path: Path) -> None:
+    """删除后重建同名 label 时应分配新的 session_id。"""
+
+    registry = FileConversationLabelRegistry(tmp_path)
+    first = registry.get_or_create_record(label="alpha", scene_name="interactive").record
+
+    assert registry.delete_record("alpha") is True
+
+    second = registry.get_or_create_record(label="alpha", scene_name="interactive").record
+
+    assert first.session_id != second.session_id
+    assert second.session_id.startswith("cli_conv_")
+
+
 def test_registry_delete_record_returns_false_when_label_is_absent(tmp_path: Path) -> None:
     """delete_record 命中缺失 label 时应返回 False。"""
 
@@ -165,7 +180,7 @@ def test_registry_rejects_corrupted_record_on_get(tmp_path: Path) -> None:
         json.dumps(
             {
                 "label": "beta",
-                "session_id": build_cli_conversation_session_id("alpha"),
+                "session_id": generate_cli_conversation_session_id(),
                 "source": CLI_CONVERSATION_SOURCE,
                 "scene_name": "interactive",
                 "created_at": "2026-04-22T00:00:00Z",
