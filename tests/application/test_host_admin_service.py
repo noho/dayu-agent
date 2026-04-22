@@ -12,6 +12,7 @@ from typing import cast
 import pytest
 
 from dayu.contracts.events import AppEvent, AppEventType, PublishedRunEventProtocol
+from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.contracts.run import RunCancelReason, RunRecord, RunState
 from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 from dayu.host.event_bus import AsyncQueueEventBus
@@ -49,7 +50,7 @@ class _FakeSessionRegistry:
         *,
         session_id: str | None = None,
         scene_name: str | None = None,
-        metadata: dict[str, object] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """创建会话。"""
 

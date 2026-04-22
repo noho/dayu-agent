@@ -6,6 +6,7 @@ from datetime import datetime
 
 import pytest
 
+from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 
 
@@ -63,10 +64,10 @@ class TestSessionRecord:
             scene_name="wechat",
             created_at=now,
             last_activity_at=now,
-            metadata={"chat_key": "user_123"},
+            metadata=ExecutionDeliveryContext({"chat_key": "user_123"}),
         )
         assert record.scene_name == "wechat"
-        assert record.metadata["chat_key"] == "user_123"
+        assert record.metadata.get("chat_key") == "user_123"
 
     @pytest.mark.unit
     def test_closed_session(self) -> None:

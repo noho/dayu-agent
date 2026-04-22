@@ -37,7 +37,7 @@ class SessionRegistryProtocol(Protocol):
         *,
         session_id: str | None = None,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """创建新 session。
 
@@ -45,7 +45,7 @@ class SessionRegistryProtocol(Protocol):
             source: 会话来源。
             session_id: 显式指定 ID，不传则自动生成。
             scene_name: 首次使用的 scene。
-            metadata: 非结构化附加信息。
+            metadata: 会话级交付上下文元数据。
 
         Returns:
             新创建的 SessionRecord。
@@ -58,7 +58,7 @@ class SessionRegistryProtocol(Protocol):
         source: SessionSource,
         *,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """幂等获取或创建 session。
 
@@ -69,7 +69,7 @@ class SessionRegistryProtocol(Protocol):
             session_id: 确定性 session ID。
             source: 会话来源。
             scene_name: 首次使用的 scene。
-            metadata: 非结构化附加信息。
+            metadata: 会话级交付上下文元数据。
 
         Returns:
             已有或新创建的 SessionRecord。
@@ -629,7 +629,7 @@ class SessionOperationsProtocol(Protocol):
         *,
         session_id: str | None = None,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """创建新的 Host session。"""
         ...
@@ -640,7 +640,7 @@ class SessionOperationsProtocol(Protocol):
         source: SessionSource,
         *,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """按确定性 session_id 幂等获取或创建 Host session。"""
         ...

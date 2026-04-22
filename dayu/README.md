@@ -625,7 +625,7 @@ class ExecutionContract:
     message_inputs: ExecutionMessageInputs
     accepted_execution_spec: AcceptedExecutionSpec
     execution_options: Any | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: ExecutionDeliveryContext = field(default_factory=empty_execution_delivery_context)
 ```
 
   `AcceptedToolConfigSpec` 现在只把通用 `toolset_configs` 作为稳定真源；Host / scene preparation 不再继续传递专用工具配置字段。

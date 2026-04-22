@@ -41,7 +41,7 @@ class StubSessionRegistry:
         *,
         session_id: str | None = None,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """创建 session。"""
         sid = session_id or uuid.uuid4().hex
@@ -64,7 +64,7 @@ class StubSessionRegistry:
         source: SessionSource,
         *,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """幂等创建或获取 session。"""
         if session_id in self._sessions:

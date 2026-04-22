@@ -10,7 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
+
+from dayu.contracts.execution_metadata import ExecutionDeliveryContext, empty_execution_delivery_context
 
 
 class SessionSource(str, Enum):
@@ -48,7 +49,7 @@ class SessionRecord:
         scene_name: 首次使用的场景名称。
         created_at: 创建时间。
         last_activity_at: 最后活跃时间（由 service 层 touch 更新）。
-        metadata: 非结构化附加信息。
+        metadata: 会话级交付上下文元数据。
     """
 
     session_id: str
@@ -57,7 +58,7 @@ class SessionRecord:
     scene_name: str | None = None
     created_at: datetime = field(default_factory=datetime.now)
     last_activity_at: datetime = field(default_factory=datetime.now)
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: ExecutionDeliveryContext = field(default_factory=empty_execution_delivery_context)
 
     def is_active(self) -> bool:
         """判断 session 是否处于活跃状态。

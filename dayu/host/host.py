@@ -11,6 +11,7 @@ from typing import Any, AsyncIterator, Callable, TypeVar, cast
 from dayu.contracts.agent_execution import ExecutionContract, deserialize_execution_contract_snapshot
 from dayu.contracts.events import AppEvent, AppResult
 from dayu.contracts.events import PublishedRunEventProtocol
+from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.contracts.infrastructure import ModelCatalogProtocol, WorkspaceResourcesProtocol
 from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, ReplyOutboxSubmitRequest
 from dayu.contracts.run import RunCancelReason, RunRecord, RunState
@@ -260,7 +261,7 @@ class Host:
         *,
         session_id: str | None = None,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """创建新的 Host Session。
 
@@ -268,7 +269,7 @@ class Host:
             source: 会话来源。
             session_id: 可选显式 session_id。
             scene_name: 首次使用的 scene。
-            metadata: 附加元数据。
+            metadata: 会话级交付上下文元数据。
 
         Returns:
             新建 SessionRecord。
@@ -295,7 +296,7 @@ class Host:
         source: SessionSource,
         *,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """幂等获取或创建 Host Session。
 
@@ -303,7 +304,7 @@ class Host:
             session_id: 确定性会话 ID。
             source: 会话来源。
             scene_name: 首次使用的 scene。
-            metadata: 附加元数据。
+            metadata: 会话级交付上下文元数据。
 
         Returns:
             现有或新建 SessionRecord。

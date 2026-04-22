@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.host.host_store import HostStore
 from dayu.host.session_registry import SQLiteSessionRegistry
 from dayu.contracts.session import SessionSource, SessionState
@@ -53,12 +54,12 @@ class TestCreateSession:
             SessionSource.API,
             session_id="my-session-123",
             scene_name="chat",
-            metadata={"key": "value"},
+            metadata=ExecutionDeliveryContext({"chat_key": "value"}),
         )
         assert session.session_id == "my-session-123"
         assert session.source == SessionSource.API
         assert session.scene_name == "chat"
-        assert session.metadata == {"key": "value"}
+        assert session.metadata == {"chat_key": "value"}
 
     @pytest.mark.unit
     def test_create_session_timestamps(self, registry: SQLiteSessionRegistry) -> None:

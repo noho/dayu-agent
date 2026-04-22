@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import pytest
 
+from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 from dayu.engine.events import EventType, StreamEvent
 from dayu.host.events import build_app_event_from_stream_event
@@ -47,7 +48,7 @@ class _StubSessionHost:
         *,
         session_id: str | None = None,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """创建会话记录。"""
 
@@ -71,7 +72,7 @@ class _StubSessionHost:
         source: SessionSource,
         *,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """按确定性 ID 获取或创建会话。"""
 

@@ -10,9 +10,10 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
+from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
+from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 from dayu.host.host_store import HostStore
 from dayu.host.protocols import SessionRegistryProtocol
-from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 from dayu.log import Log
 
 MODULE = "HOST.SESSION_REGISTRY"
@@ -32,7 +33,7 @@ def _row_to_record(row: dict[str, Any]) -> SessionRecord:
     """
 
     raw_metadata = row["metadata_json"]
-    metadata = json.loads(raw_metadata) if raw_metadata else {}
+    metadata = normalize_execution_delivery_context(json.loads(raw_metadata) if raw_metadata else {})
     return SessionRecord(
         session_id=row["session_id"],
         source=SessionSource(row["source"]),
@@ -66,14 +67,15 @@ class SQLiteSessionRegistry(SessionRegistryProtocol):
         *,
         session_id: str | None = None,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """创建新 session。"""
 
         sid = session_id or uuid.uuid4().hex
         now = _now_utc()
         now_str = _serialize_dt(now)
-        metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
+        normalized_metadata = normalize_execution_delivery_context(metadata)
+        metadata_json = json.dumps(normalized_metadata, ensure_ascii=False)
 
         conn = self._host_store.get_connection()
         conn.execute(
@@ -98,7 +100,7 @@ class SQLiteSessionRegistry(SessionRegistryProtocol):
             scene_name=scene_name,
             created_at=now,
             last_activity_at=now,
-            metadata=metadata or {},
+            metadata=normalized_metadata,
         )
 
     def ensure_session(
@@ -107,13 +109,14 @@ class SQLiteSessionRegistry(SessionRegistryProtocol):
         source: SessionSource,
         *,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """幂等获取或创建 session。"""
 
         now = _now_utc()
         now_str = _serialize_dt(now)
-        metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
+        normalized_metadata = normalize_execution_delivery_context(metadata)
+        metadata_json = json.dumps(normalized_metadata, ensure_ascii=False)
 
         conn = self._host_store.get_connection()
         # INSERT OR IGNORE：存在则忽略，不存在则插入
