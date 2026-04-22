@@ -223,4 +223,44 @@ class Log:
         cls._get_logger(module).error(message, exc_info=exc_info)
 
 
-__all__ = ["Log", "LogLevel"]
+def set_level_from_flags(
+    *,
+    log_level: str | None,
+    debug: bool,
+    verbose: bool,
+    info: bool,
+    quiet: bool,
+) -> LogLevel:
+    """按 CLI 风格参数设置全局日志级别。
+
+    Args:
+        log_level: 显式日志级别字符串。
+        debug: 是否启用 DEBUG。
+        verbose: 是否启用 VERBOSE。
+        info: 是否启用 INFO。
+        quiet: 是否仅输出 ERROR。
+
+    Returns:
+        实际生效的日志级别。
+
+    Raises:
+        KeyError: 当 ``log_level`` 不是合法级别名时抛出。
+    """
+
+    if log_level:
+        selected_level = LogLevel[log_level.upper()]
+    elif debug:
+        selected_level = LogLevel.DEBUG
+    elif verbose:
+        selected_level = LogLevel.VERBOSE
+    elif info:
+        selected_level = LogLevel.INFO
+    elif quiet:
+        selected_level = LogLevel.ERROR
+    else:
+        selected_level = LogLevel.INFO
+    Log.set_level(selected_level)
+    return selected_level
+
+
+__all__ = ["Log", "LogLevel", "set_level_from_flags"]

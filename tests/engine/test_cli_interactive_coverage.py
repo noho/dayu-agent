@@ -33,6 +33,7 @@ from dayu.services.contracts import (
     ChatResumeRequest,
     ChatTurnRequest,
     ChatTurnSubmission,
+    SceneModelConfig,
     PromptRequest,
     PromptSubmission,
     SessionResolutionPolicy,
@@ -388,7 +389,12 @@ def test_interactive_command_prints_restore_context_for_explicit_session(
         lambda **_kwargs: (
             None,
             None,
-            SimpleNamespace(resolve_scene_model=lambda *_args: {"name": "test-model"}),
+            SimpleNamespace(
+                resolve_scene_model=lambda *_args: SceneModelConfig(
+                    name="test-model",
+                    temperature=0.0,
+                )
+            ),
             object(),
             None,
         ),

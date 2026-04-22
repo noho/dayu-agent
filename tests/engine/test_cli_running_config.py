@@ -21,7 +21,6 @@ from dayu.cli.commands.write import run_write_command
 from dayu.cli.dependency_setup import (
     ModelName,
     RunningConfig,
-    ToolTraceConfig,
     WorkspaceConfig,
     _prepare_cli_host_dependencies,
     _has_local_filing_storage_root,
@@ -42,7 +41,7 @@ from dayu.cli.interactive_state import (
     InteractiveSessionState,
     build_interactive_session_id,
 )
-from dayu.services.contracts import FinsSubmission, WriteRunConfig
+from dayu.services.contracts import FinsSubmission, SceneModelConfig, WriteRunConfig
 from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
 from dayu.services.write_service import WriteService
 from dayu.startup.workspace import WorkspaceResources
@@ -74,7 +73,7 @@ from dayu.execution.runtime_config import (
     AgentRuntimeConfig as AgentRunningConfig,
     OpenAIRunnerRuntimeConfig as AsyncOpenAIRunnerRunningConfig,
 )
-from dayu.execution.options import ResolvedExecutionOptions
+from dayu.execution.options import ResolvedExecutionOptions, TraceSettings
 from dayu.fins.service_runtime import DefaultFinsRuntime
 from dayu.startup.config_file_resolver import ConfigFileResolver
 from dayu.startup.config_loader import ConfigLoader
@@ -211,7 +210,7 @@ class _FakeCliHostDependencies:
             doc_tool_limits=DocToolLimits(),
             fins_tool_limits=FinsToolLimits(),
             web_tools_config=WebToolsConfig(provider="auto"),
-            tool_trace_config=ToolTraceConfig(enabled=False, output_dir=Path("/tmp/trace")),
+            tool_trace_config=TraceSettings(enabled=False, output_dir=Path("/tmp/trace")),
         )
         self._scene_model_names = dict(scene_model_names or {})
         self.default_execution_options = _running_config_to_resolved_namespace(resolved_running_config)
@@ -238,19 +237,19 @@ class _FakeCliHostDependencies:
             )
         return SimpleNamespace(model_name=model_config, temperature=None)
 
-    def resolve_scene_model_config(self, scene_name: str, _execution_options=None) -> dict[str, object]:
+    def resolve_scene_model_config(self, scene_name: str, _execution_options=None) -> SceneModelConfig:
         """返回预置 scene 最终模型配置。"""
 
         model_config = self._scene_model_names.get(scene_name, "")
         if isinstance(model_config, dict):
-            return {
-                "name": model_config.get("name", ""),
-                "temperature": model_config.get("temperature"),
-            }
-        return {
-            "name": model_config,
-            "temperature": None,
-        }
+            return SceneModelConfig(
+                name=str(model_config.get("name", "")),
+                temperature=float(model_config.get("temperature") or 0.0),
+            )
+        return SceneModelConfig(
+            name=str(model_config),
+            temperature=0.0,
+        )
 
     def as_tuple(self) -> tuple[object, object, object, object, object]:
         """返回与 CLI Host 依赖装配函数一致的元组。
@@ -1792,7 +1791,7 @@ def test_setup_write_config_uses_workspace_draft_ticker_by_default(tmp_path: Pat
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
     write_config = setup_write_config(args, paths_config, running_config)
 
@@ -1848,7 +1847,7 @@ def test_setup_write_config_reads_web_provider_from_running_config(tmp_path: Pat
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="duckduckgo"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
     write_config = setup_write_config(args, paths_config, running_config)
 
@@ -1897,7 +1896,7 @@ def test_setup_write_config_keeps_empty_audit_override_when_cli_not_provided(tmp
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
 
     write_config = setup_write_config(args, paths_config, running_config)
@@ -1946,7 +1945,7 @@ def test_setup_write_config_raises_system_exit_when_template_missing(tmp_path: P
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
 
     with pytest.raises(SystemExit) as exc_info:
@@ -1997,7 +1996,7 @@ def test_setup_write_config_raises_system_exit_when_retry_count_is_negative(tmp_
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
 
     with pytest.raises(SystemExit) as exc_info:
@@ -2042,7 +2041,7 @@ def test_setup_write_config_prefers_workspace_template_when_cli_not_provided(tmp
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
 
     write_config = setup_write_config(args, paths_config, running_config)
@@ -2095,7 +2094,7 @@ def test_setup_write_config_falls_back_to_package_template_when_workspace_missin
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
 
     write_config = setup_write_config(args, paths_config, running_config)
@@ -2233,7 +2232,7 @@ def test_main_interactive_path_returns_zero(monkeypatch: pytest.MonkeyPatch, tmp
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
     model_name = ModelName(model_name="mimo-v2-flash")
     args = Namespace(
@@ -2294,7 +2293,7 @@ def test_main_interactive_path_returns_zero(monkeypatch: pytest.MonkeyPatch, tmp
     assert interactive_kwargs["session_id"] == build_interactive_session_id(state.interactive_key)
     assert interactive_kwargs["show_thinking"] is True
     assert interactive_execution_options.model_name == "deepseek-thinking"
-    assert any('使用模型: {"name": "scene-interactive-model", "temperature": null}' in item for item in collector.info_logs)
+    assert any('使用模型: {"name": "scene-interactive-model", "temperature": 0.0}' in item for item in collector.info_logs)
 
 
 @pytest.mark.unit
@@ -2337,7 +2336,7 @@ def test_main_interactive_path_rejects_second_instance(monkeypatch: pytest.Monke
                 doc_tool_limits=DocToolLimits(),
                 fins_tool_limits=FinsToolLimits(),
                 web_tools_config=WebToolsConfig(provider="auto"),
-                tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+                tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
             ),
             scene_model_names={"interactive": "scene-interactive-model"},
         ).as_tuple(),
@@ -2386,7 +2385,7 @@ def test_main_prompt_path_returns_prompt_exit_code(monkeypatch: pytest.MonkeyPat
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
     model_name = ModelName(model_name="mimo-v2-flash")
     args = Namespace(
@@ -2527,7 +2526,7 @@ def test_main_prompt_path_allows_missing_filings_dir(monkeypatch: pytest.MonkeyP
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
     model_name = ModelName(model_name="mimo-v2-flash")
     args = Namespace(
@@ -3236,7 +3235,7 @@ def test_main_non_interactive_path_returns_zero(monkeypatch: pytest.MonkeyPatch,
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
     model_name = ModelName(model_name="mimo-v2-flash")
     args = Namespace(command=None, log_level=None, debug=False, verbose=False, info=False, quiet=False)
@@ -3274,7 +3273,7 @@ def test_main_write_mode_requires_ticker(monkeypatch: pytest.MonkeyPatch, tmp_pa
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
     model_name = ModelName(model_name="mimo-v2-flash")
     args = Namespace(
@@ -3333,7 +3332,7 @@ def test_main_write_summary_mode_requires_ticker(monkeypatch: pytest.MonkeyPatch
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
     model_name = ModelName(model_name="mimo-v2-flash")
     args = Namespace(
@@ -3397,7 +3396,7 @@ def test_main_write_summary_mode_calls_print_report(monkeypatch: pytest.MonkeyPa
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
     model_name = ModelName(model_name="mimo-v2-flash")
     args = Namespace(
@@ -3483,7 +3482,7 @@ def test_main_write_mode_calls_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_pat
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
     model_name = ModelName(model_name="mimo-v2-flash")
     args = Namespace(
@@ -3547,7 +3546,7 @@ def test_main_write_mode_uses_resolved_company_name_and_normalized_model_overrid
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
     captured_write_config: dict[str, object] = {}
     args = Namespace(
@@ -3631,7 +3630,7 @@ def test_main_write_mode_logs_success_when_pipeline_returns_zero(
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=True, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=True, output_dir=tmp_path / "trace"),
     )
     model_name = ModelName(model_name="mimo-v2-flash")
     args = Namespace(
@@ -3705,7 +3704,7 @@ def test_main_write_mode_logs_elapsed_when_pipeline_raises(
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
     model_name = ModelName(model_name="mimo-v2-flash")
     args = Namespace(
@@ -3769,7 +3768,7 @@ def test_main_write_returns_130_when_run_write_pipeline_is_cancelled(
         doc_tool_limits=DocToolLimits(),
         fins_tool_limits=FinsToolLimits(),
         web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=ToolTraceConfig(enabled=False, output_dir=tmp_path / "trace"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
     model_name = ModelName(model_name="mimo-v2-flash")
     args = Namespace(

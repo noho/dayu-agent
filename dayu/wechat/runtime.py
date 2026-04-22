@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -706,7 +706,7 @@ def _create_run_daemon(args: argparse.Namespace, context: ResolvedWechatContext)
     scene_model = scene_execution_acceptance_preparer.resolve_scene_model("wechat", context.execution_options)
     Log.info(f"工作目录: {context.workspace_root}", module=MODULE)
     Log.info(
-        "wechat scene 模型: " + json.dumps(scene_model, ensure_ascii=False, sort_keys=True),
+        "wechat scene 模型: " + json.dumps(asdict(scene_model), ensure_ascii=False, sort_keys=True),
         module=MODULE,
     )
     chat_service = ChatService(

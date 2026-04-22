@@ -62,7 +62,7 @@ import sys
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
-from dayu.log import Log, LogLevel
+from dayu.log import Log, LogLevel, set_level_from_flags
 
 from .ingestion.process_events import ProcessEvent
 from .pipelines import PipelineProtocol, get_pipeline_from_normalized_ticker
@@ -2127,19 +2127,14 @@ def _configure_logging(
         无。
     """
 
-    if log_level:
-        Log.set_level(LogLevel[log_level.upper()])
-    elif debug:
-        Log.set_level(LogLevel.DEBUG)
-    elif verbose:
-        Log.set_level(LogLevel.VERBOSE)
-    elif info:
-        Log.set_level(LogLevel.INFO)
-    elif quiet:
-        Log.set_level(LogLevel.ERROR)
-    else:
-        # 默认采用 INFO，仍需显式调用 set_level 以触发第三方库日志抑制逻辑。
-        Log.set_level(LogLevel.INFO)
+    # 默认采用 INFO，仍需显式调用 set_level 以触发第三方库日志抑制逻辑。
+    set_level_from_flags(
+        log_level=log_level,
+        debug=debug,
+        verbose=verbose,
+        info=info,
+        quiet=quiet,
+    )
     Log.debug("日志初始化完成", module=MODULE)
 
 

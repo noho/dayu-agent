@@ -42,7 +42,8 @@ class DayuCliArgumentParser(argparse.ArgumentParser):
         if "required: command" in message:
             self.print_help(sys.stderr)
             self.exit(2, "\n错误: 缺少子命令。请先选择一个子命令，再用 `--help` 查看该命令的具体参数。\n")
-        super().error(message)
+        else:
+            super().error(message)
 
 def _add_global_args(parser: argparse.ArgumentParser) -> None:
     """追加各子命令共享的全局参数。

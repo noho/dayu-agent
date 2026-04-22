@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 from dayu.cli.dependency_setup import (
@@ -76,7 +77,7 @@ def run_interactive_command(args: argparse.Namespace) -> int:
         execution_options,
     )
     Log.info(
-        "使用模型: " f"{json.dumps(interactive_model, ensure_ascii=False, sort_keys=True)}",
+        "使用模型: " f"{json.dumps(asdict(interactive_model), ensure_ascii=False, sort_keys=True)}",
         module=MODULE,
     )
     Log.info("进入交互模式... 按 Ctrl+D 发送 prompt... 按 Enter 换行... 按两次 Ctrl+D 退出...", module=MODULE)

@@ -114,16 +114,14 @@ def _resolve_write_scene_models(
 
     scene_models: dict[str, SceneModelConfig] = {}
     for scene_name in PRIMARY_MODEL_WRITE_SCENES:
-        resolved = scene_execution_acceptance_preparer.resolve_scene_model(scene_name, main_execution_options)
-        scene_models[scene_name] = SceneModelConfig(
-            name=str(resolved["name"]),
-            temperature=float(resolved["temperature"]),
+        scene_models[scene_name] = scene_execution_acceptance_preparer.resolve_scene_model(
+            scene_name,
+            main_execution_options,
         )
     for scene_name in AUDIT_WRITE_SCENES:
-        resolved = scene_execution_acceptance_preparer.resolve_scene_model(scene_name, audit_execution_options)
-        scene_models[scene_name] = SceneModelConfig(
-            name=str(resolved["name"]),
-            temperature=float(resolved["temperature"]),
+        scene_models[scene_name] = scene_execution_acceptance_preparer.resolve_scene_model(
+            scene_name,
+            audit_execution_options,
         )
     return scene_models
 

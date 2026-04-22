@@ -251,14 +251,11 @@ class _FakeSceneExecutionAcceptancePreparer(SceneExecutionAcceptancePreparer):
         self,
         scene_name: str,
         execution_options: ExecutionOptions | None = None,
-    ) -> dict[str, str | float]:
+    ) -> SceneModelConfig:
         """返回稳定 scene model 摘要。"""
 
         del execution_options
-        return {
-            "name": f"model-{scene_name}",
-            "temperature": 0.2,
-        }
+        return SceneModelConfig(name=f"model-{scene_name}", temperature=0.2)
 
 
 def _build_workspace(workspace_dir: Path) -> WorkspaceResources:
@@ -359,14 +356,11 @@ def test_write_service_resolves_overview_scene_with_primary_model(monkeypatch: p
             self,
             scene_name: str,
             execution_options: ExecutionOptions | None = None,
-        ) -> dict[str, str | float]:
+        ) -> SceneModelConfig:
             """记录查询并返回稳定 scene model 摘要。"""
 
             scene_queries.append((scene_name, execution_options))
-            return {
-                "name": f"model-{scene_name}",
-                "temperature": 0.2,
-            }
+            return SceneModelConfig(name=f"model-{scene_name}", temperature=0.2)
 
     service = WriteService(
         host=host,

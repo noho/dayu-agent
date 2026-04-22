@@ -39,7 +39,7 @@ from dayu.fins.domain.enums import SourceKind
 from dayu.fins.service_runtime import DefaultFinsRuntime
 from dayu.fins.storage import FsSourceDocumentRepository
 from dayu.host import Host
-from dayu.log import Log, LogLevel
+from dayu.log import Log, set_level_from_flags
 from dayu.services import prepare_host_runtime_dependencies, WriteRunConfig
 from dayu.services.chat_service import ChatService
 from dayu.services.fins_service import FinsService
@@ -181,10 +181,6 @@ class ModelName:
     """模型名包装对象。"""
 
     model_name: str
-
-
-ToolTraceConfig = TraceSettings
-
 
 @dataclass
 class WriteCliConfig:
@@ -794,19 +790,14 @@ def setup_loglevel(args: argparse.Namespace) -> None:
         KeyError: 传入未知日志级别名称时抛出。
     """
 
-    if args.log_level:
-        Log.set_level(LogLevel[args.log_level.upper()])
-    elif args.debug:
-        Log.set_level(LogLevel.DEBUG)
-    elif args.verbose:
-        Log.set_level(LogLevel.VERBOSE)
-    elif args.info:
-        Log.set_level(LogLevel.INFO)
-    elif args.quiet:
-        Log.set_level(LogLevel.ERROR)
-    else:
-        # 即使无显式 flag，也需调用 set_level 以触发第三方库抑制逻辑
-        Log.set_level(LogLevel.INFO)
+    # 即使无显式 flag，也需调用 set_level 以触发第三方库抑制逻辑。
+    set_level_from_flags(
+        log_level=getattr(args, "log_level", None),
+        debug=bool(getattr(args, "debug", False)),
+        verbose=bool(getattr(args, "verbose", False)),
+        info=bool(getattr(args, "info", False)),
+        quiet=bool(getattr(args, "quiet", False)),
+    )
 
 
 def run_write_pipeline(

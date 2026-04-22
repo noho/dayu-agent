@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
 
 from dayu.contracts.agent_execution import (
     AcceptedExecutionSpec,
@@ -24,6 +23,7 @@ from dayu.execution.options import (
 )
 from dayu.prompting.scene_definition import SceneDefinition
 from dayu.services.conversation_policy_reader import ConversationPolicyReader
+from dayu.services.contracts import SceneModelConfig
 from dayu.services.scene_definition_reader import SceneDefinitionReader
 
 
@@ -39,13 +39,13 @@ class AcceptedSceneExecution:
     accepted_execution_spec: AcceptedExecutionSpec
 
     @property
-    def scene_model(self) -> dict[str, str | float]:
+    def scene_model(self) -> SceneModelConfig:
         """返回用于展示的模型摘要。"""
 
-        return {
-            "name": self.accepted_execution_spec.model.model_name,
-            "temperature": self.resolved_temperature,
-        }
+        return SceneModelConfig(
+            name=self.accepted_execution_spec.model.model_name,
+            temperature=self.resolved_temperature,
+        )
 
     @property
     def default_resumable(self) -> bool:
@@ -136,7 +136,7 @@ class SceneExecutionAcceptancePreparer:
         self,
         scene_name: str,
         execution_options: ExecutionOptions | None = None,
-    ) -> dict[str, str | float]:
+    ) -> SceneModelConfig:
         """解析用于展示的 scene 模型摘要。"""
 
         return self.prepare(scene_name, execution_options).scene_model
