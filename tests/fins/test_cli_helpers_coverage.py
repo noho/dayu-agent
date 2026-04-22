@@ -616,7 +616,7 @@ def test_regenerate_command_omits_action_when_none(tmp_path: Path) -> None:
         overwrite=False,
     )
     command = module._build_upload_filings_from_regenerate_command(
-        args=args,
+        args=cast(module.UploadFilingsScriptArgsProtocol, args),
         source_dir=tmp_path / "source",
         base_dir=tmp_path,
         output_script=tmp_path / "upload_filings_AAPL.sh",

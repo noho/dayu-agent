@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import argparse
+from argparse import Namespace
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Optional, Protocol, runtime_checkable
@@ -258,6 +258,7 @@ class _PreparedUploadFilingsFromArgs:
     """批量上传脚本生成命令的运行时准备参数。"""
 
     ticker: str
+    original_ticker: str
     base: str
     source_dir: str
     action: str | None
@@ -268,6 +269,7 @@ class _PreparedUploadFilingsFromArgs:
     report_date: str | None
     company_id: str | None
     company_name: str | None
+    original_company_name: str | None
     infer: bool
     overwrite: bool
     material_forms: str | None
@@ -278,44 +280,6 @@ class _PreparedUploadFilingsFromArgs:
     log_level: str | None
     ticker_aliases: list[str] | None
     generated_ticker_csv: str
-
-    def to_cli_namespace(self) -> argparse.Namespace:
-        """转换为 CLI helper 兼容的命名空间。
-
-        Args:
-            无。
-
-        Returns:
-            供 `cli_support` 复用的命名空间对象。
-
-        Raises:
-            无。
-        """
-
-        return argparse.Namespace(
-            command="upload_filings_from",
-            ticker=self.ticker,
-            base=self.base,
-            source_dir=self.source_dir,
-            action=self.action,
-            output_script=self.output_script,
-            recursive=self.recursive,
-            amended=self.amended,
-            filing_date=self.filing_date,
-            report_date=self.report_date,
-            company_id=self.company_id,
-            company_name=self.company_name,
-            infer=self.infer,
-            overwrite=self.overwrite,
-            material_forms=self.material_forms,
-            verbose=self.verbose,
-            debug=self.debug,
-            info=self.info,
-            quiet=self.quiet,
-            log_level=self.log_level,
-            ticker_aliases=list(self.ticker_aliases) if self.ticker_aliases is not None else None,
-            generated_ticker_csv=self.generated_ticker_csv,
-        )
 
 
 def _optional_string_list(value: object) -> list[str] | None:
@@ -438,6 +402,7 @@ def _build_upload_filings_from_args(
         raise ValueError("upload_filings_from 缺少 generated_ticker_csv")
     return _PreparedUploadFilingsFromArgs(
         ticker=str(namespace.ticker),
+        original_ticker=str(getattr(namespace, "original_ticker", namespace.ticker)),
         base=str(namespace.base),
         source_dir=str(namespace.source_dir),
         action=str(namespace.action).strip() or None if namespace.action is not None else None,
@@ -448,6 +413,11 @@ def _build_upload_filings_from_args(
         report_date=str(namespace.report_date).strip() or None if namespace.report_date is not None else None,
         company_id=str(namespace.company_id).strip() or None if namespace.company_id is not None else None,
         company_name=str(namespace.company_name).strip() or None if namespace.company_name is not None else None,
+        original_company_name=(
+            str(getattr(namespace, "original_company_name", None)).strip() or None
+            if getattr(namespace, "original_company_name", None) is not None
+            else None
+        ),
         infer=bool(namespace.infer),
         overwrite=bool(namespace.overwrite),
         material_forms=str(namespace.material_forms).strip() or None if namespace.material_forms is not None else None,
@@ -485,10 +455,10 @@ def _load_company_meta_best_effort(
         return None
 
 
-def _build_upload_filing_namespace(payload: UploadFilingCommandPayload, workspace_root: Path) -> argparse.Namespace:
+def _build_upload_filing_namespace(payload: UploadFilingCommandPayload, workspace_root: Path) -> Namespace:
     """为上传财报校验构建命名空间。"""
 
-    namespace = argparse.Namespace(
+    namespace = Namespace(
         command="upload_filing",
         ticker=payload.ticker,
         base=str(workspace_root),
@@ -509,10 +479,10 @@ def _build_upload_filing_namespace(payload: UploadFilingCommandPayload, workspac
     return namespace
 
 
-def _build_download_namespace(payload: DownloadCommandPayload, workspace_root: Path) -> argparse.Namespace:
+def _build_download_namespace(payload: DownloadCommandPayload, workspace_root: Path) -> Namespace:
     """为下载命令构建并规范化命名空间。"""
 
-    namespace = argparse.Namespace(
+    namespace = Namespace(
         command="download",
         ticker=payload.ticker,
         base=str(workspace_root),
@@ -528,10 +498,10 @@ def _build_download_namespace(payload: DownloadCommandPayload, workspace_root: P
     return namespace
 
 
-def _build_process_namespace(payload: ProcessCommandPayload, workspace_root: Path) -> argparse.Namespace:
+def _build_process_namespace(payload: ProcessCommandPayload, workspace_root: Path) -> Namespace:
     """为处理命令构建并规范化命名空间。"""
 
-    namespace = argparse.Namespace(
+    namespace = Namespace(
         command="process",
         ticker=payload.ticker,
         base=str(workspace_root),
@@ -543,10 +513,10 @@ def _build_process_namespace(payload: ProcessCommandPayload, workspace_root: Pat
     return namespace
 
 
-def _build_upload_material_namespace(payload: UploadMaterialCommandPayload, workspace_root: Path) -> argparse.Namespace:
+def _build_upload_material_namespace(payload: UploadMaterialCommandPayload, workspace_root: Path) -> Namespace:
     """为上传材料校验构建命名空间。"""
 
-    namespace = argparse.Namespace(
+    namespace = Namespace(
         command="upload_material",
         ticker=payload.ticker,
         base=str(workspace_root),
@@ -573,10 +543,10 @@ def _build_upload_material_namespace(payload: UploadMaterialCommandPayload, work
 def _build_upload_filings_from_namespace(
     payload: UploadFilingsFromCommandPayload,
     workspace_root: Path,
-) -> argparse.Namespace:
+) -> Namespace:
     """为批量上传脚本生成构建命名空间。"""
 
-    namespace = argparse.Namespace(
+    namespace = Namespace(
         command="upload_filings_from",
         ticker=payload.ticker,
         base=str(workspace_root),
@@ -1533,9 +1503,7 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
         if name == FinsCommandName.UPLOAD_FILINGS_FROM:
             typed_payload = _require_upload_filings_from_payload(payload)
             prepared_args = _build_upload_filings_from_args(typed_payload, self.workspace_root)
-            return _build_upload_filings_from_result_data(
-                generate_upload_filings_script(prepared_args.to_cli_namespace())
-            )
+            return _build_upload_filings_from_result_data(generate_upload_filings_script(prepared_args))
 
         if name == FinsCommandName.DOWNLOAD:
             typed_payload = _require_download_payload(payload)

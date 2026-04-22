@@ -93,13 +93,11 @@
 """
 
 import asyncio
-import inspect
 import json
 import time
 import uuid
-from contextlib import suppress
 from types import ModuleType
-from typing import AsyncIterator, Awaitable, Callable, Dict, List, Optional, Any, TYPE_CHECKING, TypeVar, cast
+from typing import AsyncIterator, Callable, Dict, List, Optional, Any, TYPE_CHECKING, cast
 from dataclasses import dataclass
 
 from dayu.contracts.agent_types import AgentMessage
@@ -148,11 +146,9 @@ from .tool_result import (
 from .sse_parser import SSEStreamParser
 
 MODULE = "ENGINE.ASYNC_OPENAI_RUNNER"
-_AwaitableResult = TypeVar("_AwaitableResult")
 
-
-from dayu.engine.cancellation import resolve_cancellation_waiter as _resolve_cancellation_waiter
-from dayu.engine.cancellation import cancel_task_and_wait as _cancel_task_and_wait
+from dayu.engine.cancellation import await_or_cancel as _await_or_cancel
+from dayu.engine.cancellation import create_cancellation_waiter as _create_cancellation_waiter
 
 
 def _require_aiohttp_module() -> ModuleType:
@@ -489,33 +485,6 @@ class AsyncOpenAIRunner:
         if self.cancellation_token is not None:
             self.cancellation_token.raise_if_cancelled()
 
-    def _create_cancellation_waiter(self) -> tuple[asyncio.Future[None] | None, Callable[[], None] | None]:
-        """创建与当前取消令牌联动的等待 future。
-
-        参数:
-            无。
-
-        返回值:
-            tuple[asyncio.Future[None] | None, Callable[[], None] | None]:
-                取消等待 future 与对应的回调注销函数；未配置取消令牌时返回 `(None, None)`。
-
-        异常:
-            RuntimeError: 当前事件循环不可用时由底层抛出。
-        """
-
-        if self.cancellation_token is None:
-            return None, None
-        loop = asyncio.get_running_loop()
-        waiter: asyncio.Future[None] = loop.create_future()
-
-        def _on_cancel() -> None:
-            loop.call_soon_threadsafe(_resolve_cancellation_waiter, waiter)
-
-        unregister = self.cancellation_token.on_cancel(_on_cancel)
-        if self.cancellation_token.is_cancelled():
-            _resolve_cancellation_waiter(waiter)
-        return waiter, unregister
-
     def _build_request_timeout(self, *, stream: bool) -> Any:
         """构造当前请求的 aiohttp timeout 配置。"""
 
@@ -545,42 +514,6 @@ class AsyncOpenAIRunner:
         if bool(getattr(session, "closed", False)):
             return
         await session.close()
-
-    async def _await_or_cancel(
-        self,
-        awaitable: Awaitable[_AwaitableResult],
-        *,
-        operation_name: str,
-        cancellation_waiter: asyncio.Future[None] | None,
-    ) -> _AwaitableResult:
-        """等待业务 awaitable，并在取消信号先到时优先中止。"""
-
-        try:
-            self._raise_if_cancelled()
-        except Exception:
-            if inspect.iscoroutine(awaitable):
-                awaitable.close()
-            raise
-        if cancellation_waiter is None:
-            return await awaitable
-
-        task = asyncio.ensure_future(awaitable)
-        try:
-            done, _ = await asyncio.wait(
-                {task, cancellation_waiter},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if cancellation_waiter in done and self.cancellation_token is not None and self.cancellation_token.is_cancelled():
-                await _cancel_task_and_wait(task)
-                Log.info(
-                    f"[{self.name}] 等待点已因取消中止: {operation_name}",
-                    module=MODULE,
-                )
-                raise EngineCancelledError(f"operation cancelled: {operation_name}")
-            return await task
-        except asyncio.CancelledError:
-            await _cancel_task_and_wait(task)
-            raise
 
     def _build_tool_execution_context(
         self,
@@ -911,7 +844,7 @@ class AsyncOpenAIRunner:
             "request_id": request_id,
         }
         log_prefix = f"[{self.name}][{request_id}]"
-        cancellation_waiter, unregister_cancellation_waiter = self._create_cancellation_waiter()
+        cancellation_waiter, unregister_cancellation_waiter = _create_cancellation_waiter(self.cancellation_token)
 
         # 配置级检查：模型不支持 streaming 时自动降级
         if stream and not self.supports_stream:
@@ -980,10 +913,14 @@ class AsyncOpenAIRunner:
                         headers=self.headers,
                         timeout=request_timeout,
                     )
-                    response = await self._await_or_cancel(
+                    response = await _await_or_cancel(
                         post_context.__aenter__(),
                         operation_name="http_request_enter",
                         cancellation_waiter=cancellation_waiter,
+                        cancellation_token=self.cancellation_token,
+                        raise_if_cancelled=self._raise_if_cancelled,
+                        log_prefix=f"[{self.name}]",
+                        log_module=MODULE,
                     )
                     response_entered = True
 
@@ -1005,10 +942,14 @@ class AsyncOpenAIRunner:
                                     f"{log_prefix} 请求流式模式但服务端返回 JSON 格式（Content-Type: {content_type}）",
                                     module=MODULE,
                                 )
-                            result = await self._await_or_cancel(
+                            result = await _await_or_cancel(
                                 response.json(),
                                 operation_name="response_json",
                                 cancellation_waiter=cancellation_waiter,
+                                cancellation_token=self.cancellation_token,
+                                raise_if_cancelled=self._raise_if_cancelled,
+                                log_prefix=f"[{self.name}]",
+                                log_module=MODULE,
                             )
                             async for event in self._process_non_stream(result, request_id, trace_meta):
                                 yield event
@@ -1017,19 +958,27 @@ class AsyncOpenAIRunner:
                                 async for event in self._process_sse_stream(response, request_id, trace_meta):
                                     yield event
                             else:
-                                result = await self._await_or_cancel(
+                                result = await _await_or_cancel(
                                     response.json(),
                                     operation_name="response_json_unknown_content_type",
                                     cancellation_waiter=cancellation_waiter,
+                                    cancellation_token=self.cancellation_token,
+                                    raise_if_cancelled=self._raise_if_cancelled,
+                                    log_prefix=f"[{self.name}]",
+                                    log_module=MODULE,
                                 )
                                 async for event in self._process_non_stream(result, request_id, trace_meta):
                                     yield event
                         return
 
-                    error_body = await self._await_or_cancel(
+                    error_body = await _await_or_cancel(
                         response.text(),
                         operation_name="response_error_body",
                         cancellation_waiter=cancellation_waiter,
+                        cancellation_token=self.cancellation_token,
+                        raise_if_cancelled=self._raise_if_cancelled,
+                        log_prefix=f"[{self.name}]",
+                        log_module=MODULE,
                     )
                     error_preview = error_body[:200] if error_body else "(empty response)"
                     error_detail = error_body[:400] if error_body else "(empty response)"
@@ -1073,10 +1022,14 @@ class AsyncOpenAIRunner:
                             yield self._annotate_event(warning_event(
                                 f"HTTP {response.status}, retry {attempt + 1}/{self.max_retries} in {delay:.1f}s"
                             ), trace_meta)
-                            await self._await_or_cancel(
+                            await _await_or_cancel(
                                 asyncio.sleep(delay),
                                 operation_name="retry_backoff_after_http_error",
                                 cancellation_waiter=cancellation_waiter,
+                                cancellation_token=self.cancellation_token,
+                                raise_if_cancelled=self._raise_if_cancelled,
+                                log_prefix=f"[{self.name}]",
+                                log_module=MODULE,
                             )
                             continue
 
@@ -1122,10 +1075,14 @@ class AsyncOpenAIRunner:
                             warning_event(f"Timeout, retry {attempt + 1}/{self.max_retries} in {delay}s"),
                             trace_meta,
                         )
-                        await self._await_or_cancel(
+                        await _await_or_cancel(
                             asyncio.sleep(delay),
                             operation_name="retry_backoff_after_timeout",
                             cancellation_waiter=cancellation_waiter,
+                            cancellation_token=self.cancellation_token,
+                            raise_if_cancelled=self._raise_if_cancelled,
+                            log_prefix=f"[{self.name}]",
+                            log_module=MODULE,
                         )
                         continue
 
@@ -1151,10 +1108,14 @@ class AsyncOpenAIRunner:
                             warning_event(f"Network error, retry {attempt + 1}/{self.max_retries} in {delay}s"),
                             trace_meta,
                         )
-                        await self._await_or_cancel(
+                        await _await_or_cancel(
                             asyncio.sleep(delay),
                             operation_name="retry_backoff_after_network_error",
                             cancellation_waiter=cancellation_waiter,
+                            cancellation_token=self.cancellation_token,
+                            raise_if_cancelled=self._raise_if_cancelled,
+                            log_prefix=f"[{self.name}]",
+                            log_module=MODULE,
                         )
                         continue
 
@@ -1348,6 +1309,42 @@ class AsyncOpenAIRunner:
                 trace_meta,
             )
 
+    def _build_non_stream_error_event(
+        self,
+        *,
+        trace_meta: Dict[str, Any],
+        log_message: str,
+        message: str,
+        error_type: str,
+        body: str | None = None,
+    ) -> StreamEvent:
+        """构造非流式响应的单个错误事件。
+
+        参数:
+            trace_meta: 当前 trace 元数据。
+            log_message: 需要同步写入日志的错误文本。
+            message: 返回给上游的错误摘要。
+            error_type: 错误类型标签。
+            body: 可选错误详情。
+
+        返回值:
+            已附带 trace 元数据的错误事件。
+
+        异常:
+            无。
+        """
+
+        Log.error(log_message, module=MODULE)
+        return self._annotate_event(
+            error_event(
+                message,
+                recoverable=False,
+                error_type=error_type,
+                body=body,
+            ),
+            trace_meta,
+        )
+
     async def _process_non_stream(
         self,
         result: Dict,
@@ -1367,15 +1364,12 @@ class AsyncOpenAIRunner:
         # 模型没有返回choices，这意味着服务端没有生成任何内容
         choices = result.get("choices", [])
         if not choices:
-            Log.error(
-                f"{log_prefix} 响应缺少 choices 字段，无法生成内容（error_type=response_error）",
-                module=MODULE,
-            )
-            yield self._annotate_event(error_event(
-                "No choices in response",
-                recoverable=False,
+            yield self._build_non_stream_error_event(
+                trace_meta=trace_meta,
+                log_message=f"{log_prefix} 响应缺少 choices 字段，无法生成内容（error_type=response_error）",
+                message="No choices in response",
                 error_type="response_error",
-            ), trace_meta)
+            )
             return
         
         # 只处理第一个回答（如果 n > 1，其余候选回答会被忽略，请求时已警告）
@@ -1403,69 +1397,54 @@ class AsyncOpenAIRunner:
         if tool_calls is None:
             tool_calls = []
         elif not isinstance(tool_calls, list):
-            Log.error(
-                f"{log_prefix} tool_calls 字段不是列表，无法处理（error_type=tool_call_invalid）",
-                module=MODULE,
-            )
             try:
                 body = json.dumps({"tool_calls": tool_calls}, ensure_ascii=False, default=str)
             except TypeError:
                 body = json.dumps({"tool_calls": str(tool_calls)}, ensure_ascii=False)
-            yield self._annotate_event(error_event(
-                "tool_calls must be a list",
-                recoverable=False,
+            yield self._build_non_stream_error_event(
+                trace_meta=trace_meta,
+                log_message=f"{log_prefix} tool_calls 字段不是列表，无法处理（error_type=tool_call_invalid）",
+                message="tool_calls must be a list",
                 error_type="tool_call_invalid",
                 body=body,
-            ), trace_meta)
+            )
             return
         if tool_calls:
             Log.debug(f"{log_prefix} 非流式响应包含 {len(tool_calls)} 个工具调用", module=MODULE)
             tool_call_batch = []
             for idx, tc in enumerate(tool_calls):
                 if not isinstance(tc, dict):
-                    Log.error(
-                        f"{log_prefix} 工具调用条目不是对象: index={idx}"
-                        f"（error_type=tool_call_incomplete）",
-                        module=MODULE,
-                    )
-                    yield self._annotate_event(error_event(
-                        "Tool call arguments incomplete or invalid",
-                        recoverable=False,
+                    yield self._build_non_stream_error_event(
+                        trace_meta=trace_meta,
+                        log_message=f"{log_prefix} 工具调用条目不是对象: index={idx}（error_type=tool_call_incomplete）",
+                        message="Tool call arguments incomplete or invalid",
                         error_type="tool_call_incomplete",
                         body=json.dumps([f"tool_index {idx}: tool call is not object"], ensure_ascii=False),
-                    ), trace_meta)
+                    )
                     return
 
                 tc_id = tc.get("id", "")
                 func = tc.get("function", {})
                 if not isinstance(func, dict):
-                    Log.error(
-                        f"{log_prefix} 工具调用缺少 function 对象: index={idx}"
-                        f"（error_type=tool_call_incomplete）",
-                        module=MODULE,
-                    )
-                    yield self._annotate_event(error_event(
-                        "Tool call arguments incomplete or invalid",
-                        recoverable=False,
+                    yield self._build_non_stream_error_event(
+                        trace_meta=trace_meta,
+                        log_message=f"{log_prefix} 工具调用缺少 function 对象: index={idx}（error_type=tool_call_incomplete）",
+                        message="Tool call arguments incomplete or invalid",
                         error_type="tool_call_incomplete",
                         body=json.dumps([f"tool_index {idx}: missing function object"], ensure_ascii=False),
-                    ), trace_meta)
+                    )
                     return
                 name = func.get("name", "")
                 arguments = func.get("arguments", "")
 
                 if not tc_id or not name:
-                    Log.error(
-                        f"{log_prefix} 工具调用缺少 id 或 name: index={idx}"
-                        f"（error_type=tool_call_incomplete）",
-                        module=MODULE,
-                    )
-                    yield self._annotate_event(error_event(
-                        "Tool call arguments incomplete or invalid",
-                        recoverable=False,
+                    yield self._build_non_stream_error_event(
+                        trace_meta=trace_meta,
+                        log_message=f"{log_prefix} 工具调用缺少 id 或 name: index={idx}（error_type=tool_call_incomplete）",
+                        message="Tool call arguments incomplete or invalid",
                         error_type="tool_call_incomplete",
                         body=json.dumps([f"tool_index {idx}: missing id or name"], ensure_ascii=False),
-                    ), trace_meta)
+                    )
                     return
 
                 if isinstance(arguments, dict):
@@ -1474,46 +1453,40 @@ class AsyncOpenAIRunner:
                     try:
                         args_obj = json.loads(arguments)
                     except json.JSONDecodeError as exc:
-                        Log.error(
-                            f"{log_prefix} 工具调用参数 JSON 无效: index={idx}, error={exc}"
-                            f"（error_type=tool_call_incomplete）",
-                            module=MODULE,
-                        )
-                        yield self._annotate_event(error_event(
-                            "Tool call arguments incomplete or invalid",
-                            recoverable=False,
+                        yield self._build_non_stream_error_event(
+                            trace_meta=trace_meta,
+                            log_message=(
+                                f"{log_prefix} 工具调用参数 JSON 无效: index={idx}, error={exc}"
+                                "（error_type=tool_call_incomplete）"
+                            ),
+                            message="Tool call arguments incomplete or invalid",
                             error_type="tool_call_incomplete",
                             body=json.dumps([f"tool_index {idx}: invalid arguments JSON ({exc})"], ensure_ascii=False),
-                        ), trace_meta)
+                        )
                         return
                 else:
-                    Log.error(
-                        f"{log_prefix} 工具调用参数类型非法: index={idx}, type={type(arguments).__name__}"
-                        f"（error_type=tool_call_incomplete）",
-                        module=MODULE,
-                    )
-                    yield self._annotate_event(error_event(
-                        "Tool call arguments incomplete or invalid",
-                        recoverable=False,
+                    yield self._build_non_stream_error_event(
+                        trace_meta=trace_meta,
+                        log_message=(
+                            f"{log_prefix} 工具调用参数类型非法: index={idx}, type={type(arguments).__name__}"
+                            "（error_type=tool_call_incomplete）"
+                        ),
+                        message="Tool call arguments incomplete or invalid",
                         error_type="tool_call_incomplete",
                         body=json.dumps(
                             [f"tool_index {idx}: arguments type is {type(arguments).__name__}"],
                             ensure_ascii=False,
                         ),
-                    ), trace_meta)
+                    )
                     return
                 if not isinstance(args_obj, dict):
-                    Log.error(
-                        f"{log_prefix} 工具调用参数不是对象: index={idx}"
-                        f"（error_type=tool_call_incomplete）",
-                        module=MODULE,
-                    )
-                    yield self._annotate_event(error_event(
-                        "Tool call arguments incomplete or invalid",
-                        recoverable=False,
+                    yield self._build_non_stream_error_event(
+                        trace_meta=trace_meta,
+                        log_message=f"{log_prefix} 工具调用参数不是对象: index={idx}（error_type=tool_call_incomplete）",
+                        message="Tool call arguments incomplete or invalid",
                         error_type="tool_call_incomplete",
                         body=json.dumps([f"tool_index {idx}: arguments is not object"], ensure_ascii=False),
-                    ), trace_meta)
+                    )
                     return
                 
                 # 有别于流式响应，这里一次性返回完整参数

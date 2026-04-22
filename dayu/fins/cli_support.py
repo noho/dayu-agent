@@ -60,7 +60,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional, Protocol, cast, runtime_checkable
 
 from dayu.log import Log, LogLevel, set_level_from_flags
 
@@ -125,6 +125,62 @@ _TICKER_CSV_COMMANDS = frozenset({"download", "upload_filing", "upload_material"
 _UPLOAD_SCRIPT_UNIX_PASSTHROUGH_ARGS = '"$@"'
 _UPLOAD_SCRIPT_WINDOWS_PASSTHROUGH_ARGS = "%*"
 _UPLOAD_SCRIPT_CLI_PREFIX = ("python", "-m", "dayu.cli")
+
+
+@runtime_checkable
+class UploadFilingsScriptArgsProtocol(Protocol):
+    """批量上传脚本生成所需的最小参数协议。"""
+
+    @property
+    def ticker(self) -> str: ...
+
+    @property
+    def original_ticker(self) -> str: ...
+
+    @property
+    def base(self) -> str: ...
+
+    @property
+    def source_dir(self) -> str: ...
+
+    @property
+    def action(self) -> str | None: ...
+
+    @property
+    def output_script(self) -> str | None: ...
+
+    @property
+    def recursive(self) -> bool: ...
+
+    @property
+    def amended(self) -> bool: ...
+
+    @property
+    def filing_date(self) -> str | None: ...
+
+    @property
+    def report_date(self) -> str | None: ...
+
+    @property
+    def company_id(self) -> str | None: ...
+
+    @property
+    def company_name(self) -> str | None: ...
+
+    @property
+    def original_company_name(self) -> str | None: ...
+
+    @property
+    def infer(self) -> bool: ...
+
+    @property
+    def overwrite(self) -> bool: ...
+
+    @property
+    def material_forms(self) -> str | None: ...
+
+    @property
+    def generated_ticker_csv(self) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -953,7 +1009,7 @@ def _dispatch_action(
         raise ValueError(f"不支持的 command: {args.command}")
     _prepare_cli_args(args)
     if args.command == "upload_filings_from":
-        return _generate_upload_filings_script(args)
+        return _generate_upload_filings_script(cast(UploadFilingsScriptArgsProtocol, args))
     if args.command == "download":
         return pipeline.download(
             ticker=args.ticker,
@@ -1387,7 +1443,7 @@ def _validate_company_meta_args(
         raise ValueError(f"{command_name} 在自动判定/create/update 时必须提供 --company-name")
 
 
-def _generate_upload_filings_script(args: argparse.Namespace) -> dict[str, Any]:
+def _generate_upload_filings_script(args: UploadFilingsScriptArgsProtocol) -> dict[str, Any]:
     """扫描目录并生成批量上传脚本。
 
     处理逻辑：
@@ -1408,7 +1464,8 @@ def _generate_upload_filings_script(args: argparse.Namespace) -> dict[str, Any]:
         OSError: 脚本写入失败时抛出。
     """
 
-    _prepare_cli_args(args)
+    if isinstance(args, argparse.Namespace):
+        _prepare_cli_args(args)
     source_dir = Path(args.source_dir).expanduser().resolve()
     if not source_dir.exists() or not source_dir.is_dir():
         raise FileNotFoundError(f"source_dir 不存在或不是目录: {source_dir}")
@@ -1661,7 +1718,7 @@ def _join_upload_script_command(parts: Sequence[str], *, script_platform: str) -
 
 def _build_upload_filings_from_regenerate_command(
     *,
-    args: argparse.Namespace,
+    args: UploadFilingsScriptArgsProtocol,
     source_dir: Path,
     base_dir: Path,
     output_script: Path,
@@ -1670,7 +1727,7 @@ def _build_upload_filings_from_regenerate_command(
 ) -> str:
     """构建脚本头部的重生成命令注释。
 
-    Args:
+    参数:
         args: `upload_filings_from` 子命令参数。
         source_dir: 已解析的源目录。
         base_dir: 已解析的工作区根目录。
@@ -1678,10 +1735,10 @@ def _build_upload_filings_from_regenerate_command(
         script_platform: 脚本平台标识。
         include_company_meta_args: 是否在重生成命令中保留 company meta 参数。
 
-    Returns:
+    返回值:
         可直接复制执行的 `upload_filings_from` 命令字符串。
 
-    Raises:
+    异常:
         无。
     """
 
@@ -1689,7 +1746,7 @@ def _build_upload_filings_from_regenerate_command(
         *_UPLOAD_SCRIPT_CLI_PREFIX,
         "upload_filings_from",
         "--ticker",
-        str(getattr(args, "original_ticker", args.ticker)),
+        str(args.original_ticker),
         "--from",
         str(source_dir),
         "--base",
@@ -1712,7 +1769,7 @@ def _build_upload_filings_from_regenerate_command(
     if report_date:
         parts.extend(["--report-date", str(report_date)])
     company_id = getattr(args, "company_id", None)
-    company_name = getattr(args, "original_company_name", getattr(args, "company_name", None))
+    company_name = args.original_company_name if args.original_company_name is not None else args.company_name
     if include_company_meta_args and company_id:
         parts.extend(["--company-id", str(company_id)])
     if include_company_meta_args and company_name:
@@ -2163,7 +2220,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         _prepare_cli_args(args)
         if args.command == "upload_filings_from":
-            result = _generate_upload_filings_script(args)
+            result = _generate_upload_filings_script(cast(UploadFilingsScriptArgsProtocol, args))
         else:
             workspace_root = Path(args.base).expanduser().resolve()
             pipeline = _build_pipeline_for_ticker(

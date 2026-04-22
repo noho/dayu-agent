@@ -2211,7 +2211,7 @@ def test_dispatch_upload_filings_from_applies_filter(tmp_path: Path) -> None:
             "--company-name", "测试公司",
         ]
     )
-    result = cli._generate_upload_filings_script(args)
+    result = cli._generate_upload_filings_script(cast(cli.UploadFilingsScriptArgsProtocol, args))
 
     assert result["recognized_count"] == 5
     assert result["skipped_count"] == 1
@@ -2362,7 +2362,7 @@ def test_dispatch_upload_filings_from_year_subdir_layout(tmp_path: Path) -> None
             "--company-name", "香港交易所",
         ]
     )
-    result = cli._generate_upload_filings_script(args)
+    result = cli._generate_upload_filings_script(cast(cli.UploadFilingsScriptArgsProtocol, args))
 
     # 因 _UPLOAD_MAX_PERIODIC=6，2025年内有2条记录，全部保留
     recognized_periods = [(e["fiscal_year"], e["fiscal_period"]) for e in result["recognized"]]
@@ -2782,7 +2782,7 @@ def test_upload_filings_from_bare_filename_in_quarter_subdir(tmp_path: Path) -> 
             "--company-name", "美团",
         ]
     )
-    result = cli._generate_upload_filings_script(args)
+    result = cli._generate_upload_filings_script(cast(cli.UploadFilingsScriptArgsProtocol, args))
 
     recognized_periods = [(e["fiscal_year"], e["fiscal_period"]) for e in result["recognized"]]
     assert (2025, "Q1") in recognized_periods
@@ -2998,7 +2998,7 @@ class TestGenerateUploadFilingsScriptWithMaterial:
                 "--company-name", "测试公司",
             ]
         )
-        result = cli._generate_upload_filings_script(args)
+        result = cli._generate_upload_filings_script(cast(cli.UploadFilingsScriptArgsProtocol, args))
 
         assert result["recognized_count"] == 1
         assert result["material_count"] == 1
@@ -3033,7 +3033,7 @@ class TestGenerateUploadFilingsScriptWithMaterial:
                 "--company-name", "测试",
             ]
         )
-        result = cli._generate_upload_filings_script(args)
+        result = cli._generate_upload_filings_script(cast(cli.UploadFilingsScriptArgsProtocol, args))
 
         assert result["recognized_count"] == 1
         assert result["skipped_count"] == 1
@@ -3060,7 +3060,7 @@ class TestGenerateUploadFilingsScriptWithMaterial:
                 "--company-name", "测试",
             ]
         )
-        result = cli._generate_upload_filings_script(args)
+        result = cli._generate_upload_filings_script(cast(cli.UploadFilingsScriptArgsProtocol, args))
 
         assert result["recognized_count"] == 1
         assert result["recognized"][0]["fiscal_period"] == "FY"
@@ -3094,7 +3094,7 @@ class TestGenerateUploadFilingsScriptWithMaterial:
                 "--company-name", "腾讯控股",
             ]
         )
-        result = cli._generate_upload_filings_script(args)
+        result = cli._generate_upload_filings_script(cast(cli.UploadFilingsScriptArgsProtocol, args))
 
         # 业绩公告 → recognized；业绩演示 → material
         assert result["recognized_count"] == 1
@@ -3134,7 +3134,7 @@ class TestGenerateUploadFilingsScriptWithMaterial:
                 "--company-name", "腾讯控股",
             ]
         )
-        result = cli._generate_upload_filings_script(args)
+        result = cli._generate_upload_filings_script(cast(cli.UploadFilingsScriptArgsProtocol, args))
 
         assert result["recognized_count"] == 1
         assert result["material_count"] == 1
@@ -3171,7 +3171,7 @@ class TestGenerateUploadFilingsScriptWithMaterial:
                 "--company-name", "腾讯控股",
             ]
         )
-        result = cli._generate_upload_filings_script(args)
+        result = cli._generate_upload_filings_script(cast(cli.UploadFilingsScriptArgsProtocol, args))
 
         assert result["recognized_count"] == 1
         assert result["material_count"] == 1

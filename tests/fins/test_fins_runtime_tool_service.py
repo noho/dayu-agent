@@ -458,21 +458,31 @@ def test_execute_sync_upload_filings_from_uses_script_generator(
     runtime = _make_runtime(tmp_path)
     source_dir = tmp_path / "source"
     source_dir.mkdir()
+    observed_args: dict[str, str | None] = {}
 
     monkeypatch.setattr(
         service_runtime_module,
         "generate_upload_filings_script",
-        lambda namespace: {
-            "script_path": "/tmp/upload.py",
-            "script_platform": "sec",
-            "ticker": namespace.ticker,
-            "source_dir": namespace.source_dir,
-            "total_files": 1,
-            "recognized_count": 1,
-            "material_count": 0,
-            "skipped_count": 0,
-            "recognized": [{"file": "10k.html", "fiscal_year": 2024, "fiscal_period": "FY"}],
-        },
+        lambda namespace: (
+            observed_args.update(
+                original_ticker=namespace.original_ticker,
+                original_company_name=namespace.original_company_name,
+            ) or {
+                "script_path": "/tmp/upload.py",
+                "script_platform": "sec",
+                "ticker": (
+                    (_ for _ in ()).throw(AssertionError("runtime 不应再传 argparse.Namespace"))
+                    if isinstance(namespace, argparse.Namespace)
+                    else namespace.ticker
+                ),
+                "source_dir": namespace.source_dir,
+                "total_files": 1,
+                "recognized_count": 1,
+                "material_count": 0,
+                "skipped_count": 0,
+                "recognized": [{"file": "10k.html", "fiscal_year": 2024, "fiscal_period": "FY"}],
+            }
+        ),
     )
 
     result = _require_sync_result(
@@ -492,6 +502,8 @@ def test_execute_sync_upload_filings_from_uses_script_generator(
     upload_filings_from_data = cast(Any, result.data)
 
     assert upload_filings_from_data.ticker == "AAPL"
+    assert observed_args["original_ticker"] == "AAPL"
+    assert observed_args["original_company_name"] == "Apple"
     assert upload_filings_from_data.source_dir == str(source_dir)
     assert upload_filings_from_data.recognized[0].file == "10k.html"
 
