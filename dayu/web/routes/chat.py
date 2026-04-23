@@ -6,8 +6,11 @@ import asyncio
 from typing import Any
 
 from dayu.contracts.events import AppEventType
+from dayu.log import Log
 from dayu.services.contracts import ChatTurnRequest, ChatTurnSubmission, ReplyDeliverySubmitRequest
 from dayu.services.protocols import ChatServiceProtocol, ReplyDeliveryServiceProtocol
+
+MODULE = "WEB.CHAT"
 
 
 class _InvalidChatSubmissionError(Exception):
@@ -102,7 +105,44 @@ async def _consume_stream(
     session_id: str,
     scene_name: str | None,
 ) -> None:
-    """后台消费流式事件，并在终态后显式提交 reply outbox。"""
+    """后台消费流式事件，并在终态后显式提交 reply outbox。
+
+    Args:
+        stream: ChatService 提交后返回的事件流。
+        reply_delivery_service: 投递 reply outbox 的 Service。
+        session_id: 当前 chat 的 session ID。
+        scene_name: 当前 chat 的 scene 名（缺省视为 ``"interactive"``）。
+
+    Returns:
+        无。
+
+    Raises:
+        无：所有内部异常被记录后吞掉，避免 asyncio Task 静默存储异常导致
+        线上问题难以定位。
+    """
+
+    try:
+        await _consume_stream_inner(
+            stream,
+            reply_delivery_service=reply_delivery_service,
+            session_id=session_id,
+            scene_name=scene_name,
+        )
+    except Exception as exc:
+        Log.error(
+            f"chat 后台流消费异常: session={session_id}, error={exc}",
+            module=MODULE,
+        )
+
+
+async def _consume_stream_inner(
+    stream,
+    *,
+    reply_delivery_service: ReplyDeliveryServiceProtocol,
+    session_id: str,
+    scene_name: str | None,
+) -> None:
+    """实际的事件消费与 reply 提交逻辑，便于统一异常包裹。"""
 
     content_chunks: list[str] = []
     final_reply_content = ""

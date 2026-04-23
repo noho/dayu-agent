@@ -25,7 +25,7 @@ from dayu.contracts.agent_execution import (
     ScenePreparationSpec,
 )
 from dayu.contracts.agent_types import AgentMessage
-from dayu.contracts.run import RunCancelReason
+from dayu.contracts.run import RunCancelReason, RunState
 from dayu.execution.options import ConversationMemorySettings, ExecutionOptions
 from dayu.host.host import Host
 from dayu.host.conversation_store import ConversationTranscript
@@ -188,6 +188,59 @@ def test_run_stream_manages_run_lifecycle_and_event_publish() -> None:
     run = next(iter(run_registry._runs.values()))
     assert run.state.value == "succeeded"
     assert event_bus.published == [(run.run_id, events[0])]
+
+
+@pytest.mark.unit
+def test_run_stream_marks_failed_when_acquire_many_raises_after_start_run() -> None:
+    """start_run 成功后 acquire_many 抛异常时，run 必须被显式收敛为 FAILED。
+
+    回归点：
+    - `_start_run` 先调用 `run_registry.start_run`，随后调用 `concurrency_governor.acquire_many`。
+    - 若 `acquire_many` 抛 TimeoutError/RuntimeError，run 已是 RUNNING，外层
+      `run_operation_stream` 还没进入自己的 try/finally，需要 `_start_run` 自身兜底
+      把 run 写成 FAILED，否则 run 永远卡 RUNNING 态。
+    """
+
+    from tests.application.conftest import StubRunRegistry
+
+    class _FailingGovernor(_StubGovernor):
+        """acquire_many 会抛 TimeoutError 的治理器。"""
+
+        def acquire_many(
+            self, lanes: list[str], *, timeout: float | None = None
+        ) -> list[_Permit]:
+            del lanes, timeout
+            raise TimeoutError("acquire timed out")
+
+    run_registry = StubRunRegistry()
+    governor = _FailingGovernor()
+    event_bus = _StubEventBus()
+    executor = DefaultHostExecutor(
+        run_registry=run_registry,
+        concurrency_governor=governor,  # type: ignore[arg-type]
+        event_bus=event_bus,  # type: ignore[arg-type]
+    )
+    spec = HostedRunSpec(operation_name="prompt", session_id="s1", business_concurrency_lane="sec_download")
+
+    async def _stream(_context: HostedRunContext):
+        # 不会进入——acquire_many 先抛
+        if False:
+            yield AppEvent(type=AppEventType.CONTENT_DELTA, payload="", meta={})
+
+    async def _collect() -> None:
+        async for _event in executor.run_operation_stream(spec=spec, event_stream_factory=_stream):
+            pass
+
+    with pytest.raises(TimeoutError, match="acquire timed out"):
+        asyncio.run(_collect())
+
+    runs = list(run_registry._runs.values())
+    assert len(runs) == 1, "register_run 应当只登记一条 run"
+    run = runs[0]
+    assert run.state == RunState.FAILED, f"acquire 失败后 run 应被收敛为 FAILED，实际为 {run.state}"
+    assert run.completed_at is not None, "FAILED 终态必须带 completed_at"
+    # 守护资源也应被清理：governor 在 acquire_many 抛出前未把 permit 放进 acquired
+    assert governor.acquired == [], "acquire_many 抛异常时不应残留已获取的 permit 记录"
 
 
 @pytest.mark.unit

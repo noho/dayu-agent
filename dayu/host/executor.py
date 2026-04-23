@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import threading
+from contextlib import suppress
 from typing import Any, AsyncIterator, Callable, TypeVar
 
 from dayu.host.cancellation_bridge import CancellationBridge
@@ -768,18 +769,46 @@ class DefaultHostExecutor(HostExecutorProtocol):
             spec.timeout_ms,
         )
         deadline_watcher.start()
-        self.run_registry.start_run(run_id)
-        permits: list[ConcurrencyPermit] = []
-        if self.concurrency_governor is not None:
-            lanes = _required_lanes_for_spec(spec, include_agent_lane=include_agent_lane)
-            if lanes:
-                acquire_timeout = _resolve_concurrency_acquire_timeout_seconds(spec.timeout_ms)
-                # 走 acquire_many：单事务原子拿齐全部 lane；
-                # 进程若在两步 acquire 之间被 SIGKILL，SQLite 事务未 COMMIT 等于没写，
-                # 不会残留半截 permit，无需 executor 层 try/except 回滚。
-                permits = self.concurrency_governor.acquire_many(
-                    lanes, timeout=acquire_timeout
-                )
+        # bridge / deadline_watcher 已经启动后台线程或 Timer，若后续步骤抛
+        # 异常而调用方拿不到句柄，将造成守护线程持续轮询 SQLite 与 Timer
+        # 持续到进程退出。这里在剩余初始化阶段统一兜底，确保异常时立刻
+        # 释放已启动的资源。此外，若 ``start_run`` 已成功把 run 置为
+        # RUNNING，但随后的 ``acquire_many`` 抛异常，run 将永久卡在
+        # RUNNING 态（外层 try/finally 要等 ``_start_run`` 返回后才生效），
+        # 必须在此显式把 run 收敛为 FAILED，否则 run_registry 状态与真实
+        # 执行结果将长期漂移。
+        run_started = False
+        try:
+            self.run_registry.start_run(run_id)
+            run_started = True
+            permits: list[ConcurrencyPermit] = []
+            if self.concurrency_governor is not None:
+                lanes = _required_lanes_for_spec(spec, include_agent_lane=include_agent_lane)
+                if lanes:
+                    acquire_timeout = _resolve_concurrency_acquire_timeout_seconds(spec.timeout_ms)
+                    # 走 acquire_many：单事务原子拿齐全部 lane；
+                    # 进程若在两步 acquire 之间被 SIGKILL，SQLite 事务未 COMMIT 等于没写，
+                    # 不会残留半截 permit，无需 executor 层 try/except 回滚。
+                    permits = self.concurrency_governor.acquire_many(
+                        lanes, timeout=acquire_timeout
+                    )
+        except BaseException as exc:
+            if run_started:
+                summary: str | None = None
+                if isinstance(exc, Exception):
+                    summary = self._summarize_error(exc, spec.error_summary_limit)
+                else:
+                    summary = str(exc)[: spec.error_summary_limit] if spec.error_summary_limit else str(exc)
+                with suppress(Exception):
+                    self._fail_run_preserving_original_exception(
+                        run_id=run_id,
+                        error_summary=summary,
+                    )
+            with suppress(Exception):
+                deadline_watcher.stop()
+            with suppress(Exception):
+                bridge.stop()
+            raise
         return HostedRunContext(run_id=run_id, cancellation_token=token), bridge, deadline_watcher, permits
 
     def _finish_run(
