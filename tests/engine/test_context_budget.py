@@ -280,6 +280,26 @@ class TestCompactMessages:
         assert len(result) == 7
         assert compacted is True
 
+    def test_compaction_preserves_leading_system_cluster(self) -> None:
+        """连续前导 system 段（system prompt + memory block）整体保留，不被压缩。"""
+        messages: list[AgentMessage] = [
+            {"role": "system", "content": "static system prompt"},
+            {"role": "system", "content": "[Conversation Memory] episodic block"},
+            {"role": "user", "content": "task goal"},
+        ]
+        for i in range(10):
+            messages.append({"role": "assistant", "content": f"resp_{i}", "tool_calls": []})
+            messages.append({"role": "user", "content": f"follow_up_{i}"})
+
+        result, compacted = _compact_messages(messages, recent_keep=4)
+        assert compacted is True
+        # 前两条必须仍为 system，且第二条为 memory block 原文（未被摘要）
+        assert result[0].get("role") == "system"
+        assert result[1].get("role") == "system"
+        assert "episodic block" in _message_content(result[1])
+        # 第三条为首条 user，保留任务目标
+        assert result[2] == {"role": "user", "content": "task goal"}
+
     def test_compaction_preserves_recent_tail(self) -> None:
         """压缩保留最近 N 条消息不变。"""
         messages: list[AgentMessage] = [
@@ -516,6 +536,37 @@ async def test_agent_context_overflow_max_compactions_exceeded() -> None:
     types = [e.type for e in events]
     # 最终应有不可恢复的 ERROR
     assert EventType.ERROR in types
+    # 配额耗尽后透传的 ERROR 必须改写为 context_overflow_exhausted，
+    # 用于区分"真实超长（仍可压缩）"和"压缩策略已用尽"。
+    error_events = [e for e in events if e.type == EventType.ERROR]
+    error_types = [
+        (e.metadata or {}).get("error_type") for e in error_events
+    ]
+    assert "context_overflow_exhausted" in error_types
+    assert "context_overflow" not in error_types
+
+
+@pytest.mark.asyncio
+async def test_agent_context_overflow_max_compactions_zero_marks_exhausted() -> None:
+    """max_compactions=0 时首个 overflow 立即标记为 context_overflow_exhausted。"""
+    overflow_batch = [
+        error_event("context length exceeded", recoverable=False, error_type="context_overflow"),
+    ]
+    runner = _RunnerStub([overflow_batch])
+    agent = AsyncAgent(
+        runner,
+        running_config=AgentRunningConfig(max_continuations=5, max_compactions=0),
+    )
+
+    events = []
+    async for event in agent.run("prompt"):
+        events.append(event)
+
+    error_events = [e for e in events if e.type == EventType.ERROR]
+    error_types = [(e.metadata or {}).get("error_type") for e in error_events]
+    # 配额为 0 等价于"压缩策略不可用"，应立即标记为 exhausted
+    assert "context_overflow_exhausted" in error_types
+    assert "context_overflow" not in error_types
 
 
 @pytest.mark.asyncio
@@ -649,11 +700,9 @@ def test_init_reads_explicit_running_config_capabilities() -> None:
         runner=_CreatedRunner(),
         running_config=AgentRunningConfig(
             max_context_tokens=131072,
-            max_output_tokens=8192,
         ),
     )
     assert agent.running_config.max_context_tokens == 131072
-    assert agent.running_config.max_output_tokens == 8192
 
 
 def test_init_builds_running_config_without_hidden_overrides() -> None:
@@ -684,11 +733,9 @@ def test_init_builds_running_config_without_hidden_overrides() -> None:
         runner=_CreatedRunner(),
         running_config=AgentRunningConfig(
             max_context_tokens=50000,
-            max_output_tokens=4096,
         ),
     )
     assert agent.running_config.max_context_tokens == 50000
-    assert agent.running_config.max_output_tokens == 4096
 
 
 # ========== Runner _detect_context_overflow 测试 ==========

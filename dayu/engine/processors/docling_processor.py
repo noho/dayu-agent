@@ -407,11 +407,13 @@ class DoclingProcessor:
         hits_raw: list[SearchHit] = []
         section_content_map: dict[str, str] = {}
         with self._profiler.stage("search"):
+            # 在循环外预编译 query 正则，避免每个 section 迭代都重复 re.escape + re.compile。
+            query_pattern = re.compile(re.escape(normalized_query), flags=re.IGNORECASE)
             for section in target_sections:
                 content = self._get_or_render_section_content(section)
                 title_text = section.title or ""
-                title_hit = bool(title_text) and re.search(re.escape(normalized_query), title_text, flags=re.IGNORECASE) is not None
-                content_hit = re.search(re.escape(normalized_query), content, flags=re.IGNORECASE) is not None
+                title_hit = bool(title_text) and query_pattern.search(title_text) is not None
+                content_hit = query_pattern.search(content) is not None
                 if not title_hit and not content_hit:
                     continue
                 # 若 title 命中而 content 无命中，将 title 前置进搜索文本，确保 snippet 能定位到匹配词。

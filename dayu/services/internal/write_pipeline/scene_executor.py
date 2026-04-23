@@ -19,7 +19,7 @@ from typing import Any, Callable, Protocol, TypeVar
 
 from dayu.contracts.agent_execution import ExecutionContract
 from dayu.contracts.cancellation import CancelledError
-from dayu.contracts.events import AppEvent, AppEventType, AppResult
+from dayu.contracts.events import AppEvent, AppEventType, AppResult, extract_cancel_reason
 from dayu.execution.runtime_config import OpenAIRunnerRuntimeConfig
 from dayu.log import Log
 from dayu.services.internal.write_pipeline.audit_formatting import (
@@ -813,8 +813,7 @@ def _build_cancelled_prompt_message(payload: Any) -> str:
         无。
     """
 
-    if isinstance(payload, dict):
-        cancel_reason = str(payload.get("cancel_reason") or "").strip()
-        if cancel_reason:
-            return f"写作 Agent 执行被取消: {cancel_reason}"
+    reason = extract_cancel_reason(payload)
+    if reason:
+        return f"写作 Agent 执行被取消: {reason}"
     return "写作 Agent 执行被取消"

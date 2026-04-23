@@ -17,16 +17,21 @@ P = ParamSpec("P")
 R = TypeVar("R", covariant=True)
 
 
-def _resolve_enum_values(enum_spec: Any, registry: Any) -> Optional[list]:
-    """
-    Resolve enum values for a parameter.
+def _resolve_enum_values(
+    enum_spec: Any,
+    registry: Any,
+) -> Optional[list]:
+    """解析参数的枚举值。
 
     Args:
-        enum_spec: A list of enum values or a callable returning such list.
-        registry: ToolRegistry instance, required when enum_spec is callable.
+        enum_spec: 枚举值列表，或接收 registry 返回列表的可调用对象。
+        registry: ``ToolRegistry`` 实例；当 ``enum_spec`` 为可调用对象时必填。
 
     Returns:
-        A list of enum values or None.
+        解析后的枚举值列表；若 ``enum_spec`` 或解析结果为 ``None`` 则返回 ``None``。
+
+    Raises:
+        ConfigError: 可调用 ``enum_spec`` 未传入 ``registry``，或解析结果非列表。
     """
     if enum_spec is None:
         return None
@@ -50,21 +55,22 @@ def build_tool_schema(
     description: str,
     parameters: Dict[str, Any],
     enums: Optional[Dict[str, Any]] = None,
-    registry: Any = None
+    registry: Any = None,
 ) -> ToolSchema:
-    """
-    Build a ToolSchema with optional enum injection and truncation metadata.
+    """构建带可选枚举注入的 ``ToolSchema``。
 
     Args:
-        name: Tool name.
-        description: Tool description for the LLM.
-        parameters: JSON Schema dict for parameters.
-        enums: Optional mapping of field -> enum values or callable(registry) -> list.
-        registry: ToolRegistry instance for dynamic enum resolution.
-        truncate: Optional ToolTruncateSpec or dict for truncation settings.
+        name: 工具名称。
+        description: 供 LLM 使用的工具描述。
+        parameters: 参数的 JSON Schema dict。
+        enums: 可选映射，字段名 -> 枚举值列表或 ``callable(registry) -> list``。
+        registry: 用于解析动态枚举的 ``ToolRegistry`` 实例。
 
     Returns:
-        ToolSchema instance with internal truncation metadata.
+        构建好的 ``ToolSchema`` 实例。
+
+    Raises:
+        ConfigError: 参数结构非法，或枚举字段不存在于 parameters 中。
     """
     if not isinstance(parameters, dict):
         raise ConfigError("tool_schema", None, "parameters must be a dict")
@@ -130,24 +136,30 @@ def tool(
     file_path_params: Optional[list[str]] = None,
     execution_context_param_name: str | None = None,
 ) -> Callable[[Callable[P, R]], DecoratedToolCallable[P, R]]:
-    """
-    Decorator for tool functions.
+    """工具函数装饰器。
 
-    This decorator resolves parameters, injects enums, builds ToolSchema,
-    and attaches metadata to the function for later registration.
-    
+    该装饰器解析参数、注入枚举、构建 ``ToolSchema``，并把元数据挂到
+    函数对象上，供 ``ToolRegistry.register()`` 在注册时统一读取。
+
     Args:
-        registry: ToolRegistry instance
-        name: Tool name
-        description: Tool description for LLM
-        parameters: JSON Schema dict or callable returning it
-        enums: Optional field -> enum values mapping
-        tags: Optional tags for tool grouping
-        truncate: Optional truncation specification
-        dup_call: Optional duplicate-call specification
-        file_path_params: Optional list of parameter names that should be validated
-                         as file paths (e.g., ["file_path", "directory"])
-        execution_context_param_name: 工具函数中接收 execution context 的显式参数名。
+        registry: ``ToolRegistry`` 实例。
+        name: 工具名称。
+        description: 供 LLM 使用的工具描述。
+        parameters: 参数的 JSON Schema dict，或返回该 dict 的可调用对象。
+        enums: 可选字段名 -> 枚举值映射。
+        tags: 可选的工具分组标签集合。
+        truncate: 可选截断规格。
+        dup_call: 可选重复调用规格。
+        file_path_params: 可选的需要按文件路径校验的参数名列表
+            （如 ``["file_path", "directory"]``）。
+        execution_context_param_name: 工具函数中接收 execution context 的显式参数名；
+            为 ``None`` 表示该工具不接收 execution context。
+
+    Returns:
+        装饰器函数，它会返回挂有工具元数据的可调用对象。
+
+    Raises:
+        ConfigError: ``truncate`` / ``dup_call`` 参数类型非法。
     """
 
     def wrap(func: Callable[P, R]) -> DecoratedToolCallable[P, R]:

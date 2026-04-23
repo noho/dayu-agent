@@ -337,10 +337,12 @@ class HostCleanupResult:
     Attributes:
         orphan_run_ids: 被清理的孤儿 run ID。
         stale_permit_ids: 被清理的过期 permit ID。
+        stale_pending_turn_ids: 被清理的 stale pending turn ID。
     """
 
     orphan_run_ids: tuple[str, ...]
     stale_permit_ids: tuple[str, ...]
+    stale_pending_turn_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

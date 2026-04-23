@@ -386,6 +386,8 @@ class DummyToolTraceRecorder:
         iteration_id: str,
         content: str,
         degraded: bool,
+        filtered: bool = False,
+        finish_reason: str | None = None,
     ) -> None:
         """记录最终回答。
 
@@ -393,6 +395,8 @@ class DummyToolTraceRecorder:
             iteration_id: iteration ID。
             content: 最终回答内容。
             degraded: 是否降级回答。
+            filtered: 是否被内容过滤。
+            finish_reason: 模型终止原因。
 
         Returns:
             无。
@@ -406,15 +410,24 @@ class DummyToolTraceRecorder:
                 "iteration_id": iteration_id,
                 "content": content,
                 "degraded": degraded,
+                "filtered": filtered,
+                "finish_reason": finish_reason,
             }
         )
 
-    def finish_iteration(self, *, iteration_id: str, iteration_index: int) -> None:
+    def finish_iteration(
+        self,
+        *,
+        iteration_id: str,
+        iteration_index: int,
+        termination_reason: str | None = None,
+    ) -> None:
         """记录 finish_iteration。
 
         Args:
             iteration_id: iteration ID。
             iteration_index: iteration 序号。
+            termination_reason: iteration 终止原因。
 
         Returns:
             无。
@@ -809,6 +822,44 @@ class TestAsyncAgentRun:
         tool_message = next(message for message in second_messages if message.get("role") == "tool")
         assert '"content_base64": "YWJj"' in tool_message["content"]
         assert '"content_encoding": "base64"' in tool_message["content"]
+
+    async def test_agent_injects_empty_result_placeholder_preserving_tool_call_pairing(self):
+        """工具结果为空字符串时仍须注入占位 tool message，保持 assistant.tool_calls 配对完整。
+
+        OpenAI 协议要求 assistant.tool_calls 的每个条目都有对应的 role=tool
+        message；若空结果被跳过会破坏配对（finding 081）。
+        """
+
+        tool_args = {"path": "empty.bin"}
+        runner = DummyRunner([
+            [
+                tool_call_dispatched("call_empty", "tool", tool_args, index_in_iteration=0),
+                tool_call_result(
+                    "call_empty",
+                    {"ok": True, "value": ""},
+                    name="tool",
+                    arguments=tool_args,
+                    index_in_iteration=0,
+                ),
+                tool_calls_batch_done(["call_empty"], ok=1, error=0, timeout=0, cancelled=0),
+                content_complete(""),
+                done_event(),
+            ],
+            [content_delta("done"), content_complete("done"), done_event()],
+        ])
+        agent = AsyncAgent(runner)
+
+        async for _ in agent.run("test prompt"):
+            pass
+
+        second_messages = runner.calls[1]["messages"]
+        tool_messages = [m for m in second_messages if m.get("role") == "tool"]
+        assistant_message = next(m for m in second_messages if m.get("role") == "assistant")
+        tool_calls = assistant_message.get("tool_calls", [])
+        assert len(tool_messages) == len(tool_calls) == 1
+        assert tool_messages[0].get("tool_call_id") == "call_empty"
+        # 协议要求 tool message.content 非空：空结果注入占位文案。
+        assert tool_messages[0].get("content")
 
     async def test_agent_predictively_caps_tool_results_before_next_iteration(self):
         """验证 Agent 会在注入下一轮消息前按预算预测性截断工具结果。"""
@@ -1477,6 +1528,51 @@ class TestAsyncAgentRun:
         assert EventType.FINAL_ANSWER in event_types
         assert len(runner.calls) == 4
 
+    async def test_tool_protocol_error_does_not_reset_failed_batch_counter_as_plain_text(self):
+        """工具协议错误应直接终止，而不是被当成纯文本轮清零失败计数。"""
+
+        runner = DummyRunner([
+            [
+                tool_call_dispatched("call_1", "tool", {"iter": 1}, index_in_iteration=0),
+                tool_call_result(
+                    "call_1",
+                    {"ok": False, "error": "FAIL", "message": "fail"},
+                    name="tool",
+                    arguments={"iter": 1},
+                    index_in_iteration=0,
+                ),
+                tool_calls_batch_done(["call_1"], ok=0, error=1, timeout=0, cancelled=0),
+                content_complete(""),
+                done_event(),
+            ],
+            [
+                content_complete("partial"),
+                error_event(
+                    "Tool call arguments incomplete or invalid",
+                    recoverable=False,
+                    error_type="tool_call_incomplete",
+                ),
+            ],
+            [content_delta("should not continue"), content_complete("should not continue"), done_event()],
+        ])
+        config = AgentRunningConfig(
+            fallback_mode="raise_error",
+            max_consecutive_failed_tool_batches=2,
+        )
+        agent = AsyncAgent(runner, running_config=config)
+
+        events = []
+        async for event in agent.run("prompt"):
+            events.append(event)
+
+        event_types = [event.type for event in events]
+        assert EventType.ERROR in event_types
+        assert EventType.FINAL_ANSWER not in event_types
+        assert len(runner.calls) == 2
+        error_events = [event for event in events if event.type == EventType.ERROR]
+        assert error_events
+        assert error_events[-1].metadata.get("error_type") == "tool_call_incomplete"
+
     async def test_fallback_error_stops_without_final_answer(self):
         """测试降级路径遇到 error_event 不再产出 final_answer"""
         runner = DummyRunner([
@@ -1633,7 +1729,41 @@ class TestAsyncAgentStreaming:
         assert recorder.results[0]["payload"]["result"]["ok"] is True
         assert recorder.final_responses[0]["content"] == "done"
         assert recorder.final_responses[0]["degraded"] is False
+        # 回归 finding 086：record_final_response 必须把 filtered / finish_reason
+        # 透传给 trace recorder，否则导出的 JSONL 中相关字段恒为默认值。
+        assert recorder.final_responses[0]["filtered"] is False
+        assert recorder.final_responses[0]["finish_reason"] is None
         assert recorder.closed is True
+
+    async def test_tool_trace_recorder_propagates_filtered_finish_reason(self):
+        """回归 finding 086：content_filter 触发时，recorder 必须收到 filtered=True 与 finish_reason。"""
+
+        runner = DummyRunner(
+            [
+                [
+                    content_delta("partial"),
+                    content_complete("partial"),
+                    done_event(
+                        summary={
+                            "content_filtered": True,
+                            "finish_reason": "content_filter",
+                            "truncated": False,
+                        }
+                    ),
+                ],
+            ]
+        )
+        trace_factory = DummyToolTraceRecorderFactory()
+        agent = AsyncAgent(runner, tool_trace_recorder_factory=trace_factory)
+
+        result = await agent.run_and_wait("test prompt")
+        recorder = trace_factory.created_recorders[0]["recorder"]
+
+        assert result.success is True
+        assert len(recorder.final_responses) == 1
+        assert recorder.final_responses[0]["filtered"] is True
+        assert recorder.final_responses[0]["finish_reason"] == "content_filter"
+        assert recorder.final_responses[0]["degraded"] is True
 
     async def test_tool_trace_recorder_close_on_unrecoverable_error(self):
         """验证不可恢复错误时也会触发 recorder.close。"""
@@ -1649,6 +1779,65 @@ class TestAsyncAgentStreaming:
         assert len(recorder.finished_iterations) == 1
         assert len(recorder.final_responses) == 0
         assert recorder.closed is True
+
+    async def test_tool_trace_recorder_force_answer_propagates_filtered_finish_reason(self):
+        """回归 finding 086：force_answer 降级路径也必须透传 filtered / finish_reason。
+
+        主路径修复只覆盖正常 DONE 的分支；当迭代达到 max_iterations 触发 force-answer
+        降级生成时，trace recorder 的字段同样不能退化为默认值。
+        """
+
+        runner = DummyRunner(
+            [
+                [
+                    content_complete(""),
+                    tool_call_dispatched("call_1", "tool", {"iter": 1}, index_in_iteration=0),
+                    tool_call_result(
+                        "call_1",
+                        {"ok": True, "value": "ok"},
+                        name="tool",
+                        arguments={"iter": 1},
+                        index_in_iteration=0,
+                    ),
+                    tool_calls_batch_done(["call_1"], ok=1, error=0, timeout=0, cancelled=0),
+                    done_event(),
+                ],
+                [
+                    content_delta("forced"),
+                    content_complete("forced"),
+                    done_event(
+                        summary={
+                            "content_filtered": True,
+                            "finish_reason": "content_filter",
+                        }
+                    ),
+                ],
+            ]
+        )
+        executor = DummyToolExecutor([{"name": "tool"}])
+        from dayu.engine.async_agent import AgentRunningConfig
+
+        config = AgentRunningConfig(
+            max_iterations=1,
+            max_compactions=0,
+            fallback_mode="force_answer",
+        )
+        trace_factory = DummyToolTraceRecorderFactory()
+        agent = AsyncAgent(
+            runner,
+            tool_executor=executor,
+            running_config=config,
+            tool_trace_recorder_factory=trace_factory,
+        )
+
+        result = await agent.run_and_wait("prompt")
+        recorder = trace_factory.created_recorders[0]["recorder"]
+
+        assert result.success is True
+        assert len(recorder.final_responses) == 1
+        assert recorder.final_responses[0]["degraded"] is True
+        assert recorder.final_responses[0]["filtered"] is True
+        assert recorder.final_responses[0]["finish_reason"] == "content_filter"
 
     async def test_tool_trace_recorder_start_iteration_receives_raw_tool_schemas(self):
         """验证 start_iteration 会收到当前轮真实工具 schema。"""

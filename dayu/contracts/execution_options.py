@@ -89,7 +89,7 @@ class ConversationMemorySettings:
     working_memory_max_turns: int = 6
     working_memory_token_budget_ratio: float = 0.08
     working_memory_token_budget_floor: int = 1500
-    working_memory_token_budget_cap: int = 6000
+    working_memory_token_budget_cap: int = 12000
     episodic_memory_token_budget_ratio: float = 0.02
     episodic_memory_token_budget_floor: int = 2000
     episodic_memory_token_budget_cap: int = 12000

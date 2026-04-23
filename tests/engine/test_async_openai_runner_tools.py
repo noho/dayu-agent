@@ -235,6 +235,70 @@ async def test_emit_tool_batch_success():
     assert EventType.TOOL_CALLS_BATCH_DONE in events
 
 
+@pytest.mark.asyncio
+async def test_emit_tool_batch_aborts_quickly_on_cancellation():
+    """取消令牌触发后，_emit_tool_batch 应在很短时间内抛出 EngineCancelledError，不等待工具 timeout。"""
+
+    from dayu.contracts.cancellation import CancelledError as EngineCancelledError, CancellationToken
+
+    class _SlowExecutor:
+        def get_schemas(self):
+            return []
+
+        def execute(self, name, arguments, context=None):
+            del name, arguments, context
+            # 模拟远大于测试预算的工具耗时
+            import time
+            time.sleep(5.0)
+            return {"ok": True, "value": "late"}
+
+        def clear_cursors(self) -> None:
+            pass
+
+        def get_dup_call_spec(self, name: str):
+            del name
+            return None
+
+        def get_execution_context_param_name(self, name: str) -> str | None:
+            del name
+            return None
+
+        def register_response_middleware(self, callback) -> None:
+            del callback
+
+    token = CancellationToken()
+    runner = _make_runner()
+    runner.cancellation_token = token
+    runner.set_tools(cast(ToolExecutor, _SlowExecutor()))
+
+    async def cancel_soon() -> None:
+        await asyncio.sleep(0.05)
+        token.cancel()
+
+    tool_calls = [
+        {"id": "t1", "name": "slow", "arguments": {}, "index_in_iteration": 0},
+    ]
+
+    async def drain() -> list[Any]:
+        collected: list[Any] = []
+        async for event in runner._emit_tool_batch(
+            tool_calls=tool_calls,
+            request_id="req1",
+            trace_meta={"run_id": "r", "iteration_id": "t", "request_id": "q"},
+        ):
+            collected.append(event)
+        return collected
+
+    start = asyncio.get_event_loop().time()
+    cancel_task = asyncio.create_task(cancel_soon())
+    with pytest.raises(EngineCancelledError):
+        await drain()
+    elapsed = asyncio.get_event_loop().time() - start
+    await cancel_task
+    # 取消路径不等待 tool timeout；留出一定余量但远小于 5 秒。
+    assert elapsed < 2.0, f"cancellation response too slow: {elapsed}s"
+
+
 # ---------------------------------------------------------------------------
 # _compact_args 测试
 # ---------------------------------------------------------------------------

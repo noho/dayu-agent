@@ -1074,13 +1074,11 @@ def test_prepare_wechat_host_dependencies_runs_unified_startup_recovery(
 
     prepared = wechat_runtime_module._prepare_wechat_host_dependencies(context)
 
-    assert prepared == (
-        fake_workspace,
-        fake_default_execution_options,
-        fake_scene_preparer,
-        fake_host,
-        fake_fins_runtime,
-    )
+    assert prepared.workspace is fake_workspace
+    assert prepared.default_execution_options is fake_default_execution_options
+    assert prepared.scene_execution_acceptance_preparer is fake_scene_preparer
+    assert prepared.host is fake_host
+    assert prepared.fins_runtime is fake_fins_runtime
     assert captured_call == {
         "workspace_root": context.workspace_root,
         "config_root": context.config_root,

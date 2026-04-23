@@ -15,12 +15,17 @@ import json
 import sqlite3
 import uuid
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
 from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, ReplyOutboxSubmitRequest
+from dayu.host._session_barrier import ensure_session_active
 from dayu.host.host_store import HostStore
 from dayu.log import Log
+
+if TYPE_CHECKING:
+    from dayu.host.protocols import SessionActivityQueryProtocol
 
 
 MODULE = "HOST.REPLY_OUTBOX_STORE"
@@ -107,11 +112,17 @@ class InMemoryReplyOutboxStore:
     仅用于单元测试或显式注入 Host 内部组件时的默认兜底。
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        session_activity: "SessionActivityQueryProtocol | None" = None,
+    ) -> None:
         """初始化内存仓储。
 
         Args:
-            无。
+            session_activity: 可选的 session 活性查询；装配后 ``submit_reply``
+                在 session 已 CLOSED 时抛 ``SessionClosedError``；传 ``None``
+                时退化为不做屏障的旧行为，仅用于独立 store 单元测试。
 
         Returns:
             无。
@@ -122,6 +133,7 @@ class InMemoryReplyOutboxStore:
 
         self._records: dict[str, ReplyOutboxRecord] = {}
         self._delivery_key_index: dict[str, str] = {}
+        self._session_activity: "SessionActivityQueryProtocol | None" = session_activity
 
     def submit_reply(self, request: ReplyOutboxSubmitRequest) -> ReplyOutboxRecord:
         """显式提交待交付回复。
@@ -137,6 +149,13 @@ class InMemoryReplyOutboxStore:
         """
 
         normalized_request = _normalize_submit_request(request)
+        ensure_session_active(
+            self._session_activity,
+            session_id=normalized_request.session_id,
+            operation="submit_reply",
+            module=MODULE,
+            target_name="reply outbox",
+        )
         existing = self.get_by_delivery_key(normalized_request.delivery_key)
         if existing is not None:
             _ensure_submit_request_matches(existing, normalized_request)
@@ -439,11 +458,20 @@ class InMemoryReplyOutboxStore:
 class SQLiteReplyOutboxStore:
     """SQLite 版 reply outbox 仓储。"""
 
-    def __init__(self, host_store: HostStore) -> None:
+    def __init__(
+        self,
+        host_store: HostStore,
+        *,
+        session_activity: "SessionActivityQueryProtocol | None" = None,
+    ) -> None:
         """初始化 SQLite 仓储。
 
         Args:
             host_store: 宿主层 SQLite 存储。
+            session_activity: 可选的 session 活性查询；装配后 ``submit_reply``
+                在 session 已 CLOSED 时抛 ``SessionClosedError``，防止
+                ``cancel_session`` 窗口期内产生孤儿 outbox 记录。传 ``None``
+                时退化为不做屏障的旧行为，仅用于独立 store 单元测试。
 
         Returns:
             无。
@@ -453,6 +481,7 @@ class SQLiteReplyOutboxStore:
         """
 
         self._host_store = host_store
+        self._session_activity: "SessionActivityQueryProtocol | None" = session_activity
 
     def submit_reply(self, request: ReplyOutboxSubmitRequest) -> ReplyOutboxRecord:
         """显式提交待交付回复。
@@ -469,6 +498,13 @@ class SQLiteReplyOutboxStore:
         """
 
         normalized_request = _normalize_submit_request(request)
+        ensure_session_active(
+            self._session_activity,
+            session_id=normalized_request.session_id,
+            operation="submit_reply",
+            module=MODULE,
+            target_name="reply outbox",
+        )
         now = _now_utc()
         delivery_id = f"delivery_{uuid.uuid4().hex[:12]}"
         conn = self._host_store.get_connection()
@@ -736,22 +772,34 @@ class SQLiteReplyOutboxStore:
             return existing
         normalized_error_message = _normalize_text(error_message, field_name="error_message")
         conn = self._host_store.get_connection()
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE reply_outbox
             SET state = ?,
                 last_error_message = ?,
                 updated_at = ?
-            WHERE delivery_id = ?
+            WHERE delivery_id = ? AND state != ?
             """,
             (
                 ReplyOutboxState.FAILED_RETRYABLE.value if retryable else ReplyOutboxState.FAILED_TERMINAL.value,
                 normalized_error_message,
                 _serialize_dt(_now_utc()),
                 existing.delivery_id,
+                ReplyOutboxState.DELIVERED.value,
             ),
         )
         conn.commit()
+        if cursor.rowcount == 0:
+            # SQL 守卫命中：record 已被并发推进到 DELIVERED，等价于 Python 层的检查失败
+            current = self.get_reply(existing.delivery_id)
+            if current is not None and current.state == ReplyOutboxState.DELIVERED:
+                raise ValueError(
+                    "已完成交付的 reply delivery 不能再标记失败: "
+                    f"delivery_id={delivery_id}"
+                )
+            raise RuntimeError(
+                f"reply delivery 状态守卫意外失败: delivery_id={existing.delivery_id}"
+            )
         updated = self.get_reply(existing.delivery_id)
         if updated is None:
             raise RuntimeError(f"reply delivery 更新后读取失败: {existing.delivery_id}")

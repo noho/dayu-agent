@@ -146,6 +146,8 @@ class FinalResponseInfo:
     iteration_id: str
     content: str
     degraded: bool
+    filtered: bool
+    finish_reason: str | None
     recorded_at: str
     identity: TraceIdentity
 
@@ -199,6 +201,18 @@ class RunInfo:
         """是否降级输出。"""
 
         return bool(self.final_response and self.final_response.degraded)
+
+    @property
+    def filtered(self) -> bool:
+        """最终响应是否被内容过滤命中。"""
+
+        return bool(self.final_response and self.final_response.filtered)
+
+    @property
+    def finish_reason(self) -> str | None:
+        """最终响应的 finish_reason；缺失返回 ``None``。"""
+
+        return self.final_response.finish_reason if self.final_response else None
 
     @property
     def iteration_count(self) -> int:
@@ -542,12 +556,16 @@ def _parse_final_response(record: dict[str, Any]) -> Optional[FinalResponseInfo]
     final_response = record.get("final_response")
     if not isinstance(final_response, dict):
         final_response = {}
+    raw_finish_reason = final_response.get("finish_reason")
+    finish_reason = str(raw_finish_reason).strip() if raw_finish_reason else None
     return FinalResponseInfo(
         run_id=str(record.get("run_id") or ""),
         session_id=str(record.get("session_id") or ""),
         iteration_id=str(record.get("iteration_id") or ""),
         content=str(final_response.get("content") or ""),
         degraded=bool(final_response.get("degraded")),
+        filtered=bool(final_response.get("filtered")),
+        finish_reason=finish_reason or None,
         recorded_at=str(record.get("recorded_at") or ""),
         identity=_parse_trace_identity(record),
     )
@@ -1175,7 +1193,14 @@ def _build_context_pressure_runs(runs: list[RunInfo]) -> list[dict[str, Any]]:
         over_soft_limit = any(item.is_over_soft_limit for item in run.iteration_usages)
         compaction_count = max((item.compaction_count for item in run.iteration_usages), default=0)
         continuation_count = max((item.continuation_count for item in run.iteration_usages), default=0)
-        if not (over_soft_limit or compaction_count > 0 or continuation_count > 0 or run.degraded or not run.has_final_response):
+        if not (
+            over_soft_limit
+            or compaction_count > 0
+            or continuation_count > 0
+            or run.degraded
+            or run.filtered
+            or not run.has_final_response
+        ):
             continue
         findings.append(
             {
@@ -1188,6 +1213,8 @@ def _build_context_pressure_runs(runs: list[RunInfo]) -> list[dict[str, Any]]:
                 "continuation_count": continuation_count,
                 "over_soft_limit": over_soft_limit,
                 "degraded": run.degraded,
+                "filtered": run.filtered,
+                "finish_reason": run.finish_reason,
                 "has_final_response": run.has_final_response,
                 "max_raw_input_bytes": run.max_raw_input_bytes,
             }
@@ -1195,6 +1222,7 @@ def _build_context_pressure_runs(runs: list[RunInfo]) -> list[dict[str, Any]]:
     findings.sort(
         key=lambda item: (
             not item["degraded"],
+            not item["filtered"],
             item["has_final_response"],
             -item["compaction_count"],
             -item["max_raw_input_bytes"],

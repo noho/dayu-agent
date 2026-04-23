@@ -65,7 +65,7 @@ pip install https://github.com/noho/dayu-agent/releases/download/v0.1.3/dayu_age
 
 #### 1.1.2 离线安装
 
-前往 GitHub Releases，下载与你平台匹配的离线安装包：
+从 [Releases](https://github.com/noho/dayu-agent/releases) 页面下载对应平台的离线安装包：
 
 - Mac ARM芯片：`dayu-agent-<version>-macos-arm64-offline.tar.gz`
 - Mac Intel芯片：`dayu-agent-<version>-macos-x64-offline.tar.gz`
@@ -140,11 +140,9 @@ dayu-cli init
 
 1. 复制包内默认配置到 `./workspace/config/` ，复制包内默认写作模板到 `./workspace/assets/` 。
 2. 让你选择初始化模型方案（Mimo Token Plan / Mimo Token Plan SG / Mimo Pro / Mimo Flash / DeepSeek / OpenAI / Anthropic / Gemini / 通义千问 / 自定义 OpenAI 兼容 API）
-3. 输入对应 API Key 并永久写入环境变量（macOS/Linux 写 shell profile，Windows 用 setx）；若选择自定义 OpenAI 兼容 API，还会额外询问 Base URL 与模型 ID，并把模型条目写入 `workspace/config/llm_models.json`
-4. 自动更新 manifest 中的默认模型为你选择的供应商模型
-5. 可选配置联网检索 API Key（TAVILY / SERPER / FMP）
-6. 自动检测 HuggingFace 官方 Hub 连通性：不可达时默认启用镜像加速（`HF_ENDPOINT`），可达时默认跳过；均可手动选择。可选配置 `HF_TOKEN` 提升下载稳定性。
-7. 首次初始化完成后，自动预热一次 CLI 运行时；若预热失败，不影响工作区初始化成功，但后续首次运行 `prompt` / `interactive` / `write` 时可能更慢。
+3. 输入对应 API Key 并永久写入环境变量。
+4. 可选配置联网检索 API Key（TAVILY / SERPER / FMP）
+5. 自动检测 HuggingFace 官方 Hub 连通性：不可达时默认启用镜像加速，可达时默认跳过。可选配置 `HF_TOKEN` 提升下载稳定性。
 
 如果工作区已经存在 `config/` 且你没有传 `--overwrite`，`init` 不会重置现有配置；但会增量补齐包内后来新增、而本地尚未存在的 `workspace/config/prompts/**` 资产。这个路径适合给老 workspace 补 `prompt_mt.json`、`prompt_mt.md` 之类的新 prompt 资产，同时保留你本地已经改过的模型配置。
 
@@ -166,13 +164,10 @@ API Key 申请地址：
 说明：
 - 默认推荐 Mimo Token Plan（mimo-v2-pro-plan），性价比最优。（注： MIMO_PLAN_API_KEY / MIMO_API_KEY 是两个不同的KEY，不能混用）。
 - 海外用户选Mimo Token Plan SG。
-- `MIMO_API_KEY` 可在 `init` 中分别选择 `Mimo Pro` 或 `Mimo Flash` 作为默认模型方案。
 - 如需接入 OpenRouter 等聚合服务，可在 `init` 中选择“自定义 OpenAI 兼容 API”，填写 `CUSTOM_OPENAI_API_KEY`、Base URL 与模型 ID。
-- `--reset` 会先弹出二次确认；只有输入 `y/yes` 才会继续，直接回车默认按 `N` 取消。
 - `--reset` 确认后会删除 `workspace/.dayu/`、`workspace/config/`、`workspace/assets/`，再按首次初始化流程重建；它比 `--overwrite` 更强，会一并清空运行时状态。
 - 联网搜索默认可走 `auto`，若配置了 Tavily / Serper，会优先使用对应 provider。
 - 若运行环境需要访问 `localhost`、私网 IP 或内网域名，可在 `workspace/config/run.json` 的 `web_tools_config.allow_private_network_url` 中显式打开内网访问开关。
-- `workspace/config/llm_models.json` 当前只允许 `openai_compatible` 模型配置；CLI runner 已禁用。
 - 修改默认模型请参考 [8. 模型配置](#model-config)。
 
 工作区最重要的目录：

@@ -871,6 +871,73 @@ def test_assemble_tool_calls_reports_missing_name_and_non_object_arguments() -> 
     assert any("arguments is not object" in message for message in validation_errors)
 
 
+def test_assemble_tool_calls_rejects_non_string_or_empty_id() -> None:
+    """验证 tool_call id 必须为非空字符串；null / 整数 / 空串均应被拦截。
+
+    Args:
+        无。
+
+    Returns:
+        None。
+
+    Raises:
+        AssertionError: 当非字符串或空字符串 id 未被拦截时抛出。
+    """
+
+    parser = SSEStreamParser(
+        name="test",
+        request_id="req_assemble_id",
+        running_config=_RunningConfigStub(),
+    )
+    parser._tool_calls_buffer = {
+        0: {"id": None, "name": "tool", "arguments_buf": "{}"},
+        1: {"id": 123, "name": "tool", "arguments_buf": "{}"},
+        2: {"id": "", "name": "tool", "arguments_buf": "{}"},
+        3: {"id": "tc_valid", "name": "tool", "arguments_buf": '{"a": 1}'},
+    }
+
+    tool_calls, validation_errors = parser._assemble_tool_calls()
+
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["id"] == "tc_valid"
+    missing_id_count = sum(1 for message in validation_errors if "missing id" in message)
+    assert missing_id_count == 3
+
+
+@pytest.mark.asyncio
+async def test_handle_tool_call_delta_ignores_non_string_id() -> None:
+    """验证 delta 阶段遇到 null / 非字符串 id 时不会写入 entry。
+
+    Args:
+        无。
+
+    Returns:
+        None。
+
+    Raises:
+        AssertionError: 当非字符串 id 被写入 entry 时抛出。
+    """
+
+    parser = SSEStreamParser(
+        name="test",
+        request_id="req_delta_non_string_id",
+        running_config=_RunningConfigStub(),
+    )
+
+    await _collect_events(
+        parser._handle_tool_call_delta({"index": 0, "id": None, "function": {"name": "tool"}})
+    )
+    await _collect_events(
+        parser._handle_tool_call_delta({"index": 0, "id": 123, "function": {"name": "tool"}})
+    )
+    assert parser._tool_calls_buffer[0]["id"] is None
+
+    await _collect_events(
+        parser._handle_tool_call_delta({"index": 0, "id": "tc_real", "function": {}})
+    )
+    assert parser._tool_calls_buffer[0]["id"] == "tc_real"
+
+
 # ---------------------------------------------------------------------------
 # finish_reason=length → truncated 标记 + WARN 日志
 # ---------------------------------------------------------------------------

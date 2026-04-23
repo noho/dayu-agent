@@ -27,6 +27,7 @@ from dayu.contracts.fins import (
     ProcessMaterialCommandPayload,
     UploadFilingCommandPayload,
     UploadFilingsFromCommandPayload,
+    UploadFilingsFromResultData,
     UploadMaterialCommandPayload,
 )
 from dayu.fins.cli_support import (
@@ -226,6 +227,49 @@ def _should_log_fins_progress_as_info(command_name: str) -> bool:
     return command_name in {"upload_filing", "upload_material"}
 
 
+_FINS_FAILURE_STATUS = "failed"
+
+
+def _is_fins_result_failure(result: FinsResultData) -> bool:
+    """判断财报命令结果是否需要以非零退出码上报。
+
+    Args:
+        result: 单次命令的最终结果。
+
+    Returns:
+        当结果显式标注 ``failed`` 状态时返回 ``True``；
+        ``UploadFilingsFromResultData`` 没有 status 字段，本身代表
+        脚本生成步骤已经成功完成，统一返回 ``False``；
+        其它已知非失败 status（如 ``ok`` / ``downloaded`` / ``uploaded`` /
+        ``skipped`` / ``deleted``）均视为成功，不影响退出码。
+
+    Raises:
+        无。
+    """
+
+    if isinstance(result, UploadFilingsFromResultData):
+        return False
+    return result.status == _FINS_FAILURE_STATUS
+
+
+def _describe_fins_status(result: FinsResultData) -> str:
+    """提取财报命令结果的状态描述用于日志。
+
+    Args:
+        result: 单次命令的最终结果。
+
+    Returns:
+        若结果带 ``status`` 字段则返回其取值，否则返回 ``"<no-status>"``。
+
+    Raises:
+        无。
+    """
+
+    if isinstance(result, UploadFilingsFromResultData):
+        return "<no-status>"
+    return result.status
+
+
 async def _consume_fins_stream(
     result_stream: AsyncIterator[FinsEvent],
     command_name: FinsCommandName,
@@ -292,4 +336,13 @@ def run_fins_command(args: argparse.Namespace) -> int:
         Log.error(f"财报命令执行失败: {exc}", module=MODULE)
         return 1
     print(format_fins_cli_result(command.name, result))
+    # FinsResultData 各 variant（除 UploadFilingsFromResultData 之外）携带
+    # status 字段，"succeeded" 表示成功；其它取值（如 "failed"/"skipped"）
+    # 都视为非成功，命令需要返回非零退出码以让 shell 与 CI 管线感知。
+    if _is_fins_result_failure(result):
+        Log.warn(
+            f"财报命令以非成功状态结束: command={command.name.value}, status={_describe_fins_status(result)}",
+            module=MODULE,
+        )
+        return 1
     return 0

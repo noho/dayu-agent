@@ -102,12 +102,26 @@ class ToolTraceRecorder(Protocol):
 
         ...
 
-    def record_final_response(self, *, iteration_id: str, content: str, degraded: bool) -> None:
+    def record_final_response(
+        self,
+        *,
+        iteration_id: str,
+        content: str,
+        degraded: bool,
+        filtered: bool = False,
+        finish_reason: str | None = None,
+    ) -> None:
         """记录最终回答。"""
 
         ...
 
-    def finish_iteration(self, *, iteration_id: str, iteration_index: int) -> None:
+    def finish_iteration(
+        self,
+        *,
+        iteration_id: str,
+        iteration_index: int,
+        termination_reason: str | None = None,
+    ) -> None:
         """结束一次 iteration 并输出上下文快照。"""
 
         ...

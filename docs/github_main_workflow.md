@@ -225,7 +225,7 @@ push 后 PR 自动更新，CI 重新跑。最终 merge 时用 **Squash and merge
 - **CI 通过**：Squash merge 并删除远端分支：
   ```bash
   gh pr merge <PR号> --squash --delete-branch \
-  --subject "v0.1.2 — 提供离线安装；支持MiMo Plan海外；bug fix" \
+  --subject "v0.1.3 — 提供离线安装；支持MiMo Plan海外；bug fix" \
   --body "最终提交说明"
   ```
 
@@ -370,7 +370,7 @@ push 后 PR 自动更新，CI 重新跑。最终 merge 时用 **Squash and merge
 - **CI 通过**：Squash merge 并删除远端分支：
   ```bash
   gh pr merge <PR号> --squash --delete-branch \
-  --subject "v0.1.2 — 提供离线安装；支持MiMo Plan海外；bug fix" \
+  --subject "v0.1.3 — 提供离线安装；支持MiMo Plan海外；bug fix" \
   --body "最终提交说明"
   ```
 
@@ -581,9 +581,9 @@ python utils/smoke_test_offline_bundle.py --archive $archive.FullName
 ```bash
 git switch main
 git pull
-git tag -a v0.1.2 -m "v0.1.2 — 提供离线安装；支持MiMo Plan海外；bug fix"
-git push github v0.1.2
-git push lan v0.1.2
+git tag -a v0.1.3 -m "v0.1.3 — 提供离线安装；支持MiMo Plan海外；bug fix"
+git push github v0.1.3
+git push lan v0.1.3
 ```
 
 ##### 第 3 步：创建 GitHub Release
@@ -591,29 +591,29 @@ git push lan v0.1.2
 推荐用 `gh`，也可以直接在 GitHub 网页操作。
 
 ```bash
-gh release create v0.1.2 \
-  --title "v0.1.2 — 提供离线安装；支持MiMo Plan海外；bug fix" \
+gh release create v0.1.3 \
+  --title "v0.1.3 — 支持第三方模型；interactive支持session复用；修复了大部分上传财报问题（PDF转换问题尚不确定）；bug fix" \
   --notes "$(cat <<'EOF'
 ## 安装
 
 ```bash
-pip install https://github.com/noho/dayu-agent/releases/download/v0.1.2/dayu_agent-0.1.2-py3-none-any.whl
+pip install https://github.com/noho/dayu-agent/releases/download/v0.1.3/dayu_agent-0.1.3-py3-none-any.whl
 ```
 
 ## 更新到新版本
 
 ```bash
-pip install --upgrade https://github.com/noho/dayu-agent/releases/download/v0.1.2/dayu_agent-0.1.2-py3-none-any.whl
+pip install --upgrade https://github.com/noho/dayu-agent/releases/download/v0.1.3/dayu_agent-0.1.3-py3-none-any.whl
 ```
 
 ## 离线安装
 
 从 [Releases](https://github.com/noho/dayu-agent/releases) 页面下载对应平台的离线安装包：
 
-- macOS ARM64: `dayu-agent-0.1.2-macos-arm64-offline.tar.gz`
-- macOS x64: `dayu-agent-0.1.2-macos-x64-offline.tar.gz`
-- Linux x64: `dayu-agent-0.1.2-linux-x64-offline.tar.gz`
-- Windows x64: `dayu-agent-0.1.2-windows-x64-offline.zip`
+- Mac ARM芯片：`dayu-agent-<version>-macos-arm64-offline.tar.gz`
+- Mac Intel芯片：`dayu-agent-<version>-macos-x64-offline.tar.gz`
+- Linux：`dayu-agent-<version>-linux-x64-offline.tar.gz`
+- Windows：`dayu-agent-<version>-windows-x64-offline.zip`
 
 ## 本次更新
 

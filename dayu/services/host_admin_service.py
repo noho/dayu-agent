@@ -515,9 +515,14 @@ class HostAdminService(HostAdminServiceProtocol):
 
         orphan_run_ids = tuple(self.host.cleanup_orphan_runs())
         stale_permit_ids = tuple(self.host.cleanup_stale_permits())
+        # best-effort：对齐 run / permit 的启动恢复，避免 IN_PROGRESS 回退后
+        # 整条 reply outbox 流水线卡死。失败在 Host 层已被 Log.warn 吞掉。
+        self.host.cleanup_stale_reply_outbox_deliveries()
+        stale_pending_turn_ids = tuple(self.host.cleanup_stale_pending_turns())
         return HostCleanupResult(
             orphan_run_ids=orphan_run_ids,
             stale_permit_ids=stale_permit_ids,
+            stale_pending_turn_ids=stale_pending_turn_ids,
         )
 
     def get_status(self) -> HostStatusView:

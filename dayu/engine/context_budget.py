@@ -68,7 +68,6 @@ class ContextBudgetState:
 
     Args:
         max_context_tokens: 模型最大上下文 token 数；0 表示预算治理未启用。
-        max_output_tokens: 模型最大输出 token 数；0 表示未知。
         soft_limit_ratio: 软阈值比例，超过后主动压缩。
         hard_limit_ratio: 硬阈值比例，超过后紧急治理。
         current_prompt_tokens: 最近一轮 prompt token 数。
@@ -87,7 +86,6 @@ class ContextBudgetState:
     """
 
     max_context_tokens: int = 0
-    max_output_tokens: int = 0
     soft_limit_ratio: float = 0.75
     hard_limit_ratio: float = 0.90
     current_prompt_tokens: int = 0

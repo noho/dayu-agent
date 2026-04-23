@@ -430,10 +430,9 @@ def _build_minimum_preserved_turn_view(
 
     裁剪顺序固定为：
     1. 保留完整 `user_text`
-    2. 若预算足够则保留完整 `assistant_final`
-    3. 若预算不足，优先丢弃工具摘要
-    4. 若仍不足，再截断 `assistant_final`
-    5. 若没有 `assistant_final`，则对工具摘要做截断降级
+    2. 若存在 `assistant_final`：预算足够则保留完整正文，否则按预算截断正文
+       （工具摘要在该分支下不会进入视图，属于隐式丢弃）
+    3. 若没有 `assistant_final` 但存在工具摘要，则对工具摘要做截断降级
 
     Args:
         turn: 原始 turn。
@@ -1496,6 +1495,16 @@ class DefaultConversationMemoryManager:
                 Log.debug(f"后台 compaction 写回前 transcript 已不存在: session_id={session_id}", module=MODULE)
                 return
             if current_transcript.revision != transcript.revision:
+                # REVIEW NOTE (finding 078, 驳回留观):
+                # revision 冲突时本次后台压缩结果被丢弃且**不在此处退避重试**。
+                # 这是刻意的选择，不是遗漏：
+                # 1. 自愈链路存在 —— 写回失败时 compacted_turn_count 不前进；
+                #    下一次 turn 的 schedule_compaction 会基于相同阈值重新选出
+                #    相同候选 turns 并再跑一次 _run_compaction，相当于"下一轮自动重试"。
+                # 2. 在此处加重试会把 Coordinator 从"单任务句柄管理"升级为"退避/
+                #    抢占调度器"，与新到来的 schedule 产生竞态窗口（cancel vs 重入）。
+                # 3. 失效场景只有"session 永久闲置"，此时 compaction 的价值本身也消失。
+                # 下一位 reviewer：若要改动此分支，请先核对上述自愈假设是否仍成立。
                 Log.verbose(
                     f"conversation compaction 结果已过期，跳过写回：session_id={session_id}",
                     module=MODULE,

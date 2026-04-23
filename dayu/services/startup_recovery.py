@@ -39,12 +39,21 @@ def recover_host_startup_state(
         cleanup_result = host_admin_service.cleanup()
     except Exception as exc:
         Log.warning(f"{runtime_label} 启动恢复失败，将继续启动: {exc}", module=log_module)
-        return HostCleanupResult(orphan_run_ids=(), stale_permit_ids=())
-    if cleanup_result.orphan_run_ids or cleanup_result.stale_permit_ids:
+        return HostCleanupResult(
+            orphan_run_ids=(),
+            stale_permit_ids=(),
+            stale_pending_turn_ids=(),
+        )
+    if (
+        cleanup_result.orphan_run_ids
+        or cleanup_result.stale_permit_ids
+        or cleanup_result.stale_pending_turn_ids
+    ):
         Log.info(
             f"{runtime_label} 启动恢复完成"
             f" orphan_runs={len(cleanup_result.orphan_run_ids)}"
-            f" stale_permits={len(cleanup_result.stale_permit_ids)}",
+            f" stale_permits={len(cleanup_result.stale_permit_ids)}"
+            f" stale_pending_turns={len(cleanup_result.stale_pending_turn_ids)}",
             module=log_module,
         )
     return cleanup_result

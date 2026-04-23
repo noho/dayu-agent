@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+import weakref
+from dataclasses import dataclass, field
 from typing import AsyncIterator, Callable
 
 from dayu.contracts.agent_execution import ExecutionContract
@@ -44,6 +46,32 @@ class ChatService(ChatServiceProtocol):
     scene_execution_acceptance_preparer: SceneExecutionAcceptancePreparer
     company_name_resolver: Callable[[str], str] | None = None
     session_source: SessionSource = SessionSource.API
+    # 以弱引用持有每 session 的串行锁：只要存在至少一个生成器/任务引用该锁对象，
+    # 锁就保留在表中；所有引用者结束后，对应条目由 GC 自动清理，避免长驻进程中
+    # 随 session 数单调增长。
+    _session_locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = field(
+        default_factory=weakref.WeakValueDictionary
+    )
+
+    def _lock_for_session(self, session_id: str) -> asyncio.Lock:
+        """获取或创建指定 session 的串行锁。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            对应 session 的 ``asyncio.Lock``；调用方需保持强引用直到使用完毕，
+            否则条目可能被 GC 清理（符合"无活跃使用即释放"的语义）。
+
+        Raises:
+            无。
+        """
+
+        lock = self._session_locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._session_locks[session_id] = lock
+        return lock
 
     async def submit_turn(self, request: ChatTurnRequest) -> ChatTurnSubmission:
         """提交聊天单轮并返回事件流句柄。
@@ -65,12 +93,18 @@ class ChatService(ChatServiceProtocol):
             scene_name=prepared_context.scene_name,
             policy=request.session_resolution_policy,
         )
+        # 同 session 并发提交按 FIFO 串行，避免在 Host 层因 revision 乐观锁
+        # 冲突而静默丢弃后到达的请求。
+        # 锁在事件流首次迭代时才 acquire，避免调用方拿到 submission 后放弃消费
+        # 导致锁永久不释放（隐式泄漏）。
+        session_lock = self._lock_for_session(session.session_id)
         return ChatTurnSubmission(
             session_id=session.session_id,
-            event_stream=self._stream_turn_in_session(
+            event_stream=self._stream_turn_in_session_with_lock(
                 request=request,
                 session_id=session.session_id,
                 prepared_context=prepared_context,
+                session_lock=session_lock,
             ),
         )
 
@@ -140,7 +174,16 @@ class ChatService(ChatServiceProtocol):
             ValueError: 用户输入为空或 scene 非法时抛出。
         """
 
-        scene_name = str(request.scene_name or "").strip() or "interactive"
+        # scene_name 语义对齐：契约中 None 表示"未指定"，应走默认；
+        # 显式传入空串属于调用方错误，必须报错而不是被静默覆盖。
+        raw_scene_name = request.scene_name
+        if raw_scene_name is None:
+            scene_name = "interactive"
+        else:
+            stripped_scene_name = str(raw_scene_name).strip()
+            if not stripped_scene_name:
+                raise ValueError("scene_name 不能为空字符串；如需默认 scene 请传 None")
+            scene_name = stripped_scene_name
         user_message = str(request.user_text or "").strip()
         if not user_message:
             raise ValueError("聊天输入不能为空")
@@ -153,6 +196,40 @@ class ChatService(ChatServiceProtocol):
             user_message=user_message,
             accepted_scene=accepted_scene,
         )
+
+    async def _stream_turn_in_session_with_lock(
+        self,
+        *,
+        request: ChatTurnRequest,
+        session_id: str,
+        prepared_context: _PreparedChatTurnContext,
+        session_lock: asyncio.Lock,
+    ) -> AsyncIterator[AppEvent]:
+        """在持有 session 锁的前提下产出事件流，流结束后释放锁。
+
+        Args:
+            request: 聊天单轮请求。
+            session_id: 已 resolve 的 session ID。
+            prepared_context: 已经过校验的请求级准备结果。
+            session_lock: 由 ``submit_turn`` 准备好的 session 锁；在首次迭代时 acquire。
+
+        Returns:
+            事件流异步迭代器。
+
+        Raises:
+            无：异常会沿事件流向上抛出，``finally`` 仍会释放锁。
+        """
+
+        await session_lock.acquire()
+        try:
+            async for event in self._stream_turn_in_session(
+                request=request,
+                session_id=session_id,
+                prepared_context=prepared_context,
+            ):
+                yield event
+        finally:
+            session_lock.release()
 
     async def _stream_turn_in_session(
         self,

@@ -13,6 +13,11 @@ from typing import Any
 
 from dayu.host.host_store import HostStore
 from dayu.host.protocols import RunRegistryProtocol
+from dayu.contracts.execution_metadata import (
+    ExecutionDeliveryContext,
+    empty_execution_delivery_context,
+    normalize_execution_delivery_context,
+)
 from dayu.contracts.run import (
     ACTIVE_STATES,
     ORPHAN_RUN_ERROR_SUMMARY,
@@ -105,7 +110,12 @@ def _row_to_record(row: dict[str, Any]) -> RunRecord:
     """
 
     raw_metadata = row["metadata_json"]
-    metadata = json.loads(raw_metadata) if raw_metadata else {}
+    raw_parsed: object = json.loads(raw_metadata) if raw_metadata else {}
+    metadata: ExecutionDeliveryContext = (
+        normalize_execution_delivery_context(raw_parsed)
+        if isinstance(raw_parsed, dict)
+        else empty_execution_delivery_context()
+    )
     return RunRecord(
         run_id=row["run_id"],
         session_id=row["session_id"],
@@ -150,7 +160,7 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         session_id: str | None = None,
         service_type: str,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> RunRecord:
         """注册一个新 run。"""
 
@@ -158,7 +168,12 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         now = _now_utc()
         now_str = _serialize_dt(now)
         pid = os.getpid()
-        metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
+        metadata_typed: ExecutionDeliveryContext = (
+            normalize_execution_delivery_context(metadata)
+            if metadata is not None
+            else empty_execution_delivery_context()
+        )
+        metadata_json = json.dumps(metadata_typed, ensure_ascii=False)
 
         conn = self._host_store.get_connection()
         conn.execute(
@@ -194,7 +209,7 @@ class SQLiteRunRegistry(RunRegistryProtocol):
             cancel_requested_reason=None,
             cancel_reason=None,
             owner_pid=pid,
-            metadata=metadata or {},
+            metadata=metadata_typed,
         )
 
     def start_run(self, run_id: str) -> RunRecord:

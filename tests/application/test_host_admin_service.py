@@ -112,6 +112,14 @@ class _FakeSessionRegistry:
             metadata=record.metadata,
         )
 
+    def is_session_active(self, session_id: str) -> bool:
+        """查询 session 是否仍处于非 CLOSED 状态。"""
+
+        record = self.records.get(session_id)
+        if record is None:
+            return False
+        return record.state != SessionState.CLOSED
+
 
 class _FakeRunRegistry:
     """测试用 run registry。"""
@@ -929,3 +937,100 @@ def test_stream_subscription_events_closes_on_completion() -> None:
     asyncio.run(_drain())
 
     assert sub.close_called is True
+
+
+@pytest.mark.unit
+def test_cleanup_stale_pending_turns_removes_turns_with_terminal_runs() -> None:
+    """关联 run 已终态、且按调和规则应删除的 pending turn 应被清理。
+
+    回归 review 条目 S-5.10-4：Host 进程崩溃或启动调和路径异常时可能漏调
+    `_reconcile_pending_turn_after_terminal_run`，需要独立的启动清理兜底。
+    """
+
+    from dayu.host.pending_turn_store import (
+        InMemoryPendingConversationTurnStore,
+        PendingConversationTurnState,
+    )
+    from dayu.host.reply_outbox_store import InMemoryReplyOutboxStore
+
+    pending_store = InMemoryPendingConversationTurnStore()
+    outbox_store = InMemoryReplyOutboxStore()
+    session_registry = _FakeSessionRegistry()
+    run_registry = _FakeRunRegistry()
+
+    now = datetime.now(timezone.utc)
+    # run_succ：成功终态 → 关联 pending turn 应清理
+    run_registry.records["run_succ"] = RunRecord(
+        run_id="run_succ",
+        session_id="session_1",
+        service_type="chat_turn",
+        scene_name="chat",
+        state=RunState.SUCCEEDED,
+        created_at=now,
+        started_at=now,
+        completed_at=now,
+    )
+    # run_failed_resumable：失败且 resumable → 保留
+    run_registry.records["run_failed_resumable"] = RunRecord(
+        run_id="run_failed_resumable",
+        session_id="session_1",
+        service_type="chat_turn",
+        scene_name="chat",
+        state=RunState.FAILED,
+        created_at=now,
+        started_at=now,
+        completed_at=now,
+    )
+    # run_1 已在 fixture 中为 RUNNING → 保留
+
+    pending_store.upsert_pending_turn(
+        session_id="session_1",
+        scene_name="chat",
+        user_text="succ",
+        source_run_id="run_succ",
+        resumable=False,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+    pending_store.upsert_pending_turn(
+        session_id="session_1",
+        scene_name="chat_a",
+        user_text="failed-resumable",
+        source_run_id="run_failed_resumable",
+        resumable=True,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+    pending_store.upsert_pending_turn(
+        session_id="session_1",
+        scene_name="chat_b",
+        user_text="still-running",
+        source_run_id="run_1",
+        resumable=False,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+    pending_store.upsert_pending_turn(
+        session_id="session_1",
+        scene_name="chat_c",
+        user_text="missing-run",
+        source_run_id="run_missing",
+        resumable=False,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+
+    host = Host(
+        executor=SimpleNamespace(),  # type: ignore[arg-type]
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=run_registry,  # type: ignore[arg-type]
+        concurrency_governor=_FakeGovernor(),  # type: ignore[arg-type]
+        event_bus=AsyncQueueEventBus(run_registry=run_registry),  # type: ignore[arg-type]
+        pending_turn_store=pending_store,
+        reply_outbox_store=outbox_store,
+    )
+
+    cleaned = host.cleanup_stale_pending_turns()
+
+    remaining_scenes = {
+        record.scene_name for record in pending_store.list_pending_turns()
+    }
+    # chat (succ) + chat_c (missing run) 被清理；chat_a + chat_b 保留
+    assert remaining_scenes == {"chat_a", "chat_b"}
+    assert len(cleaned) == 2

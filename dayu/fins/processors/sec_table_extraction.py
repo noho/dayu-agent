@@ -36,6 +36,7 @@ from dayu.engine.processors.text_utils import (
     normalize_whitespace as _normalize_whitespace,
 )
 from dayu.fins.processors.sec_html_rules import is_sec_cover_page_table, is_sec_section_heading_table
+from dayu.fins.processors.html_financial_statement_common import normalize_numeric_separators
 from dayu.fins.processors.sec_section_build import (
     _SectionBlock,
     _normalize_searchable_text,
@@ -2136,7 +2137,9 @@ def _normalize_numeric_cell_text(text: str) -> Optional[str]:
     negative = cleaned.startswith("(") and cleaned.endswith(")")
     if negative:
         cleaned = cleaned[1:-1].strip()
-    cleaned = cleaned.replace("$", "").replace("¥", "").replace("€", "").replace(",", "").replace(" ", "")
+    # 先剥离货币符号与空白，再由共享规范化辅助函数处理千分位/小数分隔符，避免欧洲格式 "1,23" 被误删逗号丢失小数语义。
+    cleaned = cleaned.replace("$", "").replace("¥", "").replace("€", "").replace(" ", "")
+    cleaned = normalize_numeric_separators(cleaned)
     if cleaned.startswith("+"):
         cleaned = cleaned[1:]
     if not cleaned:

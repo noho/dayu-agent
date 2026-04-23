@@ -1129,3 +1129,248 @@ async def test_call_uses_model_total_timeout_and_stream_idle_timeout(monkeypatch
     assert events[-1].type == EventType.DONE
     assert post_calls[0]["timeout"]["total"] == 91
     assert post_calls[0]["timeout"]["sock_read"] == 19.0
+
+
+class _ExitRaisingPostContext:
+    """__aexit__ 抛异常的 post 上下文桩，用于覆盖 B-02 cleanup 异常收敛。"""
+
+    def __init__(self, response: _FakeResponse, exit_exc: Exception) -> None:
+        """初始化。
+
+        Args:
+            response: 进入上下文时返回的响应。
+            exit_exc: __aexit__ 被调用时抛出的异常。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        self._response = response
+        self._exit_exc = exit_exc
+        self.exit_called = False
+
+    async def __aenter__(self) -> _FakeResponse:
+        """进入上下文并返回成功响应。"""
+
+        return self._response
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+        """退出时抛出注入的异常。"""
+
+        del exc_type, exc, tb
+        self.exit_called = True
+        raise self._exit_exc
+
+
+@pytest.mark.asyncio
+async def test_call_swallows_aexit_cleanup_exception_and_logs_warn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-02 回归：响应上下文 __aexit__ 失败时降级为 warn，不掩盖已 yield 的事件。
+
+    Args:
+        monkeypatch: monkeypatch fixture。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    success_json = {"choices": [{"message": {"content": "ok"}}]}
+    response = _FakeResponse(
+        status=200,
+        headers={"Content-Type": "application/json"},
+        json_data=success_json,
+    )
+    exit_exc = RuntimeError("connection released twice")
+    exit_ctx = _ExitRaisingPostContext(response=response, exit_exc=exit_exc)
+
+    class _SingleStepSession:
+        """只提供一次 post 的会话桩。"""
+
+        def __init__(self) -> None:
+            self.closed = False
+            self.post_calls: list[dict[str, Any]] = []
+            self._served = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+        def post(self, endpoint_url: str, **kwargs: Any) -> _ExitRaisingPostContext:
+            """返回注入的 exit-抛异常上下文。"""
+
+            del endpoint_url
+            if self._served:
+                raise RuntimeError("只应 post 一次")
+            self._served = True
+            self.post_calls.append(kwargs)
+            return exit_ctx
+
+    session_holder: dict[str, _SingleStepSession] = {}
+    all_sessions: list[_SingleStepSession] = []
+
+    def _session_factory() -> _SingleStepSession:
+        sess = _SingleStepSession()
+        session_holder["session"] = sess
+        all_sessions.append(sess)
+        return sess
+
+    fake_aiohttp = SimpleNamespace(
+        ClientSession=_session_factory,
+        ClientTimeout=lambda **kwargs: kwargs,
+        ClientError=_FakeClientError,
+    )
+    monkeypatch.setattr(aor, "aiohttp", fake_aiohttp)
+
+    warn_messages: list[str] = []
+
+    def _capture_warn(message: str, *args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        warn_messages.append(message)
+
+    monkeypatch.setattr(aor.Log, "warn", _capture_warn)
+
+    runner = aor.AsyncOpenAIRunner(
+        endpoint_url="https://example.com/v1/chat/completions",
+        model="test-model",
+        headers={"Authorization": "Bearer x"},
+        temperature=0.2,
+        timeout=30,
+    )
+
+    events = await _collect_events(runner.call([{"role": "user", "content": "hi"}], stream=False))
+
+    # 1) 非流式成功事件应完整保留，没有被 cleanup 异常掩盖。
+    assert events, "成功路径应至少产出一个事件"
+    assert any(event.type == EventType.DONE for event in events)
+    assert not any(event.type == EventType.ERROR for event in events)
+
+    # 2) __aexit__ 确实被调用且抛出，但没有向外传播。
+    assert exit_ctx.exit_called is True
+
+    # 3) cleanup 异常被降级为 warn 日志，并带有诊断关键词与 attempt 编号。
+    assert any("响应上下文释放异常" in msg for msg in warn_messages)
+    assert any("attempt=1" in msg for msg in warn_messages)
+
+    # 4) cleanup 失败后脏 session 必须被作废；旧 session 被关闭，Runner 内部要么被置空，
+    #    要么已经重建为一个全新的 session（本测试只提供一次 post，所以不会真正发起下一个请求，
+    #    但 `_ensure_session()` 会在 finally 路径上被立即调用，因此 Runner 内部应持有一个新建的 session）。
+    del session_holder  # factory 会覆盖 session_holder，使用 all_sessions[0] 锁定最初的脏 session。
+    assert len(all_sessions) >= 1, "至少应创建过一个 session"
+    stale = all_sessions[0]
+    assert stale.closed is True, "脏 session 必须被显式关闭"
+    runner_session = runner._session  # type: ignore[attr-defined]
+    assert runner_session is not stale, "Runner 级 session 必须已作废/重建"
+
+
+@pytest.mark.asyncio
+async def test_call_retries_with_new_session_after_aexit_cleanup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-02 回归：cleanup 失败后下一轮重试必须使用新 session，不复用脏连接池。
+
+    场景：
+    - 第一轮返回 503（可重试），`__aexit__` 抛异常 → 作废 session；
+    - 第二轮重建新 session 并返回 200。
+
+    Args:
+        monkeypatch: monkeypatch fixture。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    async def _fake_sleep(delay: float) -> None:
+        del delay
+        return None
+
+    monkeypatch.setattr(aor.asyncio, "sleep", _fake_sleep)
+
+    retry_resp = _FakeResponse(status=503, text_data="upstream")
+    exit_failing_ctx = _ExitRaisingPostContext(
+        response=retry_resp,
+        exit_exc=RuntimeError("release failed"),
+    )
+
+    success_json = {"choices": [{"message": {"content": "ok"}}]}
+    success_resp = _FakeResponse(
+        status=200,
+        headers={"Content-Type": "application/json"},
+        json_data=success_json,
+    )
+    success_ctx = _FakePostContext(_PostStep(response=success_resp))
+
+    sessions_seen: list[Any] = []
+    # 共享队列：按全局 post 顺序逐个发放上下文，跨 session 重建也能正确推进。
+    post_queue: list[Any] = [exit_failing_ctx, success_ctx]
+
+    class _QueueSession:
+        """从共享队列消费 post 上下文的会话桩。"""
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+        def post(self, endpoint_url: str, **kwargs: Any) -> Any:
+            del endpoint_url, kwargs
+            if not post_queue:
+                raise RuntimeError("post 队列已耗尽")
+            return post_queue.pop(0)
+
+    def _session_factory() -> _QueueSession:
+        sess = _QueueSession()
+        sessions_seen.append(sess)
+        return sess
+
+    fake_aiohttp = SimpleNamespace(
+        ClientSession=_session_factory,
+        ClientTimeout=lambda **kwargs: kwargs,
+        ClientError=_FakeClientError,
+    )
+    monkeypatch.setattr(aor, "aiohttp", fake_aiohttp)
+
+    warn_messages: list[str] = []
+
+    def _capture_warn(message: str, *args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        warn_messages.append(message)
+
+    monkeypatch.setattr(aor.Log, "warn", _capture_warn)
+
+    runner = aor.AsyncOpenAIRunner(
+        endpoint_url="https://example.com/v1/chat/completions",
+        model="test-model",
+        headers={"Authorization": "Bearer x"},
+        temperature=0.2,
+        timeout=30,
+        max_retries=1,
+    )
+
+    events = await _collect_events(runner.call([{"role": "user", "content": "hi"}], stream=False))
+
+    # 1) 最终请求应成功，没有把 cleanup 异常冒泡成 ERROR 事件。
+    assert any(event.type == EventType.DONE for event in events)
+    assert not any(event.type == EventType.ERROR for event in events)
+
+    # 2) 第一轮的脏 session 必须被关闭。
+    assert sessions_seen, "至少应创建过一个 session"
+    first_session = sessions_seen[0]
+    assert first_session.closed is True, "cleanup 失败后第一个 session 必须被关闭"
+
+    # 3) 第二轮必须使用另一个全新的 session，而不是复用脏 session。
+    assert len(sessions_seen) >= 2, "cleanup 失败后下一轮必须重建 session"
+    retry_session = sessions_seen[1]
+    assert retry_session is not first_session
+
+    # 4) cleanup warn 日志带有关键词。
+    assert any("作废当前 HTTP session" in msg for msg in warn_messages)
