@@ -103,6 +103,9 @@ DEFAULT_COMPACTION_SUMMARY_INSTRUCTION = (
 
 # 压缩中保留的最近 message 条数（system 和首条 user 单独保留）
 _COMPACT_RECENT_KEEP = 6
+_COMPACTION_TOOL_RESULT_MAX_LINES = 4
+_COMPACTION_VALUE_SUMMARY_MAX_CHARS = 160
+_COMPACTION_ERROR_SUMMARY_MAX_CHARS = 120
 
 
 def _normalize_system_prompt(system_prompt: Optional[str]) -> str:
@@ -1493,7 +1496,8 @@ def _build_compaction_summary(
     tool_call_count = 0
     tool_result_count = 0
     user_count = 0
-    tool_names: set = set()
+    tool_names: set[str] = set()
+    tool_call_names_by_id: dict[str, str] = {}
 
     for msg in messages:
         role = msg.get("role", "")
@@ -1502,9 +1506,13 @@ def _build_compaction_summary(
             tool_calls = msg.get("tool_calls", [])
             tool_call_count += len(tool_calls)
             for tc in tool_calls:
+                tool_call_id = str(tc.get("id") or "").strip()
                 fn = tc.get("function", {})
-                if fn.get("name"):
-                    tool_names.add(fn["name"])
+                tool_name = str(fn.get("name") or "").strip()
+                if tool_name:
+                    tool_names.add(tool_name)
+                    if tool_call_id:
+                        tool_call_names_by_id[tool_call_id] = tool_name
         elif role == "tool":
             tool_result_count += 1
         elif role == "user":
@@ -1520,8 +1528,175 @@ def _build_compaction_summary(
     ]
     if tool_names:
         lines.append(f"Tools called: {', '.join(sorted(tool_names))}.")
+    tool_result_lines = _summarize_compacted_tool_results(
+        messages,
+        tool_call_names_by_id=tool_call_names_by_id,
+    )
+    lines.extend(tool_result_lines)
     lines.append(instruction)
     return "\n".join(lines)
+
+
+def _summarize_compacted_tool_results(
+    messages: List[AgentMessage],
+    *,
+    tool_call_names_by_id: dict[str, str],
+) -> list[str]:
+    """提取被压缩区间内的工具结果核心语义摘要。
+
+    Args:
+        messages: 被压缩区间内的消息列表。
+        tool_call_names_by_id: `tool_call_id -> tool_name` 映射。
+
+    Returns:
+        可直接拼入 compaction summary 的文本行列表；没有可摘要内容时返回空列表。
+
+    Raises:
+        无。
+    """
+
+    summarized_results: list[str] = []
+    for message in messages:
+        if message.get("role") != "tool":
+            continue
+        summarized_result = _summarize_single_tool_result(
+            message,
+            tool_call_names_by_id=tool_call_names_by_id,
+        )
+        if summarized_result is None:
+            continue
+        summarized_results.append(summarized_result)
+        if len(summarized_results) >= _COMPACTION_TOOL_RESULT_MAX_LINES:
+            break
+    if not summarized_results:
+        return []
+    return ["Tool result highlights:"] + [f"- {summary}" for summary in summarized_results]
+
+
+def _summarize_single_tool_result(
+    message: AgentMessage,
+    *,
+    tool_call_names_by_id: dict[str, str],
+) -> str | None:
+    """为单条 tool message 构建紧凑摘要。
+
+    Args:
+        message: 单条工具消息。
+        tool_call_names_by_id: `tool_call_id -> tool_name` 映射。
+
+    Returns:
+        单行摘要；若消息内容为空且无法提炼语义，则返回 `None`。
+
+    Raises:
+        无。
+    """
+
+    tool_call_id = str(message.get("tool_call_id") or "").strip()
+    tool_name = tool_call_names_by_id.get(tool_call_id, tool_call_id or "unknown_tool")
+    parsed_payload = _parse_compaction_tool_payload(message.get("content"))
+    status_parts = _build_compaction_tool_status_parts(parsed_payload)
+    if not status_parts:
+        text_summary = _summarize_compaction_scalar_value(message.get("content"))
+        if text_summary is None:
+            return None
+        return f"{tool_name}: value={text_summary}"
+    return f"{tool_name}: {', '.join(status_parts)}"
+
+
+def _parse_compaction_tool_payload(content: object) -> object:
+    """把 tool message 内容解析为便于摘要的对象。
+
+    Args:
+        content: 原始 tool message 内容。
+
+    Returns:
+        若内容是 JSON 字符串则返回解析后的对象；否则返回原始值或规范化后的字符串。
+
+    Raises:
+        无。
+    """
+
+    if isinstance(content, str):
+        stripped_content = content.strip()
+        if not stripped_content:
+            return ""
+        try:
+            return json.loads(stripped_content)
+        except ValueError:
+            return stripped_content
+    return content
+
+
+def _build_compaction_tool_status_parts(parsed_payload: object) -> list[str]:
+    """从工具结果载荷中抽取 `ok/error/value` 关键字段。
+
+    Args:
+        parsed_payload: 已解析的工具结果载荷。
+
+    Returns:
+        状态片段列表，供上层以逗号拼接。
+
+    Raises:
+        无。
+    """
+
+    if not isinstance(parsed_payload, dict):
+        scalar_summary = _summarize_compaction_scalar_value(parsed_payload)
+        return [f"value={scalar_summary}"] if scalar_summary is not None else []
+
+    status_parts: list[str] = []
+    ok_value = parsed_payload.get("ok")
+    if isinstance(ok_value, bool):
+        status_parts.append(f"ok={str(ok_value).lower()}")
+    error_summary = _summarize_compaction_scalar_value(
+        parsed_payload.get("error"),
+        max_chars=_COMPACTION_ERROR_SUMMARY_MAX_CHARS,
+    )
+    if error_summary is not None:
+        status_parts.append(f"error={error_summary}")
+    value_summary = _summarize_compaction_scalar_value(
+        parsed_payload.get("value"),
+        max_chars=_COMPACTION_VALUE_SUMMARY_MAX_CHARS,
+    )
+    if value_summary is not None:
+        status_parts.append(f"value={value_summary}")
+    if not status_parts:
+        fallback_summary = _summarize_compaction_scalar_value(parsed_payload)
+        if fallback_summary is not None:
+            status_parts.append(f"value={fallback_summary}")
+    return status_parts
+
+
+def _summarize_compaction_scalar_value(
+    value: object,
+    *,
+    max_chars: int = _COMPACTION_VALUE_SUMMARY_MAX_CHARS,
+) -> str | None:
+    """把任意值压缩为单行短摘要。
+
+    Args:
+        value: 待摘要的值。
+        max_chars: 最长字符数。
+
+    Returns:
+        单行摘要；若值为空或规范化后为空字符串，则返回 `None`。
+
+    Raises:
+        无。
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = " ".join(value.split())
+    else:
+        serialized = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        normalized = " ".join(serialized.split())
+    if not normalized:
+        return None
+    if len(normalized) <= max_chars:
+        return normalized
+    return normalized[: max_chars - 3] + "..."
 
 
 class AgentResult:

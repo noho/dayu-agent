@@ -91,6 +91,8 @@ class FakePipeline(PipelineProtocol):
         overwrite: bool = False,
         rebuild: bool = False,
         ticker_aliases: Optional[list[str]] = None,
+        *,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> AsyncIterator[DownloadEvent]:
         """记录 download_stream 调用并返回最小事件流。
 
@@ -102,6 +104,7 @@ class FakePipeline(PipelineProtocol):
             overwrite: 是否覆盖。
             rebuild: 是否重建本地 meta/manifest。
             ticker_aliases: 可选 alias 列表。
+            cancel_checker: 可选取消检查函数。
 
         Yields:
             最小下载事件流。
@@ -118,6 +121,7 @@ class FakePipeline(PipelineProtocol):
             "overwrite": overwrite,
             "rebuild": rebuild,
             "ticker_aliases": ticker_aliases,
+            "cancel_checker": cancel_checker,
         }
         self.last_call = ("download_stream", payload)
         yield DownloadEvent(
@@ -497,6 +501,8 @@ class FakePipeline(PipelineProtocol):
         overwrite: bool = False,
         ci: bool = False,
         document_ids: list[str] | None = None,
+        *,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> AsyncIterator[ProcessEvent]:
         """记录 process_stream 调用并返回最小事件流。
 
@@ -505,6 +511,7 @@ class FakePipeline(PipelineProtocol):
             overwrite: 是否覆盖。
             ci: 是否追加导出 CI 快照。
             document_ids: 可选文档 ID 列表。
+            cancel_checker: 可选取消检查函数。
 
         Yields:
             最小预处理事件流。
@@ -518,6 +525,7 @@ class FakePipeline(PipelineProtocol):
             "overwrite": overwrite,
             "ci": ci,
             "document_ids": document_ids,
+            "cancel_checker": cancel_checker,
         }
         self.last_call = ("process_stream", payload)
         yield ProcessEvent(

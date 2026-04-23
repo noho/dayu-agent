@@ -185,6 +185,32 @@ class _CancelledSyncExecutor:
         return operation(context)
 
 
+class _CancelledStreamExecutor:
+    """在流式执行前预先取消 token 的 HostExecutor。"""
+
+    def __init__(self) -> None:
+        """初始化测试状态。"""
+
+        self.last_spec: HostedRunSpec | None = None
+        self.stream_call_count = 0
+
+    async def run_operation_stream(
+        self,
+        *,
+        spec: HostedRunSpec,
+        event_stream_factory: Callable[[HostedRunContext], AsyncIterator[FinsEvent]],
+    ) -> AsyncIterator[FinsEvent]:
+        """构造已取消上下文并执行流式操作。"""
+
+        self.last_spec = spec
+        self.stream_call_count += 1
+        token = CancellationToken()
+        token.cancel()
+        context = HostedRunContext(run_id="run_test", cancellation_token=token)
+        async for event in event_stream_factory(context):
+            yield event
+
+
 @pytest.mark.unit
 def test_execute_sync_download() -> None:
     """验证同步路径会透传到 runtime。"""
@@ -649,3 +675,38 @@ def test_execute_sync_process_filing_passes_host_cancel_checker() -> None:
     assert runtime.received_cancel_checker is not None
     assert runtime.observed_cancelled is True
     assert result.data.status == "cancelled"
+
+
+@pytest.mark.unit
+def test_execute_stream_download_passes_host_cancel_checker() -> None:
+    """验证流式 direct operation 也会把 Host 取消状态透传给 runtime。"""
+
+    runtime = _CancelAwareFinsRuntime()
+    host = Host(
+        executor=_CancelledStreamExecutor(),  # type: ignore[arg-type]
+        session_registry=StubSessionRegistry(),  # type: ignore[arg-type]
+        run_registry=object(),  # type: ignore[arg-type]
+    )
+    service = FinsService(
+        host=host,
+        fins_runtime=runtime,
+    )
+
+    async def _collect() -> list[FinsEvent]:
+        events: list[FinsEvent] = []
+        stream = service.execute(
+            FinsCommand(
+                name=FinsCommandName.DOWNLOAD,
+                payload=DownloadCommandPayload(ticker="AAPL"),
+                stream=True,
+            )
+        )
+        async for event in cast(AsyncIterator[FinsEvent], stream):
+            events.append(event)
+        return events
+
+    events = asyncio.run(_collect())
+
+    assert runtime.received_cancel_checker is not None
+    assert runtime.observed_cancelled is True
+    assert [event.type for event in events] == [FinsEventType.PROGRESS, FinsEventType.RESULT]

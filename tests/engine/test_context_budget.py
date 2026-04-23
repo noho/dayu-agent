@@ -348,6 +348,45 @@ class TestCompactMessages:
         assert "search_document" in summary
         assert "fetch_web_page" in summary
 
+    def test_build_compaction_summary_keeps_tool_result_semantics(self) -> None:
+        """摘要应保留工具结果的 `ok/error/value` 核心语义。"""
+
+        messages: list[AgentMessage] = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "search_document", "arguments": "{}"},
+                    },
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "fetch_web_page", "arguments": "{}"},
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": json.dumps({"ok": True, "value": {"ticker": "AAPL", "revenue": "100"}}),
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_2",
+                "content": json.dumps({"ok": False, "error": "403 blocked"}),
+            },
+        ]
+
+        summary = _build_compaction_summary(messages)
+
+        assert "Tool result highlights:" in summary
+        assert "search_document: ok=true" in summary
+        assert '"ticker": "AAPL"' in summary
+        assert "fetch_web_page: ok=false, error=403 blocked" in summary
+
     def test_compact_messages_with_gap_between_system_and_first_user(self) -> None:
         """T7: system~first_user 之间有消息时，这些消息进入摘要而非被丢弃。"""
         messages: list[AgentMessage] = [

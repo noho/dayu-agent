@@ -22,6 +22,7 @@ from dayu.log import Log
 from dayu.contracts.reply_outbox import ReplyOutboxState
 from dayu.contracts.events import AppEvent, AppEventType
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext
+from dayu.services.pending_turns import has_resumable_pending_turn
 from dayu.state_dir_lock import StateDirSingleInstanceLock
 from dayu.services.contracts import (
     ChatResumeRequest,
@@ -175,6 +176,36 @@ def _resolve_chat_key(message: dict[str, Any]) -> str | None:
     if from_user_id:
         return from_user_id
     return None
+
+
+def _group_inbound_messages_by_chat_key(
+    messages: list[dict[str, Any]],
+) -> list[list[dict[str, Any]]]:
+    """按 chat_key 对入站消息分组。
+
+    不同 `chat_key` 的消息允许并发处理；同一 `chat_key` 仍保持原始顺序串行，
+    以守住 session 级恢复与发送语义。
+
+    Args:
+        messages: 当前长轮询批次中的消息列表。
+
+    Returns:
+        分组后的消息列表，组间顺序按首条消息出现顺序稳定保留。
+
+    Raises:
+        无。
+    """
+
+    grouped_messages: dict[str, list[dict[str, Any]]] = {}
+    ordered_keys: list[str] = []
+    for index, message in enumerate(messages):
+        chat_key = _resolve_chat_key(message)
+        group_key = chat_key if chat_key else f"__ungrouped__:{index}"
+        if group_key not in grouped_messages:
+            grouped_messages[group_key] = []
+            ordered_keys.append(group_key)
+        grouped_messages[group_key].append(message)
+    return [grouped_messages[key] for key in ordered_keys]
 
 
 def _build_wechat_delivery_context(
@@ -1000,18 +1031,44 @@ class WeChatDaemon:
         messages = payload.get("msgs")
         if not isinstance(messages, list):
             messages = []
-        processed_count = 0
-        for message in messages:
-            if not isinstance(message, dict):
-                continue
-            handled = await self._handle_inbound_message(message, state)
-            if handled:
-                processed_count += 1
+        structured_messages = [message for message in messages if isinstance(message, dict)]
+        processed_counts = await asyncio.gather(
+            *(
+                self._handle_inbound_message_group(message_group, state)
+                for message_group in _group_inbound_messages_by_chat_key(structured_messages)
+            )
+        )
+        processed_count = sum(processed_counts)
         next_cursor = payload.get("get_updates_buf")
         if isinstance(next_cursor, str) and next_cursor:
             state.get_updates_buf = next_cursor
         await self._state_io.save(state)
         await self._deliver_pending_replies()
+        return processed_count
+
+    async def _handle_inbound_message_group(
+        self,
+        messages: list[dict[str, Any]],
+        state: WeChatDaemonState,
+    ) -> int:
+        """串行处理同一 chat_key 下的一组消息。
+
+        Args:
+            messages: 同一 `chat_key` 下、顺序稳定的一组消息。
+            state: 当前 daemon 状态。
+
+        Returns:
+            本组中被成功处理为文本会话的消息数量。
+
+        Raises:
+            无。
+        """
+
+        processed_count = 0
+        for message in messages:
+            handled = await self._handle_inbound_message(message, state)
+            if handled:
+                processed_count += 1
         return processed_count
 
     async def _handle_inbound_message(self, message: dict[str, Any], state: WeChatDaemonState) -> bool:
@@ -1183,6 +1240,20 @@ class WeChatDaemon:
             try:
                 await self._resume_single_pending_turn(pending_turn.pending_turn_id)
             except _PendingTurnRecoveryError as exc:
+                if not has_resumable_pending_turn(
+                    self.chat_service,
+                    session_id=pending_turn.session_id,
+                    scene_name=self.config.scene_name,
+                    pending_turn_id=pending_turn.pending_turn_id,
+                ):
+                    Log.warning(
+                        "恢复 pending 微信 turn 失败，但 Host 已清理记录，继续放行后续消息"
+                        f" pending_turn_id={pending_turn.pending_turn_id}"
+                        f" source_run_id={pending_turn.source_run_id}"
+                        f" error={exc}",
+                        module=MODULE,
+                    )
+                    continue
                 if fail_fast:
                     raise
                 Log.warning(
@@ -1193,6 +1264,20 @@ class WeChatDaemon:
                     module=MODULE,
                 )
             except Exception as exc:
+                if not has_resumable_pending_turn(
+                    self.chat_service,
+                    session_id=pending_turn.session_id,
+                    scene_name=self.config.scene_name,
+                    pending_turn_id=pending_turn.pending_turn_id,
+                ):
+                    Log.warning(
+                        "恢复 pending 微信 turn 失败，但 Host 已清理记录，继续放行后续消息"
+                        f" pending_turn_id={pending_turn.pending_turn_id}"
+                        f" source_run_id={pending_turn.source_run_id}"
+                        f" error={exc}",
+                        module=MODULE,
+                    )
+                    continue
                 if fail_fast:
                     raise _PendingTurnRecoveryError(
                         session_id=pending_turn.session_id,

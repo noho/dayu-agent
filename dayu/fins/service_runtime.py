@@ -1486,7 +1486,7 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
         """执行财报命令。"""
 
         if command.stream:
-            return self._execute_stream(command)
+            return self._execute_stream(command, cancel_checker=cancel_checker)
         result = self._execute_sync(command, cancel_checker=cancel_checker)
         return FinsResult(command=command.name, data=result)
 
@@ -1591,8 +1591,25 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
             return _build_process_single_result_data(raw_result)
         raise ValueError(f"不支持的命令: {name}")
 
-    async def _execute_stream(self, command: FinsCommand) -> AsyncIterator[FinsEvent]:
-        """执行流式命令。"""
+    async def _execute_stream(
+        self,
+        command: FinsCommand,
+        *,
+        cancel_checker: Callable[[], bool] | None = None,
+    ) -> AsyncIterator[FinsEvent]:
+        """执行流式命令。
+
+        Args:
+            command: 财报命令。
+            cancel_checker: 可选取消检查函数；当前仅在已支持的长事务流式链路中继续下传。
+
+        Yields:
+            统一的财报事件。
+
+        Raises:
+            ValueError: 命令不支持流式执行时抛出。
+            RuntimeError: 流式事件缺少最终结果时抛出。
+        """
 
         name = command.name
         payload = command.payload
@@ -1608,6 +1625,7 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
                 overwrite=prepared_args.overwrite,
                 rebuild=prepared_args.rebuild,
                 ticker_aliases=prepared_args.ticker_aliases,
+                cancel_checker=cancel_checker,
             )
             async for event in self._iter_stream_events(command_name=name, stream=stream, final_event_types={"pipeline_completed"}):
                 yield event
@@ -1621,6 +1639,7 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
                 overwrite=prepared_args.overwrite,
                 ci=prepared_args.ci,
                 document_ids=_coerce_document_ids_input(prepared_args.document_ids),
+                cancel_checker=cancel_checker,
             )
             async for event in self._iter_stream_events(command_name=name, stream=stream, final_event_types={"pipeline_completed"}):
                 yield event

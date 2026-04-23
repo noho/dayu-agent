@@ -7,7 +7,7 @@ from typing import Any
 
 from dayu.contracts.events import AppEventType
 from dayu.log import Log
-from dayu.services.contracts import ChatTurnRequest, ChatTurnSubmission, ReplyDeliverySubmitRequest
+from dayu.services.contracts import ChatResumeRequest, ChatTurnRequest, ChatTurnSubmission, ReplyDeliverySubmitRequest
 from dayu.services.protocols import ChatServiceProtocol, ReplyDeliveryServiceProtocol
 
 MODULE = "WEB.CHAT"
@@ -15,6 +15,33 @@ MODULE = "WEB.CHAT"
 
 class _InvalidChatSubmissionError(Exception):
     """ChatService 返回非法提交句柄时抛出的内部异常。"""
+
+
+def _resolve_resume_scene_name(
+    chat_service: ChatServiceProtocol,
+    *,
+    session_id: str,
+    pending_turn_id: str,
+) -> str:
+    """从 ChatService 可恢复视图中解析 pending turn 的 scene 名称。
+
+    Args:
+        chat_service: ChatService 稳定协议实现。
+        session_id: 当前请求所属会话 ID。
+        pending_turn_id: 待恢复 pending turn ID。
+
+    Returns:
+        该 pending turn 对应的真实 scene 名称。
+
+    Raises:
+        KeyError: 当指定 pending turn 不存在于当前 session 的可恢复视图中时抛出。
+    """
+
+    pending_turns = chat_service.list_resumable_pending_turns(session_id=session_id)
+    for pending_turn in pending_turns:
+        if pending_turn.pending_turn_id == pending_turn_id:
+            return pending_turn.scene_name
+    raise KeyError(f"pending conversation turn 不存在: {pending_turn_id}")
 
 
 def _require_chat_submission(submission: object) -> ChatTurnSubmission:
@@ -40,6 +67,38 @@ def _require_chat_submission(submission: object) -> ChatTurnSubmission:
     return submission
 
 
+def _start_chat_stream_consumer(
+    *,
+    stream: Any,
+    reply_delivery_service: ReplyDeliveryServiceProtocol,
+    session_id: str,
+    scene_name: str | None,
+) -> None:
+    """启动后台 chat 事件流消费任务。
+
+    Args:
+        stream: ChatService 返回的事件流。
+        reply_delivery_service: reply outbox 服务。
+        session_id: 当前会话 ID。
+        scene_name: 当前 chat 的真实 scene 名称。
+
+    Returns:
+        无。
+
+    Raises:
+        无。
+    """
+
+    asyncio.create_task(
+        _consume_stream(
+            stream,
+            reply_delivery_service=reply_delivery_service,
+            session_id=session_id,
+            scene_name=scene_name,
+        )
+    )
+
+
 def create_chat_router(
     chat_service: ChatServiceProtocol,
     reply_delivery_service: ReplyDeliveryServiceProtocol,
@@ -58,6 +117,12 @@ def create_chat_router(
         ticker: str | None = None
         scene_name: str | None = None
         session_id: str | None = None
+
+    class ChatResumeBody(BaseModel):
+        """恢复 chat pending turn 的请求体。"""
+
+        session_id: str
+        pending_turn_id: str
 
     class ChatResponse(BaseModel):
         """Chat turn 响应（异步模式，返回 session 句柄）。"""
@@ -88,13 +153,42 @@ def create_chat_router(
             validated_submission = _require_chat_submission(submission)
         except _InvalidChatSubmissionError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        asyncio.create_task(
-            _consume_stream(
-                validated_submission.event_stream,
-                reply_delivery_service=reply_delivery_service,
-                session_id=validated_submission.session_id,
-                scene_name=body.scene_name,
+        _start_chat_stream_consumer(
+            stream=validated_submission.event_stream,
+            reply_delivery_service=reply_delivery_service,
+            session_id=validated_submission.session_id,
+            scene_name=body.scene_name,
+        )
+        return ChatResponse(session_id=validated_submission.session_id)
+
+    @router.post("/chat/resume", response_model=ChatResponse, status_code=202)
+    async def resume_chat_turn(body: ChatResumeBody) -> ChatResponse:
+        """恢复指定 chat pending turn，结果通过 SSE 推送。"""
+
+        request = ChatResumeRequest(
+            session_id=body.session_id.strip(),
+            pending_turn_id=body.pending_turn_id.strip(),
+        )
+        try:
+            scene_name = _resolve_resume_scene_name(
+                chat_service,
+                session_id=request.session_id,
+                pending_turn_id=request.pending_turn_id,
             )
+            submission = await chat_service.resume_pending_turn(request)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="pending turn not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            validated_submission = _require_chat_submission(submission)
+        except _InvalidChatSubmissionError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _start_chat_stream_consumer(
+            stream=validated_submission.event_stream,
+            reply_delivery_service=reply_delivery_service,
+            session_id=validated_submission.session_id,
+            scene_name=scene_name,
         )
         return ChatResponse(session_id=validated_submission.session_id)
 

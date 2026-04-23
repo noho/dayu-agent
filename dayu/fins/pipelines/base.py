@@ -37,6 +37,8 @@ class PipelineProtocol(Protocol):
         overwrite: bool = False,
         rebuild: bool = False,
         ticker_aliases: Optional[list[str]] = None,
+        *,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> AsyncIterator[DownloadEvent]:
         """执行流式下载。
 
@@ -48,6 +50,7 @@ class PipelineProtocol(Protocol):
             overwrite: 是否强制覆盖。
             rebuild: 是否仅基于本地已下载数据重建 `meta/manifest`。
             ticker_aliases: 可选公司 alias 列表；download 场景下会与市场侧 alias 合并。
+            cancel_checker: 可选取消检查函数，仅在长事务阶段边界生效。
 
         Returns:
             异步事件流，逐步产出下载过程事件。
@@ -266,6 +269,8 @@ class PipelineProtocol(Protocol):
         overwrite: bool = False,
         ci: bool = False,
         document_ids: Optional[list[str]] = None,
+        *,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> AsyncIterator[ProcessEvent]:
         """执行流式全量预处理。
 
@@ -274,6 +279,7 @@ class PipelineProtocol(Protocol):
             overwrite: 是否强制覆盖。
             ci: 是否追加导出 `search_document/query_xbrl_facts` 快照。
             document_ids: 可选文档 ID 列表；传入时仅处理这些文档。
+            cancel_checker: 可选取消检查函数，仅在长事务阶段边界生效。
 
         Returns:
             异步事件流，逐步产出预处理过程事件。

@@ -37,10 +37,12 @@ class _PipelineStub(PipelineProtocol):
         overwrite: bool = False,
         rebuild: bool = False,
         ticker_aliases: list[str] | None = None,
+        *,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> AsyncIterator[DownloadEvent]:
         """测试中不应调用 download_stream。"""
 
-        del ticker, form_type, start_date, end_date, overwrite, rebuild, ticker_aliases
+        del ticker, form_type, start_date, end_date, overwrite, rebuild, ticker_aliases, cancel_checker
         raise AssertionError("download_stream 不应在该测试中被调用")
 
     def download(
@@ -235,10 +237,12 @@ class _PipelineStub(PipelineProtocol):
         overwrite: bool = False,
         ci: bool = False,
         document_ids: list[str] | None = None,
+        *,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> AsyncIterator[ProcessEvent]:
         """测试中不应调用 process_stream。"""
 
-        del ticker, overwrite, ci, document_ids
+        del ticker, overwrite, ci, document_ids, cancel_checker
         raise AssertionError("process_stream 不应在该测试中被调用")
 
     def process_filing(

@@ -60,7 +60,7 @@ _CREATED_DAEMONS: list[WeChatDaemon] = []
 
 def _build_daemon(
     *,
-    chat_service: _FakeChatService | _FakeResumableChatService | _OrderedResumableChatService | _FailingResumeChatService,
+    chat_service: _FakeChatService | _FakeResumableChatService | _OrderedResumableChatService | _FailingResumeChatService | _AutoCleaningResumeChatService,
     state_store: FileWeChatStateStore,
     client: _FakeIlinkClient | _BusinessFailingIlinkClient | _TransientFailingIlinkClient,
     reply_delivery_service: ReplyDeliveryService | None = None,
@@ -264,6 +264,29 @@ class _FailingResumeChatService(_FakeResumableChatService):
     async def resume_pending_turn(self, request: ChatResumeRequest) -> ChatTurnSubmission:
         self.resume_requests.append(request)
         raise ValueError("pending conversation turn 对应的 source run 仍处于活跃状态，不能恢复")
+
+
+class _AutoCleaningResumeChatService(_FakeResumableChatService):
+    """模拟恢复失败后 pending turn 已被 Host 清理的测试桩。"""
+
+    def __init__(self, scripted_turns: list[_ScriptedTurn], *, runtime_identity: str) -> None:
+        super().__init__(scripted_turns, runtime_identity=runtime_identity)
+        self._cleared = False
+
+    def list_resumable_pending_turns(
+        self,
+        *,
+        session_id: str | None = None,
+        scene_name: str | None = None,
+    ) -> list[ChatPendingTurnView]:
+        if self._cleared:
+            return []
+        return super().list_resumable_pending_turns(session_id=session_id, scene_name=scene_name)
+
+    async def resume_pending_turn(self, request: ChatResumeRequest) -> ChatTurnSubmission:
+        self.resume_requests.append(request)
+        self._cleared = True
+        raise ValueError("pending turn resume_source_json 不是合法 JSON object")
 
 class _FakeIlinkClient:
     """测试用 iLink client。"""
@@ -978,6 +1001,48 @@ def test_process_once_rejects_new_message_when_session_pending_turn_cannot_resum
 
 
 @pytest.mark.unit
+def test_process_once_allows_new_message_when_failed_pending_turn_has_been_cleared(tmp_path: Path) -> None:
+    """若恢复失败后 Host 已清理 pending turn，daemon 应继续处理当前新消息。"""
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    store.save(WeChatDaemonState(bot_token="token-1", base_url="https://ilink.example"))
+    service = _AutoCleaningResumeChatService(
+        scripted_turns=[
+            _ScriptedTurn(
+                events=(
+                    AppEvent(
+                        type=AppEventType.FINAL_ANSWER,
+                        payload={"content": "新回复", "degraded": False},
+                        meta={"run_id": "run-new"},
+                    ),
+                )
+            )
+        ],
+        runtime_identity=build_wechat_runtime_identity(store.state_dir),
+    )
+    client = _FakeIlinkClient(
+        updates_payloads=[
+            {"ret": 0, "msgs": [_build_text_message(text="新问题", context_token="ctx-new")], "get_updates_buf": "cursor-1"}
+        ]
+    )
+    daemon = _build_daemon(chat_service=service, state_store=store, client=client)
+
+    processed = asyncio.run(daemon.process_once())
+
+    assert processed == 1
+    assert [request.pending_turn_id for request in service.resume_requests] == ["pending-1"]
+    assert len(service.submit_turn_requests) == 1
+    assert client.sent_messages == [
+        {
+            "to_user_id": "user@im.wechat",
+            "context_token": "ctx-new",
+            "text": "新回复",
+            "group_id": None,
+        }
+    ]
+
+
+@pytest.mark.unit
 def test_run_forever_recovers_interrupted_reply_delivery_before_polling(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1327,6 +1392,107 @@ def test_process_once_only_resumes_pending_turns_for_current_runtime(tmp_path: P
     assert [request.pending_turn_id for request in service.resume_requests] == ["pending-1"]
     assert [request.session_id for request in service.resume_requests] == [build_wechat_session_id("user@im.wechat")]
     assert [message["text"] for message in client.sent_messages] == ["补发答复", "当前问题答复"]
+
+
+@pytest.mark.unit
+def test_process_once_processes_different_chat_keys_concurrently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """不同 chat_key 的消息应并发处理。"""
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    store.save(WeChatDaemonState(bot_token="token-1", base_url="https://ilink.example"))
+    daemon = _build_daemon(
+        chat_service=_FakeChatService(scripted_turns=[]),
+        state_store=store,
+        client=_FakeIlinkClient(
+            updates_payloads=[
+                {
+                    "ret": 0,
+                    "msgs": [
+                        _build_text_message(text="A", context_token="ctx-a", from_user_id="user-a"),
+                        _build_text_message(text="B", context_token="ctx-b", from_user_id="user-b"),
+                    ],
+                    "get_updates_buf": "cursor-1",
+                }
+            ]
+        ),
+    )
+    barrier = asyncio.Event()
+    started_count = 0
+    active_count = 0
+    max_active_count = 0
+
+    async def _fake_handle(message: dict[str, object], state: WeChatDaemonState) -> bool:
+        nonlocal started_count, active_count, max_active_count
+        del message, state
+        started_count += 1
+        active_count += 1
+        max_active_count = max(max_active_count, active_count)
+        if started_count == 2:
+            barrier.set()
+        await asyncio.wait_for(barrier.wait(), timeout=0.2)
+        active_count -= 1
+        return True
+
+    monkeypatch.setattr(daemon, "_handle_inbound_message", _fake_handle)
+
+    processed = asyncio.run(daemon.process_once())
+
+    assert processed == 2
+    assert max_active_count == 2
+
+
+@pytest.mark.unit
+def test_process_once_keeps_same_chat_key_serialized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同一 chat_key 的消息即使同批到达，也必须保持串行。"""
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    store.save(WeChatDaemonState(bot_token="token-1", base_url="https://ilink.example"))
+    daemon = _build_daemon(
+        chat_service=_FakeChatService(scripted_turns=[]),
+        state_store=store,
+        client=_FakeIlinkClient(
+            updates_payloads=[
+                {
+                    "ret": 0,
+                    "msgs": [
+                        _build_text_message(text="A1", context_token="ctx-a1", from_user_id="same-user"),
+                        _build_text_message(text="A2", context_token="ctx-a2", from_user_id="same-user"),
+                    ],
+                    "get_updates_buf": "cursor-1",
+                }
+            ]
+        ),
+    )
+    active_count = 0
+    max_active_count = 0
+    seen_context_tokens: list[str] = []
+
+    async def _fake_handle(
+        message: dict[str, str | int | float | bool | None | list | dict],
+        state: WeChatDaemonState,
+    ) -> bool:
+        nonlocal active_count, max_active_count
+        del state
+        active_count += 1
+        max_active_count = max(max_active_count, active_count)
+        seen_context_tokens.append(str(message.get("context_token") or ""))
+        await asyncio.sleep(0)
+        active_count -= 1
+        return True
+
+    monkeypatch.setattr(daemon, "_handle_inbound_message", _fake_handle)
+
+    processed = asyncio.run(daemon.process_once())
+
+    assert processed == 2
+    assert max_active_count == 1
+    assert seen_context_tokens == ["ctx-a1", "ctx-a2"]
 
 
 @pytest.mark.unit

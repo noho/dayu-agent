@@ -134,7 +134,7 @@ direct operation 的公共命令/事件/结果契约定义在 [../contracts/fins
 
 当前 direct operation 还要守住一条请求期边界：
 - `FinsService.submit()` 必须先调用 `FinsRuntime` 的同步 preflight，再创建 Host session 和 run 规格；像空 `ticker`、payload 类型不匹配、CLI 规范化失败、不支持流式执行的命令被设置 `stream=True` 这类请求级错误，必须在返回 `FinsSubmission` 之前抛出，不能先返回可执行句柄、再让后台流式消费阶段失败。
-- 对同步 `process_filing` / `process_material` 这类 direct operation，`FinsService` 只能把 `Host` 提供的取消状态收敛成窄 `cancel_checker` 继续下传；取消真源仍归 `Host`，但 runtime / pipeline 必须在单文档处理与快照导出阶段边界协作停止，不能等整个同步操作返回后才被动收口。
+- 对同步 `process_filing` / `process_material`，以及已支持取消协作的流式 `download` / `process` 这类 direct operation，`FinsService` 只能把 `Host` 提供的取消状态收敛成窄 `cancel_checker` 继续下传；取消真源仍归 `Host`，但 runtime / pipeline 必须在长事务阶段边界协作停止，不能等整个 direct operation 完成后才被动收口。
 
 ## 4. Agent 路径中的 Fins
 
@@ -212,7 +212,7 @@ direct operation 当前由 `FinsRuntime` 和对应 pipeline 实现。
 - `download` 走 `sec_download` lane，必须串行
 - 流式 direct operation 事件可以双写到 EventBus
 - 取消通过 `CancellationBridge` 收口在 Host，而不是散在 Fins 内部
-- 同步 direct operation 不得自己持有 `RunRegistry` 或 Host 内部桥接器；若需要及时响应取消，只能沿 `Service -> Runtime -> Pipeline` 透传窄 `cancel_checker`，并在阶段边界主动停机
+- direct operation 不得自己持有 `RunRegistry` 或 Host 内部桥接器；若需要及时响应取消，只能沿 `Service -> Runtime -> Pipeline` 透传窄 `cancel_checker`，并在已支持取消协作的阶段边界主动停机
 
 ### 5.2 direct operation 公共契约
 

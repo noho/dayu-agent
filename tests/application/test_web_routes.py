@@ -20,7 +20,7 @@ from dayu.contracts.fins import (
     ProcessResultData,
 )
 from dayu.contracts.events import AppEvent, AppEventType
-from dayu.services.contracts import ChatTurnSubmission, FinsSubmission, PromptSubmission, RunAdminView
+from dayu.services.contracts import ChatPendingTurnView, ChatTurnSubmission, FinsSubmission, PromptSubmission, RunAdminView
 from dayu.services.protocols import (
     ChatServiceProtocol,
     FinsServiceProtocol,
@@ -144,6 +144,14 @@ class _ChatBody:
     ticker: str | None = None
     scene_name: str | None = None
     session_id: str | None = None
+
+
+@dataclass(frozen=True)
+class _ChatResumeBody:
+    """chat resume handler 测试请求体。"""
+
+    session_id: str
+    pending_turn_id: str
 
 
 @dataclass(frozen=True)
@@ -705,6 +713,170 @@ def test_chat_route_maps_invalid_submission_to_500_without_creating_task(monkeyp
 
     assert exc_info.value.status_code == 500
     assert exc_info.value.detail == "chat service returned invalid submission"
+    assert create_task_calls == []
+
+
+@pytest.mark.unit
+def test_chat_resume_route_creates_task_only_after_successful_resume(monkeypatch: pytest.MonkeyPatch) -> None:
+    """chat resume 路由只应在 resume 成功后调度后台任务。"""
+
+    _install_fake_route_modules(monkeypatch)
+    create_task_calls: list[object] = []
+    monkeypatch.setattr(
+        "dayu.web.routes.chat.asyncio.create_task",
+        lambda coroutine: _record_background_task(create_task_calls, coroutine),
+    )
+
+    class _SuccessfulChatService:
+        async def submit_turn(self, request):
+            del request
+            raise AssertionError("当前测试不应调用 submit_turn")
+
+        def list_resumable_pending_turns(self, *, session_id: str | None = None, scene_name: str | None = None):
+            del scene_name
+            assert session_id == "session_chat"
+            return [
+                ChatPendingTurnView(
+                    pending_turn_id="pending_1",
+                    session_id="session_chat",
+                    scene_name="custom_scene",
+                    user_text="old question",
+                    source_run_id="run_old",
+                    resumable=True,
+                    state="sent_to_llm",
+                    metadata={"delivery_channel": "web"},
+                )
+            ]
+
+        async def resume_pending_turn(self, request):
+            assert request.session_id == "session_chat"
+            assert request.pending_turn_id == "pending_1"
+            return ChatTurnSubmission(session_id="session_chat", event_stream=_empty_app_stream())
+
+    class _ReplyDeliveryService:
+        def submit_reply_for_delivery(self, request):
+            del request
+            raise AssertionError("当前测试不应投递 reply")
+
+    router = cast(
+        _CapturingRouter,
+        create_chat_router(
+            cast(ChatServiceProtocol, _SuccessfulChatService()),
+            cast(ReplyDeliveryServiceProtocol, _ReplyDeliveryService()),
+        ),
+    )
+    handler = cast(Any, router.handlers["POST /chat/resume"])
+
+    response = asyncio.run(handler(_ChatResumeBody(session_id="session_chat", pending_turn_id="pending_1")))
+
+    assert response.session_id == "session_chat"
+    assert len(create_task_calls) == 1
+
+
+@pytest.mark.unit
+def test_chat_resume_route_uses_pending_turn_scene_name_for_background_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """chat resume 路由应把 pending turn 的真实 scene_name 传给后台消费器。"""
+
+    _install_fake_route_modules(monkeypatch)
+    captured_scene_names: list[str | None] = []
+    monkeypatch.setattr(
+        "dayu.web.routes.chat._start_chat_stream_consumer",
+        lambda *, stream, reply_delivery_service, session_id, scene_name: (
+            captured_scene_names.append(scene_name)
+        ),
+    )
+
+    class _SuccessfulChatService:
+        async def submit_turn(self, request):
+            del request
+            raise AssertionError("当前测试不应调用 submit_turn")
+
+        def list_resumable_pending_turns(self, *, session_id: str | None = None, scene_name: str | None = None):
+            del scene_name
+            assert session_id == "session_chat"
+            return [
+                ChatPendingTurnView(
+                    pending_turn_id="pending_1",
+                    session_id="session_chat",
+                    scene_name="earnings_review",
+                    user_text="old question",
+                    source_run_id="run_old",
+                    resumable=True,
+                    state="sent_to_llm",
+                    metadata={"delivery_channel": "web"},
+                )
+            ]
+
+        async def resume_pending_turn(self, request):
+            assert request.session_id == "session_chat"
+            assert request.pending_turn_id == "pending_1"
+            return ChatTurnSubmission(session_id="session_chat", event_stream=_empty_app_stream())
+
+    class _ReplyDeliveryService:
+        def submit_reply_for_delivery(self, request):
+            del request
+            raise AssertionError("当前测试不应投递 reply")
+
+    router = cast(
+        _CapturingRouter,
+        create_chat_router(
+            cast(ChatServiceProtocol, _SuccessfulChatService()),
+            cast(ReplyDeliveryServiceProtocol, _ReplyDeliveryService()),
+        ),
+    )
+    handler = cast(Any, router.handlers["POST /chat/resume"])
+
+    response = asyncio.run(handler(_ChatResumeBody(session_id="session_chat", pending_turn_id="pending_1")))
+
+    assert response.session_id == "session_chat"
+    assert captured_scene_names == ["earnings_review"]
+
+
+@pytest.mark.unit
+def test_chat_resume_route_maps_missing_pending_turn_to_404(monkeypatch: pytest.MonkeyPatch) -> None:
+    """chat resume 路由应把缺失 pending turn 映射为 404。"""
+
+    _install_fake_route_modules(monkeypatch)
+    create_task_calls: list[object] = []
+    monkeypatch.setattr(
+        "dayu.web.routes.chat.asyncio.create_task",
+        lambda coroutine: _record_background_task(create_task_calls, coroutine),
+    )
+
+    class _FailingChatService:
+        async def submit_turn(self, request):
+            del request
+            raise AssertionError("当前测试不应调用 submit_turn")
+
+        def list_resumable_pending_turns(self, *, session_id: str | None = None, scene_name: str | None = None):
+            del session_id, scene_name
+            return []
+
+        async def resume_pending_turn(self, request):
+            del request
+            raise KeyError("missing pending turn")
+
+    class _ReplyDeliveryService:
+        def submit_reply_for_delivery(self, request):
+            del request
+            raise AssertionError("当前测试不应投递 reply")
+
+    router = cast(
+        _CapturingRouter,
+        create_chat_router(
+            cast(ChatServiceProtocol, _FailingChatService()),
+            cast(ReplyDeliveryServiceProtocol, _ReplyDeliveryService()),
+        ),
+    )
+    handler = cast(Any, router.handlers["POST /chat/resume"])
+
+    with pytest.raises(_FakeHTTPException) as exc_info:
+        asyncio.run(handler(_ChatResumeBody(session_id="session_chat", pending_turn_id="pending_1")))
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "pending turn not found"
     assert create_task_calls == []
 
 

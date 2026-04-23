@@ -137,7 +137,10 @@ class FinsService(FinsServiceProtocol):
 
         async for event in self.host.run_operation_stream(
             spec=spec,
-            event_stream_factory=lambda _context: self._execute_command_stream(command),
+            event_stream_factory=lambda context: self._execute_command_stream(
+                command,
+                cancel_checker=_build_cancel_checker(context),
+            ),
         ):
             yield event
 
@@ -154,10 +157,26 @@ class FinsService(FinsServiceProtocol):
             raise TypeError(f"同步执行应返回 FinsResult，实际得到 {type(result).__name__}")
         return result
 
-    async def _execute_command_stream(self, command: FinsCommand) -> AsyncIterator[FinsEvent]:
-        """执行流式财报命令。"""
+    async def _execute_command_stream(
+        self,
+        command: FinsCommand,
+        *,
+        cancel_checker: Callable[[], bool] | None = None,
+    ) -> AsyncIterator[FinsEvent]:
+        """执行流式财报命令。
 
-        result = self.fins_runtime.execute(command)
+        Args:
+            command: 财报命令。
+            cancel_checker: 可选取消检查函数。
+
+        Returns:
+            统一的财报事件流。
+
+        Raises:
+            TypeError: runtime 返回同步结果时抛出。
+        """
+
+        result = self.fins_runtime.execute(command, cancel_checker=cancel_checker)
         if isinstance(result, FinsResult):
             raise TypeError(f"流式执行不应返回 FinsResult，应为 AsyncIterator")
         async for event in result:

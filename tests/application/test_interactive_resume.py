@@ -56,6 +56,29 @@ class _RejectingChatService(_FakeChatService):
         raise ValueError("pending turn 当前不可恢复")
 
 
+class _AutoCleaningRejectingChatService(_FakeChatService):
+    """模拟恢复失败后 Host 已清理 pending turn 的聊天服务。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._cleared = False
+
+    def list_resumable_pending_turns(
+        self,
+        *,
+        session_id: str | None = None,
+        scene_name: str | None = None,
+    ) -> list[ChatPendingTurnView]:
+        if self._cleared:
+            return []
+        return super().list_resumable_pending_turns(session_id=session_id, scene_name=scene_name)
+
+    async def resume_pending_turn(self, request: ChatResumeRequest):
+        self.resume_requests.append(request)
+        self._cleared = True
+        raise ValueError("pending turn resume_source_json 不是合法 JSON object")
+
+
 @pytest.mark.unit
 def test_interactive_startup_resumes_pending_turn(monkeypatch: pytest.MonkeyPatch) -> None:
     """进入 interactive REPL 前应先恢复当前 session 的 pending turn。"""
@@ -93,6 +116,29 @@ def test_interactive_startup_keeps_pending_turn_when_resume_is_rejected() -> Non
 
     assert [request.pending_turn_id for request in service.resume_requests] == ["pending-1"]
     assert [request.session_id for request in service.resume_requests] == ["interactive-session"]
+
+
+@pytest.mark.unit
+def test_interactive_startup_allows_session_when_failed_pending_turn_has_been_cleared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """恢复失败后若 pending turn 已被 Host 清理，interactive 不应中断整个会话。"""
+
+    service = _AutoCleaningRejectingChatService()
+    rendered: list[str] = []
+    monkeypatch.setattr(
+        "dayu.cli.interactive_ui._render_warning_or_error",
+        lambda current_state, message: rendered.append(message),
+    )
+
+    _resume_interactive_pending_turn_if_needed(
+        service,  # type: ignore[arg-type]
+        session_id="interactive-session",
+        show_thinking=True,
+    )
+
+    assert [request.pending_turn_id for request in service.resume_requests] == ["pending-1"]
+    assert rendered == ["[warning] 上一轮 pending turn 恢复失败，但记录已被清理；当前会话继续可用"]
 
 
 @pytest.mark.unit
