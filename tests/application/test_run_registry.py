@@ -62,11 +62,11 @@ class TestRegisterRun:
             session_id="sess-1",
             service_type="write_pipeline",
             scene_name="sec_filing",
-            metadata={"chapter": 3},
+            metadata={"delivery_channel": "wechat"},
         )
         assert run.session_id == "sess-1"
         assert run.scene_name == "sec_filing"
-        assert run.metadata == {"chapter": 3}
+        assert run.metadata == {"delivery_channel": "wechat"}
 
     @pytest.mark.unit
     def test_register_run_has_pid(self, registry: SQLiteRunRegistry) -> None:

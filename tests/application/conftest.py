@@ -8,7 +8,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Callable, TypeVar
 
 from dayu.contracts.agent_execution import ExecutionContract
-from dayu.contracts.execution_metadata import ExecutionDeliveryContext
+from dayu.contracts.execution_metadata import (
+    ExecutionDeliveryContext,
+    empty_execution_delivery_context,
+)
 from dayu.contracts.events import AppEvent, AppEventType, AppResult
 from dayu.contracts.run import RunCancelReason, RunRecord, RunState
 from dayu.contracts.session import SessionRecord, SessionSource, SessionState
@@ -142,7 +145,7 @@ class StubRunRegistry:
         session_id: str | None = None,
         service_type: str,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> RunRecord:
         """注册 run。"""
         import os
@@ -158,7 +161,7 @@ class StubRunRegistry:
             cancel_requested_at=None,
             cancel_requested_reason=None,
             owner_pid=os.getpid(),
-            metadata=metadata or {},
+            metadata=metadata if metadata is not None else empty_execution_delivery_context(),
         )
         self._runs[run_id] = record
         return record

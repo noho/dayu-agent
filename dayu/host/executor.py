@@ -281,7 +281,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             session_id=spec.session_id,
             service_type=spec.operation_name,
             scene_name=spec.scene_name,
-            metadata=dict(spec.metadata),
+            metadata=spec.metadata,
         )
         context, bridge, deadline_watcher, permits = self._start_run(
             spec=spec, run_id=run.run_id, include_agent_lane=False,
@@ -326,7 +326,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             session_id=spec.session_id,
             service_type=spec.operation_name,
             scene_name=spec.scene_name,
-            metadata=dict(spec.metadata),
+            metadata=spec.metadata,
         )
         context, bridge, deadline_watcher, permits = self._start_run(
             spec=spec, run_id=run.run_id, include_agent_lane=False,
@@ -385,7 +385,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             session_id=spec.session_id,
             service_type=spec.operation_name,
             scene_name=spec.scene_name,
-            metadata=dict(spec.metadata),
+            metadata=spec.metadata,
         )
         context, bridge, deadline_watcher, permits = self._start_run(
             spec=spec, run_id=run.run_id, include_agent_lane=True,
@@ -460,7 +460,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             session_id=spec.session_id,
             service_type=spec.operation_name,
             scene_name=spec.scene_name,
-            metadata=dict(spec.metadata),
+            metadata=spec.metadata,
         )
         context, bridge, deadline_watcher, permits = self._start_run(
             spec=spec, run_id=run.run_id, include_agent_lane=True,

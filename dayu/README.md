@@ -877,7 +877,7 @@ Host 是 Dayu 的通用托管执行层。它的价值不在于“帮 Service 调
 - `Host Run` 是“一次执行尝试”，不是长期会话，也不是 Agent 内部 iteration。
 - `DefaultHostExecutor` 在 run 开始时统一完成四件事：注册 run、建立取消桥、建立 deadline watcher、按需获取并发许可。
 - `run_id` 由 Host 生成后作为执行级上下文传给 Agent；Agent 不自己发明 run identity。
-- `Host Run` 只保存 `run_id`、`session_id`、`service_type`、`scene_name`、状态、时间戳和通用 `metadata`，不结构化持久化 `ticker` 这类业务字段。
+- `Host Run` 只保存 `run_id`、`session_id`、`service_type`、`scene_name`、状态、时间戳和 `metadata`；`metadata` 类型固定为 `ExecutionDeliveryContext`（`delivery_channel` / `delivery_target` / `delivery_thread_id` / `delivery_group_id` / `interactive_key` / `chat_key` 等稳定交付字段），不再作为自由 `dict[str, Any]` 承载业务参数，也不结构化持久化 `ticker` 这类业务字段。
 
 ### 6.3 并发治理能力
 

@@ -223,7 +223,7 @@ class RunRegistryProtocol(Protocol):
         session_id: str | None = None,
         service_type: str,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> RunRecord:
         """注册一个新 run。
 
@@ -231,7 +231,8 @@ class RunRegistryProtocol(Protocol):
             session_id: 关联 session（可选）。
             service_type: 服务类型标识。
             scene_name: 场景名。
-            metadata: 非结构化附加信息。
+            metadata: 宿主侧交付上下文，仅承载稳定键值（与 ExecutionContract.metadata
+                同型），不允许随意塞入业务非结构化字段。
 
         Returns:
             状态为 CREATED 的 RunRecord。
