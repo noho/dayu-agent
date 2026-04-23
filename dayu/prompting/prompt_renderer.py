@@ -20,6 +20,13 @@ class PromptParseError(Exception):
 GuidanceParseError = PromptParseError
 
 
+# 模板条件块的固定字面量正则；提升到模块级以避免每次解析重复编译。
+_WHEN_TOOL_OPEN_PATTERN = re.compile(r"<when_tool\s+([a-zA-Z_][a-zA-Z0-9_]*)>")
+_WHEN_TOOL_CLOSE_PATTERN = re.compile(r"</when_tool>")
+_WHEN_TAG_OPEN_PATTERN = re.compile(r"<when_tag\s+([a-zA-Z0-9_\-,\s]+)>")
+_WHEN_TAG_CLOSE_PATTERN = re.compile(r"</when_tag>")
+
+
 @dataclass
 class ConditionalBlock:
     """条件块表示。
@@ -57,8 +64,8 @@ def parse_when_tool_blocks(template: str, tool_names: set[str]) -> str:
         PromptParseError: 标签不匹配或格式错误时抛出。
     """
 
-    open_tag_pattern = re.compile(r"<when_tool\s+([a-zA-Z_][a-zA-Z0-9_]*)>")
-    close_tag_pattern = re.compile(r"</when_tool>")
+    open_tag_pattern = _WHEN_TOOL_OPEN_PATTERN
+    close_tag_pattern = _WHEN_TOOL_CLOSE_PATTERN
 
     result_parts: list[str] = []
     position = 0
@@ -144,8 +151,8 @@ def parse_when_tag_blocks(template: str, tag_names: set[str]) -> str:
         PromptParseError: 标签不匹配或格式错误时抛出。
     """
 
-    open_tag_pattern = re.compile(r"<when_tag\s+([a-zA-Z0-9_\-,\s]+)>")
-    close_tag_pattern = re.compile(r"</when_tag>")
+    open_tag_pattern = _WHEN_TAG_OPEN_PATTERN
+    close_tag_pattern = _WHEN_TAG_CLOSE_PATTERN
 
     result_parts: list[str] = []
     position = 0

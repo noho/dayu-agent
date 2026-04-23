@@ -72,11 +72,13 @@ class PromptService(PromptServiceProtocol):
         request: PromptRequest,
         session_id: str,
     ) -> AsyncIterator[AppEvent]:
-        """在给定 session 中执行单轮 Prompt。"""
+        """在给定 session 中执行单轮 Prompt。
+
+        前置条件：调用方（``submit`` → ``_resolve_session``）已校验
+        ``request.user_text`` 非空，这里直接复用该结果，不再重复校验。
+        """
 
         user_message = str(request.user_text or "").strip()
-        if not user_message:
-            raise ValueError("Prompt 输入不能为空")
 
         accepted_scene = self.scene_execution_acceptance_preparer.prepare("prompt", request.execution_options)
         prompt_contributions = {

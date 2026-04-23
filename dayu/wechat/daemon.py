@@ -1127,6 +1127,7 @@ class WeChatDaemon:
             source_run_id=reply.source_run_id,
             reply_text=reply_text,
             metadata=_rebuild_wechat_delivery_context(delivery_context, filtered=reply.filtered),
+            filtered=reply.filtered,
         )
         await self._deliver_pending_replies(session_id=session_id)
         return True
@@ -1256,6 +1257,7 @@ class WeChatDaemon:
             source_run_id=reply.source_run_id,
             reply_text=reply_text,
             metadata=_rebuild_wechat_delivery_context(pending_turn.metadata, filtered=reply.filtered),
+            filtered=reply.filtered,
         )
         await self._deliver_pending_replies(session_id=submission.session_id)
 
@@ -1267,8 +1269,22 @@ class WeChatDaemon:
         source_run_id: str,
         reply_text: str,
         metadata: ExecutionDeliveryContext,
+        filtered: bool,
     ) -> ReplyDeliveryView:
-        """向 reply delivery Service 提交待发送回复。"""
+        """向 reply delivery Service 提交待发送回复。
+
+        Args:
+            session_id: Dayu 会话 ID。
+            scene_name: scene 名称。
+            source_run_id: 源 run ID。
+            reply_text: 要投递的回复文本。
+            metadata: 已带有投递上下文的 metadata；不依赖其 ``filtered``
+                字段取值，以避免 metadata 链路丢失该字段后语义漂移。
+            filtered: 显式标注当前回复是否因内容安全过滤而降级。
+
+        Returns:
+            delivery service 返回的视图。
+        """
 
         if self.reply_delivery_service is None:
             raise RuntimeError("reply_delivery_service 未配置，不能提交微信 delivery")
@@ -1281,7 +1297,7 @@ class WeChatDaemon:
                 reply_content=reply_text,
                 metadata=_rebuild_wechat_delivery_context(
                     metadata,
-                    filtered=bool(metadata.get("filtered", False)),
+                    filtered=filtered,
                 ),
             )
         )

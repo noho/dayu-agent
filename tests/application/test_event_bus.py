@@ -231,3 +231,22 @@ class TestCleanupClosed:
         assert len(bus._subscriptions) == 2
         bus._cleanup_closed()
         assert len(bus._subscriptions) == 1
+
+    @pytest.mark.unit
+    def test_publish_reaps_closed_subscriptions(self) -> None:
+        """publish 应顺带回收已关闭订阅，防止长驻进程内存泄漏。
+
+        回归 finding 009：曾经 _cleanup_closed 只作为内部方法存在但没有
+        任何调用点，导致 subscribe → close → publish 反复循环时，
+        _subscriptions 长度持续增长。
+        """
+
+        bus = AsyncQueueEventBus()
+        _ = bus.subscribe()  # 保留一个活跃订阅
+        # 模拟多轮 subscribe → close → publish
+        for _ in range(5):
+            sub = bus.subscribe()
+            sub.close()
+            bus.publish("run_x", _make_event())
+        # 只剩 1 个活跃订阅（首次保留的），5 个已关闭的都应被回收。
+        assert len(bus._subscriptions) == 1

@@ -1739,7 +1739,7 @@ def _parse_optional_numeric(value: Any) -> Optional[float]:
     normalized = normalized.replace("'", "").replace(" ", "").strip()
     if normalized in {"", "-", "--"}:
         return None
-    normalized = _normalize_numeric_separators(normalized)
+    normalized = normalize_numeric_separators(normalized)
     if normalized in {"", "-", "--"}:
         return None
     try:
@@ -1751,7 +1751,7 @@ def _parse_optional_numeric(value: Any) -> Optional[float]:
     return -numeric if negative else numeric
 
 
-def _normalize_numeric_separators(value: str) -> str:
+def normalize_numeric_separators(value: str) -> str:
     """规范化数字中的千分位与小数分隔符。
 
     Args:

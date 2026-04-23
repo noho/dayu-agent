@@ -411,9 +411,9 @@ def test_statement_currency_scale_and_row_helpers_cover_remaining_branches() -> 
     assert html_statement_module._infer_scale_from_caption("No scale") is None
     assert html_statement_module._extract_row_label(["nan", "123", "Revenue", "456"]) == "Revenue"
     assert html_statement_module._extract_row_label(["", "100", "200"]) is None
-    assert html_statement_module._normalize_numeric_separators("1.234,56") == "1234.56"
-    assert html_statement_module._normalize_numeric_separators("1,23") == "1.23"
-    assert html_statement_module._normalize_numeric_separators("1,234") == "1234"
+    assert html_statement_module.normalize_numeric_separators("1.234,56") == "1234.56"
+    assert html_statement_module.normalize_numeric_separators("1,23") == "1.23"
+    assert html_statement_module.normalize_numeric_separators("1,234") == "1234"
     assert html_statement_module._count_pattern_hits(
         statement_patterns=(re.compile(r"revenue"), re.compile(r"income")),
         text="revenue operating income",

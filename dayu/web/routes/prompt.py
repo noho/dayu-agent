@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from typing import AsyncIterator
 
+from dayu.contracts.events import AppEvent, AppEventType
+from dayu.log import Log
 from dayu.services.protocols import PromptServiceProtocol
+
+MODULE = "WEB.PROMPT"
 
 
 def create_prompt_router(prompt_service: PromptServiceProtocol):
@@ -34,7 +39,7 @@ def create_prompt_router(prompt_service: PromptServiceProtocol):
         ticker: str | None = None
 
     class PromptResponse(BaseModel):
-        """Prompt 响应（异步模式）。"""
+        """Prompt 响应（异步模式)。"""
 
         session_id: str
         accepted: bool = True
@@ -62,27 +67,46 @@ def create_prompt_router(prompt_service: PromptServiceProtocol):
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        asyncio.create_task(_consume_stream(submission.event_stream))
+        asyncio.create_task(
+            _consume_stream(submission.event_stream, session_id=submission.session_id)
+        )
         return PromptResponse(session_id=submission.session_id)
 
     return router
 
 
-async def _consume_stream(stream):
+async def _consume_stream(stream: AsyncIterator[AppEvent], *, session_id: str) -> None:
     """后台消费流式事件。
 
     Args:
         stream: 事件流句柄。
+        session_id: 当前 prompt 的 session ID，用于关联日志。
 
     Returns:
         无。
 
     Raises:
-        无。
+        无：所有异常被记录后吞掉，避免污染 asyncio 任务退出原因。
     """
 
-    async for _ in stream:
-        pass
+    try:
+        async for event in stream:
+            # 关键终态事件统一落日志，便于线上排查 prompt 执行结果；
+            # 中间增量事件（CONTENT_DELTA 等）继续静默丢弃。
+            if event.type in (
+                AppEventType.FINAL_ANSWER,
+                AppEventType.ERROR,
+                AppEventType.CANCELLED,
+            ):
+                Log.info(
+                    f"prompt 后台流事件: session={session_id}, type={event.type.value}",
+                    module=MODULE,
+                )
+    except Exception as exc:
+        Log.error(
+            f"prompt 后台流消费异常: session={session_id}, error={exc}",
+            module=MODULE,
+        )
 
 
 __all__ = ["create_prompt_router"]

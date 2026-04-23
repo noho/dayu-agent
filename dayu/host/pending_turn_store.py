@@ -209,6 +209,8 @@ class InMemoryPendingConversationTurnStore:
             resumable=bool(resumable),
             state=state,
             resume_source_json=normalized_resume_source_json,
+            resume_attempt_count=existing.resume_attempt_count,
+            last_resume_error_message=existing.last_resume_error_message,
             metadata=normalized_metadata,
         )
         self._records[updated.pending_turn_id] = updated

@@ -772,22 +772,34 @@ class SQLiteReplyOutboxStore:
             return existing
         normalized_error_message = _normalize_text(error_message, field_name="error_message")
         conn = self._host_store.get_connection()
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE reply_outbox
             SET state = ?,
                 last_error_message = ?,
                 updated_at = ?
-            WHERE delivery_id = ?
+            WHERE delivery_id = ? AND state != ?
             """,
             (
                 ReplyOutboxState.FAILED_RETRYABLE.value if retryable else ReplyOutboxState.FAILED_TERMINAL.value,
                 normalized_error_message,
                 _serialize_dt(_now_utc()),
                 existing.delivery_id,
+                ReplyOutboxState.DELIVERED.value,
             ),
         )
         conn.commit()
+        if cursor.rowcount == 0:
+            # SQL 守卫命中：record 已被并发推进到 DELIVERED，等价于 Python 层的检查失败
+            current = self.get_reply(existing.delivery_id)
+            if current is not None and current.state == ReplyOutboxState.DELIVERED:
+                raise ValueError(
+                    "已完成交付的 reply delivery 不能再标记失败: "
+                    f"delivery_id={delivery_id}"
+                )
+            raise RuntimeError(
+                f"reply delivery 状态守卫意外失败: delivery_id={existing.delivery_id}"
+            )
         updated = self.get_reply(existing.delivery_id)
         if updated is None:
             raise RuntimeError(f"reply delivery 更新后读取失败: {existing.delivery_id}")

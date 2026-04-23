@@ -8,19 +8,20 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, TypeVar, cast
 
-from dayu.contracts.agent_execution import ExecutionContract, deserialize_execution_contract_snapshot
+from dayu.contracts.agent_execution import ExecutionContract
+from dayu.contracts.agent_execution_serialization import deserialize_execution_contract_snapshot
 from dayu.contracts.events import AppEvent, AppResult
 from dayu.contracts.events import PublishedRunEventProtocol
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.contracts.infrastructure import ModelCatalogProtocol, WorkspaceResourcesProtocol
 from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, ReplyOutboxSubmitRequest
-from dayu.contracts.run import RunCancelReason, RunRecord, RunState
+from dayu.contracts.run import ACTIVE_STATES, RunCancelReason, RunRecord, RunState
 from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 from dayu.execution.options import ResolvedExecutionOptions
 from dayu.engine.tool_registry import ToolRegistry
 from dayu.host.concurrency import SQLiteConcurrencyGovernor
 from dayu.host.conversation_store import ConversationStore, FileConversationStore
-from dayu.host.executor import DefaultHostExecutor
+from dayu.host.executor import DefaultHostExecutor, should_delete_pending_turn_after_terminal_run
 from dayu.host.host_execution import HostExecutorProtocol, HostedRunContext, HostedRunSpec
 from dayu.host.host_store import HostStore
 from dayu.host.pending_turn_store import (
@@ -56,8 +57,13 @@ from dayu.workspace_paths import build_conversation_store_dir
 
 
 MODULE = "HOST"
+# 会话预览截断长度：控制 session 摘要、日志输出等场景下的 user_message 预览宽度，
+# 48 字符能覆盖常见一行标题，同时避免日志中占用过多宽度。
 _CONVERSATION_PREVIEW_MAX_CHARS = 48
 _CONVERSATION_PREVIEW_SUFFIX = "..."
+# 回复 outbox 清理阈值：启动调和时用来识别"陈旧"未送达的 reply delivery 记录。
+# 15 分钟覆盖典型外部信道（WeChat / Web SSE）的正常延迟，超过该阈值
+# 判定为上次进程异常退出时遗留，可安全丢弃，避免重启后重复投递历史消息。
 _STALE_REPLY_OUTBOX_MAX_AGE = timedelta(minutes=15)
 
 
@@ -247,6 +253,10 @@ class Host:
         if host_store_path is None:
             raise ValueError("默认 Host 装配缺少 host_store_path")
 
+        # 默认装配路径下 Host 与内部 ScenePreparer 共享同一 conversation_store 实例，
+        # 避免出现指向同一 workspace 目录的多实例（文件锁虽保证跨实例一致性，
+        # 但内存缓存/订阅状态无法共享，后续若引入 transcript 缓存会触发 stale read）。
+        shared_conversation_store = conversation_store or _build_default_conversation_store(workspace)
         default_components = _build_default_host_components(
             workspace=workspace,
             model_catalog=model_catalog,
@@ -254,6 +264,7 @@ class Host:
             host_store_path=host_store_path,
             lane_config=lane_config,
             event_bus=event_bus,
+            conversation_store=shared_conversation_store,
         )
         self._executor = executor or default_components._executor
         self._session_registry = session_registry or default_components._session_registry
@@ -263,7 +274,7 @@ class Host:
         self._reply_outbox_store = reply_outbox_store or default_components._reply_outbox_store
         self._event_bus = event_bus
         self._pending_turn_resume_max_attempts = pending_turn_resume_max_attempts
-        self._conversation_store = conversation_store or _build_default_conversation_store(workspace)
+        self._conversation_store = shared_conversation_store
 
     def create_session(
         self,
@@ -760,10 +771,19 @@ class Host:
         cancelled_ids: list[str] = []
         for run in active_runs:
             try:
+                # request_cancel 返回 False 有两种语义：
+                # 1) run 已被收敛为终态（state ∉ ACTIVE_STATES）；
+                # 2) run 仍 ACTIVE 但 cancel_requested_at 已被先前调用写入。
+                # 仅(1)能跳过 mark_cancelled；(2)仍需主动收敛，否则 owner 进程退出后
+                # 该 run 会被下次启动 cleanup 误判为 UNSETTLED orphan。
+                # 因此用 get_run 复核当前实际 state，而不是依赖 request_cancel 返回值。
                 self._run_registry.request_cancel(
                     run.run_id,
                     cancel_reason=RunCancelReason.USER_CANCELLED,
                 )
+                latest = self._run_registry.get_run(run.run_id)
+                if latest is None or latest.state not in ACTIVE_STATES:
+                    continue
                 self._run_registry.mark_cancelled(
                     run.run_id,
                     cancel_reason=RunCancelReason.USER_CANCELLED,
@@ -826,6 +846,65 @@ class Host:
                 module=MODULE,
             )
         return stale_ids
+
+    def cleanup_stale_pending_turns(self) -> list[str]:
+        """清理关联 run 已终态、且按调和规则应删除的 pending turn。
+
+        进程崩溃或启动调和路径上，``_reconcile_pending_turn_after_terminal_run``
+        可能未完成调用；而 Host 的 orphan run cleanup 只收敛 run 本身，
+        pending turn 会残留至下一次 resume 流程发现。本方法在启动/维护阶段
+        主动扫描所有 pending turn，按终态 run 调和规则做兜底清理。
+
+        Args:
+            无。
+
+        Returns:
+            被清理的 pending_turn_id 列表。
+
+        Raises:
+            无。失败仅 Log.warn。
+        """
+
+        try:
+            records = self._pending_turn_store.list_pending_turns()
+        except Exception as exc:  # pragma: no cover - 防御 DB 异常
+            Log.warn(f"Host 扫描 pending turn 失败: {exc}", module=MODULE)
+            return []
+        cleaned_ids: list[str] = []
+        for record in records:
+            try:
+                run = self._run_registry.get_run(record.source_run_id)
+            except Exception as exc:  # pragma: no cover - 防御 DB 异常
+                Log.warn(
+                    f"Host 查询 pending turn 源 run 失败: "
+                    f"pending_turn_id={record.pending_turn_id}, "
+                    f"source_run_id={record.source_run_id}, error={exc}",
+                    module=MODULE,
+                )
+                continue
+            if run is not None and not run.is_terminal():
+                continue
+            if not should_delete_pending_turn_after_terminal_run(
+                run=run,
+                resumable=record.resumable,
+            ):
+                continue
+            try:
+                self._pending_turn_store.delete_pending_turn(record.pending_turn_id)
+                cleaned_ids.append(record.pending_turn_id)
+            except Exception as exc:
+                Log.warn(
+                    f"Host 清理 stale pending turn 失败: "
+                    f"pending_turn_id={record.pending_turn_id}, error={exc}",
+                    module=MODULE,
+                )
+        if cleaned_ids:
+            Log.info(
+                f"Host 清理 stale pending turns: count={len(cleaned_ids)}, "
+                f"ids={','.join(cleaned_ids)}",
+                module=MODULE,
+            )
+        return cleaned_ids
 
     def get_all_lane_statuses(self) -> dict[str, LaneStatus]:
         """获取全部并发 lane 状态快照。
@@ -1000,7 +1079,7 @@ class Host:
                 max_attempts=self._pending_turn_resume_max_attempts,
             )
         except ValueError as exc:
-            self._delete_pending_turn(pending_turn_id)
+            # record_resume_attempt 内部已在达上限时原子删除记录；此处不再重复 DELETE，避免无意义 SQL 与模糊的代码意图。
             raise ValueError(
                 "pending conversation turn 已达到最大恢复次数，已删除: "
                 f"pending_turn_id={pending_turn_id}, session_id={session_id}"
@@ -1329,6 +1408,7 @@ def _build_default_host_components(
     host_store_path: Path,
     lane_config: dict[str, int] | None,
     event_bus: RunEventBusProtocol | None,
+    conversation_store: ConversationStore | None,
 ) -> _DefaultHostComponents:
     """构造 Host 默认内部子组件。
 
@@ -1339,6 +1419,8 @@ def _build_default_host_components(
         host_store_path: Host SQLite 路径。
         lane_config: 并发 lane 配置。
         event_bus: 事件总线。
+        conversation_store: Host 外层构造并共享的 conversation 存储；
+            传入后将由内部 ScenePreparer 与 Host 公共字段复用同一实例。
 
     Returns:
         默认子组件集合。
@@ -1364,6 +1446,7 @@ def _build_default_host_components(
         workspace=workspace,
         model_catalog=model_catalog,
         default_execution_options=default_execution_options,
+        conversation_store=conversation_store,
     )
     executor = DefaultHostExecutor(
         run_registry=run_registry,
@@ -1387,6 +1470,7 @@ def _build_default_scene_preparation(
     workspace: WorkspaceResourcesProtocol | None,
     model_catalog: ModelCatalogProtocol | None,
     default_execution_options: ResolvedExecutionOptions | None,
+    conversation_store: ConversationStore | None,
 ) -> DefaultScenePreparer | None:
     """构造 Host 默认 scene preparation。
 
@@ -1394,6 +1478,9 @@ def _build_default_scene_preparation(
         workspace: 工作区稳定资源。
         model_catalog: 模型目录。
         default_execution_options: 默认执行基线。
+        conversation_store: 由 Host 构造并共享的 conversation 存储；
+            传入 ``None`` 时 ScenePreparer 会回退为按 workspace 自建实例，
+            正式默认装配路径不应使用该回退。
     Returns:
         默认 scene preparation；若未提供执行路径所需稳定输入则返回 ``None``。
 
@@ -1420,6 +1507,7 @@ def _build_default_scene_preparation(
         model_catalog=model_catalog,
         default_execution_options=default_execution_options,
         tool_registry_factory=lambda: ToolRegistry(),
+        conversation_store=conversation_store,
     )
 
 

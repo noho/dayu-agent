@@ -15,7 +15,7 @@ import time
 from multiprocessing.process import BaseProcess
 from queue import Empty
 from threading import Lock
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING
 from urllib.parse import urlparse
 
 import requests
@@ -23,6 +23,14 @@ from dayu.contracts.cancellation import CancellationToken
 
 from dayu.log import Log
 from dayu.contracts.cancellation import CancelledError
+
+if TYPE_CHECKING:
+    # Playwright 是可选依赖，运行时不导入；TYPE_CHECKING 下仅引入模块级单例
+    # 需要的类型，让 IDE / pyright 能识别 Playwright 实例与 Browser 的真实类型。
+    # 注：函数参数（route / page / result_queue）保留 Any，避免与下游测试中
+    # duck-typed mock 产生冲突；类型收紧应作为单独的 medium 级任务处理。
+    from playwright.sync_api import Browser as _PlaywrightBrowser
+    from playwright.sync_api import Playwright as _PlaywrightInstance
 
 MODULE = "ENGINE.WEB_PLAYWRIGHT"
 
@@ -37,8 +45,8 @@ _DEFAULT_SEC_CH_UA = '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand"
 _DEFAULT_SEC_CH_UA_MOBILE = "?0"
 _DEFAULT_SEC_CH_UA_PLATFORM = '"macOS"'
 
-_PW_INSTANCE: Any | None = None
-_PW_BROWSER: Any | None = None
+_PW_INSTANCE: "_PlaywrightInstance | None" = None
+_PW_BROWSER: "_PlaywrightBrowser | None" = None
 _PW_BROWSER_KEY: tuple[str | None, bool] | None = None
 _PW_LOCK = Lock()
 _PW_RESULT_EXTRA_TIMEOUT_SECONDS = 10

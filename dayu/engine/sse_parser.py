@@ -358,6 +358,18 @@ class SSEStreamParser:
             if data_str.startswith(" "):
                 data_str = data_str[1:]
             event_data_lines.append(data_str)
+            # 流以未换行的 data 行结尾时下游若无法解析 JSON 仅会落成
+            # protocol_error，这里显式记录一次，便于排查生产环境中的
+            # 上游截断问题。
+            Log.warn(
+                f"{self._log_prefix} SSE 流末尾残留未换行 data 片段，长度={len(data_str)}",
+                module=MODULE,
+            )
+        elif trailing_line:
+            Log.debug(
+                f"{self._log_prefix} SSE 流末尾残留非 data 字节，长度={len(trailing_line)}",
+                module=MODULE,
+            )
 
         async for event in self._flush_event_data_lines(event_data_lines):
             yield event
@@ -665,13 +677,13 @@ class SSEStreamParser:
                 return
             args_delta = raw_args_delta
 
-        # 记录 id（首次出现即写入）
-        tc_id = tc.get("id")
-        if tc_id and not entry["id"]:
-            entry["id"] = tc_id
+        # 记录 id（首次出现即写入）；只接受非空字符串，非字符串或空字符串均视为未提供
+        tc_id_raw = tc.get("id")
+        if isinstance(tc_id_raw, str) and tc_id_raw and not entry["id"]:
+            entry["id"] = tc_id_raw
             if self._running_config.debug_tool_delta:
                 Log.debug(
-                    f"{self._log_prefix} 记录 tool_call_id: {tc_id}（index={tool_index}）",
+                    f"{self._log_prefix} 记录 tool_call_id: {tc_id_raw}（index={tool_index}）",
                     module=MODULE,
                 )
 
@@ -749,7 +761,7 @@ class SSEStreamParser:
             name = tc_data.get("name")
             args_buf = tc_data.get("arguments_buf", "")
 
-            if not tc_id:
+            if not isinstance(tc_id, str) or not tc_id:
                 validation_errors.append(f"tool_index {tool_index}: missing id")
                 continue
             if not name:

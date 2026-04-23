@@ -885,6 +885,14 @@ class HostGovernanceProtocol(Protocol):
         """
         ...
 
+    def cleanup_stale_pending_turns(self) -> list[str]:
+        """清理关联 run 已终态、且按调和规则应删除的 pending turn。
+
+        Returns:
+            被清理的 pending_turn_id 列表。
+        """
+        ...
+
     def get_all_lane_statuses(self) -> dict[str, LaneStatus]:
         """获取全部并发 lane 状态快照。"""
         ...
