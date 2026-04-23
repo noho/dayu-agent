@@ -502,3 +502,41 @@ def test_cleanup_stale_in_progress_skips_fresh_records(tmp_path: Path) -> None:
     refreshed = store.get_reply(submitted.delivery_id)
     assert refreshed is not None
     assert refreshed.state == ReplyOutboxState.DELIVERY_IN_PROGRESS
+
+
+@pytest.mark.unit
+def test_sqlite_mark_failed_sql_guard_prevents_overwriting_delivered(tmp_path: Path) -> None:
+    """mark_failed 在 Python 检查后到 UPDATE 之间若并发被推进到 DELIVERED，应被 SQL 守卫拦截。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLiteReplyOutboxStore(host_store)
+    submitted = store.submit_reply(_build_submit_request())
+    claimed = store.claim_reply(submitted.delivery_id)
+
+    # 模拟 TOCTOU 窗口：让 get_reply 返回 IN_PROGRESS 旧 snapshot，
+    # 但实际数据库已被并发推进到 DELIVERED。
+    delivered = store.mark_delivered(claimed.delivery_id)
+    assert delivered.state == ReplyOutboxState.DELIVERED
+
+    stale_snapshot = claimed
+    real_get_reply = store.get_reply
+    call_state: dict[str, int] = {"count": 0}
+
+    def fake_get_reply(delivery_id: str):
+        call_state["count"] += 1
+        if call_state["count"] == 1:
+            return stale_snapshot
+        return real_get_reply(delivery_id)
+
+    store.get_reply = fake_get_reply  # type: ignore[method-assign]
+    try:
+        with pytest.raises(ValueError, match="已完成交付"):
+            store.mark_failed(claimed.delivery_id, retryable=True, error_message="late failure")
+    finally:
+        store.get_reply = real_get_reply  # type: ignore[method-assign]
+
+    final = store.get_reply(claimed.delivery_id)
+    assert final is not None
+    assert final.state == ReplyOutboxState.DELIVERED
+    assert final.last_error_message is None

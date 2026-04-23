@@ -1019,3 +1019,95 @@ def test_resume_pending_turn_rejects_cross_session_resume(monkeypatch: pytest.Mo
 
     with pytest.raises(ValueError, match="不属于当前 session"):
         asyncio.run(_consume_submission(service, pending_turn_id, session_id="other-session"))
+
+
+@pytest.mark.unit
+def test_submit_turn_serializes_concurrent_requests_per_session() -> None:
+    """同 session 并发提交应按 FIFO 串行，不并行进入 Host 执行。"""
+
+    service, _ = _build_service()
+
+    async def scenario() -> tuple[list[float], list[float]]:
+        first = await service.submit_turn(
+            ChatTurnRequest(session_id="s1", user_text="q1", ticker="AAPL")
+        )
+        first_iter = first.event_stream.__aiter__()
+        # 先启动第一条事件流的首次迭代，让 session 锁被 acquire。
+        first_first_event = await first_iter.__anext__()
+        assert first_first_event is not None
+
+        second = await service.submit_turn(
+            ChatTurnRequest(session_id="s1", user_text="q2", ticker="AAPL")
+        )
+        second_iter = second.event_stream.__aiter__()
+
+        second_completed: list[float] = []
+
+        async def consume_second() -> None:
+            first_event = await second_iter.__anext__()
+            assert first_event is not None
+            async for _ in second_iter:
+                pass
+            second_completed.append(asyncio.get_event_loop().time())
+
+        task = asyncio.create_task(consume_second())
+        await asyncio.sleep(0.05)
+        # 第一条流尚未 yield 完，第二条的 __anext__ 不应被调度完成。
+        assert not task.done(), "第二条事件流未被 session 锁阻塞"
+
+        first_completed: list[float] = []
+        async for _ in first_iter:
+            pass
+        first_completed.append(asyncio.get_event_loop().time())
+        await task
+        return first_completed, second_completed
+
+    first_done, second_done = asyncio.run(scenario())
+    assert first_done and second_done
+    assert first_done[0] <= second_done[0]
+
+
+@pytest.mark.unit
+def test_submit_turn_abandoned_submission_does_not_leak_session_lock() -> None:
+    """调用方放弃消费首个 submission 的 event_stream，锁不应泄漏到后续提交。"""
+
+    service, _ = _build_service()
+
+    async def scenario() -> None:
+        # 第一次拿到 submission 后直接丢弃，不消费 event_stream——模拟上层异常退出。
+        await service.submit_turn(
+            ChatTurnRequest(session_id="s1", user_text="q1", ticker="AAPL")
+        )
+        # 第二次提交必须在合理时间内拿到 submission，不应被遗留锁卡死。
+        second = await asyncio.wait_for(
+            service.submit_turn(
+                ChatTurnRequest(session_id="s1", user_text="q2", ticker="AAPL")
+            ),
+            timeout=0.5,
+        )
+        async for _ in second.event_stream:
+            pass
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.unit
+def test_submit_turn_session_locks_do_not_accumulate_after_consumption() -> None:
+    """多个 session 正常完成后，_session_locks 中对应条目应被 GC 自动清理。"""
+
+    import gc
+
+    service, _ = _build_service()
+
+    async def scenario() -> None:
+        for _ in range(3):
+            submission = await service.submit_turn(
+                ChatTurnRequest(session_id=None, user_text="q", ticker="AAPL")
+            )
+            async for _ in submission.event_stream:
+                pass
+
+    asyncio.run(scenario())
+    # 驱动 GC，让 WeakValueDictionary 清理无强引用的锁条目。
+    gc.collect()
+    assert len(service._session_locks) == 0

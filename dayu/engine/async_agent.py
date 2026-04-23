@@ -581,7 +581,20 @@ class AsyncAgent:
                     yield self._annotate_event(event, run_id=run_id, iteration_id=iteration_id)
                 
                 elif event.type == EventType.TOOL_CALL_RESULT:
-                    tool_call_id = event.data["id"]
+                    if not isinstance(event.data, dict):
+                        Log.warn(
+                            f"[{iteration_id}] TOOL_CALL_RESULT 事件 data 非 dict，已跳过: type={type(event.data).__name__}",
+                            module=MODULE,
+                        )
+                        continue
+                    raw_tool_call_id = event.data.get("id")
+                    if not isinstance(raw_tool_call_id, str) or not raw_tool_call_id:
+                        Log.warn(
+                            f"[{iteration_id}] TOOL_CALL_RESULT 事件缺少有效 id，已跳过",
+                            module=MODULE,
+                        )
+                        continue
+                    tool_call_id = raw_tool_call_id
                     tool_calls_data.setdefault(tool_call_id, {})["id"] = tool_call_id
                     tool_calls_data[tool_call_id]["name"] = event.data.get("name", "")
                     tool_calls_data[tool_call_id]["arguments"] = event.data.get("arguments", {})

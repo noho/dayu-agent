@@ -148,6 +148,7 @@ from .sse_parser import SSEStreamParser
 MODULE = "ENGINE.ASYNC_OPENAI_RUNNER"
 
 from dayu.engine.cancellation import await_or_cancel as _await_or_cancel
+from dayu.engine.cancellation import cancel_task_and_wait
 from dayu.engine.cancellation import create_cancellation_waiter as _create_cancellation_waiter
 
 
@@ -792,7 +793,46 @@ class AsyncOpenAIRunner:
             asyncio.create_task(self._run_tool_call(tc, request_id, trace_meta))
             for tc in ordered_calls
         ]
-        results = await asyncio.gather(*tasks) if tasks else []
+        if not tasks:
+            results: list[Dict[str, Any]] = []
+        else:
+            # 取消信号到达时，立刻取消未完成的工具任务并退出，
+            # 不再等待 tool_timeout_seconds 触发逐个工具的超时回收。
+            waiter, unregister_waiter = _create_cancellation_waiter(self.cancellation_token)
+            try:
+                if waiter is None:
+                    results = await asyncio.gather(*tasks)
+                else:
+                    gather_task = asyncio.ensure_future(asyncio.gather(*tasks))
+                    try:
+                        done, _pending = await asyncio.wait(
+                            {gather_task, waiter},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if (
+                            waiter in done
+                            and self.cancellation_token is not None
+                            and self.cancellation_token.is_cancelled()
+                            and not gather_task.done()
+                        ):
+                            for task in tasks:
+                                if not task.done():
+                                    task.cancel()
+                            await cancel_task_and_wait(gather_task)
+                            Log.info(
+                                f"{log_prefix} 工具批次因取消信号提前中止: {len(ordered_calls)} 个待完成",
+                                module=MODULE,
+                            )
+                            raise EngineCancelledError("tool batch cancelled")
+                        results = await gather_task
+                    except asyncio.CancelledError:
+                        await cancel_task_and_wait(gather_task)
+                        raise
+            finally:
+                if unregister_waiter is not None:
+                    unregister_waiter()
+                if waiter is not None and not waiter.done():
+                    waiter.cancel()
 
         counts = {"ok": 0, "error": 0, "timeout": 0, "cancelled": 0}
         for result in results:
@@ -1425,7 +1465,24 @@ class AsyncOpenAIRunner:
             return
         
         # 只处理第一个回答（如果 n > 1，其余候选回答会被忽略，请求时已警告）
-        message = choices[0].get("message", {})
+        first_choice = choices[0]
+        if not isinstance(first_choice, dict):
+            yield self._build_non_stream_error_event(
+                trace_meta=trace_meta,
+                log_message=f"{log_prefix} choices[0] 非 dict（实际类型 {type(first_choice).__name__}），无法解析（error_type=response_error）",
+                message="Invalid choices[0] structure",
+                error_type="response_error",
+            )
+            return
+        message = first_choice.get("message", {})
+        if not isinstance(message, dict):
+            yield self._build_non_stream_error_event(
+                trace_meta=trace_meta,
+                log_message=f"{log_prefix} choices[0].message 非 dict（实际类型 {type(message).__name__}），无法解析（error_type=response_error）",
+                message="Invalid choices[0].message structure",
+                error_type="response_error",
+            )
+            return
         
         # 内容
         content = message.get("content")

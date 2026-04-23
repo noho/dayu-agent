@@ -397,6 +397,25 @@ class TestAsyncOpenAIRunnerProcessNonStream:
         error_events = [e for e in events if e.type == EventType.ERROR]
         assert len(error_events) > 0
 
+    async def test_process_non_stream_message_field_not_dict(self):
+        """choices[0].message 非 dict（例如字符串）时应产出 response_error，不抛 AttributeError。"""
+        runner = AsyncOpenAIRunner(
+            endpoint_url="https://api.example.com",
+            model="gpt-4",
+            headers={},
+        )
+
+        result = {"choices": [{"message": "oops"}]}
+
+        events = []
+        trace_meta = {"run_id": "run_test", "iteration_id": "run_test_iteration", "request_id": "test_request"}
+        async for event in runner._process_non_stream(result, "test_request", trace_meta):
+            events.append(event)
+
+        assert events
+        assert events[0].type == EventType.ERROR
+        assert events[0].metadata.get("error_type") == "response_error"
+
     async def test_process_content_none(self):
         """测试 content 为 None 时归一为字符串"""
         runner = AsyncOpenAIRunner(
