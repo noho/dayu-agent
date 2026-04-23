@@ -10,9 +10,6 @@ from pathlib import Path
 from typing import Protocol
 
 from dayu.contracts.session import SessionSource
-from dayu.execution.options import ResolvedExecutionOptions
-from dayu.fins.service_runtime import DefaultFinsRuntime
-from dayu.host import Host
 from dayu.log import Log
 from dayu.services import prepare_host_runtime_dependencies
 from dayu.services.chat_service import ChatService
@@ -26,10 +23,9 @@ from dayu.services.contracts import (
     ReplyDeliveryView,
 )
 from dayu.services.reply_delivery_service import ReplyDeliveryService
-from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
+from dayu.services.startup_preparation import PreparedHostRuntimeDependencies
 from dayu.startup.config_file_resolver import ConfigFileResolver
 from dayu.startup.config_loader import ConfigLoader
-from dayu.startup.workspace import WorkspaceResources
 from dayu.wechat.arg_parsing import (
     DEFAULT_TYPING_INTERVAL_SEC,
     DEFAULT_WECHAT_DELIVERY_MAX_ATTEMPTS,
@@ -647,38 +643,26 @@ def _create_login_daemon(args: argparse.Namespace, context: ResolvedWechatContex
 
 def _prepare_wechat_host_dependencies(
     context: ResolvedWechatContext,
-) -> tuple[
-    WorkspaceResources,
-    ResolvedExecutionOptions,
-    SceneExecutionAcceptancePreparer,
-    Host,
-    DefaultFinsRuntime,
-]:
+) -> PreparedHostRuntimeDependencies:
     """准备 WeChat 的 Host 级稳定依赖。
 
     Args:
         context: 已解析的共享上下文。
 
     Returns:
-        ``workspace``、默认执行选项、scene preparation、Host 与 FinsRuntime。
+        Service 层封装的共享依赖集合（包含 workspace、默认执行选项、
+        scene preparation、Host 网关与 FinsRuntime）。
 
     Raises:
         无。
     """
 
-    prepared = prepare_host_runtime_dependencies(
+    return prepare_host_runtime_dependencies(
         workspace_root=context.workspace_root,
         config_root=context.config_root,
         execution_options=context.execution_options,
         runtime_label="WeChat Host runtime",
         log_module=MODULE,
-    )
-    return (
-        prepared.workspace,
-        prepared.default_execution_options,
-        prepared.scene_execution_acceptance_preparer,
-        prepared.host,
-        prepared.fins_runtime,
     )
 
 
@@ -696,13 +680,10 @@ def _create_run_daemon(args: argparse.Namespace, context: ResolvedWechatContext)
         无。
     """
 
-    (
-        _workspace,
-        _default_execution_options,
-        scene_execution_acceptance_preparer,
-        host,
-        fins_runtime,
-    ) = _prepare_wechat_host_dependencies(context)
+    prepared = _prepare_wechat_host_dependencies(context)
+    scene_execution_acceptance_preparer = prepared.scene_execution_acceptance_preparer
+    host = prepared.host
+    fins_runtime = prepared.fins_runtime
     scene_model = scene_execution_acceptance_preparer.resolve_scene_model("wechat", context.execution_options)
     Log.info(f"工作目录: {context.workspace_root}", module=MODULE)
     Log.info(

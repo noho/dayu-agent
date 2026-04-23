@@ -14,14 +14,10 @@ from pathlib import Path
 import unicodedata
 from typing import Protocol
 
-from dayu.host import Host, resolve_host_config
-from dayu.services.host_admin_service import HostAdminService
 from dayu.services.protocols import HostAdminServiceProtocol
+from dayu.services.startup_preparation import prepare_host_admin_dependencies
 from dayu.cli.dependency_setup import setup_loglevel
-from dayu.startup.config_file_resolver import ConfigFileResolver
-from dayu.startup.config_loader import ConfigLoader
 from dayu.startup.paths import StartupPaths
-from dayu.startup.paths import resolve_startup_paths
 
 _SESSION_ID_COLUMN_WIDTH = 36
 _SESSION_SOURCE_COLUMN_WIDTH = 10
@@ -92,27 +88,13 @@ def _build_host_runtime(args: argparse.Namespace) -> HostCliRuntime:
     workspace_root = Path(str(getattr(args, "base", "./workspace"))).expanduser().resolve()
     raw_config_root = getattr(args, "config", None)
     config_root = Path(str(raw_config_root)).expanduser().resolve() if raw_config_root else None
-    paths = resolve_startup_paths(
+    dependencies = prepare_host_admin_dependencies(
         workspace_root=workspace_root,
         config_root=config_root,
     )
-    resolver = ConfigFileResolver(paths.config_root)
-    config_loader = ConfigLoader(resolver)
-    run_config = config_loader.load_run_config()
-    host_config = resolve_host_config(
-        workspace_root=paths.workspace_root,
-        run_config=run_config,
-        explicit_lane_config=None,
-    )
-    host = Host(
-        host_store_path=host_config.store_path,
-        lane_config=host_config.lane_config,
-        pending_turn_resume_max_attempts=host_config.pending_turn_resume_max_attempts,
-        event_bus=None,
-    )
     return HostCliRuntime(
-        paths=paths,
-        host_admin_service=HostAdminService(host=host),
+        paths=dependencies.paths,
+        host_admin_service=dependencies.host_admin_service,
     )
 
 

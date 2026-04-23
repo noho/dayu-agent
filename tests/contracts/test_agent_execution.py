@@ -21,6 +21,8 @@ from dayu.contracts.agent_execution import (
     ExecutionPermissions,
     ExecutionWebPermissions,
     ScenePreparationSpec,
+)
+from dayu.contracts.agent_execution_serialization import (
     deserialize_execution_contract_snapshot,
     serialize_execution_contract_snapshot,
 )

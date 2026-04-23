@@ -24,9 +24,22 @@ from dayu.execution.options import build_base_execution_options, merge_execution
 from dayu.startup.config_file_resolver import ConfigFileResolver
 from dayu.startup.config_loader import ConfigLoader
 from dayu.startup.model_catalog import ConfigLoaderModelCatalog
-from dayu.startup.paths import resolve_startup_paths
+from dayu.startup.paths import StartupPaths, resolve_startup_paths
 from dayu.startup.prompt_assets import FilePromptAssetStore
 from dayu.startup.workspace import WorkspaceResources
+
+
+@dataclass(frozen=True)
+class PreparedHostAdminDependencies:
+    """Host 管理子命令使用的轻量依赖集合。
+
+    Args:
+        paths: 启动期解析出的路径信息（供 CLI 展示）。
+        host_admin_service: 已装配的宿主管理服务。
+    """
+
+    paths: StartupPaths
+    host_admin_service: HostAdminService
 
 
 @dataclass(frozen=True)
@@ -166,8 +179,57 @@ def prepare_host_runtime_dependencies(
     )
 
 
+def prepare_host_admin_dependencies(
+    *,
+    workspace_root: Path,
+    config_root: Path | None,
+) -> PreparedHostAdminDependencies:
+    """为 Host 管理子命令准备轻量依赖。
+
+    本入口不构造执行期所需的 scene preparer 与 fins runtime，
+    仅装配 Host 并封装出 `HostAdminService`，供 CLI 展示与运维命令使用。
+
+    Args:
+        workspace_root: 工作区根目录。
+        config_root: 可选配置根目录。
+
+    Returns:
+        已装配的宿主管理服务以及配套路径信息。
+
+    Raises:
+        TypeError: `run.json` 配置结构非法时抛出。
+        ValueError: `run.json` 配置值非法时抛出。
+    """
+
+    paths = resolve_startup_paths(
+        workspace_root=workspace_root,
+        config_root=config_root,
+    )
+    resolver = ConfigFileResolver(paths.config_root)
+    config_loader = ConfigLoader(resolver)
+    run_config = config_loader.load_run_config()
+    host_config = resolve_host_config(
+        workspace_root=paths.workspace_root,
+        run_config=run_config,
+        service_lane_defaults=dict(SERVICE_DEFAULT_LANE_CONFIG),
+        explicit_lane_config=None,
+    )
+    host = Host(
+        host_store_path=host_config.store_path,
+        lane_config=host_config.lane_config,
+        pending_turn_resume_max_attempts=host_config.pending_turn_resume_max_attempts,
+        event_bus=None,
+    )
+    return PreparedHostAdminDependencies(
+        paths=paths,
+        host_admin_service=HostAdminService(host=host),
+    )
+
+
 __all__ = [
+    "PreparedHostAdminDependencies",
     "PreparedHostRuntimeDependencies",
+    "prepare_host_admin_dependencies",
     "prepare_host_runtime_dependencies",
     "prepare_scene_execution_acceptance_preparer",
 ]

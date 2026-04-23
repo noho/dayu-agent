@@ -8,7 +8,8 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, TypeVar, cast
 
-from dayu.contracts.agent_execution import ExecutionContract, deserialize_execution_contract_snapshot
+from dayu.contracts.agent_execution import ExecutionContract
+from dayu.contracts.agent_execution_serialization import deserialize_execution_contract_snapshot
 from dayu.contracts.events import AppEvent, AppResult
 from dayu.contracts.events import PublishedRunEventProtocol
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext

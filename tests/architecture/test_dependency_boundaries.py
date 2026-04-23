@@ -454,6 +454,7 @@ def test_execution_contract_is_only_constructed_in_contract_preparation_module()
     allowed_files = {
         (_APP_SRC / "services" / "contract_preparation.py").resolve(),
         (_APP_SRC / "contracts" / "agent_execution.py").resolve(),
+        (_APP_SRC / "contracts" / "agent_execution_serialization.py").resolve(),
     }
     offenders: list[str] = []
     for file_path in _iter_python_files(_APP_SRC):
