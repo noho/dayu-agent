@@ -823,6 +823,44 @@ class TestAsyncAgentRun:
         assert '"content_base64": "YWJj"' in tool_message["content"]
         assert '"content_encoding": "base64"' in tool_message["content"]
 
+    async def test_agent_injects_empty_result_placeholder_preserving_tool_call_pairing(self):
+        """工具结果为空字符串时仍须注入占位 tool message，保持 assistant.tool_calls 配对完整。
+
+        OpenAI 协议要求 assistant.tool_calls 的每个条目都有对应的 role=tool
+        message；若空结果被跳过会破坏配对（finding 081）。
+        """
+
+        tool_args = {"path": "empty.bin"}
+        runner = DummyRunner([
+            [
+                tool_call_dispatched("call_empty", "tool", tool_args, index_in_iteration=0),
+                tool_call_result(
+                    "call_empty",
+                    {"ok": True, "value": ""},
+                    name="tool",
+                    arguments=tool_args,
+                    index_in_iteration=0,
+                ),
+                tool_calls_batch_done(["call_empty"], ok=1, error=0, timeout=0, cancelled=0),
+                content_complete(""),
+                done_event(),
+            ],
+            [content_delta("done"), content_complete("done"), done_event()],
+        ])
+        agent = AsyncAgent(runner)
+
+        async for _ in agent.run("test prompt"):
+            pass
+
+        second_messages = runner.calls[1]["messages"]
+        tool_messages = [m for m in second_messages if m.get("role") == "tool"]
+        assistant_message = next(m for m in second_messages if m.get("role") == "assistant")
+        tool_calls = assistant_message.get("tool_calls", [])
+        assert len(tool_messages) == len(tool_calls) == 1
+        assert tool_messages[0].get("tool_call_id") == "call_empty"
+        # 协议要求 tool message.content 非空：空结果注入占位文案。
+        assert tool_messages[0].get("content")
+
     async def test_agent_predictively_caps_tool_results_before_next_iteration(self):
         """验证 Agent 会在注入下一轮消息前按预算预测性截断工具结果。"""
 

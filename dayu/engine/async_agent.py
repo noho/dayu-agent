@@ -1346,10 +1346,14 @@ def _compact_messages(
     result: List[AgentMessage] = []
     start_idx = 0
 
-    # 保留 system message
-    if messages and messages[0].get("role") == "system":
-        result.append(messages[0])
-        start_idx = 1
+    # 保留连续前导 system 段（static system prompt + episodic memory block 等）。
+    # Host 层可能注入多条 system message（例如 build_messages 会追加一条
+    # `[Conversation Memory]` block）。这些都属于"框架条件"，不能落入中段被压缩；
+    # 否则 episodic memory 会被降级为"摘要之摘要"，丢失 pinned_state / episode
+    # title 等结构化信息。
+    while start_idx < len(messages) and messages[start_idx].get("role") == "system":
+        result.append(messages[start_idx])
+        start_idx += 1
 
     # 保留首条 user message
     first_user_idx = None

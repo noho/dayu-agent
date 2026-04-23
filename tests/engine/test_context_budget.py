@@ -280,6 +280,26 @@ class TestCompactMessages:
         assert len(result) == 7
         assert compacted is True
 
+    def test_compaction_preserves_leading_system_cluster(self) -> None:
+        """连续前导 system 段（system prompt + memory block）整体保留，不被压缩。"""
+        messages: list[AgentMessage] = [
+            {"role": "system", "content": "static system prompt"},
+            {"role": "system", "content": "[Conversation Memory] episodic block"},
+            {"role": "user", "content": "task goal"},
+        ]
+        for i in range(10):
+            messages.append({"role": "assistant", "content": f"resp_{i}", "tool_calls": []})
+            messages.append({"role": "user", "content": f"follow_up_{i}"})
+
+        result, compacted = _compact_messages(messages, recent_keep=4)
+        assert compacted is True
+        # 前两条必须仍为 system，且第二条为 memory block 原文（未被摘要）
+        assert result[0].get("role") == "system"
+        assert result[1].get("role") == "system"
+        assert "episodic block" in _message_content(result[1])
+        # 第三条为首条 user，保留任务目标
+        assert result[2] == {"role": "user", "content": "task goal"}
+
     def test_compaction_preserves_recent_tail(self) -> None:
         """压缩保留最近 N 条消息不变。"""
         messages: list[AgentMessage] = [
