@@ -1147,7 +1147,39 @@ class AsyncOpenAIRunner:
                     return
                 finally:
                     if response_entered and post_context is not None:
-                        await post_context.__aexit__(None, None, None)
+                        try:
+                            await post_context.__aexit__(None, None, None)
+                        except (EngineCancelledError, asyncio.CancelledError):
+                            # 取消语义必须穿透 cleanup，不能被吞；协作式取消依赖这条透传。
+                            raise
+                        except Exception as cleanup_exc:
+                            # aiohttp release 失败 = 连接可能未归还或被归还为脏连接；
+                            # 1) 把 cleanup 异常降级为 warn，避免覆盖已 yield 的业务事件与真正的业务异常；
+                            # 2) 废弃当前 Runner 级 session，强制下一轮 / 下一次 call() 重建，防止
+                            #    后续请求继续复用受污染的连接池。
+                            Log.warn(
+                                f"{log_prefix} HTTP 响应上下文释放异常"
+                                f"（attempt={attempt + 1}，连接可能未归还，作废当前 HTTP session）: {cleanup_exc}",
+                                module=MODULE,
+                            )
+                            stale_session = self._session
+                            self._session = None
+                            if stale_session is not None:
+                                try:
+                                    if not bool(getattr(stale_session, "closed", False)):
+                                        await stale_session.close()
+                                except (EngineCancelledError, asyncio.CancelledError):
+                                    raise
+                                except Exception as close_exc:
+                                    # 脏 session 关闭再失败属于 aiohttp 内部问题，这里只记日志、不向上传播，
+                                    # 让 Runner 继续使用后续新建的 session。
+                                    Log.warn(
+                                        f"{log_prefix} 作废 HTTP session 时关闭失败（忽略并丢弃）: {close_exc}",
+                                        module=MODULE,
+                                    )
+                            # 若外层决策是 continue 去重试，下一轮 session.post(...) 必须看到新 session，
+                            # 所以同步更新循环内的局部 session 绑定。
+                            session = self._ensure_session()
         finally:
             if unregister_cancellation_waiter is not None:
                 unregister_cancellation_waiter()
