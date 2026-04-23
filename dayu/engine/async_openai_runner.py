@@ -1532,7 +1532,9 @@ class AsyncOpenAIRunner:
                     )
                     return
 
-                tc_id = tc.get("id", "")
+                # id 必须为非空字符串；null / 非字符串 / 空串 统一归一化为 "" 由下方校验拦截
+                raw_tc_id = tc.get("id")
+                tc_id = raw_tc_id if isinstance(raw_tc_id, str) else ""
                 func = tc.get("function", {})
                 if not isinstance(func, dict):
                     yield self._build_non_stream_error_event(

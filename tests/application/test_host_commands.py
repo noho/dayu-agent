@@ -405,7 +405,12 @@ def test_run_cancel_command_supports_session_scope(
 ) -> None:
     """验证 cancel --session 会调用批量取消分支。"""
 
-    fake_runtime = SimpleNamespace(host_admin_service=SimpleNamespace(cancel_session_runs=lambda _session_id: ["run-1", "run-2"]))
+    fake_runtime = SimpleNamespace(
+        host_admin_service=SimpleNamespace(
+            get_session=lambda _session_id: SimpleNamespace(session_id=_session_id),
+            cancel_session_runs=lambda _session_id: ["run-1", "run-2"],
+        )
+    )
     monkeypatch.setattr(host_commands_module, "_build_host_runtime", lambda _args: fake_runtime)
 
     exit_code = host_commands_module._run_cancel_command(
@@ -420,6 +425,35 @@ def test_run_cancel_command_supports_session_scope(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "2 个 run" in captured.out
+
+
+@pytest.mark.unit
+def test_run_cancel_command_session_not_found_returns_nonzero_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """验证 cancel --session 对不存在 session_id 返回非零退出码并打印错误。"""
+
+    fake_runtime = SimpleNamespace(
+        host_admin_service=SimpleNamespace(
+            get_session=lambda _session_id: None,
+            cancel_session_runs=lambda _session_id: pytest.fail("不应进入批量取消分支"),
+        )
+    )
+    monkeypatch.setattr(host_commands_module, "_build_host_runtime", lambda _args: fake_runtime)
+
+    exit_code = host_commands_module._run_cancel_command(
+        argparse.Namespace(
+            session_id="session-missing",
+            run_id=None,
+            base="./workspace",
+            config=None,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "session session-missing 不存在" in captured.err
 
 
 @pytest.mark.unit

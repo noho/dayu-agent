@@ -4283,6 +4283,14 @@ def test_table_classification_numeric_and_quality_helpers() -> None:
     assert sec_table_extraction._normalize_numeric_cell_text("+123") == "123"
     assert sec_table_extraction._normalize_numeric_cell_text("$") is None
 
+    # 回归守护：逗号角色识别（finding 008）。
+    # 欧洲格式 "1,23" 必须识别为 1.23；千分位 "1,234" 必须识别为 1234；
+    # 复合格式在点逗并存时按最后出现的分隔符判别小数位。
+    assert sec_table_extraction._normalize_numeric_cell_text("1,23") == "1.23"
+    assert sec_table_extraction._normalize_numeric_cell_text("1,234") == "1234"
+    assert sec_table_extraction._normalize_numeric_cell_text("1.234,56") == "1234.56"
+    assert sec_table_extraction._normalize_numeric_cell_text("1,234.56") == "1234.56"
+
     # 回归守护：脚注剥离规则只能匹配单字母脚注（如 "1,234a"），
     # 必须保留多字母单位/缩写后缀（bps / mm 等），否则会把语义上的非纯数字单元
     # 误规范化为数字，污染下游表格解析。详见 medium 文件 finding 025。

@@ -69,8 +69,11 @@ def create_chat_router(
     async def submit_chat_turn(body: ChatRequest) -> ChatResponse:
         """提交 chat turn，结果通过 SSE 推送。"""
 
+        # 把空字符串与全空白都归一化为 None：CLI/WeChat 入口同样会把 blank 视为"未提供 session_id"，
+        # 否则下游 SessionCoordinator AUTO 策略会把字面量 " " 当成既有 session，落到 SessionRegistry 查空白 ID。
+        normalized_session_id = (body.session_id or "").strip() or None
         request = ChatTurnRequest(
-            session_id=body.session_id,
+            session_id=normalized_session_id,
             user_text=body.user_text,
             ticker=body.ticker,
             scene_name=body.scene_name,
@@ -171,6 +174,12 @@ async def _consume_stream_inner(
 
     reply_content = final_reply_content or "".join(content_chunks).strip()
     if not reply_content or not source_run_id:
+        # reply_content 已生成但 run_id 缺失属于 Service 层契约违反，仅静默 return 会掩盖上游事件 meta 丢失的 bug。
+        if reply_content and not source_run_id:
+            Log.warning(
+                f"chat 流产生了回复内容但事件 meta 缺少 run_id，已跳过 reply 投递: session={session_id}",
+                module=MODULE,
+            )
         return
 
     reply_delivery_service.submit_reply_for_delivery(

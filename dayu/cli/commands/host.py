@@ -364,6 +364,10 @@ def _run_cancel_command(args: argparse.Namespace) -> int:
     service = _resolve_host_admin_service(runtime)
 
     if getattr(args, "session_id", None):
+        # 先校验 session 存在，避免对拼写错误的 session_id 静默返回 0，让用户误以为操作成功。
+        if service.get_session(args.session_id) is None:
+            print(f"session {args.session_id} 不存在", file=sys.stderr)
+            return 1
         cancelled_run_ids = service.cancel_session_runs(args.session_id)
         print(f"已请求取消 session {args.session_id} 下 {len(cancelled_run_ids)} 个 run")
         return 0

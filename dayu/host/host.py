@@ -1079,7 +1079,7 @@ class Host:
                 max_attempts=self._pending_turn_resume_max_attempts,
             )
         except ValueError as exc:
-            self._delete_pending_turn(pending_turn_id)
+            # record_resume_attempt 内部已在达上限时原子删除记录；此处不再重复 DELETE，避免无意义 SQL 与模糊的代码意图。
             raise ValueError(
                 "pending conversation turn 已达到最大恢复次数，已删除: "
                 f"pending_turn_id={pending_turn_id}, session_id={session_id}"

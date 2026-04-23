@@ -499,6 +499,8 @@ class TestAsyncOpenAIRunnerProcessNonStream:
             [{"function": {"name": "tool", "arguments": "{}"}}],
             [{"id": "call_1", "function": {"name": "tool", "arguments": "{"}}],
             [{"id": "call_1", "function": {"name": "tool", "arguments": "[]"}}],
+            [{"id": None, "function": {"name": "tool", "arguments": "{}"}}],
+            [{"id": 123, "function": {"name": "tool", "arguments": "{}"}}],
         ],
     )
     async def test_process_tool_calls_incomplete_or_invalid(self, tool_calls):

@@ -677,13 +677,13 @@ class SSEStreamParser:
                 return
             args_delta = raw_args_delta
 
-        # 记录 id（首次出现即写入）
-        tc_id = tc.get("id")
-        if tc_id and not entry["id"]:
-            entry["id"] = tc_id
+        # 记录 id（首次出现即写入）；只接受非空字符串，非字符串或空字符串均视为未提供
+        tc_id_raw = tc.get("id")
+        if isinstance(tc_id_raw, str) and tc_id_raw and not entry["id"]:
+            entry["id"] = tc_id_raw
             if self._running_config.debug_tool_delta:
                 Log.debug(
-                    f"{self._log_prefix} 记录 tool_call_id: {tc_id}（index={tool_index}）",
+                    f"{self._log_prefix} 记录 tool_call_id: {tc_id_raw}（index={tool_index}）",
                     module=MODULE,
                 )
 
@@ -761,7 +761,7 @@ class SSEStreamParser:
             name = tc_data.get("name")
             args_buf = tc_data.get("arguments_buf", "")
 
-            if not tc_id:
+            if not isinstance(tc_id, str) or not tc_id:
                 validation_errors.append(f"tool_index {tool_index}: missing id")
                 continue
             if not name:

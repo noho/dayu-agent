@@ -633,6 +633,44 @@ def test_chat_route_creates_task_only_after_successful_submit(monkeypatch: pytes
 
 
 @pytest.mark.unit
+def test_chat_route_normalizes_empty_session_id_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """空字符串 / 全空白 session_id 都应在路由层归一化为 None，避免下游出现未定义行为。"""
+
+    _install_fake_route_modules(monkeypatch)
+    monkeypatch.setattr(
+        "dayu.web.routes.chat.asyncio.create_task",
+        lambda coroutine: _record_background_task([], coroutine),
+    )
+
+    captured_requests: list[object] = []
+
+    class _CapturingChatService:
+        async def submit_turn(self, request):
+            captured_requests.append(request)
+            return ChatTurnSubmission(session_id="session_new", event_stream=_empty_app_stream())
+
+    class _NoopReplyDeliveryService:
+        def submit_reply_for_delivery(self, request):
+            del request
+
+    router = cast(
+        _CapturingRouter,
+        create_chat_router(
+            cast(ChatServiceProtocol, _CapturingChatService()),
+            cast(ReplyDeliveryServiceProtocol, _NoopReplyDeliveryService()),
+        ),
+    )
+    handler = cast(Any, router.handlers["/chat"])
+
+    asyncio.run(handler(_ChatBody(user_text="hello", session_id="")))
+    asyncio.run(handler(_ChatBody(user_text="hello", session_id="   ")))
+    asyncio.run(handler(_ChatBody(user_text="hello", session_id="\t\n")))
+
+    assert len(captured_requests) == 3
+    assert all(getattr(req, "session_id") is None for req in captured_requests)
+
+
+@pytest.mark.unit
 def test_chat_route_maps_invalid_submission_to_500_without_creating_task(monkeypatch: pytest.MonkeyPatch) -> None:
     """chat 路由应把非法 Service 返回值映射为 500，且不启动后台任务。"""
 

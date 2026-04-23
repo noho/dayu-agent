@@ -235,6 +235,40 @@ def test_chat_stream_consumer_submits_web_reply_outbox() -> None:
 
 
 @pytest.mark.unit
+def test_chat_stream_consumer_warns_when_reply_ready_but_run_id_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """有 reply 但事件 meta 缺 run_id 时应发出 warning，且不写 reply outbox。"""
+
+    service = _build_reply_delivery_service()
+
+    async def _stream():
+        yield AppEvent(type=AppEventType.CONTENT_DELTA, payload="前半段", meta={})
+        yield AppEvent(
+            type=AppEventType.FINAL_ANSWER,
+            payload={"content": "最终答案", "degraded": False},
+            meta={},
+        )
+
+    warnings: list[str] = []
+    from dayu.log import Log as _Log
+
+    monkeypatch.setattr(_Log, "warning", lambda message, *, module=None: warnings.append(str(message)))
+
+    asyncio.run(
+        _consume_stream(
+            _stream(),
+            reply_delivery_service=service,
+            session_id="session_web_missing_run",
+            scene_name="web_chat",
+        )
+    )
+
+    assert service.list_deliveries(session_id="session_web_missing_run") == []
+    assert any("缺少 run_id" in entry for entry in warnings)
+
+
+@pytest.mark.unit
 def test_chat_stream_consumer_preserves_filtered_metadata() -> None:
     """Web chat 后台消费应把 filtered 状态写入 reply metadata。"""
 
