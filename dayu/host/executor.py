@@ -52,6 +52,35 @@ MODULE = "HOST.EXECUTOR"
 _DEFAULT_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS = 300.0
 
 
+def should_delete_pending_turn_after_terminal_run(
+    *,
+    run: RunRecord | None,
+    resumable: bool,
+) -> bool:
+    """给定终态 run，判断是否应当删除关联 pending turn。
+
+    Args:
+        run: 对应的 run 记录；``None`` 表示 run 记录缺失。
+        resumable: pending turn 所属 scene 是否允许 resume。
+
+    Returns:
+        ``True`` 表示应当删除 pending turn；``False`` 表示应当保留以供恢复。
+
+    Raises:
+        无。
+    """
+
+    if run is None:
+        return True
+    if run.state in (RunState.FAILED, RunState.UNSETTLED):
+        return not resumable
+    if run.state == RunState.CANCELLED:
+        if resumable and run.cancel_reason == RunCancelReason.TIMEOUT:
+            return False
+        return True
+    return True
+
+
 def _format_run_identity(
     *,
     run_id: str,
@@ -1097,26 +1126,14 @@ class DefaultHostExecutor(HostExecutorProtocol):
             )
             self._delete_pending_turn(pending_turn_id)
             return
-        if run.state in (RunState.FAILED, RunState.UNSETTLED):
-            if resumable:
-                Log.verbose(
-                    f"[{run.run_id}] run 终态={run.state.value}，保留 pending turn 供恢复: pending_turn_id={pending_turn_id}",
-                    module=MODULE,
-                )
-                return
+        if should_delete_pending_turn_after_terminal_run(run=run, resumable=resumable):
             self._delete_pending_turn(pending_turn_id)
             return
-        if run.state == RunState.CANCELLED:
-            if resumable and run.cancel_reason == RunCancelReason.TIMEOUT:
-                Log.verbose(
-                    f"[{run.run_id}] run timeout 取消，保留 pending turn 供恢复: "
-                    f"pending_turn_id={pending_turn_id}",
-                    module=MODULE,
-                )
-                return
-            self._delete_pending_turn(pending_turn_id)
-            return
-        self._delete_pending_turn(pending_turn_id)
+        Log.verbose(
+            f"[{run.run_id}] run 终态={run.state.value}，保留 pending turn 供恢复: "
+            f"pending_turn_id={pending_turn_id}",
+            module=MODULE,
+        )
 
     def _settle_agent_cancelled(
         self,

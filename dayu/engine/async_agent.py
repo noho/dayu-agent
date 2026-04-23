@@ -222,7 +222,6 @@ class AgentRunningConfig:
     max_duplicate_tool_calls: int = 2
     # 上下文预算治理参数（max_context_tokens=0 表示禁用）
     max_context_tokens: int = 0
-    max_output_tokens: int = 0
     budget_soft_limit_ratio: float = 0.75
     budget_hard_limit_ratio: float = 0.90
     max_continuations: int = 3
@@ -479,7 +478,6 @@ class AsyncAgent:
         # 上下文预算状态（max_context_tokens=0 时不生效）
         budget_state = ContextBudgetState(
             max_context_tokens=self.running_config.max_context_tokens,
-            max_output_tokens=self.running_config.max_output_tokens,
             soft_limit_ratio=self.running_config.budget_soft_limit_ratio,
             hard_limit_ratio=self.running_config.budget_hard_limit_ratio,
         )

@@ -700,11 +700,9 @@ def test_init_reads_explicit_running_config_capabilities() -> None:
         runner=_CreatedRunner(),
         running_config=AgentRunningConfig(
             max_context_tokens=131072,
-            max_output_tokens=8192,
         ),
     )
     assert agent.running_config.max_context_tokens == 131072
-    assert agent.running_config.max_output_tokens == 8192
 
 
 def test_init_builds_running_config_without_hidden_overrides() -> None:
@@ -735,11 +733,9 @@ def test_init_builds_running_config_without_hidden_overrides() -> None:
         runner=_CreatedRunner(),
         running_config=AgentRunningConfig(
             max_context_tokens=50000,
-            max_output_tokens=4096,
         ),
     )
     assert agent.running_config.max_context_tokens == 50000
-    assert agent.running_config.max_output_tokens == 4096
 
 
 # ========== Runner _detect_context_overflow 测试 ==========

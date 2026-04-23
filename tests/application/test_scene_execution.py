@@ -270,7 +270,6 @@ def test_build_agent_running_config() -> None:
     )
     assert running_config.max_iterations == 9
     assert running_config.max_context_tokens == 50000
-    assert running_config.max_output_tokens == 4096
     assert running_config.fallback_mode == FallbackMode.FORCE_ANSWER
 
 

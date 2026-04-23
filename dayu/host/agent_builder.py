@@ -68,8 +68,6 @@ def build_agent_running_config(agent_create_args: AgentCreateArgs) -> AgentRunni
         running_config.max_iterations = int(agent_create_args.max_turns)
     if agent_create_args.max_context_tokens is not None:
         running_config.max_context_tokens = int(agent_create_args.max_context_tokens)
-    if agent_create_args.max_output_tokens is not None:
-        running_config.max_output_tokens = int(agent_create_args.max_output_tokens)
     return running_config
 
 
@@ -217,7 +215,6 @@ def _build_agent_running_config_from_snapshot(
         max_consecutive_failed_tool_batches=snapshot.get("max_consecutive_failed_tool_batches", 2),
         max_duplicate_tool_calls=snapshot.get("max_duplicate_tool_calls", 2),
         max_context_tokens=snapshot.get("max_context_tokens", 0),
-        max_output_tokens=snapshot.get("max_output_tokens", 0),
         budget_soft_limit_ratio=snapshot.get("budget_soft_limit_ratio", 0.75),
         budget_hard_limit_ratio=snapshot.get("budget_hard_limit_ratio", 0.9),
         max_continuations=snapshot.get("max_continuations", 3),
