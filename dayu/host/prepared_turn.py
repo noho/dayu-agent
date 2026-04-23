@@ -48,7 +48,7 @@ from dayu.execution.options import (
     deserialize_execution_options_snapshot,
     serialize_execution_options_snapshot,
 )
-from dayu.execution.runtime_config import AgentRunningConfigSnapshot, RunnerRunningConfigSnapshot
+from dayu.contracts.runtime_config_snapshot import AgentRunningConfigSnapshot, RunnerRunningConfigSnapshot
 from dayu.host.conversation_store import ConversationTranscript
 
 PendingTurnSnapshotScalar: TypeAlias = str | int | float | bool | None
