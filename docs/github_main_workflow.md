@@ -673,37 +673,69 @@ gh release create v0.2.0 \
 
 ## 四、常见场景
 
-### A. 远端 `main` 有别人合进来的提交
+### A. 远端 `main` 有别人提交到PR要合进来
 
-如果当时不在功能分支上：
+前提是：每个人都先同步 `main`，再从 `main` 切自己的独立功能分支；没有人直接在 `main` 上开发。  
+因此这里要处理的问题是：别人 PR 合进 `main` 之后，你自己的功能分支要不要跟进最新 `main`。
+
+#### 你的功能分支还没 push 到 GitHub
+
+这时你可以直接重写自己的本地分支历史，成本最低：
+
 ```bash
-git switch main
-git pull
-```
-
-**如果当时正在功能分支上开发，先提交当前进度再同步**：
-
-```bash
-# 1. 保存当前功能分支的改动
+# 0. 如果功能分支上还有未提交改动，先提交当前进度
 git add <当前改动>
 git commit -m "feat: WIP"
 
-# 2. 同步 main
+# 1. 切回 main，合并别人的 PR，并同步最新 main
 git switch main
-git pull
+gh pr merge <PR号> --squash
+git pull --ff-only github main
 
-# 3. 回到功能分支，rebase 到最新 main
-git branch
+# 2. 回到自己的功能分支，rebase 到最新 main
+git switch feat/xxx
+git rebase main
+```
+
+因为这个功能分支还没 push，到这里就结束；不需要 `git push --force-with-lease`。
+
+#### 你的功能分支已经 push 到 GitHub
+
+如果这条分支是你独占维护的，即使已经开了 PR，也仍然推荐 `rebase` 到最新 `main`，然后用 `--force-with-lease` 更新远端分支：
+
+```bash
+# 0. 如果功能分支上还有未提交改动，先提交当前进度
+git add <当前改动>
+git commit -m "feat: WIP"
+
+# 1. 切回 main，合并别人的 PR，并同步最新 main
+git switch main
+gh pr merge <PR号> --squash
+git pull --ff-only github main
+
+# 2. 回到自己的功能分支，rebase 到最新 main
 git switch feat/xxx
 git rebase main
 
-# 4. 如果这个分支已经 push 到 GitHub，rebase 后要更新远端 PR 分支
+# 3. 更新远端功能分支；如果已经开 PR，PR 会自动刷新
 git push --force-with-lease
 ```
 
-推荐 `rebase`：功能分支保持线性，PR review 更直观；只要分支还没 push / 没人协作就安全。已经 push 到 GitHub 的分支做 rebase，push 时要加 `--force-with-lease`。
+说明：
 
-如果功能分支和新 merge 的 PR 没有文件冲突，也可以不急着 rebase，等开 PR 时 GitHub 会自动做 merge check。
+- `rebase` 只改写你自己的功能分支历史，不改写 `main`。
+- 这条功能分支如果已经关联了 PR，`git push --force-with-lease` 后，原 PR 会自动更新，不需要重开。
+- `--force-with-lease` 适用于“你独占维护的功能分支”；不应用于公开的 `github/main`。
+
+如果你不想改写已经 push 的功能分支历史，也可以改用：
+
+```bash
+git switch feat/xxx
+git merge main
+git push
+```
+
+但在“每个人都用独立分支”的前提下，默认还是优先 `rebase`，因为历史更线性，PR review 更清晰。
 
 ### B. 同时开发多个功能 / 同时修 bug 和做 feature
 
