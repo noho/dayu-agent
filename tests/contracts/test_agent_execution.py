@@ -443,3 +443,37 @@ def test_execution_contract_snapshot_drops_trace_settings_when_output_dir_missin
     restored = deserialize_execution_contract_snapshot(snapshot)
 
     assert restored.accepted_execution_spec.infrastructure.trace_settings is None
+
+
+@pytest.mark.unit
+def test_snapshot_optional_float_rejects_bool_uniformly() -> None:
+    """三个模块的 ``_snapshot_optional_float`` 遇到 bool 均应统一 raise。
+
+    动机：
+        bool 属于 ``int`` 的子类，但语义上不是数字。若一处 return None、一处 raise，
+        同一份快照数据在不同反序列化路径会出现不一致的行为。本用例锁定"统一 raise"
+        契约，防止任何一处退化回静默降级。
+    """
+
+    from dayu.contracts.agent_execution_serialization import (
+        _snapshot_optional_float as _contract_snapshot_optional_float,
+    )
+    from dayu.contracts.execution_options import (
+        _snapshot_optional_float as _options_contract_snapshot_optional_float,
+    )
+    from dayu.execution.options import (
+        _snapshot_optional_float as _execution_snapshot_optional_float,
+    )
+
+    for fn in (
+        _contract_snapshot_optional_float,
+        _options_contract_snapshot_optional_float,
+        _execution_snapshot_optional_float,
+    ):
+        with pytest.raises(ValueError):
+            fn(True)
+        with pytest.raises(ValueError):
+            fn(False)
+        assert fn(None) is None
+        assert fn(1.5) == 1.5
+        assert fn(3) == 3.0

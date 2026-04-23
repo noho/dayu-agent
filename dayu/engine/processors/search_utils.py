@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections import OrderedDict
-from typing import Any
+from typing import Any, Callable, Protocol, TypeVar
 
 from .base import SearchEvidence, SearchHit, build_search_hit
 from .text_utils import normalize_whitespace as _normalize_whitespace
@@ -692,6 +692,83 @@ def _pick_first_positive_page_no(hits: list[SearchHit]) -> int | None:
         if isinstance(page_no, int) and page_no > 0:
             return page_no
     return None
+
+
+# ---------------------------------------------------------------------------
+# 带 title 的 section 搜索循环（bs / docling / markdown 三处理器共享）
+# ---------------------------------------------------------------------------
+
+
+class _TitledSection(Protocol):
+    """带 title/ref 的 section 协议，用于 ``run_titled_section_search``。
+
+    仅声明共享的属性字段，不约束具体 dataclass 类型，避免 processor 之间耦合。
+    """
+
+    ref: str
+    title: str | None
+
+
+_TitledSectionT = TypeVar("_TitledSectionT", bound=_TitledSection)
+
+
+def run_titled_section_search(
+    sections: list[_TitledSectionT],
+    normalized_query: str,
+    get_text: Callable[[_TitledSectionT], str],
+    page_no_of: Callable[[_TitledSectionT], int | None] | None = None,
+) -> tuple[list[SearchHit], dict[str, str]]:
+    """按 title + content 双锚点在 sections 列表上做关键词搜索。
+
+    原 `bs_processor` / `docling_processor` / `markdown_processor` 三处几乎同构的
+    搜索循环被抽取到此处，核心行为保持一致：
+
+    - 预编译 query 正则（避免循环内重复编译）。
+    - 同时检测 `title` 与 `content`；
+    - 若 title 命中但 content 无命中，将 title 前置拼入搜索文本，确保下游 snippet
+      能定位到匹配词。
+    - 命中后构建 `SearchHit`，snippet 暂存为 `normalized_query`，由下游
+      `enrich_hits_by_section` 替换为锚点化 snippet。
+
+    Args:
+        sections: 待搜索的 section 列表。
+        normalized_query: 已 strip 的查询词；调用方负责前置过滤空值。
+        get_text: 从 section 读取正文的回调。
+        page_no_of: 从 section 读取 page_no 的回调；不适用时传 None。
+
+    Returns:
+        二元组：`(hits_raw, section_content_map)`。`hits_raw` 作为入参传入
+        `enrich_hits_by_section`；`section_content_map` 提供可搜索正文，供
+        snippet 抽取时使用（若 title 前置则以拼接后的文本为准）。
+    """
+
+    query_pattern = re.compile(re.escape(normalized_query), flags=re.IGNORECASE)
+    hits_raw: list[SearchHit] = []
+    section_content_map: dict[str, str] = {}
+
+    for section in sections:
+        text = get_text(section)
+        title_text = section.title or ""
+        title_hit = bool(title_text) and query_pattern.search(title_text) is not None
+        content_hit = query_pattern.search(text) is not None
+        if not title_hit and not content_hit:
+            continue
+        # 若 title 命中而 content 无命中，将 title 前置进搜索文本，确保 snippet 能定位到匹配词。
+        searchable_text = (
+            (title_text + "\n" + text).strip()
+            if title_hit and not content_hit
+            else text
+        )
+        section_content_map[section.ref] = searchable_text
+        hits_raw.append(
+            build_search_hit(
+                section_ref=section.ref,
+                section_title=section.title,
+                snippet=normalized_query,
+                page_no=page_no_of(section) if page_no_of is not None else None,
+            )
+        )
+    return hits_raw, section_content_map
 
 
 # ---------------------------------------------------------------------------

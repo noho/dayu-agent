@@ -168,11 +168,28 @@ def _snapshot_optional_int(value: ExecutionContractSnapshotValue | None) -> int 
 
 
 def _snapshot_optional_float(value: ExecutionContractSnapshotValue | None) -> float | None:
-    """从快照值中读取可选浮点数。"""
+    """从快照值中读取可选浮点数。
 
-    if isinstance(value, bool) or not isinstance(value, int | float):
+    Args:
+        value: 原始快照值。
+
+    Returns:
+        浮点数或 ``None``。
+
+    Raises:
+        ValueError: 当值类型不是 ``None`` / ``int`` / ``float`` 时抛出。``bool``
+            属于 ``int`` 的子类但语义上不是数字，混入 float 快照通常意味着上游
+            序列化 bug，直接 raise 以便尽早暴露（与 ``contracts.execution_options``
+            / ``execution.options`` 中的同名函数保持一致的严格策略）。
+    """
+
+    if value is None:
         return None
-    return float(value)
+    if isinstance(value, bool):
+        raise ValueError("execution contract snapshot value must be number")
+    if isinstance(value, int | float):
+        return float(value)
+    raise ValueError("execution contract snapshot value must be number")
 
 
 def _snapshot_optional_bool(value: ExecutionContractSnapshotValue | None) -> bool | None:

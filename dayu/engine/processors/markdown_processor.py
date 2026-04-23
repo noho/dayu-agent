@@ -10,7 +10,7 @@ import re
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 from .base import (
     SearchHit,
@@ -18,14 +18,13 @@ from .base import (
     SectionSummary,
     TableContent,
     TableSummary,
-    build_search_hit,
     build_section_content,
     build_section_summary,
     build_table_content,
     build_table_summary,
 )
 from .perf_utils import ProcessorStageProfiler, is_processor_profile_enabled
-from .search_utils import enrich_hits_by_section
+from .search_utils import enrich_hits_by_section, run_titled_section_search
 from .source import Source
 from .text_utils import (
     PREVIEW_MAX_CHARS as _PREVIEW_MAX_CHARS,
@@ -348,29 +347,11 @@ class MarkdownProcessor:
         hits_raw: list[SearchHit] = []
         section_content_map: dict[str, str] = {}
         with self._profiler.stage("search"):
-            # 在循环外预编译 query 正则，避免每个 section 迭代都重复 re.escape + re.compile。
-            query_pattern = re.compile(re.escape(normalized_query), flags=re.IGNORECASE)
-            for section in sections:
-                content = self._get_or_render_section_content(section)
-                title_text = section.title or ""
-                title_hit = bool(title_text) and query_pattern.search(title_text) is not None
-                content_hit = query_pattern.search(content) is not None
-                if not title_hit and not content_hit:
-                    continue
-                # 若 title 命中而 content 无命中，将 title 前置进搜索文本，确保 snippet 能定位到匹配词。
-                searchable_text = (
-                    (title_text + "\n" + content).strip()
-                    if title_hit and not content_hit
-                    else content
-                )
-                section_content_map[section.ref] = searchable_text
-                hits_raw.append(
-                    build_search_hit(
-                        section_ref=section.ref,
-                        section_title=section.title,
-                        snippet=normalized_query,
-                    )
-                )
+            hits_raw, section_content_map = run_titled_section_search(
+                sections=sections,
+                normalized_query=normalized_query,
+                get_text=self._get_or_render_section_content,
+            )
         return enrich_hits_by_section(
             hits_raw=hits_raw,
             section_content_map=section_content_map,
