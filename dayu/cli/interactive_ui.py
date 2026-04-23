@@ -21,6 +21,7 @@ from dayu.contracts.events import AppEventType, extract_cancel_reason
 from dayu.execution.options import ExecutionOptions
 from dayu.log import Log
 from dayu.services.contracts import ChatResumeRequest, ChatTurnRequest, PromptRequest, SessionResolutionPolicy
+from dayu.services.pending_turns import has_resumable_pending_turn
 from dayu.services.protocols import ChatServiceProtocol, PromptServiceProtocol
 
 MODULE = "APP.INTERACTIVE"
@@ -360,10 +361,23 @@ def _resume_interactive_pending_turn_if_needed(
     session: ChatServiceProtocol,
     *,
     session_id: str | None,
-    scene_name: str,
+    scene_name: str = "interactive",
     show_thinking: bool,
 ) -> None:
-    """在进入 REPL 前恢复当前 interactive session 的 pending turn。"""
+    """在进入 REPL 前恢复当前 interactive session 的 pending turn。
+
+    Args:
+        session: interactive 使用的 ChatService 协议实现。
+        session_id: 当前 interactive 绑定的 Host session ID；为空时直接跳过恢复。
+        scene_name: 本次 interactive 会话对应的 scene 名称，默认使用 `interactive`。
+        show_thinking: 是否展示 thinking 流。
+
+    Returns:
+        无。
+
+    Raises:
+        Exception: 当 pending turn 仍然存在且恢复失败时，继续向上抛出原始异常。
+    """
 
     if session_id is None:
         return
@@ -373,6 +387,7 @@ def _resume_interactive_pending_turn_if_needed(
     )
     if not pending_turns:
         return
+    pending_turn = pending_turns[0]
     state = _RenderState(show_thinking=show_thinking)
     _start_spinner_if_needed(state, enabled=not show_thinking)
     try:
@@ -380,14 +395,35 @@ def _resume_interactive_pending_turn_if_needed(
             submission = await session.resume_pending_turn(
                 ChatResumeRequest(
                     session_id=session_id,
-                    pending_turn_id=pending_turns[0].pending_turn_id,
+                    pending_turn_id=pending_turn.pending_turn_id,
                 )
             )
             async for event in submission.event_stream:
                 _render_stream_event(event, state)
             return submission.session_id
 
-        asyncio.run(_resume_and_consume())
+        try:
+            asyncio.run(_resume_and_consume())
+        except Exception as exc:
+            if not has_resumable_pending_turn(
+                session,
+                session_id=pending_turn.session_id,
+                scene_name=scene_name,
+                pending_turn_id=pending_turn.pending_turn_id,
+            ):
+                Log.warning(
+                    "interactive pending turn 恢复失败，但记录已被 Host 清理，继续进入会话"
+                    f" session_id={pending_turn.session_id}"
+                    f" pending_turn_id={pending_turn.pending_turn_id}"
+                    f" error={exc}",
+                    module=MODULE,
+                )
+                _render_warning_or_error(
+                    state,
+                    "[warning] 上一轮 pending turn 恢复失败，但记录已被清理；当前会话继续可用",
+                )
+                return
+            raise
     finally:
         _stop_spinner_if_needed(state)
         _ensure_reasoning_newline(state)
