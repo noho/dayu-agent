@@ -74,9 +74,35 @@ class AppResult:
     warnings: list[str]
     degraded: bool = False
     filtered: bool = False
+
+
+def extract_cancel_reason(payload: Any) -> str | None:
+    """从 CANCELLED 事件负载中提取 ``cancel_reason`` 字段。
+
+    该 helper 只做纯解析，不拼装任何面向人的提示文案；展示文案留在各
+    消费端（CLI / 写作流水线 / Web 等）自行组装，避免把 UI 文案约定带进
+    ``contracts`` 稳定边界。
+
+    Args:
+        payload: 事件 payload；通常为 dict，也可能是任意对象。
+
+    Returns:
+        非空 ``cancel_reason`` 字符串；若 payload 非 dict、字段缺失或去空后为空则返回 ``None``。
+
+    Raises:
+        无。
+    """
+
+    if not isinstance(payload, dict):
+        return None
+    cancel_reason = str(payload.get("cancel_reason") or "").strip()
+    return cancel_reason or None
+
+
 __all__ = [
     "AppEvent",
     "AppEventType",
     "AppResult",
     "PublishedRunEventProtocol",
+    "extract_cancel_reason",
 ]

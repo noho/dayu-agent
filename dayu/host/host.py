@@ -56,8 +56,13 @@ from dayu.workspace_paths import build_conversation_store_dir
 
 
 MODULE = "HOST"
+# 会话预览截断长度：控制 session 摘要、日志输出等场景下的 user_message 预览宽度，
+# 48 字符能覆盖常见一行标题，同时避免日志中占用过多宽度。
 _CONVERSATION_PREVIEW_MAX_CHARS = 48
 _CONVERSATION_PREVIEW_SUFFIX = "..."
+# 回复 outbox 清理阈值：启动调和时用来识别"陈旧"未送达的 reply delivery 记录。
+# 15 分钟覆盖典型外部信道（WeChat / Web SSE）的正常延迟，超过该阈值
+# 判定为上次进程异常退出时遗留，可安全丢弃，避免重启后重复投递历史消息。
 _STALE_REPLY_OUTBOX_MAX_AGE = timedelta(minutes=15)
 
 

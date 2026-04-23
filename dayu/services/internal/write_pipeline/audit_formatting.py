@@ -17,6 +17,22 @@ from dayu.services.internal.write_pipeline.source_list_builder import (
     looks_like_evidence_item,
 )
 
+# 模块级正则常量，避免每次函数调用重复编译。
+# 注意：代码块正则使用贪婪 `[\s\S]*`，以便正确处理章节正文中嵌套的 ```json``` 等
+# 子代码块（外层 ```markdown ... ``` 需整体保留）。该贪婪模式的已知副作用是：
+# 当输入包含多个平级的 ```markdown fence 时，会把第一个 ``` 到最后一个 ``` 之间
+# 的所有内容（包括中间的说明文字）当成一个代码块提取。如需精确处理这种平级
+# 多 fence 场景，需改为 fence 计数/行级解析，不能单纯把 `*` 换成 `*?`
+# （会截断合法的嵌套子代码块）。
+_MARKDOWN_CODE_BLOCK_PATTERN = re.compile(
+    r"```(?:markdown)?\s*([\s\S]*)```", re.IGNORECASE
+)
+_MARKDOWN_HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
+_EVIDENCE_SECTION_PATTERN = re.compile(
+    r"\n###\s+证据与出处\b.*?(?=\n##[^#]|\Z)",
+    re.DOTALL,
+)
+
 _HEADING_PUNCTUATION_TRANSLATION = str.maketrans(
     {
         "【": "[",
@@ -74,8 +90,7 @@ def _extract_markdown_content(raw_text: str) -> str:
         无。
     """
 
-    pattern = re.compile(r"```(?:markdown)?\s*([\s\S]*)```", re.IGNORECASE)
-    match = pattern.search(raw_text)
+    match = _MARKDOWN_CODE_BLOCK_PATTERN.search(raw_text)
     if match is None:
         return raw_text.strip()
     return match.group(1).strip()
@@ -154,8 +169,7 @@ def _extract_markdown_headings(markdown_text: str) -> list[tuple[int, str]]:
     """
 
     headings: list[tuple[int, str]] = []
-    heading_pattern = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
-    for match in heading_pattern.finditer(markdown_text):
+    for match in _MARKDOWN_HEADING_PATTERN.finditer(markdown_text):
         headings.append((len(match.group(1)), match.group(2).strip()))
     return headings
 
@@ -277,9 +291,8 @@ def _find_markdown_section_span(*, markdown_text: str, heading_text: str) -> tup
         无。
     """
 
-    heading_pattern = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
     headings: list[dict[str, Any]] = []
-    for match in heading_pattern.finditer(markdown_text):
+    for match in _MARKDOWN_HEADING_PATTERN.finditer(markdown_text):
         headings.append(
             {
                 "level": len(match.group(1)),
@@ -599,11 +612,7 @@ def _strip_evidence_section(content: str) -> str:
     """
 
     # 匹配 ### 证据与出处 直到下一个同级或更高级标题，或文末
-    pattern = re.compile(
-        r"\n###\s+证据与出处\b.*?(?=\n##[^#]|\Z)",
-        re.DOTALL,
-    )
-    return pattern.sub("", content).rstrip()
+    return _EVIDENCE_SECTION_PATTERN.sub("", content).rstrip()
 
 
 def _normalize_patch_match_text(text: str) -> str:

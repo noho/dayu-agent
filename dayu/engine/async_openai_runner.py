@@ -207,6 +207,17 @@ NON_RETRIABLE_STATUS_CODES = {
     422,  # Unprocessable Entity：请求参数错误
 }
 
+# 不可重试 HTTP 状态码 -> error_type 的固定映射，提升为模块级常量避免每次请求重建 dict。
+_NON_RETRIABLE_ERROR_TYPE_MAP: dict[int, str] = {
+    400: "invalid_request",
+    401: "auth_error",
+    402: "insufficient_quota",
+    403: "auth_error",
+    404: "resource_not_found",
+    421: "content_blocked",
+    422: "invalid_request",
+}
+
 # 工具调用日志辅助常量
 _MAX_ARG_STR_LEN = 40   # 单个参数字符串值的最大显示长度
 _MAX_COMPACT_ARGS_LEN = 120  # compact args 总长度上限
@@ -987,15 +998,9 @@ class AsyncOpenAIRunner:
                         if response.status == 400 and _detect_context_overflow(error_body):
                             error_type = "context_overflow"
                         else:
-                            error_type = {
-                                400: "invalid_request",
-                                401: "auth_error",
-                                402: "insufficient_quota",
-                                403: "auth_error",
-                                404: "resource_not_found",
-                                421: "content_blocked",
-                                422: "invalid_request",
-                            }.get(response.status, "client_error")
+                            error_type = _NON_RETRIABLE_ERROR_TYPE_MAP.get(
+                                response.status, "client_error"
+                            )
 
                         Log.warn(
                             f"{log_prefix} HTTP {response.status}（不可重试，error_type={error_type}）: "

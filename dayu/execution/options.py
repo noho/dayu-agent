@@ -295,6 +295,9 @@ def resolve_scene_temperature(
     """
 
     if resolved_temperature is not None:
+        # 防御性兜底：``normalize_temperature`` 在输入为空白字符串时会返回 ``None``；
+        # 当前外层已过滤 ``None``，但不过滤空串。这里显式 ``or 0.0`` 保证返回严格 float，
+        # 同时避免向调用方泄漏 "空字符串" 的语义。
         return normalize_temperature(
             resolved_temperature,
             field_name="resolved_execution_options.temperature",

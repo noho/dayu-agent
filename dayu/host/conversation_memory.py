@@ -430,10 +430,9 @@ def _build_minimum_preserved_turn_view(
 
     裁剪顺序固定为：
     1. 保留完整 `user_text`
-    2. 若预算足够则保留完整 `assistant_final`
-    3. 若预算不足，优先丢弃工具摘要
-    4. 若仍不足，再截断 `assistant_final`
-    5. 若没有 `assistant_final`，则对工具摘要做截断降级
+    2. 若存在 `assistant_final`：预算足够则保留完整正文，否则按预算截断正文
+       （工具摘要在该分支下不会进入视图，属于隐式丢弃）
+    3. 若没有 `assistant_final` 但存在工具摘要，则对工具摘要做截断降级
 
     Args:
         turn: 原始 turn。

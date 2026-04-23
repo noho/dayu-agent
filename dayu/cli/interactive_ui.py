@@ -16,7 +16,7 @@ from enum import Enum
 from typing import Any
 import sys
 
-from dayu.contracts.events import AppEventType
+from dayu.contracts.events import AppEventType, extract_cancel_reason
 from dayu.execution.options import ExecutionOptions
 from dayu.log import Log
 from dayu.services.contracts import ChatResumeRequest, ChatTurnRequest, PromptRequest, SessionResolutionPolicy
@@ -209,8 +209,9 @@ def _get_event_payload(event: object) -> object | None:
         无。
     """
 
-    if hasattr(event, "payload"):
-        return getattr(event, "payload")
+    payload = getattr(event, "payload", None)
+    if payload is not None:
+        return payload
     return getattr(event, "data", None)
 
 
@@ -228,11 +229,11 @@ def _render_stream_event(event: Any, state: _RenderState) -> None:
     event_type = _get_event_type_token(event)
     payload = _get_event_payload(event)
 
-    if event_type == "content_delta":
+    if event_type == AppEventType.CONTENT_DELTA.value:
         _render_content_delta(state, str(payload or ""))
         return
 
-    if event_type == "final_answer":
+    if event_type == AppEventType.FINAL_ANSWER.value:
         state.final_content = str(payload.get("content", "")) if isinstance(payload, dict) else str(payload)
         state.filtered = bool(payload.get("filtered", False)) if isinstance(payload, dict) else False
         if state.final_content and not state.content_streamed:
@@ -241,16 +242,16 @@ def _render_stream_event(event: Any, state: _RenderState) -> None:
             _render_warning_or_error(state, "[filtered] 本轮输出触发内容过滤，结果可能不完整")
         return
 
-    if event_type == "reasoning_delta":
+    if event_type == AppEventType.REASONING_DELTA.value:
         _render_reasoning_delta(state, str(payload or ""))
         return
 
-    if event_type == "warning":
+    if event_type == AppEventType.WARNING.value:
         message = payload.get("message", "") if isinstance(payload, dict) else str(payload)
         _render_warning_or_error(state, f"[warning] {message}")
         return
 
-    if event_type == "error":
+    if event_type == AppEventType.ERROR.value:
         if isinstance(payload, dict):
             message = str(payload.get("message", payload))
         else:
@@ -266,10 +267,9 @@ def _render_stream_event(event: Any, state: _RenderState) -> None:
 def _format_cancelled_message(payload: Any) -> str:
     """将取消事件负载格式化为 CLI 提示。"""
 
-    if isinstance(payload, dict):
-        cancel_reason = str(payload.get("cancel_reason") or "").strip()
-        if cancel_reason:
-            return f"[cancelled] 执行已取消: {cancel_reason}"
+    reason = extract_cancel_reason(payload)
+    if reason:
+        return f"[cancelled] 执行已取消: {reason}"
     return "[cancelled] 执行已取消"
 
 async def _consume_chat_turn_stream(
