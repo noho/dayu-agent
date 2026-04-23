@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
 from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, ReplyOutboxSubmitRequest
+from dayu.host._session_barrier import ensure_session_active
 from dayu.host.host_store import HostStore
 from dayu.log import Log
 
@@ -34,41 +35,6 @@ STALE_IN_PROGRESS_ERROR_MESSAGE = "stale in_progress recovery"
 
 
 from dayu.host._datetime_utils import now_utc as _now_utc, parse_dt as _parse_dt, serialize_dt as _serialize_dt
-
-
-def _ensure_session_active(
-    session_activity: "SessionActivityQueryProtocol | None",
-    *,
-    session_id: str,
-    operation: str,
-) -> None:
-    """在仓储写入前校验 session 活性。
-
-    Args:
-        session_activity: 可选的 session 活性查询协议实现。
-        session_id: 目标 session ID（应为已规范化文本）。
-        operation: 触发屏障的写入操作名，仅用于日志。
-
-    Returns:
-        无。
-
-    Raises:
-        SessionClosedError: session 不存在或已 ``CLOSED`` 时抛出。
-    """
-
-    if session_activity is None:
-        return
-    if session_activity.is_session_active(session_id):
-        return
-    # 延迟 import 避免 reply_outbox_store -> protocols 循环。
-    from dayu.host.protocols import SessionClosedError
-
-    Log.verbose(
-        f"session 已关闭或不存在，拒绝 reply outbox 写入: "
-        f"session_id={session_id}, operation={operation}",
-        module=MODULE,
-    )
-    raise SessionClosedError(session_id)
 
 
 def _normalize_text(value: str, *, field_name: str) -> str:
@@ -183,10 +149,12 @@ class InMemoryReplyOutboxStore:
         """
 
         normalized_request = _normalize_submit_request(request)
-        _ensure_session_active(
+        ensure_session_active(
             self._session_activity,
             session_id=normalized_request.session_id,
             operation="submit_reply",
+            module=MODULE,
+            target_name="reply outbox",
         )
         existing = self.get_by_delivery_key(normalized_request.delivery_key)
         if existing is not None:
@@ -530,10 +498,12 @@ class SQLiteReplyOutboxStore:
         """
 
         normalized_request = _normalize_submit_request(request)
-        _ensure_session_active(
+        ensure_session_active(
             self._session_activity,
             session_id=normalized_request.session_id,
             operation="submit_reply",
+            module=MODULE,
+            target_name="reply outbox",
         )
         now = _now_utc()
         delivery_id = f"delivery_{uuid.uuid4().hex[:12]}"

@@ -20,6 +20,7 @@ from dayu.contracts.execution_metadata import (
     empty_execution_delivery_context,
     normalize_execution_delivery_context,
 )
+from dayu.host._session_barrier import ensure_session_active
 from dayu.host.host_store import HostStore
 
 if TYPE_CHECKING:
@@ -79,41 +80,6 @@ def _normalize_text(value: str, *, field_name: str) -> str:
     if not normalized:
         raise ValueError(f"{field_name} 不能为空")
     return normalized
-
-
-def _ensure_session_active(
-    session_activity: "SessionActivityQueryProtocol | None",
-    *,
-    session_id: str,
-    operation: str,
-) -> None:
-    """在仓储写入前校验 session 活性。
-
-    Args:
-        session_activity: 可选的 session 活性查询协议实现；``None`` 表示未装配屏障。
-        session_id: 目标 session ID（应为已规范化文本）。
-        operation: 触发屏障的写入操作名，仅用于日志与异常上下文。
-
-    Returns:
-        无。
-
-    Raises:
-        SessionClosedError: session 不存在或已 ``CLOSED`` 时抛出。
-    """
-
-    if session_activity is None:
-        return
-    if session_activity.is_session_active(session_id):
-        return
-    # 延迟 import 避免 pending_turn_store -> protocols 循环。
-    from dayu.host.protocols import SessionClosedError
-
-    Log.verbose(
-        f"session 已关闭或不存在，拒绝 pending turn 写入: "
-        f"session_id={session_id}, operation={operation}",
-        module=MODULE,
-    )
-    raise SessionClosedError(session_id)
 
 
 class PendingConversationTurnState(str, Enum):
@@ -199,10 +165,12 @@ class InMemoryPendingConversationTurnStore:
         normalized_source_run_id = _normalize_text(source_run_id, field_name="source_run_id")
         normalized_resume_source_json = _normalize_resume_source_json(resume_source_json)
         normalized_metadata = _normalize_metadata(metadata)
-        _ensure_session_active(
+        ensure_session_active(
             self._session_activity,
             session_id=normalized_session_id,
             operation="upsert_pending_turn",
+            module=MODULE,
+            target_name="pending turn",
         )
         existing = self.get_session_pending_turn(
             session_id=normalized_session_id,
@@ -304,10 +272,12 @@ class InMemoryPendingConversationTurnStore:
         existing = self.get_pending_turn(pending_turn_id)
         if existing is None:
             raise KeyError(f"pending turn 不存在: {pending_turn_id}")
-        _ensure_session_active(
+        ensure_session_active(
             self._session_activity,
             session_id=existing.session_id,
             operation="update_state",
+            module=MODULE,
+            target_name="pending turn",
         )
         updated = PendingConversationTurn(
             pending_turn_id=existing.pending_turn_id,
@@ -340,10 +310,12 @@ class InMemoryPendingConversationTurnStore:
             raise KeyError(f"pending turn 不存在: {pending_turn_id}")
         if max_attempts <= 0:
             raise ValueError("max_attempts 必须是正整数")
-        _ensure_session_active(
+        ensure_session_active(
             self._session_activity,
             session_id=existing.session_id,
             operation="record_resume_attempt",
+            module=MODULE,
+            target_name="pending turn",
         )
         if existing.resume_attempt_count >= max_attempts:
             self._records.pop(existing.pending_turn_id, None)
@@ -387,10 +359,12 @@ class InMemoryPendingConversationTurnStore:
         existing = self.get_pending_turn(pending_turn_id)
         if existing is None:
             raise KeyError(f"pending turn 不存在: {pending_turn_id}")
-        _ensure_session_active(
+        ensure_session_active(
             self._session_activity,
             session_id=existing.session_id,
             operation="record_resume_failure",
+            module=MODULE,
+            target_name="pending turn",
         )
         updated = PendingConversationTurn(
             pending_turn_id=existing.pending_turn_id,
@@ -504,10 +478,12 @@ class SQLitePendingConversationTurnStore:
         normalized_source_run_id = _normalize_text(source_run_id, field_name="source_run_id")
         normalized_resume_source_json = _normalize_resume_source_json(resume_source_json)
         normalized_metadata = _normalize_metadata(metadata)
-        _ensure_session_active(
+        ensure_session_active(
             self._session_activity,
             session_id=normalized_session_id,
             operation="upsert_pending_turn",
+            module=MODULE,
+            target_name="pending turn",
         )
         now = _now_utc()
         conn = self._host_store.get_connection()
@@ -661,10 +637,12 @@ class SQLitePendingConversationTurnStore:
         existing = self.get_pending_turn(normalized_pending_turn_id)
         if existing is None:
             raise KeyError(f"pending turn 不存在: {normalized_pending_turn_id}")
-        _ensure_session_active(
+        ensure_session_active(
             self._session_activity,
             session_id=existing.session_id,
             operation="update_state",
+            module=MODULE,
+            target_name="pending turn",
         )
         conn = self._host_store.get_connection()
         cursor = conn.execute(
@@ -697,10 +675,12 @@ class SQLitePendingConversationTurnStore:
         existing = self.get_pending_turn(normalized_pending_turn_id)
         if existing is None:
             raise KeyError(f"pending turn 不存在: {normalized_pending_turn_id}")
-        _ensure_session_active(
+        ensure_session_active(
             self._session_activity,
             session_id=existing.session_id,
             operation="record_resume_attempt",
+            module=MODULE,
+            target_name="pending turn",
         )
         conn = self._host_store.get_connection()
         # 用 BEGIN IMMEDIATE 序列化 UPDATE / DELETE / re-read，避免并发下
@@ -770,10 +750,12 @@ class SQLitePendingConversationTurnStore:
         existing = self.get_pending_turn(normalized_pending_turn_id)
         if existing is None:
             raise KeyError(f"pending turn 不存在: {normalized_pending_turn_id}")
-        _ensure_session_active(
+        ensure_session_active(
             self._session_activity,
             session_id=existing.session_id,
             operation="record_resume_failure",
+            module=MODULE,
+            target_name="pending turn",
         )
         conn = self._host_store.get_connection()
         cursor = conn.execute(
