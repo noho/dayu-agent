@@ -9,12 +9,9 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import TYPE_CHECKING, NoReturn
+from typing import NoReturn
 
 from dayu.execution.cli_execution_options import add_execution_option_arguments
-
-if TYPE_CHECKING:
-    from dayu.execution.options import ExecutionOptionsOverridePayload
 
 
 
@@ -756,78 +753,6 @@ def parse_arguments() -> argparse.Namespace:
 # CLI 参数解析共享工具函数
 # ---------------------------------------------------------------------------
 
-def parse_limits_override(
-    raw_json: str | None,
-    *,
-    field_name: str,
-) -> "ExecutionOptionsOverridePayload | None":
-    """解析工具 limits JSON 覆盖字符串。
+# 注：``parse_limits_override`` / ``parse_temperature_argument`` 已下沉到
+# ``dayu/execution/cli_execution_options.py``，避免 execution/ 层反向依赖 UI 层。
 
-    将 CLI / WeChat 等入口传入的 JSON 字符串解析为
-    ``ExecutionOptionsOverridePayload``，校验值类型（仅允许标量）。
-
-    Args:
-        raw_json: 原始 JSON 字符串；``None`` 表示未提供。
-        field_name: 当前参数名，用于错误提示。
-
-    Returns:
-        归一化后的覆盖字典；未提供时返回 ``None``。
-
-    Raises:
-        SystemExit: 当 JSON 非法、不是对象或包含非标量值时退出。
-    """
-
-    if raw_json is None:
-        return None
-    import json
-
-    from dayu.execution.options import ExecutionOptionsOverridePayload
-    from dayu.log import Log
-
-    try:
-        parsed = json.loads(raw_json)
-    except json.JSONDecodeError as exc:
-        Log.error(f"{field_name} 不是合法 JSON: {exc}", module=_PARSE_MODULE)
-        raise SystemExit(2) from exc
-    if not isinstance(parsed, dict):
-        Log.error(f"{field_name} 必须是 JSON 对象", module=_PARSE_MODULE)
-        raise SystemExit(2)
-    normalized: ExecutionOptionsOverridePayload = {}
-    for key, value in parsed.items():
-        if value is None or isinstance(value, str | int | float | bool):
-            normalized[str(key)] = value
-            continue
-        Log.error(f"{field_name} 只允许 JSON 标量值，字段 {key!r} 非法", module=_PARSE_MODULE)
-        raise SystemExit(2)
-    return normalized
-
-
-def parse_temperature_argument(
-    raw_value: str | int | float | None,
-    *,
-    field_name: str,
-) -> float | None:
-    """解析 temperature 参数。
-
-    Args:
-        raw_value: 原始参数值。
-        field_name: 参数名，仅用于错误提示。
-
-    Returns:
-        标准化后的 temperature；未传时返回 ``None``。
-
-    Raises:
-        SystemExit: 当 temperature 非法时退出。
-    """
-
-    from dayu.execution.options import normalize_temperature
-    from dayu.log import Log
-
-    try:
-        return normalize_temperature(raw_value, field_name=field_name)
-    except ValueError as exc:
-        Log.error(str(exc), module=_PARSE_MODULE)
-        raise SystemExit(2) from exc
-
-
-_PARSE_MODULE = "CLI.ARGS"

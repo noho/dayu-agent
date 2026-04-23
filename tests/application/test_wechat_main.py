@@ -1139,7 +1139,7 @@ def test_wechat_main_helper_functions_cover_env_identity_parsing_and_signal_clea
     assert identity.instance_label == "default"
     assert identity.label == "com.dayu.wechat.test"
     assert identity.definition_path == (tmp_path / "com.dayu.wechat.test.launchd")
-    from dayu.cli.arg_parsing import parse_limits_override, parse_temperature_argument
+    from dayu.execution.cli_execution_options import parse_limits_override, parse_temperature_argument
     with pytest.raises(SystemExit, match="2"):
         parse_limits_override("{bad json}", field_name="--doc-limits-json")
     with pytest.raises(SystemExit, match="2"):
