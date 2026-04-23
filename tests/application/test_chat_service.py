@@ -858,7 +858,7 @@ def test_resume_pending_turn_deletes_record_after_max_attempts(monkeypatch: pyte
     )
     host_executor = _executor(service)
 
-    async def _failing_run_prepared_turn_stream(_prepared_turn):
+    async def _failing_run_prepared_turn_stream(_prepared_turn, *, resumed_pending_turn_id=None):
         raise RuntimeError("network boom")
         yield  # pragma: no cover
 

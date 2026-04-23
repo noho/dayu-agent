@@ -390,6 +390,43 @@ class PendingConversationTurnStoreProtocol(Protocol):
         """记录一次 pending turn 恢复失败。"""
         ...
 
+    def release_resume_lease(self, pending_turn_id: str) -> PendingConversationTurn | None:
+        """把 RESUMING 的 pending turn 原子回退到 ``pre_resume_state``。
+
+        Args:
+            pending_turn_id: 目标 pending turn ID。
+
+        Returns:
+            回退后的 pending turn；若记录缺失或当前 state 非 RESUMING 则
+            返回 ``None`` 或原记录（幂等 no-op）。
+
+        Raises:
+            无：状态不符合回退条件时视为 no-op。
+        """
+        ...
+
+    def rebind_source_run_id_for_resume(
+        self,
+        pending_turn_id: str,
+        *,
+        new_source_run_id: str,
+    ) -> PendingConversationTurn:
+        """在持有 RESUMING lease 的前提下把 ``source_run_id`` 原子重绑到当前 resumed run。
+
+        Args:
+            pending_turn_id: 目标 pending turn ID。
+            new_source_run_id: 当前 resumed run 的 run_id。
+
+        Returns:
+            重绑后的 pending turn 记录。
+
+        Raises:
+            KeyError: 记录不存在时抛出。
+            ValueError: ``new_source_run_id`` 为空字符串时抛出。
+            PendingTurnResumeConflictError: 当前 state 非 ``RESUMING`` 时抛出。
+        """
+        ...
+
     def delete_pending_turn(self, pending_turn_id: str) -> None:
         """删除指定 pending turn。"""
         ...

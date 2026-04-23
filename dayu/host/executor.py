@@ -387,11 +387,17 @@ class DefaultHostExecutor(HostExecutorProtocol):
     async def run_agent_stream(
         self,
         execution_contract: ExecutionContract,
+        *,
+        resumed_pending_turn_id: str | None = None,
     ) -> AsyncIterator[Any]:
         """托管一次 Agent 子执行并返回应用层事件流。
 
         Args:
             execution_contract: Service 输出的执行契约。
+            resumed_pending_turn_id: 仅在 Host 层发起 pending turn resume 流程时传入，
+                表示本次执行已由 Host 端持有 RESUMING lease；executor 必须跳过
+                ``_register_accepted_pending_turn`` 的 upsert，以免覆盖调用方持有的
+                lease。非 resume 路径保持 ``None``。
 
         Returns:
             应用层事件流。
@@ -420,10 +426,6 @@ class DefaultHostExecutor(HostExecutorProtocol):
         context, bridge, deadline_watcher, permits = self._start_run(
             spec=spec, run_id=run.run_id, include_agent_lane=True,
         )
-        pending_turn_id = self._register_accepted_pending_turn(
-            execution_contract=execution_contract,
-            run_id=run.run_id,
-        )
         resumable = bool(execution_contract.host_policy.resumable)
         Log.debug(
             _build_agent_run_start_debug_message(
@@ -437,11 +439,34 @@ class DefaultHostExecutor(HostExecutorProtocol):
             ),
             module=MODULE,
         )
+        pending_turn_id: str | None = None
         try:
+            # pending turn 登记 / resume lease 重绑必须在 try/finally 收敛范围内：
+            # 任一抛异常都必须把当前新 run 推进到终态并释放 permit / deadline
+            # watcher / cancellation bridge，否则会泄漏活跃 run。
+            pending_turn_id = (
+                resumed_pending_turn_id
+                if resumed_pending_turn_id is not None
+                else self._register_accepted_pending_turn(
+                    execution_contract=execution_contract,
+                    run_id=run.run_id,
+                )
+            )
+            if resumed_pending_turn_id is not None and self.pending_turn_store is not None:
+                # resume 路径下跳过了 _register_*_pending_turn 的 upsert，必须显式把
+                # pending turn 的 source_run_id 重绑到当前 resumed run；否则 "成功执行
+                # 后 delete 瞬时失败" 会留下 source_run_id 指向旧 timeout-cancelled run
+                # 的残留，后续 resume gate 仍会放行，触发重复恢复。
+                self.pending_turn_store.rebind_source_run_id_for_resume(
+                    resumed_pending_turn_id,
+                    new_source_run_id=run.run_id,
+                )
             prepared_execution = await self.scene_preparation.prepare(execution_contract, context)
             if resumable and prepared_execution.resume_snapshot is None:
                 raise RuntimeError("resumable scene preparation 缺少 prepared snapshot")
-            if prepared_execution.resume_snapshot is not None:
+            if prepared_execution.resume_snapshot is not None and resumed_pending_turn_id is None:
+                # resume 路径已由 Host 端持有 RESUMING lease，不能再 upsert 覆盖；
+                # 非 resume 路径在此刻把 pending turn 切换到 prepared 真源。
                 pending_turn_id = self._register_prepared_pending_turn(
                     prepared_turn=prepared_execution.resume_snapshot,
                     run_id=run.run_id,
@@ -479,8 +504,18 @@ class DefaultHostExecutor(HostExecutorProtocol):
     async def run_prepared_turn_stream(
         self,
         prepared_turn: PreparedAgentTurnSnapshot,
+        *,
+        resumed_pending_turn_id: str | None = None,
     ) -> AsyncIterator[Any]:
-        """基于 prepared turn 快照恢复一次 Agent 子执行。"""
+        """基于 prepared turn 快照恢复一次 Agent 子执行。
+
+        Args:
+            prepared_turn: Host prepared snapshot。
+            resumed_pending_turn_id: 仅在 Host 层发起 pending turn resume 流程时传入，
+                表示本次执行已由 Host 端持有 RESUMING lease；executor 必须跳过
+                ``_register_prepared_pending_turn`` 的 upsert，以免覆盖调用方持有
+                的 lease。非 resume 路径保持 ``None``。
+        """
 
         if self.scene_preparation is None:
             raise RuntimeError("当前 HostExecutor 未配置 scene preparation")
@@ -495,7 +530,6 @@ class DefaultHostExecutor(HostExecutorProtocol):
         context, bridge, deadline_watcher, permits = self._start_run(
             spec=spec, run_id=run.run_id, include_agent_lane=True,
         )
-        pending_turn_id = self._register_prepared_pending_turn(prepared_turn=prepared_turn, run_id=run.run_id)
         resumable = bool(prepared_turn.resumable)
         Log.debug(
             _build_agent_run_start_debug_message(
@@ -509,7 +543,25 @@ class DefaultHostExecutor(HostExecutorProtocol):
             ),
             module=MODULE,
         )
+        pending_turn_id: str | None = None
         try:
+            # pending turn 登记 / resume lease 重绑必须在 try/finally 收敛范围内：
+            # 任一抛异常都必须把当前新 run 推进到终态并释放 permit / deadline
+            # watcher / cancellation bridge，否则会泄漏活跃 run。
+            pending_turn_id = (
+                resumed_pending_turn_id
+                if resumed_pending_turn_id is not None
+                else self._register_prepared_pending_turn(
+                    prepared_turn=prepared_turn, run_id=run.run_id,
+                )
+            )
+            if resumed_pending_turn_id is not None and self.pending_turn_store is not None:
+                # 同 run_agent_stream 的 resume 分支：显式把 source_run_id 切到当前
+                # resumed run，避免 delete 失败后旧 source_run 被再次放行恢复。
+                self.pending_turn_store.rebind_source_run_id_for_resume(
+                    resumed_pending_turn_id,
+                    new_source_run_id=run.run_id,
+                )
             agent_input = await self.scene_preparation.restore_prepared_execution(prepared_turn, context)
             async for event in self._run_prepared_agent_stream(
                 run_id=run.run_id,

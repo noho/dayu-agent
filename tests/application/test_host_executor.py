@@ -31,7 +31,11 @@ from dayu.host.host import Host
 from dayu.host.conversation_store import ConversationTranscript
 from dayu.host.host_execution import HostedRunContext, HostedRunSpec
 from dayu.host.executor import DefaultHostExecutor
-from dayu.host.prepared_turn import PreparedAgentTurnSnapshot, PreparedConversationSessionSnapshot
+from dayu.host.prepared_turn import (
+    PreparedAgentTurnSnapshot,
+    PreparedConversationSessionSnapshot,
+    serialize_prepared_agent_turn_snapshot,
+)
 from dayu.host.scene_preparer import PreparedAgentExecution
 from dayu.contracts.events import AppEvent, AppEventType
 from dayu.contracts.cancellation import CancelledError
@@ -39,7 +43,8 @@ from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.engine.events import EventType, StreamEvent
 from dayu.host.host_store import HostStore
 from dayu.host.run_registry import SQLiteRunRegistry
-from dayu.host.pending_turn_store import PendingConversationTurnState
+from dayu.host.pending_turn_store import PendingConversationTurn, PendingConversationTurnState
+from dayu.host.protocols import SessionClosedError
 from dayu.log import Log
 from dayu.contracts.run import ORPHAN_RUN_ERROR_SUMMARY
 
@@ -1799,3 +1804,640 @@ def test_hosted_run_spec_normalizes_execution_delivery_context() -> None:
         "delivery_target": "user-1",
         "filtered": True,
     }
+
+
+@pytest.mark.unit
+def test_resume_pending_turn_stream_keeps_lease_through_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """resume 路径下 DefaultHostExecutor 不得 upsert 覆盖 Host 端持有的 RESUMING lease。
+
+    用例构造真实 ``DefaultHostExecutor`` + ``StubPendingTurnStore``，预置一条
+    PREPARED_BY_HOST 状态的 pending turn，并让 source run 处于 TIMEOUT 取消终态；
+    调用 ``Host.resume_pending_turn_stream`` 后：
+
+    - ``_register_accepted_pending_turn`` / ``_register_prepared_pending_turn`` 均不应被调用，
+      即 executor 读取到的 `resumed_pending_turn_id` 非 None，不触发 upsert 覆盖；
+    - pending turn 最终按"成功执行 → delete"路径被清理，lease 没有被迫回到 PREPARED_BY_HOST。
+    """
+
+    from tests.application.conftest import (
+        StubPendingTurnStore,
+        StubRunRegistry,
+        StubSessionRegistry,
+    )
+
+    class _RecordingSessionState:
+        def persist_turn(self, **_kwargs) -> None:
+            return None
+
+    class _StubScenePreparation:
+        async def prepare(
+            self,
+            execution_contract: ExecutionContract,
+            run_context: HostedRunContext,
+        ) -> PreparedAgentExecution:
+            del run_context
+            raise AssertionError("resume 路径不应走 prepare")
+
+        async def restore_prepared_execution(
+            self,
+            prepared_turn: PreparedAgentTurnSnapshot,
+            run_context: HostedRunContext,
+        ) -> AgentInput:
+            del run_context
+            return AgentInput(
+                system_prompt=prepared_turn.system_prompt,
+                messages=list(prepared_turn.messages),
+                agent_create_args=prepared_turn.agent_create_args,
+                session_state=_RecordingSessionState(),
+            )
+
+    class _FakeAgent:
+        async def run_messages(self, messages, *, session_id, run_id, stream):
+            del messages, session_id, run_id, stream
+            yield StreamEvent(EventType.FINAL_ANSWER, {"content": "done", "degraded": False}, {})
+
+    session_registry = StubSessionRegistry()
+    session_registry.create_session(source=cast("object", "interactive"), session_id="s-resume-ok")  # type: ignore[arg-type]
+    run_registry = StubRunRegistry()
+    pending_turn_store = StubPendingTurnStore()
+
+    # 构造 prepared snapshot 及其真源 JSON
+    execution_contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="interactive",
+        host_policy=ExecutionHostPolicy(session_key="s-resume-ok", resumable=True),
+        preparation_spec=ScenePreparationSpec(),
+        message_inputs=ExecutionMessageInputs(user_message="问题-resume"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
+        execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
+        metadata={"delivery_channel": "interactive"},
+    )
+    prepared_execution = _build_prepared_execution(execution_contract=execution_contract)
+    prepared_turn = prepared_execution.resume_snapshot
+    assert prepared_turn is not None
+    prepared_turn_json = json.dumps(
+        serialize_prepared_agent_turn_snapshot(prepared_turn),
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+    # 登记并标记源 run 为 TIMEOUT 取消，使其满足 resume 的 source run 合法性校验
+    source_run = run_registry.register_run(
+        session_id="s-resume-ok",
+        service_type="chat_turn",
+        scene_name="interactive",
+    )
+    run_registry.start_run(source_run.run_id)
+    run_registry.mark_cancelled(source_run.run_id, cancel_reason=RunCancelReason.TIMEOUT)
+
+    seeded = pending_turn_store.seed_pending_turn(
+        session_id="s-resume-ok",
+        scene_name="interactive",
+        user_text="问题-resume",
+        source_run_id=source_run.run_id,
+        resumable=True,
+        resume_source_json=prepared_turn_json,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+
+    executor = DefaultHostExecutor(
+        run_registry=run_registry,  # type: ignore[arg-type]
+        pending_turn_store=pending_turn_store,  # type: ignore[arg-type]
+        scene_preparation=_StubScenePreparation(),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr("dayu.host.executor.build_async_agent", lambda **_: _FakeAgent())
+
+    # 侦测 _register_*_pending_turn 是否被调用；resume 路径下严禁触发
+    accepted_register_calls: list[str] = []
+    prepared_register_calls: list[str] = []
+
+    original_register_accepted = executor._register_accepted_pending_turn
+    original_register_prepared = executor._register_prepared_pending_turn
+
+    def _spy_register_accepted(**kwargs) -> str | None:  # type: ignore[no-untyped-def]
+        accepted_register_calls.append(kwargs.get("run_id", ""))
+        return original_register_accepted(**kwargs)
+
+    def _spy_register_prepared(**kwargs) -> str | None:  # type: ignore[no-untyped-def]
+        prepared_register_calls.append(kwargs.get("run_id", ""))
+        return original_register_prepared(**kwargs)
+
+    monkeypatch.setattr(executor, "_register_accepted_pending_turn", _spy_register_accepted)
+    monkeypatch.setattr(executor, "_register_prepared_pending_turn", _spy_register_prepared)
+
+    host = Host(
+        executor=executor,
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=run_registry,  # type: ignore[arg-type]
+        pending_turn_store=pending_turn_store,  # type: ignore[arg-type]
+    )
+
+    async def _collect() -> list[AppEvent]:
+        events: list[AppEvent] = []
+        async for event in host.resume_pending_turn_stream(
+            pending_turn_id=seeded.pending_turn_id,
+            session_id="s-resume-ok",
+        ):
+            events.append(event)
+        return events
+
+    events = asyncio.run(_collect())
+
+    assert accepted_register_calls == []
+    assert prepared_register_calls == []
+    # 执行成功后 pending turn 被 executor 正常清理
+    assert pending_turn_store.list_pending_turns(session_id="s-resume-ok", scene_name="interactive") == []
+    assert [event.type for event in events] == [AppEventType.FINAL_ANSWER]
+
+
+@pytest.mark.unit
+def test_resume_pending_turn_stream_second_resumer_rejected_without_deleting_record() -> None:
+    """第二位并发 resumer 在发现 RESUMING lease 时应被 ``ValueError`` 拒绝，且不得删除记录。
+
+    Finding 070 的老集成漏洞：在 acquire 之前按 state 解析真源，会把 RESUMING +
+    pre_resume_state=ACCEPTED_BY_HOST 的记录按 prepared snapshot 路径反序列化，
+    抛 "messages 必须是 JSON array"、被判定"永久损坏"后误删合法持有者的 lease。
+    修复后 Host 必须在 acquire 之后再解析，第二位申请直接在 acquire 阶段被拒，
+    不会进入反序列化分支，pending turn 记录保持存在。
+    """
+
+    from tests.application.conftest import (
+        StubHostExecutor,
+        StubPendingTurnStore,
+        StubRunRegistry,
+        StubSessionRegistry,
+    )
+
+    session_registry = StubSessionRegistry()
+    session_registry.create_session(source=cast("object", "interactive"), session_id="s-resume-conflict")  # type: ignore[arg-type]
+    run_registry = StubRunRegistry()
+    pending_turn_store = StubPendingTurnStore()
+
+    # 源 run 置为 TIMEOUT 取消，满足 source run 合法性校验
+    source_run = run_registry.register_run(
+        session_id="s-resume-conflict",
+        service_type="chat_turn",
+        scene_name="interactive",
+    )
+    run_registry.start_run(source_run.run_id)
+    run_registry.mark_cancelled(source_run.run_id, cancel_reason=RunCancelReason.TIMEOUT)
+
+    # 构造 accepted 真源 JSON：有效 payload，保证即便被错误路由到 prepared 反序列化
+    # 仍然能被检测出来——更重要的是验证"第二位根本不会进入解析"。
+    execution_contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="interactive",
+        host_policy=ExecutionHostPolicy(session_key="s-resume-conflict", resumable=True),
+        preparation_spec=ScenePreparationSpec(),
+        message_inputs=ExecutionMessageInputs(user_message="问题-冲突"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
+        execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
+        metadata={"delivery_channel": "interactive"},
+    )
+    prepared_execution = _build_prepared_execution(execution_contract=execution_contract)
+    prepared_turn = prepared_execution.resume_snapshot
+    assert prepared_turn is not None
+    prepared_turn_json = json.dumps(
+        serialize_prepared_agent_turn_snapshot(prepared_turn),
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+    seeded = pending_turn_store.seed_pending_turn(
+        session_id="s-resume-conflict",
+        scene_name="interactive",
+        user_text="问题-冲突",
+        source_run_id=source_run.run_id,
+        resumable=True,
+        resume_source_json=prepared_turn_json,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+
+    # 第一位 resumer：直接在仓储层 acquire，模拟已持有 RESUMING lease
+    first_record = pending_turn_store.record_resume_attempt(
+        seeded.pending_turn_id,
+        max_attempts=5,
+    )
+    assert first_record.state is PendingConversationTurnState.RESUMING
+    assert first_record.pre_resume_state is PendingConversationTurnState.PREPARED_BY_HOST
+
+    # 第二位 resumer：走 Host 入口，应在 acquire 阶段被拒绝
+    host = Host(
+        executor=StubHostExecutor(),  # type: ignore[arg-type]
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=run_registry,  # type: ignore[arg-type]
+        pending_turn_store=pending_turn_store,  # type: ignore[arg-type]
+    )
+
+    async def _second_resume() -> None:
+        async for _event in host.resume_pending_turn_stream(
+            pending_turn_id=seeded.pending_turn_id,
+            session_id="s-resume-conflict",
+        ):
+            pass
+
+    with pytest.raises(ValueError, match="正被其他 resumer 持有"):
+        asyncio.run(_second_resume())
+
+    # 第二位请求不得触碰 lease 或删除记录；留给第一位安全收尾
+    surviving = pending_turn_store.get_pending_turn_record(seeded.pending_turn_id)
+    assert surviving is not None
+    assert surviving.state is PendingConversationTurnState.RESUMING
+    assert surviving.pre_resume_state is PendingConversationTurnState.PREPARED_BY_HOST
+    # 第一位刚 acquire，attempt_count 应为 1；第二位被拒后不得再前进
+    assert surviving.resume_attempt_count == 1
+
+
+@pytest.mark.unit
+def test_resume_pending_turn_stream_rebinds_source_run_id_and_blocks_reresume_when_delete_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """resume 成功执行后即便 delete_pending_turn 失败，后续 resumer 也必须被拒。
+
+    修复 Finding 070 三次加固引入的回归：resume 路径为避免覆盖 RESUMING lease
+    跳过了 ``_register_*_pending_turn``，但若不重绑 ``source_run_id`` 到当前
+    resumed run，则"delete 瞬时失败"场景下旧 timeout-cancelled run 仍会被
+    ``_validate_source_run_for_resume`` 认作"可 resume 的 cancelled run"，触发
+    重复恢复窗口。本测试模拟 delete 失败 → 断言 pending turn 的 source_run_id
+    已指向当前 resumed run；下次 resume 尝试因新 run 处于 SUCCEEDED 终态被拒。
+    """
+
+    from tests.application.conftest import (
+        StubPendingTurnStore,
+        StubRunRegistry,
+        StubSessionRegistry,
+    )
+
+    class _RecordingSessionState:
+        def persist_turn(self, **_kwargs) -> None:
+            return None
+
+    class _DeleteFailingPendingTurnStore(StubPendingTurnStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.delete_attempts = 0
+
+        def delete_pending_turn(self, pending_turn_id: str) -> None:
+            self.delete_attempts += 1
+            # 只模拟首次 delete 瞬时失败
+            if self.delete_attempts <= 1:
+                raise RuntimeError("delete failed")
+            super().delete_pending_turn(pending_turn_id)
+
+    class _StubScenePreparation:
+        async def prepare(
+            self,
+            execution_contract: ExecutionContract,
+            run_context: HostedRunContext,
+        ) -> PreparedAgentExecution:
+            del run_context
+            raise AssertionError("resume 路径不应走 prepare")
+
+        async def restore_prepared_execution(
+            self,
+            prepared_turn: PreparedAgentTurnSnapshot,
+            run_context: HostedRunContext,
+        ) -> AgentInput:
+            del run_context
+            return AgentInput(
+                system_prompt=prepared_turn.system_prompt,
+                messages=list(prepared_turn.messages),
+                agent_create_args=prepared_turn.agent_create_args,
+                session_state=_RecordingSessionState(),
+            )
+
+    class _FakeAgent:
+        async def run_messages(self, messages, *, session_id, run_id, stream):
+            del messages, session_id, run_id, stream
+            yield StreamEvent(EventType.FINAL_ANSWER, {"content": "done", "degraded": False}, {})
+
+    session_registry = StubSessionRegistry()
+    session_registry.create_session(source=cast("object", "interactive"), session_id="s-rebind")  # type: ignore[arg-type]
+    run_registry = StubRunRegistry()
+    pending_turn_store = _DeleteFailingPendingTurnStore()
+
+    execution_contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="interactive",
+        host_policy=ExecutionHostPolicy(session_key="s-rebind", resumable=True),
+        preparation_spec=ScenePreparationSpec(),
+        message_inputs=ExecutionMessageInputs(user_message="问题-rebind"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
+        execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
+        metadata={"delivery_channel": "interactive"},
+    )
+    prepared_execution = _build_prepared_execution(execution_contract=execution_contract)
+    prepared_turn = prepared_execution.resume_snapshot
+    assert prepared_turn is not None
+    prepared_turn_json = json.dumps(
+        serialize_prepared_agent_turn_snapshot(prepared_turn),
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+    source_run = run_registry.register_run(
+        session_id="s-rebind",
+        service_type="chat_turn",
+        scene_name="interactive",
+    )
+    run_registry.start_run(source_run.run_id)
+    run_registry.mark_cancelled(source_run.run_id, cancel_reason=RunCancelReason.TIMEOUT)
+
+    seeded = pending_turn_store.seed_pending_turn(
+        session_id="s-rebind",
+        scene_name="interactive",
+        user_text="问题-rebind",
+        source_run_id=source_run.run_id,
+        resumable=True,
+        resume_source_json=prepared_turn_json,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+
+    executor = DefaultHostExecutor(
+        run_registry=run_registry,  # type: ignore[arg-type]
+        pending_turn_store=pending_turn_store,  # type: ignore[arg-type]
+        scene_preparation=_StubScenePreparation(),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr("dayu.host.executor.build_async_agent", lambda **_: _FakeAgent())
+
+    host = Host(
+        executor=executor,
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=run_registry,  # type: ignore[arg-type]
+        pending_turn_store=pending_turn_store,  # type: ignore[arg-type]
+    )
+
+    async def _resume_once() -> None:
+        async for _event in host.resume_pending_turn_stream(
+            pending_turn_id=seeded.pending_turn_id,
+            session_id="s-rebind",
+        ):
+            pass
+
+    # 首次 resume：执行本体成功但 delete 瞬时失败；executor 会吞掉 delete 异常
+    # 并把 run 按成功路径收口（顺带依赖后续 resume gate 拒绝重放作为兜底）。
+    asyncio.run(_resume_once())
+    assert pending_turn_store.delete_attempts >= 1
+
+    # pending turn 仍存在（因首次 delete 失败），但 source_run_id 必须已被重绑到当前 resumed run
+    surviving = pending_turn_store.get_pending_turn_record(seeded.pending_turn_id)
+    assert surviving is not None
+    assert surviving.source_run_id != source_run.run_id
+    rebound_run = run_registry.get_run(surviving.source_run_id)
+    assert rebound_run is not None
+    # 当前 resumed run 已成功执行 → SUCCEEDED；后续 resume gate 应据此拒绝
+    assert rebound_run.state == RunState.SUCCEEDED
+
+    # 第二次 resume 尝试：_validate_source_run_for_resume 看到新 run 已 SUCCEEDED，
+    # 按"V1 不支持补投递恢复"路径拒绝；老的 timeout-cancelled run 不再被认作 gate。
+    with pytest.raises(ValueError, match="已成功完成"):
+        asyncio.run(_resume_once())
+
+
+@pytest.mark.unit
+def test_resume_pending_turn_stream_rebind_failure_finishes_run_without_leak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """rebind_source_run_id_for_resume 抛异常时当前 resumed run 必须进入 FAILED 终态。
+
+    Finding 070 四次加固回归测试：此前 ``rebind_source_run_id_for_resume`` 放在 executor
+    主体 try/finally 之外——若它因 ``SessionClosedError`` 等仓储异常抛出，则当前已经
+    ``register_run`` + ``_start_run`` 创建的 run 不会进入 except/finally 收敛路径，
+    ``_finish_run`` 不执行，permit / deadline watcher / cancellation bridge 全部泄漏，
+    run 永久卡在 RUNNING。
+
+    本用例通过 wrapper pending turn store 让 rebind 抛 ``SessionClosedError``，断言：
+    - ``Host.resume_pending_turn_stream`` 把异常按 Host 层约定转成 ``ValueError``
+      并回退 lease；
+    - 新建的 resumed run 不再停留在 RUNNING——由 executor 的 try/except 收敛为 FAILED；
+    - 不遗留活跃 run，``list_active_runs`` 为空。
+    """
+
+    from tests.application.conftest import (
+        StubPendingTurnStore,
+        StubRunRegistry,
+        StubSessionRegistry,
+    )
+
+    class _RebindFailingPendingTurnStore(StubPendingTurnStore):
+        """rebind 抛 SessionClosedError 的 wrapper，用于复现异常收敛缺口。"""
+
+        def rebind_source_run_id_for_resume(
+            self,
+            pending_turn_id: str,
+            *,
+            new_source_run_id: str,
+        ) -> PendingConversationTurn:
+            del pending_turn_id, new_source_run_id
+            raise SessionClosedError("session closed during rebind")
+
+    class _StubScenePreparation:
+        async def prepare(
+            self,
+            execution_contract: ExecutionContract,
+            run_context: HostedRunContext,
+        ) -> PreparedAgentExecution:
+            del execution_contract, run_context
+            raise AssertionError("rebind 失败路径不应走 prepare")
+
+        async def restore_prepared_execution(
+            self,
+            prepared_turn: PreparedAgentTurnSnapshot,
+            run_context: HostedRunContext,
+        ) -> AgentInput:
+            del prepared_turn, run_context
+            raise AssertionError("rebind 失败路径不应走 restore")
+
+    session_registry = StubSessionRegistry()
+    session_registry.create_session(source=cast("object", "interactive"), session_id="s-rebind-fail")  # type: ignore[arg-type]
+    run_registry = StubRunRegistry()
+    pending_turn_store = _RebindFailingPendingTurnStore()
+
+    execution_contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="interactive",
+        host_policy=ExecutionHostPolicy(session_key="s-rebind-fail", resumable=True),
+        preparation_spec=ScenePreparationSpec(),
+        message_inputs=ExecutionMessageInputs(user_message="问题-rebind-fail"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
+        execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
+        metadata={"delivery_channel": "interactive"},
+    )
+    prepared_execution = _build_prepared_execution(execution_contract=execution_contract)
+    prepared_turn = prepared_execution.resume_snapshot
+    assert prepared_turn is not None
+    prepared_turn_json = json.dumps(
+        serialize_prepared_agent_turn_snapshot(prepared_turn),
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+    source_run = run_registry.register_run(
+        session_id="s-rebind-fail",
+        service_type="chat_turn",
+        scene_name="interactive",
+    )
+    run_registry.start_run(source_run.run_id)
+    run_registry.mark_cancelled(source_run.run_id, cancel_reason=RunCancelReason.TIMEOUT)
+
+    seeded = pending_turn_store.seed_pending_turn(
+        session_id="s-rebind-fail",
+        scene_name="interactive",
+        user_text="问题-rebind-fail",
+        source_run_id=source_run.run_id,
+        resumable=True,
+        resume_source_json=prepared_turn_json,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+
+    executor = DefaultHostExecutor(
+        run_registry=run_registry,  # type: ignore[arg-type]
+        pending_turn_store=pending_turn_store,  # type: ignore[arg-type]
+        scene_preparation=_StubScenePreparation(),  # type: ignore[arg-type]
+    )
+
+    host = Host(
+        executor=executor,
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=run_registry,  # type: ignore[arg-type]
+        pending_turn_store=pending_turn_store,  # type: ignore[arg-type]
+    )
+
+    async def _resume() -> None:
+        async for _event in host.resume_pending_turn_stream(
+            pending_turn_id=seeded.pending_turn_id,
+            session_id="s-rebind-fail",
+        ):
+            pass
+
+    # Host 必须把内部仓储屏障异常 (SessionClosedError) 收敛为业务语义
+    # ValueError，避免把 RuntimeError 子类泄漏到 Service / UI。
+    with pytest.raises(ValueError, match="session 已关闭"):
+        asyncio.run(_resume())
+
+    # 关键断言 1：不泄漏活跃 run —— rebind 抛异常后 executor 的 try/except/finally
+    # 应把新创建的 resumed run 推进到终态（FAILED），permit / bridge / watcher 释放。
+    assert run_registry.list_active_runs() == []
+
+    # 关键断言 2：新 resumed run 必须处于失败终态，而非 RUNNING / CREATED。
+    resumed_runs = [
+        run for run in run_registry.list_runs(session_id="s-rebind-fail")
+        if run.run_id != source_run.run_id
+    ]
+    assert len(resumed_runs) == 1
+    assert resumed_runs[0].state == RunState.FAILED
+
+    # 关键断言 3：pending turn lease 应被 Host 层回退至可 resume 状态，
+    # 而非卡在 RESUMING（由 Host 外层的 release_resume_lease 保证）。
+    surviving = pending_turn_store.get_pending_turn_record(seeded.pending_turn_id)
+    assert surviving is not None
+    assert surviving.state in {
+        PendingConversationTurnState.PREPARED_BY_HOST,
+        PendingConversationTurnState.ACCEPTED_BY_HOST,
+    }
+    del monkeypatch  # 本用例未使用 monkeypatch，保留签名与现有 fixture 约定一致
+
+
+@pytest.mark.unit
+def test_resume_pending_turn_stream_translates_session_closed_error_at_acquire() -> None:
+    """acquire resume lease 阶段仓储抛 SessionClosedError 时 Host 必须转为 ValueError。
+
+    Finding 070 五次加固的剩余缺口：``record_resume_attempt`` 自身在仓储层入口会跑
+    ``ensure_session_active`` 屏障；若 session 恰在 acquire 瞬间被关闭，``SessionClosedError``
+    会在 lease 尚未落地时抛出。此前 Host 只在 ``except Exception`` 收尾分支做了
+    ``SessionClosedError -> ValueError`` 转译，acquire 阶段未被覆盖，RuntimeError 子类仍
+    会泄漏给 Service / UI，与 docstring 声明的 ``KeyError | ValueError`` 契约不一致。
+
+    本用例让 ``record_resume_attempt`` 直接抛 ``SessionClosedError``，断言：
+    - ``Host.resume_pending_turn_stream`` 对外只抛 ``ValueError("...session 已关闭...")``；
+    - 异常链 ``__cause__`` 仍指向原始 ``SessionClosedError``，便于诊断；
+    - 失败发生在 acquire 阶段，executor 不应被触发——``list_active_runs`` 为空，
+      pending turn 记录保持可 resume 态（未被推入 RESUMING）。
+    """
+
+    from tests.application.conftest import (
+        StubHostExecutor,
+        StubPendingTurnStore,
+        StubRunRegistry,
+        StubSessionRegistry,
+    )
+
+    class _AcquireBarrierPendingTurnStore(StubPendingTurnStore):
+        """acquire 阶段仓储屏障抛 SessionClosedError 的 wrapper。"""
+
+        def record_resume_attempt(
+            self,
+            pending_turn_id: str,
+            *,
+            max_attempts: int,
+        ) -> PendingConversationTurn:
+            del pending_turn_id, max_attempts
+            raise SessionClosedError("s-acquire-barrier")
+
+    session_registry = StubSessionRegistry()
+    session_registry.create_session(source=cast("object", "interactive"), session_id="s-acquire-barrier")  # type: ignore[arg-type]
+    run_registry = StubRunRegistry()
+    pending_turn_store = _AcquireBarrierPendingTurnStore()
+
+    source_run = run_registry.register_run(
+        session_id="s-acquire-barrier",
+        service_type="chat_turn",
+        scene_name="interactive",
+    )
+    run_registry.start_run(source_run.run_id)
+    run_registry.mark_cancelled(source_run.run_id, cancel_reason=RunCancelReason.TIMEOUT)
+
+    execution_contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="interactive",
+        host_policy=ExecutionHostPolicy(session_key="s-acquire-barrier", resumable=True),
+        preparation_spec=ScenePreparationSpec(),
+        message_inputs=ExecutionMessageInputs(user_message="问题-acquire-barrier"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
+        execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
+        metadata={"delivery_channel": "interactive"},
+    )
+    prepared_execution = _build_prepared_execution(execution_contract=execution_contract)
+    prepared_turn = prepared_execution.resume_snapshot
+    assert prepared_turn is not None
+    prepared_turn_json = json.dumps(
+        serialize_prepared_agent_turn_snapshot(prepared_turn),
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    seeded = pending_turn_store.seed_pending_turn(
+        session_id="s-acquire-barrier",
+        scene_name="interactive",
+        user_text="问题-acquire-barrier",
+        source_run_id=source_run.run_id,
+        resumable=True,
+        resume_source_json=prepared_turn_json,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+
+    host = Host(
+        executor=StubHostExecutor(),  # type: ignore[arg-type]
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=run_registry,  # type: ignore[arg-type]
+        pending_turn_store=pending_turn_store,  # type: ignore[arg-type]
+    )
+
+    async def _resume() -> None:
+        async for _event in host.resume_pending_turn_stream(
+            pending_turn_id=seeded.pending_turn_id,
+            session_id="s-acquire-barrier",
+        ):
+            pass
+
+    with pytest.raises(ValueError, match="session 已关闭") as exc_info:
+        asyncio.run(_resume())
+    # 保留诊断链路：原始仓储屏障异常应挂在 __cause__ 上。
+    assert isinstance(exc_info.value.__cause__, SessionClosedError)
+
+    # acquire 阶段失败，executor 不应被触发；无活跃 run、lease 未进 RESUMING。
+    assert run_registry.list_active_runs() == []
+    surviving = pending_turn_store.get_pending_turn_record(seeded.pending_turn_id)
+    assert surviving is not None
+    assert surviving.state is PendingConversationTurnState.PREPARED_BY_HOST

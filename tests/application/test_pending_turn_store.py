@@ -21,6 +21,7 @@ from dayu.host.conversation_store import ConversationTranscript
 from dayu.host.pending_turn_store import (
     InMemoryPendingConversationTurnStore,
     PendingConversationTurnState,
+    PendingTurnResumeConflictError,
     SQLitePendingConversationTurnStore,
 )
 from dayu.host.prepared_turn import (
@@ -582,6 +583,154 @@ def test_inmemory_pending_turn_store_exhausted_attempt_deletes_record() -> None:
         store.record_resume_attempt(created.pending_turn_id, max_attempts=1)
 
     assert store.get_pending_turn(created.pending_turn_id) is None
+
+
+@pytest.mark.unit
+def test_sqlite_pending_turn_store_rejects_concurrent_resume_acquire(tmp_path: Path) -> None:
+    """并发 acquire 必须只有一方拿到 RESUMING，另一方抛 PendingTurnResumeConflictError。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLitePendingConversationTurnStore(host_store)
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题一",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+        resume_source_json='{"scene_name": "wechat"}',
+    )
+
+    success_ids: list[str] = []
+    conflicts: list[str] = []
+    lock = threading.Lock()
+    barrier = threading.Barrier(2)
+
+    def _worker() -> None:
+        try:
+            barrier.wait(timeout=5)
+            record = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+            with lock:
+                success_ids.append(record.pending_turn_id)
+        except PendingTurnResumeConflictError as exc:
+            with lock:
+                conflicts.append(str(exc))
+
+    t1 = threading.Thread(target=_worker)
+    t2 = threading.Thread(target=_worker)
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    assert len(success_ids) == 1
+    assert len(conflicts) == 1
+    current = store.get_pending_turn(created.pending_turn_id)
+    assert current is not None
+    assert current.state is PendingConversationTurnState.RESUMING
+    assert current.pre_resume_state is PendingConversationTurnState.PREPARED_BY_HOST
+    # 只前进一次 attempt count —— 体现互斥而非双写
+    assert current.resume_attempt_count == 1
+
+
+@pytest.mark.unit
+def test_inmemory_pending_turn_store_rejects_duplicate_resume_acquire() -> None:
+    """内存实现二次 acquire 必须抛 PendingTurnResumeConflictError。"""
+
+    store = InMemoryPendingConversationTurnStore()
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题一",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+
+    first = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+    assert first.state is PendingConversationTurnState.RESUMING
+    assert first.pre_resume_state is PendingConversationTurnState.PREPARED_BY_HOST
+
+    with pytest.raises(PendingTurnResumeConflictError):
+        store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+
+
+@pytest.mark.unit
+def test_sqlite_pending_turn_store_release_resume_lease_restores_state(tmp_path: Path) -> None:
+    """release_resume_lease 把 RESUMING 原子回退到 pre_resume_state。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLitePendingConversationTurnStore(host_store)
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题一",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+        resume_source_json='{"scene_name": "wechat"}',
+    )
+    store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+
+    released = store.release_resume_lease(created.pending_turn_id)
+    assert released is not None
+    assert released.state is PendingConversationTurnState.PREPARED_BY_HOST
+    assert released.pre_resume_state is None
+
+    # 幂等：非 RESUMING 再调用返回当前记录（no-op），不再变更 state。
+    again = store.release_resume_lease(created.pending_turn_id)
+    assert again is not None
+    assert again.state is PendingConversationTurnState.PREPARED_BY_HOST
+    assert again.pre_resume_state is None
+
+
+@pytest.mark.unit
+def test_sqlite_pending_turn_store_record_resume_failure_releases_lease(tmp_path: Path) -> None:
+    """record_resume_failure 在 RESUMING 态应同时写错误消息并回退 state。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLitePendingConversationTurnStore(host_store)
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题一",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+        resume_source_json='{"scene_name": "wechat"}',
+    )
+    store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+
+    failed = store.record_resume_failure(created.pending_turn_id, error_message="boom")
+    assert failed.state is PendingConversationTurnState.PREPARED_BY_HOST
+    assert failed.pre_resume_state is None
+    assert failed.last_resume_error_message == "boom"
+
+
+@pytest.mark.unit
+def test_inmemory_pending_turn_store_release_resume_lease_restores_state() -> None:
+    """内存实现的 release_resume_lease 行为与 SQLite 等价。"""
+
+    store = InMemoryPendingConversationTurnStore()
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题一",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.ACCEPTED_BY_HOST,
+    )
+    store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+
+    released = store.release_resume_lease(created.pending_turn_id)
+    assert released is not None
+    assert released.state is PendingConversationTurnState.ACCEPTED_BY_HOST
+    assert released.pre_resume_state is None
+
+    assert store.release_resume_lease(created.pending_turn_id) is not None
 
 
 @pytest.mark.unit

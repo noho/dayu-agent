@@ -396,6 +396,7 @@ class StubHostExecutor:
         self.last_spec: HostedRunSpec | None = None
         self.last_execution_contract: ExecutionContract | None = None
         self.last_prepared_turn: PreparedAgentTurnSnapshot | None = None
+        self.last_resumed_pending_turn_id: str | None = None
         self.stream_call_count = 0
         self.sync_call_count = 0
 
@@ -431,10 +432,13 @@ class StubHostExecutor:
     async def run_agent_stream(
         self,
         execution_contract: ExecutionContract,
+        *,
+        resumed_pending_turn_id: str | None = None,
     ) -> AsyncIterator[AppEvent]:
         """执行 Agent 路径 stub。"""
 
         self.last_execution_contract = execution_contract
+        self.last_resumed_pending_turn_id = resumed_pending_turn_id
         yield AppEvent(type=AppEventType.CONTENT_DELTA, payload="hello", meta={})
         yield AppEvent(
             type=AppEventType.FINAL_ANSWER,
@@ -445,10 +449,13 @@ class StubHostExecutor:
     async def run_prepared_turn_stream(
         self,
         prepared_turn: PreparedAgentTurnSnapshot,
+        *,
+        resumed_pending_turn_id: str | None = None,
     ) -> AsyncIterator[AppEvent]:
         """执行 prepared turn 恢复路径 stub。"""
 
         self.last_prepared_turn = prepared_turn
+        self.last_resumed_pending_turn_id = resumed_pending_turn_id
         yield AppEvent(type=AppEventType.CONTENT_DELTA, payload="hello", meta={})
         yield AppEvent(
             type=AppEventType.FINAL_ANSWER,

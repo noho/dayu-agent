@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS pending_conversation_turns (
     resume_source_json TEXT NOT NULL DEFAULT '',
     resume_attempt_count INTEGER NOT NULL DEFAULT 0,
     last_resume_error_message TEXT,
+    pre_resume_state TEXT,
     metadata_json   TEXT NOT NULL DEFAULT '{}'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_turns_session_scene
