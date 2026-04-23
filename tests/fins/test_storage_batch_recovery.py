@@ -18,6 +18,10 @@ import dayu.fins.storage._fs_storage_infra as fs_storage_infra_module
 from dayu.fins.storage.fs_company_meta_repository import FsCompanyMetaRepository
 from tests.fins.storage_testkit import build_fs_storage_test_context
 
+_LOCK_HOLDER_POLL_INTERVAL_SEC = 0.05
+_LOCK_HOLDER_READY_TIMEOUT_SEC = 15.0
+_LOCK_HOLDER_STOP_TIMEOUT_SEC = 15.0
+
 
 class _LockHolderState(TypedDict):
     """跨进程持锁子进程回传的状态。"""
@@ -169,7 +173,7 @@ def _wait_for_lock_holder_state(process: subprocess.Popen[str], ready_path: Path
         AssertionError: 子进程提前退出或超时未就绪时抛出。
     """
 
-    deadline = time.monotonic() + 5.0
+    deadline = time.monotonic() + _LOCK_HOLDER_READY_TIMEOUT_SEC
     while time.monotonic() < deadline:
         if ready_path.exists():
             raw_payload = json.loads(ready_path.read_text(encoding="utf-8"))
@@ -192,9 +196,9 @@ def _wait_for_lock_holder_state(process: subprocess.Popen[str], ready_path: Path
                 f"stdout={stdout}\n"
                 f"stderr={stderr}"
             )
-        time.sleep(0.05)
+        time.sleep(_LOCK_HOLDER_POLL_INTERVAL_SEC)
     _stop_lock_holder(process, ready_path.parent / "holder-release-on-timeout")
-    raise AssertionError("等待持锁子进程状态超时")
+    raise AssertionError(f"等待持锁子进程状态超时: timeout={_LOCK_HOLDER_READY_TIMEOUT_SEC} 秒")
 
 
 def _stop_lock_holder(process: subprocess.Popen[str], release_path: Path) -> None:
@@ -214,12 +218,12 @@ def _stop_lock_holder(process: subprocess.Popen[str], release_path: Path) -> Non
     if process.poll() is None:
         release_path.touch()
         try:
-            stdout, stderr = process.communicate(timeout=5)
+            stdout, stderr = process.communicate(timeout=_LOCK_HOLDER_STOP_TIMEOUT_SEC)
         except subprocess.TimeoutExpired:
             process.kill()
             stdout, stderr = process.communicate()
             raise AssertionError(
-                "持锁子进程未能在超时内退出:\n"
+                f"持锁子进程未能在超时内退出: timeout={_LOCK_HOLDER_STOP_TIMEOUT_SEC} 秒\n"
                 f"stdout={stdout}\n"
                 f"stderr={stderr}"
             )

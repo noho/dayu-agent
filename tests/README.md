@@ -117,6 +117,7 @@ pip install -r requirements.txt
 - `tests/cli/test_init_command.py` 还要守住 `dayu-cli init` 的交互输入边界：测试不得隐式依赖开发机已有的 `SEC_USER_AGENT` 等环境变量短路交互流程，凡是验证完整 `run_init_command()` 路径的用例，都应显式 `delenv/setenv` 相关变量并提供完整输入序列；`--reset` 这类破坏性开关还必须验证二次确认语义，且直接回车默认按 `N` 取消。
 - `tests/cli/test_init_command.py` 还要守住已有 workspace 的增量补齐语义：未传 `--overwrite` 时，`init` 只能补齐缺失的 `config/prompts/**` 资产，不能覆盖用户本地已经改过的 manifest、scene 或其他配置文件。
 - `tests/application/test_cancellation_bridge.py` 与 `tests/engine/test_async_openai_runner_utils.py` 这类并发/超时测试，不得把 0.08s、0.2s 这类固定 sleep 当成必然成立的完成信号；应使用带超时的轮询等待来守住语义，避免 CI runner 时序抖动造成伪失败。
+- `tests/fins/test_storage_batch_recovery.py` 这类跨进程锁测试同样不得把 5 秒级硬编码收口时间当成必然成立的环境保证；应使用具名超时常量和轮询等待，让较慢的 Windows runner 仍能验证同一套锁语义，而不是把时序抖动误报成存储回归。
 - `test_web_routes.py` 还要守住 Web 的客户端错误语义：像 `PromptService.submit()`、`ChatService.resume_pending_turn()` 这类已经在 Service 边界同步抛出的 `ValueError/KeyError`，router 必须映射成对应 `4xx`，且 `/api/chat/resume` 只能在 resume 成功后才创建后台消费任务，不能漏成 `500` 或先受理后失败。
 - `test_web_routes.py` 还要守住 `/api/write` 的未支持语义：当 Web 当前不支持在线写作时，route 必须显式返回 `501`，不能再用 `202` / `accepted=true` 伪装成已受理。
 - `test_fins_service.py`、`test_sec_process_workflow.py`、`test_sec_pipeline_process_filing_source.py`、`test_cn_pipeline_process.py` 与 `test_tool_snapshot_export.py` 还要共同守住 Fins 取消传播链路：`Host` 的取消状态只能以窄 `cancel_checker` 形式从 `FinsService -> FinsRuntime -> Pipeline` 下传；同步 `process_filing/process_material` 与已支持取消协作的流式 `download/process` 都必须在阶段边界及时抛出 `CancelledError` 或收口为 cancelled，不能等 direct operation 整体结束后才统一收口。
