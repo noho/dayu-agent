@@ -1168,7 +1168,11 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 resumable=resumable,
             )
         self._complete_run_preserving_terminal_state(run_id=run_id)
-        self._delete_pending_turn_best_effort(run_id=run_id, pending_turn_id=pending_turn_id)
+        # 若 run 已被外部（如 cleanup_orphan_runs）收敛为非 SUCCEEDED 终态，
+        # 需要保留 pending turn 以便后续恢复路径使用；仅在 run 最终为
+        # SUCCEEDED 时才视为本 executor 正常收口，清理 pending turn。
+        if self._is_run_succeeded(run_id):
+            self._delete_pending_turn_best_effort(run_id=run_id, pending_turn_id=pending_turn_id)
         return None
 
     def _settle_agent_exception(

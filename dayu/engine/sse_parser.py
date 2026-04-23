@@ -358,6 +358,18 @@ class SSEStreamParser:
             if data_str.startswith(" "):
                 data_str = data_str[1:]
             event_data_lines.append(data_str)
+            # 流以未换行的 data 行结尾时下游若无法解析 JSON 仅会落成
+            # protocol_error，这里显式记录一次，便于排查生产环境中的
+            # 上游截断问题。
+            Log.warn(
+                f"{self._log_prefix} SSE 流末尾残留未换行 data 片段，长度={len(data_str)}",
+                module=MODULE,
+            )
+        elif trailing_line:
+            Log.debug(
+                f"{self._log_prefix} SSE 流末尾残留非 data 字节，长度={len(trailing_line)}",
+                module=MODULE,
+            )
 
         async for event in self._flush_event_data_lines(event_data_lines):
             yield event

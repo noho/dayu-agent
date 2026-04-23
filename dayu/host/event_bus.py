@@ -135,6 +135,9 @@ class AsyncQueueEventBus(RunEventBusProtocol):
         """发布事件到指定 run 的所有匹配订阅者。"""
 
         with self._lock:
+            # 每次 publish 都顺带回收已关闭的订阅，防止长驻进程中订阅
+            # 列表持续增长导致的内存泄漏与遍历性能退化。
+            self._subscriptions = [s for s in self._subscriptions if not s.is_closed]
             subs = list(self._subscriptions)
 
         session_id: str | None = None

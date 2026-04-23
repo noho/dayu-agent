@@ -476,7 +476,11 @@ class ExecutionContract:
         message_inputs: 当前轮消息输入。
         accepted_execution_spec: Service 已接受的执行规格。
         execution_options: Service 已接受的通用执行显式参数。该字段对 Host /
-            scene preparation 是不透明透传对象，不参与契约层解释。
+            scene preparation 是不透明透传对象，**不参与契约层解释**，也**不参与
+            Host 执行路径**——Host 始终以 ``accepted_execution_spec`` 作为执行
+            参数来源。此处保留 ``execution_options`` 仅用于审计/调试快照，便于
+            从 trace 追溯 Service 原始请求意图；任何 Host 侧的行为差异都应通过
+            ``accepted_execution_spec`` 表达，避免快照恢复时出现语义漂移。
         metadata: 宿主侧交付上下文。
 
     Returns:
