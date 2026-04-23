@@ -183,6 +183,106 @@ def _build_tool_trace_budget_snapshot(
     }
 
 
+def _build_tool_calls_payload(
+    ordered_tool_calls: List[Dict[str, Any]],
+) -> list[ToolCallPayload]:
+    """根据已排序的工具调用数据构造 OpenAI tool_calls payload。
+
+    Args:
+        ordered_tool_calls: 已按 index_in_iteration 排序的工具调用数据列表，
+            每项至少包含 ``id`` / ``name`` / ``arguments`` 字段。
+
+    Returns:
+        可直接放入 assistant message 的 tool_calls 列表；参数若非字符串，
+        会通过 ``json.dumps`` 序列化保持 OpenAI 协议兼容。
+
+    Raises:
+        KeyError: 当某个 tool call 缺少必需字段 ``id`` / ``name`` 时抛出。
+    """
+
+    tool_calls_payload: list[ToolCallPayload] = []
+    for tc in ordered_tool_calls:
+        raw_args = tc.get("arguments", "")
+        if not isinstance(raw_args, str):
+            raw_args = json.dumps(raw_args)
+        tool_calls_payload.append({
+            "id": tc["id"],
+            "type": "function",
+            "function": {
+                "name": tc["name"],
+                "arguments": raw_args,
+            },
+        })
+    return tool_calls_payload
+
+
+def _serialize_tool_results_for_llm(
+    ordered_tool_calls: List[Dict[str, Any]],
+    *,
+    budget_remaining: int,
+) -> list[tuple[Dict[str, Any], str]]:
+    """序列化工具调用结果为文本，供注入到 tool message。
+
+    Args:
+        ordered_tool_calls: 已按 index_in_iteration 排序的工具调用数据列表。
+        budget_remaining: 当前 run 剩余工具调用轮次，会透传给 ``project_for_llm``
+            用于注入"剩余轮次"信号。
+
+    Returns:
+        ``(tool_call_data, serialized_text)`` 对；若 ``result`` 已是字符串则原样
+        保留，若为 None 则对应空字符串，否则通过 ``project_for_llm`` 投影后再
+        ``json.dumps``。
+
+    Raises:
+        无。
+    """
+
+    serialized_pairs: list[tuple[Dict[str, Any], str]] = []
+    for tc in ordered_tool_calls:
+        tool_result = tc.get("result")
+        if tool_result is None:
+            serialized_pairs.append((tc, ""))
+            continue
+        if not isinstance(tool_result, str):
+            tool_result = json.dumps(
+                project_for_llm(tool_result, budget=budget_remaining),
+                ensure_ascii=False,
+            )
+        serialized_pairs.append((tc, tool_result))
+    return serialized_pairs
+
+
+def _compute_predictive_budget_stats(
+    budget_state: ContextBudgetState,
+    serialized_pairs: list[tuple[Dict[str, Any], str]],
+) -> tuple[int, int, int]:
+    """估算工具结果注入后的 prompt tokens 使用量。
+
+    Args:
+        budget_state: 当前上下文预算状态，需包含最新 ``current_prompt_tokens``
+            和 ``latest_completion_tokens``。
+        serialized_pairs: 序列化后的 ``(tool_call, text)`` 对列表。
+
+    Returns:
+        ``(total_result_chars, estimated_injection_tokens, projected_tokens)``
+        三元组，分别表示工具结果总字符数、估算注入 tokens 数以及注入后预计的
+        总 prompt tokens（已加上 ``PREDICTIVE_OVERHEAD_TOKENS``）。
+
+    Raises:
+        无。
+    """
+
+    total_result_chars = sum(len(s) for _, s in serialized_pairs)
+    estimated_injection_tokens = ToolResultBudgetCapper.estimate_chars_to_tokens(total_result_chars)
+    projected_tokens = (
+        budget_state.current_prompt_tokens
+        + budget_state.latest_completion_tokens
+        + estimated_injection_tokens
+        + PREDICTIVE_OVERHEAD_TOKENS
+    )
+    return total_result_chars, estimated_injection_tokens, projected_tokens
+
+
 def _normalize_trace_identity(trace_identity: Optional[AgentTraceIdentity]) -> dict[str, str]:
     """规范化 trace 身份元数据。
 
@@ -756,19 +856,7 @@ class AsyncAgent:
                         )
                         early_exit_error_type = "consecutive_failed_tool_batches"
 
-                tool_calls_payload: list[ToolCallPayload] = []
-                for tc in ordered_tool_calls:
-                    raw_args = tc.get("arguments", "")
-                    if not isinstance(raw_args, str):
-                        raw_args = json.dumps(raw_args)
-                    tool_calls_payload.append({
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {
-                            "name": tc["name"],
-                            "arguments": raw_args,
-                        },
-                    })
+                tool_calls_payload = _build_tool_calls_payload(ordered_tool_calls)
 
                 assistant_message = build_assistant_chat_message(
                     content=assistant_content,
@@ -790,30 +878,16 @@ class AsyncAgent:
                 messages.append(assistant_message)
                 
                 # Pass 1: 序列化所有工具结果
-                serialized_pairs: list[tuple[dict[str, object], str]] = []
-                for tc in ordered_tool_calls:
-                    tool_result = tc.get("result")
-                    if tool_result is None:
-                        serialized_pairs.append((tc, ""))
-                        continue
-                    if not isinstance(tool_result, str):
-                        # 投影为 LLM 最优扁平 JSON 并注入剩余轮次信号
-                        budget_remaining = max(0, self.running_config.max_iterations - iteration)
-                        tool_result = json.dumps(
-                            project_for_llm(tool_result, budget=budget_remaining),
-                            ensure_ascii=False,
-                        )
-                    serialized_pairs.append((tc, tool_result))
+                budget_remaining = max(0, self.running_config.max_iterations - iteration)
+                serialized_pairs = _serialize_tool_results_for_llm(
+                    ordered_tool_calls,
+                    budget_remaining=budget_remaining,
+                )
 
                 # Pass 1.5: 预测性预算检查 —— 估算工具结果注入后是否会超过硬阈值
                 if budget_state.is_budget_enabled:
-                    total_result_chars = sum(len(s) for _, s in serialized_pairs)
-                    estimated_injection_tokens = ToolResultBudgetCapper.estimate_chars_to_tokens(total_result_chars)
-                    projected_tokens = (
-                        budget_state.current_prompt_tokens
-                        + budget_state.latest_completion_tokens
-                        + estimated_injection_tokens
-                        + PREDICTIVE_OVERHEAD_TOKENS
+                    total_result_chars, estimated_injection_tokens, projected_tokens = (
+                        _compute_predictive_budget_stats(budget_state, serialized_pairs)
                     )
                     if projected_tokens > budget_state.hard_limit_tokens:
                         serialized_pairs, was_capped = ToolResultBudgetCapper.cap_results_for_budget(
