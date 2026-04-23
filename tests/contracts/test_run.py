@@ -112,11 +112,11 @@ class TestRunRecord:
             created_at=now,
             started_at=now,
             owner_pid=12345,
-            metadata={"chapter_index": 3},
+            metadata={"delivery_channel": "wechat", "delivery_target": "user_1"},
         )
         assert record.session_id == "sess_001"
         assert record.owner_pid == 12345
-        assert record.metadata["chapter_index"] == 3
+        assert record.metadata.get("delivery_channel") == "wechat"
         assert record.is_active()
 
     @pytest.mark.unit

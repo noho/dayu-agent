@@ -9,7 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Mapping, TypeAlias, TypedDict
+from typing import Mapping, TypeAlias
+
+from dayu.contracts.runtime_config_snapshot import (
+    AgentRunningConfigSnapshot,
+    RunnerRunningConfigSnapshot,
+)
 
 
 class FallbackMode(StrEnum):
@@ -115,18 +120,6 @@ class CliRunnerRuntimeConfig:
 RunnerRuntimeConfig: TypeAlias = OpenAIRunnerRuntimeConfig | CliRunnerRuntimeConfig
 
 
-class RunnerRunningConfigSnapshot(TypedDict, total=False):
-    """跨层传递的 runner 运行配置快照。"""
-
-    debug_sse: bool
-    debug_tool_delta: bool
-    debug_sse_sample_rate: float
-    debug_sse_throttle_sec: float
-    tool_timeout_seconds: float
-    stream_idle_timeout: float
-    stream_idle_heartbeat_sec: float
-
-
 @dataclass(frozen=True)
 class AgentRuntimeConfig:
     """Agent 的纯运行配置。"""
@@ -159,26 +152,6 @@ class AgentRuntimeConfig:
     budget_hard_limit_ratio: float = 0.90
     max_continuations: int = 3
     max_compactions: int = 3
-
-
-class AgentRunningConfigSnapshot(TypedDict, total=False):
-    """跨层传递的 agent 运行配置快照。"""
-
-    max_iterations: int
-    fallback_mode: str
-    fallback_prompt: str
-    duplicate_tool_hint_prompt: str
-    continuation_prompt: str
-    compaction_summary_header: str
-    compaction_summary_instruction: str
-    max_consecutive_failed_tool_batches: int
-    max_duplicate_tool_calls: int
-    budget_soft_limit_ratio: float
-    budget_hard_limit_ratio: float
-    max_continuations: int
-    max_compactions: int
-    max_context_tokens: int
-    max_output_tokens: int
 
 
 def build_runner_running_config_snapshot(
@@ -298,12 +271,10 @@ def build_agent_running_config_from_snapshot(
 
 
 __all__ = [
-    "AgentRunningConfigSnapshot",
     "AgentRuntimeConfig",
     "FallbackMode",
     "CliRunnerRuntimeConfig",
     "OpenAIRunnerRuntimeConfig",
-    "RunnerRunningConfigSnapshot",
     "RunnerRuntimeConfig",
     "build_agent_running_config_from_snapshot",
     "build_agent_running_config_snapshot",

@@ -117,6 +117,14 @@ class _FakeSessionRegistry:
             metadata=record.metadata,
         )
 
+    def is_session_active(self, session_id: str) -> bool:
+        """查询 session 是否仍处于非 CLOSED 状态。"""
+
+        record = self.records.get(session_id)
+        if record is None:
+            return False
+        return record.state != SessionState.CLOSED
+
 
 class _FakeRunRegistry:
     """测试用 run registry。"""

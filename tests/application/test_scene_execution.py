@@ -32,12 +32,14 @@ from dayu.engine.async_agent import AgentRunningConfig
 from dayu.engine.tool_registry import ToolRegistry
 from dayu.contracts.cancellation import CancellationToken
 from dayu.engine.async_openai_runner import AsyncOpenAIRunner
-from dayu.execution.runtime_config import (
+from dayu.contracts.runtime_config_snapshot import (
     AgentRunningConfigSnapshot,
+    RunnerRunningConfigSnapshot,
+)
+from dayu.execution.runtime_config import (
     AgentRuntimeConfig,
     FallbackMode,
     OpenAIRunnerRuntimeConfig,
-    RunnerRunningConfigSnapshot,
 )
 from dayu.execution.options import (
     ConversationMemorySettings,

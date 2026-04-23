@@ -8,7 +8,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Callable, TypeVar
 
 from dayu.contracts.agent_execution import ExecutionContract
-from dayu.contracts.execution_metadata import ExecutionDeliveryContext
+from dayu.contracts.execution_metadata import (
+    ExecutionDeliveryContext,
+    empty_execution_delivery_context,
+)
 from dayu.contracts.events import AppEvent, AppEventType, AppResult
 from dayu.contracts.run import RunCancelReason, RunRecord, RunState
 from dayu.contracts.session import SessionRecord, SessionSource, SessionState
@@ -98,15 +101,33 @@ class StubSessionRegistry:
             raise KeyError(f"session 不存在: {session_id}")
 
     def close_session(self, session_id: str) -> None:
-        """关闭 session。"""
-        if session_id not in self._sessions:
+        """关闭 session，并将状态推进到 CLOSED。"""
+        existing = self._sessions.get(session_id)
+        if existing is None:
             raise KeyError(f"session 不存在: {session_id}")
+        self._sessions[session_id] = SessionRecord(
+            session_id=existing.session_id,
+            source=existing.source,
+            state=SessionState.CLOSED,
+            scene_name=existing.scene_name,
+            created_at=existing.created_at,
+            last_activity_at=existing.last_activity_at,
+            metadata=existing.metadata,
+        )
 
     def close_idle_sessions(self, idle_threshold: timedelta) -> list[str]:
         """测试桩不做 idle session 回收。"""
 
         del idle_threshold
         return []
+
+    def is_session_active(self, session_id: str) -> bool:
+        """查询 session 是否仍处于非 CLOSED 状态。"""
+
+        existing = self._sessions.get(str(session_id or "").strip())
+        if existing is None:
+            return False
+        return existing.state != SessionState.CLOSED
 
 
 class StubRunRegistry:
@@ -124,7 +145,7 @@ class StubRunRegistry:
         session_id: str | None = None,
         service_type: str,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> RunRecord:
         """注册 run。"""
         import os
@@ -140,7 +161,7 @@ class StubRunRegistry:
             cancel_requested_at=None,
             cancel_requested_reason=None,
             owner_pid=os.getpid(),
-            metadata=metadata or {},
+            metadata=metadata if metadata is not None else empty_execution_delivery_context(),
         )
         self._runs[run_id] = record
         return record

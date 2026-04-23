@@ -13,14 +13,18 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dayu.contracts.execution_metadata import (
     ExecutionDeliveryContext,
     empty_execution_delivery_context,
     normalize_execution_delivery_context,
 )
+from dayu.host._session_barrier import ensure_session_active
 from dayu.host.host_store import HostStore
+
+if TYPE_CHECKING:
+    from dayu.host.protocols import SessionActivityQueryProtocol
 
 
 from dayu.host._datetime_utils import now_utc as _now_utc, parse_dt as _parse_dt, serialize_dt as _serialize_dt
@@ -119,11 +123,17 @@ class InMemoryPendingConversationTurnStore:
     仅用于单元测试或显式注入 Host 内部组件时的默认兜底。
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        session_activity: "SessionActivityQueryProtocol | None" = None,
+    ) -> None:
         """初始化内存仓储。
 
         Args:
-            无。
+            session_activity: 可选的 session 活性查询。装配后所有写入入口会先
+                校验 session 是否仍处于非 CLOSED 状态；装配为 ``None`` 时退化为
+                不做屏障的旧行为，仅用于独立 store 单元测试。
 
         Returns:
             无。
@@ -133,6 +143,7 @@ class InMemoryPendingConversationTurnStore:
         """
 
         self._records: dict[str, PendingConversationTurn] = {}
+        self._session_activity: "SessionActivityQueryProtocol | None" = session_activity
 
     def upsert_pending_turn(
         self,
@@ -154,6 +165,13 @@ class InMemoryPendingConversationTurnStore:
         normalized_source_run_id = _normalize_text(source_run_id, field_name="source_run_id")
         normalized_resume_source_json = _normalize_resume_source_json(resume_source_json)
         normalized_metadata = _normalize_metadata(metadata)
+        ensure_session_active(
+            self._session_activity,
+            session_id=normalized_session_id,
+            operation="upsert_pending_turn",
+            module=MODULE,
+            target_name="pending turn",
+        )
         existing = self.get_session_pending_turn(
             session_id=normalized_session_id,
             scene_name=normalized_scene_name,
@@ -254,6 +272,13 @@ class InMemoryPendingConversationTurnStore:
         existing = self.get_pending_turn(pending_turn_id)
         if existing is None:
             raise KeyError(f"pending turn 不存在: {pending_turn_id}")
+        ensure_session_active(
+            self._session_activity,
+            session_id=existing.session_id,
+            operation="update_state",
+            module=MODULE,
+            target_name="pending turn",
+        )
         updated = PendingConversationTurn(
             pending_turn_id=existing.pending_turn_id,
             session_id=existing.session_id,
@@ -285,6 +310,13 @@ class InMemoryPendingConversationTurnStore:
             raise KeyError(f"pending turn 不存在: {pending_turn_id}")
         if max_attempts <= 0:
             raise ValueError("max_attempts 必须是正整数")
+        ensure_session_active(
+            self._session_activity,
+            session_id=existing.session_id,
+            operation="record_resume_attempt",
+            module=MODULE,
+            target_name="pending turn",
+        )
         if existing.resume_attempt_count >= max_attempts:
             self._records.pop(existing.pending_turn_id, None)
             Log.warn(
@@ -327,6 +359,13 @@ class InMemoryPendingConversationTurnStore:
         existing = self.get_pending_turn(pending_turn_id)
         if existing is None:
             raise KeyError(f"pending turn 不存在: {pending_turn_id}")
+        ensure_session_active(
+            self._session_activity,
+            session_id=existing.session_id,
+            operation="record_resume_failure",
+            module=MODULE,
+            target_name="pending turn",
+        )
         updated = PendingConversationTurn(
             pending_turn_id=existing.pending_turn_id,
             session_id=existing.session_id,
@@ -377,11 +416,19 @@ class InMemoryPendingConversationTurnStore:
 class SQLitePendingConversationTurnStore:
     """基于 SQLite 的 pending turn 仓储。"""
 
-    def __init__(self, host_store: HostStore) -> None:
+    def __init__(
+        self,
+        host_store: HostStore,
+        *,
+        session_activity: "SessionActivityQueryProtocol | None" = None,
+    ) -> None:
         """初始化 SQLite pending turn 仓储。
 
         Args:
             host_store: Host 共享 SQLite 存储。
+            session_activity: 可选的 session 活性查询。装配后所有写入入口会在
+                事务内先校验 session 是否仍处于非 CLOSED 状态；装配为 ``None``
+                时退化为不做屏障的旧行为，仅用于独立 store 单元测试。
 
         Returns:
             无。
@@ -391,6 +438,7 @@ class SQLitePendingConversationTurnStore:
         """
 
         self._host_store = host_store
+        self._session_activity: "SessionActivityQueryProtocol | None" = session_activity
 
     def upsert_pending_turn(
         self,
@@ -430,6 +478,13 @@ class SQLitePendingConversationTurnStore:
         normalized_source_run_id = _normalize_text(source_run_id, field_name="source_run_id")
         normalized_resume_source_json = _normalize_resume_source_json(resume_source_json)
         normalized_metadata = _normalize_metadata(metadata)
+        ensure_session_active(
+            self._session_activity,
+            session_id=normalized_session_id,
+            operation="upsert_pending_turn",
+            module=MODULE,
+            target_name="pending turn",
+        )
         now = _now_utc()
         conn = self._host_store.get_connection()
         metadata_json = json.dumps(normalized_metadata, ensure_ascii=False, sort_keys=True)
@@ -579,6 +634,16 @@ class SQLitePendingConversationTurnStore:
         """更新 pending turn 的 Host 内部状态。"""
 
         normalized_pending_turn_id = _normalize_text(pending_turn_id, field_name="pending_turn_id")
+        existing = self.get_pending_turn(normalized_pending_turn_id)
+        if existing is None:
+            raise KeyError(f"pending turn 不存在: {normalized_pending_turn_id}")
+        ensure_session_active(
+            self._session_activity,
+            session_id=existing.session_id,
+            operation="update_state",
+            module=MODULE,
+            target_name="pending turn",
+        )
         conn = self._host_store.get_connection()
         cursor = conn.execute(
             """
@@ -607,6 +672,16 @@ class SQLitePendingConversationTurnStore:
         normalized_pending_turn_id = _normalize_text(pending_turn_id, field_name="pending_turn_id")
         if max_attempts <= 0:
             raise ValueError("max_attempts 必须是正整数")
+        existing = self.get_pending_turn(normalized_pending_turn_id)
+        if existing is None:
+            raise KeyError(f"pending turn 不存在: {normalized_pending_turn_id}")
+        ensure_session_active(
+            self._session_activity,
+            session_id=existing.session_id,
+            operation="record_resume_attempt",
+            module=MODULE,
+            target_name="pending turn",
+        )
         conn = self._host_store.get_connection()
         # 用 BEGIN IMMEDIATE 序列化 UPDATE / DELETE / re-read，避免并发下
         # "UPDATE 胜出方读到记录已被 DELETE 分支抹掉" 的竞态。
@@ -672,6 +747,16 @@ class SQLitePendingConversationTurnStore:
 
         normalized_pending_turn_id = _normalize_text(pending_turn_id, field_name="pending_turn_id")
         normalized_error_message = str(error_message).strip() or None
+        existing = self.get_pending_turn(normalized_pending_turn_id)
+        if existing is None:
+            raise KeyError(f"pending turn 不存在: {normalized_pending_turn_id}")
+        ensure_session_active(
+            self._session_activity,
+            session_id=existing.session_id,
+            operation="record_resume_failure",
+            module=MODULE,
+            target_name="pending turn",
+        )
         conn = self._host_store.get_connection()
         cursor = conn.execute(
             """

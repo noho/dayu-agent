@@ -88,7 +88,7 @@ Host / scene preparation
 - `runner_running_config`：跨层快照，不再使用未约束的配置袋子
 - `agent_running_config`：跨层快照，不再使用未约束的配置袋子
 
-跨 Service / Host 传递的 runtime config 稳定真源在 `dayu.execution.runtime_config`，而不是 `dayu.engine` 的包级导出。
+跨 Service / Host 传递的 runtime config 快照（`RunnerRunningConfigSnapshot` / `AgentRunningConfigSnapshot`）稳定真源在 `dayu.contracts.runtime_config_snapshot`；execution 层运行配置值对象与快照转换函数仍归属 `dayu.execution.runtime_config`。
 
 Host 负责最后一跳把这些纯配置快照恢复并转换成 engine 内部实现对象；`AgentRunningConfig` 与 `AsyncOpenAIRunnerRunningConfig` 只作为 engine 定义模块内的实现细节存在，不属于 `dayu.engine` 的包级公共 API。
 

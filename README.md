@@ -65,7 +65,7 @@ pip install https://github.com/noho/dayu-agent/releases/download/v0.1.3/dayu_age
 
 #### 1.1.2 离线安装
 
-前往 GitHub Releases，下载与你平台匹配的离线安装包：
+从 [Releases](https://github.com/noho/dayu-agent/releases) 页面下载对应平台的离线安装包：
 
 - Mac ARM芯片：`dayu-agent-<version>-macos-arm64-offline.tar.gz`
 - Mac Intel芯片：`dayu-agent-<version>-macos-x64-offline.tar.gz`

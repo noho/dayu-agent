@@ -214,6 +214,31 @@ class SQLiteSessionRegistry(SessionRegistryProtocol):
             raise KeyError(f"session 不存在: {session_id}")
         Log.info(f"关闭 session: session_id={session_id}", module=MODULE)
 
+    def is_session_active(self, session_id: str) -> bool:
+        """查询 session 是否仍处于非 CLOSED 状态。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            session 存在且状态非 ``CLOSED`` 时返回 ``True``；否则返回 ``False``。
+
+        Raises:
+            无。
+        """
+
+        normalized = str(session_id or "").strip()
+        if not normalized:
+            return False
+        conn = self._host_store.get_connection()
+        row = conn.execute(
+            "SELECT state FROM sessions WHERE session_id = ?",
+            (normalized,),
+        ).fetchone()
+        if row is None:
+            return False
+        return str(row["state"]) != SessionState.CLOSED.value
+
     def close_idle_sessions(self, idle_threshold: timedelta) -> list[str]:
         """关闭超过空闲阈值的活跃 session。"""
 

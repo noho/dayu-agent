@@ -24,6 +24,56 @@ from dayu.host.pending_turn_store import PendingConversationTurn, PendingConvers
 # ---------------------------------------------------------------------------
 
 
+class SessionClosedError(RuntimeError):
+    """尝试对不存在或已 CLOSED 的 session 执行写入时抛出。
+
+    该异常由 Host 内部写入屏障（pending turn / reply outbox 仓储）在检测到
+    session 不存在或已进入 ``CLOSED`` 终态时抛出，用于阻断
+    ``cancel_session`` 窗口期内的并发写入，防止产生孤儿数据。
+    """
+
+    def __init__(self, session_id: str) -> None:
+        """初始化异常。
+
+        Args:
+            session_id: 触发屏障的 session ID。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        super().__init__(f"session 不存在或已关闭，拒绝写入: session_id={session_id}")
+        self.session_id = session_id
+
+
+class SessionActivityQueryProtocol(Protocol):
+    """面向仓储层的 session 活性查询协议。
+
+    仅暴露仓储写入屏障所需的最小查询能力，避免把 ``SessionRegistryProtocol``
+    的完整生命周期接口泄漏给 pending turn / reply outbox 仓储。
+
+    查询语义：``True`` 表示 session 存在且当前不是 ``CLOSED``；
+    ``False`` 表示 session 不存在或已 ``CLOSED``。
+    """
+
+    def is_session_active(self, session_id: str) -> bool:
+        """查询指定 session 是否仍处于非 CLOSED 状态。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            session 存在且非 CLOSED 时返回 ``True``，否则返回 ``False``。
+
+        Raises:
+            无。
+        """
+        ...
+
+
 @runtime_checkable
 class SessionRegistryProtocol(Protocol):
     """宿主级会话注册表协议。
@@ -139,6 +189,21 @@ class SessionRegistryProtocol(Protocol):
         """
         ...
 
+    def is_session_active(self, session_id: str) -> bool:
+        """查询指定 session 是否仍处于非 CLOSED 状态。
+
+        仓储写入屏障会在每次写入前调用本方法，若返回 ``False`` 则拒绝写入，
+        确保 ``cancel_session`` 关闭 session 后不会再产生孤儿 pending turn /
+        reply outbox 记录。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            session 存在且状态非 ``CLOSED`` 时返回 ``True``；否则返回 ``False``。
+        """
+        ...
+
 
 # ---------------------------------------------------------------------------
 # RunRegistry
@@ -158,7 +223,7 @@ class RunRegistryProtocol(Protocol):
         session_id: str | None = None,
         service_type: str,
         scene_name: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> RunRecord:
         """注册一个新 run。
 
@@ -166,7 +231,8 @@ class RunRegistryProtocol(Protocol):
             session_id: 关联 session（可选）。
             service_type: 服务类型标识。
             scene_name: 场景名。
-            metadata: 非结构化附加信息。
+            metadata: 宿主侧交付上下文，仅承载稳定键值（与 ExecutionContract.metadata
+                同型），不允许随意塞入业务非结构化字段。
 
         Returns:
             状态为 CREATED 的 RunRecord。
@@ -909,6 +975,8 @@ __all__ = [
     "RunEventBusProtocol",
     "RunAdministrationProtocol",
     "RunRegistryProtocol",
+    "SessionActivityQueryProtocol",
+    "SessionClosedError",
     "SessionOperationsProtocol",
     "SessionRegistryProtocol",
 ]

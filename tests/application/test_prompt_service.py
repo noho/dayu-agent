@@ -20,8 +20,8 @@ from dayu.contracts.model_config import OpenAICompatibleModelConfig
 from dayu.contracts.toolset_config import ToolsetConfigSnapshot, build_toolset_config_snapshot
 from dayu.contracts.events import AppEventType
 from dayu.contracts.session import SessionSource
+from dayu.contracts.runtime_config_snapshot import AgentRunningConfigSnapshot
 from dayu.execution.runtime_config import (
-    AgentRunningConfigSnapshot,
     AgentRuntimeConfig,
     OpenAIRunnerRuntimeConfig,
 )

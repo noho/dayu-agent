@@ -42,7 +42,7 @@ from dayu.contracts.toolset_config import (
     replace_toolset_config,
     serialize_toolset_config_payload_value,
 )
-from dayu.execution.runtime_config import AgentRunningConfigSnapshot, RunnerRunningConfigSnapshot
+from dayu.contracts.runtime_config_snapshot import AgentRunningConfigSnapshot, RunnerRunningConfigSnapshot
 
 ExecutionContractSnapshotScalar: TypeAlias = str | int | float | bool | None
 ExecutionContractSnapshotValue: TypeAlias = (

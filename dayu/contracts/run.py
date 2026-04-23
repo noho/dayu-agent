@@ -9,7 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
+
+from dayu.contracts.execution_metadata import (
+    ExecutionDeliveryContext,
+    empty_execution_delivery_context,
+)
 
 
 ORPHAN_RUN_ERROR_SUMMARY = "orphan: owner process terminated"
@@ -111,7 +115,8 @@ class RunRecord:
         cancel_requested_reason: 请求取消原因（写入取消意图时填充）。
         cancel_reason: 取消原因（取消时填充）。
         owner_pid: 创建该 run 的进程 PID，用于死进程检测。
-        metadata: 非结构化附加信息（chapter_index / form_type 等）。
+        metadata: 宿主侧交付上下文，仅承载稳定键值（与 ExecutionContract.metadata
+            同型 ExecutionDeliveryContext），不作为自由 dict 承载业务字段。
     """
 
     run_id: str
@@ -127,7 +132,7 @@ class RunRecord:
     cancel_requested_reason: RunCancelReason | None = None
     cancel_reason: RunCancelReason | None = None
     owner_pid: int = 0
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: ExecutionDeliveryContext = field(default_factory=empty_execution_delivery_context)
 
     def is_terminal(self) -> bool:
         """判断是否处于终态。

@@ -33,6 +33,7 @@ from dayu.host.protocols import (
     PendingConversationTurnStoreProtocol,
     RunEventBusProtocol,
     RunRegistryProtocol,
+    SessionClosedError,
 )
 from dayu.contracts.agent_execution import AgentInput, ExecutionContract
 from dayu.contracts.cancellation import CancelledError, CancellationToken
@@ -280,7 +281,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             session_id=spec.session_id,
             service_type=spec.operation_name,
             scene_name=spec.scene_name,
-            metadata=dict(spec.metadata),
+            metadata=spec.metadata,
         )
         context, bridge, deadline_watcher, permits = self._start_run(
             spec=spec, run_id=run.run_id, include_agent_lane=False,
@@ -325,7 +326,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             session_id=spec.session_id,
             service_type=spec.operation_name,
             scene_name=spec.scene_name,
-            metadata=dict(spec.metadata),
+            metadata=spec.metadata,
         )
         context, bridge, deadline_watcher, permits = self._start_run(
             spec=spec, run_id=run.run_id, include_agent_lane=False,
@@ -384,7 +385,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             session_id=spec.session_id,
             service_type=spec.operation_name,
             scene_name=spec.scene_name,
-            metadata=dict(spec.metadata),
+            metadata=spec.metadata,
         )
         context, bridge, deadline_watcher, permits = self._start_run(
             spec=spec, run_id=run.run_id, include_agent_lane=True,
@@ -459,7 +460,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             session_id=spec.session_id,
             service_type=spec.operation_name,
             scene_name=spec.scene_name,
-            metadata=dict(spec.metadata),
+            metadata=spec.metadata,
         )
         context, bridge, deadline_watcher, permits = self._start_run(
             spec=spec, run_id=run.run_id, include_agent_lane=True,
@@ -531,16 +532,26 @@ class DefaultHostExecutor(HostExecutorProtocol):
             ensure_ascii=False,
             sort_keys=True,
         )
-        record = self.pending_turn_store.upsert_pending_turn(
-            session_id=session_id,
-            scene_name=scene_name,
-            user_text=user_text,
-            source_run_id=run_id,
-            resumable=True,
-            state=PendingConversationTurnState.ACCEPTED_BY_HOST,
-            resume_source_json=accepted_turn_json,
-            metadata=_extract_pending_turn_metadata(execution_contract.metadata),
-        )
+        try:
+            record = self.pending_turn_store.upsert_pending_turn(
+                session_id=session_id,
+                scene_name=scene_name,
+                user_text=user_text,
+                source_run_id=run_id,
+                resumable=True,
+                state=PendingConversationTurnState.ACCEPTED_BY_HOST,
+                resume_source_json=accepted_turn_json,
+                metadata=_extract_pending_turn_metadata(execution_contract.metadata),
+            )
+        except SessionClosedError:
+            # cancel_session 已在仓储层屏障处关闭 session，executor 必须放弃登记
+            # 以避免生成孤儿 pending turn。
+            Log.verbose(
+                f"[{run_id}] session 已关闭，跳过 accepted pending turn 登记: "
+                f"session_id={session_id}, scene_name={scene_name}",
+                module=MODULE,
+            )
+            return None
         Log.verbose(
             f"[{run_id}] pending turn 已登记 accepted 真源: "
             f"pending_turn_id={record.pending_turn_id}, session_id={session_id}, "
@@ -582,16 +593,26 @@ class DefaultHostExecutor(HostExecutorProtocol):
             ensure_ascii=False,
             sort_keys=True,
         )
-        record = self.pending_turn_store.upsert_pending_turn(
-            session_id=session_id,
-            scene_name=scene_name,
-            user_text=user_text,
-            source_run_id=run_id,
-            resumable=bool(prepared_turn.resumable),
-            state=PendingConversationTurnState.PREPARED_BY_HOST,
-            resume_source_json=prepared_turn_json,
-            metadata=metadata,
-        )
+        try:
+            record = self.pending_turn_store.upsert_pending_turn(
+                session_id=session_id,
+                scene_name=scene_name,
+                user_text=user_text,
+                source_run_id=run_id,
+                resumable=bool(prepared_turn.resumable),
+                state=PendingConversationTurnState.PREPARED_BY_HOST,
+                resume_source_json=prepared_turn_json,
+                metadata=metadata,
+            )
+        except SessionClosedError:
+            # cancel_session 已在仓储层屏障处关闭 session，executor 必须放弃登记
+            # 以避免生成孤儿 pending turn。
+            Log.verbose(
+                f"[{run_id}] session 已关闭，跳过 prepared pending turn 登记: "
+                f"session_id={session_id}, scene_name={scene_name}",
+                module=MODULE,
+            )
+            return None
         Log.verbose(
             f"[{run_id}] pending turn 已登记 prepared 真源: "
             f"pending_turn_id={record.pending_turn_id}, session_id={session_id}, "
