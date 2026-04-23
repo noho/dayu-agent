@@ -984,6 +984,8 @@ class AsyncAgent:
                         iteration_id=iteration_id,
                         content=full_content,
                         degraded=is_filtered,
+                        filtered=is_filtered,
+                        finish_reason=finish_reason,
                     )
                 yield self._annotate_event(final_event, run_id=run_id, iteration_id=iteration_id)
                 if trace_recorder is not None:
@@ -1167,6 +1169,8 @@ class AsyncAgent:
                         iteration_id=iteration_id,
                         content=final_content,
                         degraded=True,
+                        filtered=is_filtered,
+                        finish_reason=finish_reason,
                     )
                 yield self._annotate_event(final_event, run_id=run_id, iteration_id=iteration_id)
             else:

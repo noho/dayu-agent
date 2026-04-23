@@ -1062,13 +1062,23 @@ class V2ToolTraceRecorder:
                 module=MODULE,
             )
 
-    def record_final_response(self, *, iteration_id: str, content: str, degraded: bool) -> None:
+    def record_final_response(
+        self,
+        *,
+        iteration_id: str,
+        content: str,
+        degraded: bool,
+        filtered: bool = False,
+        finish_reason: str | None = None,
+    ) -> None:
         """记录最终回答。
 
         Args:
             iteration_id: iteration ID。
             content: 最终回答文本。
             degraded: 是否降级回答。
+            filtered: 是否被内容过滤命中。
+            finish_reason: 上游 runner 报告的 finish_reason（如 length / stop / content_filter）。
 
         Returns:
             无。
@@ -1088,6 +1098,8 @@ class V2ToolTraceRecorder:
                 "final_response": {
                     "content": content,
                     "degraded": degraded,
+                    "filtered": filtered,
+                    "finish_reason": finish_reason,
                 },
             }
             if self._agent_metadata:
@@ -1099,12 +1111,20 @@ class V2ToolTraceRecorder:
                 module=MODULE,
             )
 
-    def finish_iteration(self, *, iteration_id: str, iteration_index: int) -> None:
+    def finish_iteration(
+        self,
+        *,
+        iteration_id: str,
+        iteration_index: int,
+        termination_reason: str | None = None,
+    ) -> None:
         """结束一次 iteration 并输出上下文快照。
 
         Args:
             iteration_id: iteration ID。
             iteration_index: iteration 序号。
+            termination_reason: iteration 结束原因（如 final_answer / tool_calls / error / cancelled / max_iterations / overflow_exhausted）。
+                可选，缺省 None 兼容历史调用。
 
         Returns:
             无。
@@ -1143,6 +1163,7 @@ class V2ToolTraceRecorder:
                 "tool_schema_names": list(iteration_state.tool_schema_names),
                 "raw_tool_schemas_ref": iteration_state.raw_tool_schemas_ref,
                 "tool_calls": tool_calls,
+                "termination_reason": termination_reason,
             }
             if self._agent_metadata:
                 record.update(self._agent_metadata)

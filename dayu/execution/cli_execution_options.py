@@ -118,6 +118,16 @@ def build_execution_options_from_args(args: argparse.Namespace) -> ExecutionOpti
         field_name="--fins-limits-json",
     )
 
+    # CLI 层 max_iterations 正值校验：
+    # scene manifest 层（scene_definition.py）已守 raw_value <= 0，但 CLI 直传
+    # 路径会绕过 manifest 校验，导致 0/-1 静默触发 fallback answer。
+    # 这里在入口处暴露错误，与 manifest 行为对齐。
+    raw_max_iterations = getattr(args, "max_iterations", None)
+    if raw_max_iterations is not None and raw_max_iterations <= 0:
+        raise SystemExit(
+            f"--max-iterations 必须为正整数，收到: {raw_max_iterations}"
+        )
+
     return ExecutionOptions(
         model_name=(raw_model_name if (raw_model_name := str(getattr(args, "model_name", "") or "").strip()) else None),
         temperature=parse_temperature_argument(getattr(args, "temperature", None), field_name="--temperature"),

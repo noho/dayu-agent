@@ -140,7 +140,16 @@ class ChatService(ChatServiceProtocol):
             ValueError: 用户输入为空或 scene 非法时抛出。
         """
 
-        scene_name = str(request.scene_name or "").strip() or "interactive"
+        # scene_name 语义对齐：契约中 None 表示"未指定"，应走默认；
+        # 显式传入空串属于调用方错误，必须报错而不是被静默覆盖。
+        raw_scene_name = request.scene_name
+        if raw_scene_name is None:
+            scene_name = "interactive"
+        else:
+            stripped_scene_name = str(raw_scene_name).strip()
+            if not stripped_scene_name:
+                raise ValueError("scene_name 不能为空字符串；如需默认 scene 请传 None")
+            scene_name = stripped_scene_name
         user_message = str(request.user_text or "").strip()
         if not user_message:
             raise ValueError("聊天输入不能为空")

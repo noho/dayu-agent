@@ -14,7 +14,7 @@ from dayu.contracts.events import PublishedRunEventProtocol
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.contracts.infrastructure import ModelCatalogProtocol, WorkspaceResourcesProtocol
 from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, ReplyOutboxSubmitRequest
-from dayu.contracts.run import RunCancelReason, RunRecord, RunState
+from dayu.contracts.run import ACTIVE_STATES, RunCancelReason, RunRecord, RunState
 from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 from dayu.execution.options import ResolvedExecutionOptions
 from dayu.engine.tool_registry import ToolRegistry
@@ -765,10 +765,19 @@ class Host:
         cancelled_ids: list[str] = []
         for run in active_runs:
             try:
+                # request_cancel 返回 False 有两种语义：
+                # 1) run 已被收敛为终态（state ∉ ACTIVE_STATES）；
+                # 2) run 仍 ACTIVE 但 cancel_requested_at 已被先前调用写入。
+                # 仅(1)能跳过 mark_cancelled；(2)仍需主动收敛，否则 owner 进程退出后
+                # 该 run 会被下次启动 cleanup 误判为 UNSETTLED orphan。
+                # 因此用 get_run 复核当前实际 state，而不是依赖 request_cancel 返回值。
                 self._run_registry.request_cancel(
                     run.run_id,
                     cancel_reason=RunCancelReason.USER_CANCELLED,
                 )
+                latest = self._run_registry.get_run(run.run_id)
+                if latest is None or latest.state not in ACTIVE_STATES:
+                    continue
                 self._run_registry.mark_cancelled(
                     run.run_id,
                     cancel_reason=RunCancelReason.USER_CANCELLED,

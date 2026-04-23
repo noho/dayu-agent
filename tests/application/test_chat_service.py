@@ -608,6 +608,25 @@ def test_submit_turn_rejects_missing_scene_before_creating_session(monkeypatch: 
 
 
 @pytest.mark.unit
+def test_submit_turn_rejects_empty_string_scene_name() -> None:
+    """显式 scene_name="" 应报错而不是被静默覆盖为默认值。
+
+    契约层约定 None=未指定（走默认 scene），空串属于调用方显式错误，
+    必须暴露而非吞掉。
+    """
+
+    service, _ = _build_service()
+
+    async def _submit() -> None:
+        await service.submit_turn(
+            ChatTurnRequest(user_text="hello", scene_name=""),
+        )
+
+    with pytest.raises(ValueError, match="scene_name 不能为空字符串"):
+        asyncio.run(_submit())
+
+
+@pytest.mark.unit
 def test_submit_turn_can_ensure_deterministic_session(monkeypatch: pytest.MonkeyPatch) -> None:
     """显式 `ENSURE_DETERMINISTIC` 时应由 Service 幂等获取或创建 session。"""
 
