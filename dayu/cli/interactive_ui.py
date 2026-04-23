@@ -408,7 +408,7 @@ def _resume_interactive_pending_turn_if_needed(
             if not has_resumable_pending_turn(
                 session,
                 session_id=pending_turn.session_id,
-                scene_name=scene_name,
+                scene_name="interactive",
                 pending_turn_id=pending_turn.pending_turn_id,
             ):
                 Log.warning(

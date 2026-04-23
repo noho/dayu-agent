@@ -60,8 +60,8 @@ class _AutoCleaningRejectingChatService(_FakeChatService):
     """模拟恢复失败后 Host 已清理 pending turn 的聊天服务。"""
 
     def __init__(self) -> None:
-        self._cleared = False
         super().__init__()
+        self._cleared = False
 
     def list_resumable_pending_turns(
         self,
@@ -74,8 +74,6 @@ class _AutoCleaningRejectingChatService(_FakeChatService):
         return super().list_resumable_pending_turns(session_id=session_id, scene_name=scene_name)
 
     async def resume_pending_turn(self, request: ChatResumeRequest):
-        """模拟恢复失败前 Host 先清理 pending turn 记录。"""
-
         self.resume_requests.append(request)
         self._cleared = True
         raise ValueError("pending turn resume_source_json 不是合法 JSON object")
@@ -95,7 +93,6 @@ def test_interactive_startup_resumes_pending_turn(monkeypatch: pytest.MonkeyPatc
     _resume_interactive_pending_turn_if_needed(
         service,  # type: ignore[arg-type]
         session_id="interactive-session",
-        scene_name="interactive",
         show_thinking=False,
     )
 
@@ -114,7 +111,6 @@ def test_interactive_startup_keeps_pending_turn_when_resume_is_rejected() -> Non
         _resume_interactive_pending_turn_if_needed(
             service,  # type: ignore[arg-type]
             session_id="interactive-session",
-            scene_name="interactive",
             show_thinking=False,
         )
 
@@ -138,7 +134,6 @@ def test_interactive_startup_allows_session_when_failed_pending_turn_has_been_cl
     _resume_interactive_pending_turn_if_needed(
         service,  # type: ignore[arg-type]
         session_id="interactive-session",
-        scene_name="interactive",
         show_thinking=True,
     )
 
