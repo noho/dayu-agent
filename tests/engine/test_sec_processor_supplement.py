@@ -4283,6 +4283,18 @@ def test_table_classification_numeric_and_quality_helpers() -> None:
     assert sec_table_extraction._normalize_numeric_cell_text("+123") == "123"
     assert sec_table_extraction._normalize_numeric_cell_text("$") is None
 
+    # 回归守护：脚注剥离规则只能匹配单字母脚注（如 "1,234a"），
+    # 必须保留多字母单位/缩写后缀（bps / mm 等），否则会把语义上的非纯数字单元
+    # 误规范化为数字，污染下游表格解析。详见 medium 文件 finding 025。
+    # 注意：单字母规则下 "10Q" 仍会被吃为 "10"，是当前已知盲点（finding 025 升级到 medium 处理）。
+    assert sec_table_extraction._strip_trailing_footnote("1,234a") == "1,234"
+    assert sec_table_extraction._strip_trailing_footnote("10bps") == "10bps"
+    assert sec_table_extraction._strip_trailing_footnote("10mm") == "10mm"
+    assert sec_table_extraction._strip_trailing_footnote("123ab") == "123ab"
+    assert sec_table_extraction._normalize_numeric_cell_text("10bps") is None
+    assert sec_table_extraction._normalize_numeric_cell_text("10mm") is None
+    assert sec_table_extraction._normalize_numeric_cell_text("123ab") is None
+
     assert sec_table_extraction._looks_like_default_headers(["", " "]) is True
     assert sec_table_extraction._looks_like_default_headers(["1", "2", "3"]) is True
     assert sec_table_extraction._looks_like_default_headers(["Revenue", "Cost"]) is False

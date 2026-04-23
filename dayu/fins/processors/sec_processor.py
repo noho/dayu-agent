@@ -469,8 +469,10 @@ class SecProcessor:
         hits_raw: list[SearchHit] = []
         section_content_map: dict[str, str] = {}
         with self._profiler.stage("search"):
+            # 在循环外预编译 query 正则，避免每个 section 迭代都重复 re.escape + re.compile。
+            query_pattern = re.compile(re.escape(normalized_query), flags=re.IGNORECASE)
             for section in target_sections:
-                if re.search(re.escape(normalized_query), section.text, flags=re.IGNORECASE) is None:
+                if query_pattern.search(section.text) is None:
                     continue
                 section_content_map[section.ref] = section.text
                 hits_raw.append(

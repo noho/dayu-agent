@@ -656,30 +656,44 @@ class AsyncAgent:
                     error_data = event.data if isinstance(event.data, dict) else {}
                     error_meta = event.metadata if isinstance(event.metadata, dict) else {}
                     err_type = error_meta.get("error_type", "")
-                    # context_overflow 特殊处理：压缩后重试
-                    if (
-                        err_type == "context_overflow"
-                        and budget_state.compaction_count < self.running_config.max_compactions
-                    ):
-                        messages, actually_compacted = _compact_messages(
-                            messages,
-                            summary_header=self.running_config.compaction_summary_header,
-                            summary_instruction=self.running_config.compaction_summary_instruction,
+                    # context_overflow 特殊处理：尝试压缩后重试
+                    overflow_exhausted = False
+                    if err_type == "context_overflow":
+                        if budget_state.compaction_count < self.running_config.max_compactions:
+                            messages, actually_compacted = _compact_messages(
+                                messages,
+                                summary_header=self.running_config.compaction_summary_header,
+                                summary_instruction=self.running_config.compaction_summary_instruction,
+                            )
+                            if actually_compacted:
+                                budget_state.compaction_count += 1
+                                overflow_msg = (
+                                    f"⚠️ 上下文超长（prompt_tokens={budget_state.current_prompt_tokens}），"
+                                    f"正在执行第 {budget_state.compaction_count} 次消息压缩..."
+                                )
+                                yield self._annotate_event(
+                                    warning_event(overflow_msg),
+                                    run_id=run_id, iteration_id=iteration_id,
+                                )
+                                Log.warn(f"[{iteration_id}] {overflow_msg}", module=MODULE)
+                                context_overflow_handled = True
+                                break  # 退出 async for，回到 while 循环重试
+                            # 还有配额但消息已压不动
+                            overflow_exhausted = True
+                        else:
+                            # max_compactions 配额已耗尽（含 max_compactions=0）
+                            overflow_exhausted = True
+
+                    if overflow_exhausted:
+                        # 区分“真实 context 超长（首次未尝试压缩）”与“压缩策略已不可用”：
+                        # 不可用包括 1) 配额已耗尽 2) 配额未耗尽但 _compact_messages 返回未压缩。
+                        exhausted_metadata = dict(error_meta)
+                        exhausted_metadata["error_type"] = "context_overflow_exhausted"
+                        event = StreamEvent(
+                            type=event.type,
+                            data=event.data,
+                            metadata=exhausted_metadata,
                         )
-                        if actually_compacted:
-                            budget_state.compaction_count += 1
-                            overflow_msg = (
-                                f"⚠️ 上下文超长（prompt_tokens={budget_state.current_prompt_tokens}），"
-                                f"正在执行第 {budget_state.compaction_count} 次消息压缩..."
-                            )
-                            yield self._annotate_event(
-                                warning_event(overflow_msg),
-                                run_id=run_id, iteration_id=iteration_id,
-                            )
-                            Log.warn(f"[{iteration_id}] {overflow_msg}", module=MODULE)
-                            context_overflow_handled = True
-                            break  # 退出 async for，回到 while 循环重试
-                        # 消息已无法进一步压缩，按不可恢复错误处理
 
                     yield self._annotate_event(event, run_id=run_id, iteration_id=iteration_id)
                     if not error_data.get("recoverable", False):
@@ -809,14 +823,15 @@ class AsyncAgent:
                             Log.warn(f"[{iteration_id}] {cap_msg}", module=MODULE)
 
                 # Pass 2: 注入到 messages
+                # OpenAI 协议要求 assistant.tool_calls 与 role=tool 消息一一对应，
+                # 不能因为序列化结果为空字符串就跳过；对空结果统一注入占位文案，
+                # 既保证协议完整，也便于模型识别“工具返回为空”。
                 for tc, result_str in serialized_pairs:
-                    if not result_str:
-                        continue
                     tool_call_id = str(tc["id"])
                     messages.append(
                         build_tool_chat_message(
                             tool_call_id=tool_call_id,
-                            content=result_str,
+                            content=result_str if result_str else "(empty result)",
                         )
                     )
 
@@ -1110,6 +1125,7 @@ class AsyncAgent:
             content_buffer = []
             content_complete_seen = False
             content_complete_text = None
+            done_summary: Dict[str, Any] = {}
             call_payloads = dict(extra_payloads)
             call_payloads["trace_context"] = {"run_id": run_id, "iteration_id": iteration_id}
             async for event in self.runner.call(
@@ -1124,6 +1140,11 @@ class AsyncAgent:
                 elif event.type == EventType.CONTENT_DELTA:
                     content_buffer.append(event.data)
                     yield self._annotate_event(event, run_id=run_id, iteration_id=iteration_id)
+                elif event.type == EventType.DONE:
+                    # 降级分支也需要捕获截断/过滤信号，透传给 final_answer_event
+                    if isinstance(event.data, dict):
+                        done_summary = event.data
+                    yield self._annotate_event(event, run_id=run_id, iteration_id=iteration_id)
                 elif event.type == EventType.ERROR:
                     yield self._annotate_event(event, run_id=run_id, iteration_id=iteration_id)
                     return
@@ -1133,7 +1154,14 @@ class AsyncAgent:
             if content_complete_seen or content_buffer:
                 final_content = content_complete_text if content_complete_text is not None else "".join(content_buffer)
                 self._raise_if_cancelled()
-                final_event = final_answer_event(final_content, degraded=True)
+                is_filtered = bool(done_summary.get("content_filtered", False))
+                finish_reason = str(done_summary.get("finish_reason") or "").strip() or None
+                final_event = final_answer_event(
+                    final_content,
+                    degraded=True,
+                    filtered=is_filtered,
+                    finish_reason=finish_reason,
+                )
                 if trace_recorder is not None:
                     trace_recorder.record_final_response(
                         iteration_id=iteration_id,

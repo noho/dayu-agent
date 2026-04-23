@@ -78,7 +78,7 @@ def extract_query_anchored_snippets(
         )
         if not snippet:
             continue
-        if re.search(re.escape(normalized_query), snippet, flags=re.IGNORECASE) is None:
+        if query_pattern.search(snippet) is None:
             # 复杂逻辑说明：理论上命中片段一定包含 query；这里额外防御，避免分句异常导致锚点丢失。
             continue
         snippets_raw.append(snippet)

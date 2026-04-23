@@ -114,7 +114,7 @@ except ImportError:
 
 # 类型检查时导入
 if TYPE_CHECKING:
-    from aiohttp import ClientResponse
+    from aiohttp import ClientResponse, ClientSession, ClientTimeout
 
 from .events import (
     EventType,
@@ -221,6 +221,20 @@ _NON_RETRIABLE_ERROR_TYPE_MAP: dict[int, str] = {
 # 工具调用日志辅助常量
 _MAX_ARG_STR_LEN = 40   # 单个参数字符串值的最大显示长度
 _MAX_COMPACT_ARGS_LEN = 120  # compact args 总长度上限
+
+# Runner 默认超时与心跳常量。
+# - DEFAULT_REQUEST_TIMEOUT_SEC：单次 HTTP 请求总超时（含连接/读取），1 小时给长上下文留余地。
+# - DEFAULT_TOOL_TIMEOUT_SEC：单个工具执行超时；财报场景多数工具应在 90s 内完成。
+# - DEFAULT_STREAM_IDLE_TIMEOUT_SEC：SSE 流空闲超时；超过 120s 无字节即视为服务端挂起。
+# - DEFAULT_STREAM_IDLE_HEARTBEAT_SEC：每 10s 心跳触发一次空闲检查。
+# - DEFAULT_ERROR_BODY_PREVIEW_CHARS：日志中的错误体短摘要长度。
+# - DEFAULT_ERROR_BODY_DETAIL_CHARS：错误事件 metadata 中的错误体长摘要长度。
+_DEFAULT_REQUEST_TIMEOUT_SEC: int = 3600
+_DEFAULT_TOOL_TIMEOUT_SEC: float = 90.0
+_DEFAULT_STREAM_IDLE_TIMEOUT_SEC: float = 120.0
+_DEFAULT_STREAM_IDLE_HEARTBEAT_SEC: float = 10.0
+_DEFAULT_ERROR_BODY_PREVIEW_CHARS: int = 200
+_DEFAULT_ERROR_BODY_DETAIL_CHARS: int = 400
 _RESERVED_EXTRA_PAYLOAD_KEYS = frozenset(
     {
         "messages",
@@ -414,7 +428,7 @@ class AsyncOpenAIRunner:
         name: Optional[str] = None,
         temperature: float = 0.7,
         default_extra_payloads: Optional[Dict[str, Any]] = None,
-        timeout: int = 3600,
+        timeout: int = _DEFAULT_REQUEST_TIMEOUT_SEC,
         max_retries: int = 3,
         supports_stream: bool = True,
         supports_tool_calling: bool = True,
@@ -451,11 +465,11 @@ class AsyncOpenAIRunner:
         if running_config is None:
             running_config = AsyncOpenAIRunnerRunningConfig()
         if running_config.tool_timeout_seconds is None:
-            running_config.tool_timeout_seconds = 90.0
+            running_config.tool_timeout_seconds = _DEFAULT_TOOL_TIMEOUT_SEC
         if running_config.stream_idle_timeout is None:
-            running_config.stream_idle_timeout = 120.0
+            running_config.stream_idle_timeout = _DEFAULT_STREAM_IDLE_TIMEOUT_SEC
         if running_config.stream_idle_heartbeat_sec is None:
-            running_config.stream_idle_heartbeat_sec = 10.0
+            running_config.stream_idle_heartbeat_sec = _DEFAULT_STREAM_IDLE_HEARTBEAT_SEC
         
         self.endpoint_url = endpoint_url
         self.model = model
@@ -496,7 +510,7 @@ class AsyncOpenAIRunner:
         if self.cancellation_token is not None:
             self.cancellation_token.raise_if_cancelled()
 
-    def _build_request_timeout(self, *, stream: bool) -> Any:
+    def _build_request_timeout(self, *, stream: bool) -> "ClientTimeout":
         """构造当前请求的 aiohttp timeout 配置。"""
 
         aiohttp_module = _require_aiohttp_module()
@@ -505,15 +519,16 @@ class AsyncOpenAIRunner:
             sock_read=self.stream_idle_timeout if stream else None,
         )
 
-    def _ensure_session(self) -> Any:
+    def _ensure_session(self) -> "ClientSession":
         """确保当前 Runner 拥有可复用的 HTTP session。"""
 
         session = self._session
         if session is not None and not bool(getattr(session, "closed", False)):
             return session
         aiohttp_module = _require_aiohttp_module()
-        self._session = aiohttp_module.ClientSession()
-        return self._session
+        new_session = aiohttp_module.ClientSession()
+        self._session = new_session
+        return new_session
 
     async def close(self) -> None:
         """关闭 Runner 级异步资源。"""
@@ -991,8 +1006,8 @@ class AsyncOpenAIRunner:
                         log_prefix=f"[{self.name}]",
                         log_module=MODULE,
                     )
-                    error_preview = error_body[:200] if error_body else "(empty response)"
-                    error_detail = error_body[:400] if error_body else "(empty response)"
+                    error_preview = error_body[:_DEFAULT_ERROR_BODY_PREVIEW_CHARS] if error_body else "(empty response)"
+                    error_detail = error_body[:_DEFAULT_ERROR_BODY_DETAIL_CHARS] if error_body else "(empty response)"
 
                     if response.status in NON_RETRIABLE_STATUS_CODES:
                         if response.status == 400 and _detect_context_overflow(error_body):

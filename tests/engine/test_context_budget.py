@@ -516,6 +516,37 @@ async def test_agent_context_overflow_max_compactions_exceeded() -> None:
     types = [e.type for e in events]
     # 最终应有不可恢复的 ERROR
     assert EventType.ERROR in types
+    # 配额耗尽后透传的 ERROR 必须改写为 context_overflow_exhausted，
+    # 用于区分"真实超长（仍可压缩）"和"压缩策略已用尽"。
+    error_events = [e for e in events if e.type == EventType.ERROR]
+    error_types = [
+        (e.metadata or {}).get("error_type") for e in error_events
+    ]
+    assert "context_overflow_exhausted" in error_types
+    assert "context_overflow" not in error_types
+
+
+@pytest.mark.asyncio
+async def test_agent_context_overflow_max_compactions_zero_marks_exhausted() -> None:
+    """max_compactions=0 时首个 overflow 立即标记为 context_overflow_exhausted。"""
+    overflow_batch = [
+        error_event("context length exceeded", recoverable=False, error_type="context_overflow"),
+    ]
+    runner = _RunnerStub([overflow_batch])
+    agent = AsyncAgent(
+        runner,
+        running_config=AgentRunningConfig(max_continuations=5, max_compactions=0),
+    )
+
+    events = []
+    async for event in agent.run("prompt"):
+        events.append(event)
+
+    error_events = [e for e in events if e.type == EventType.ERROR]
+    error_types = [(e.metadata or {}).get("error_type") for e in error_events]
+    # 配额为 0 等价于"压缩策略不可用"，应立即标记为 exhausted
+    assert "context_overflow_exhausted" in error_types
+    assert "context_overflow" not in error_types
 
 
 @pytest.mark.asyncio
