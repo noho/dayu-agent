@@ -279,12 +279,6 @@ dayu-cli <subcommand> [参数]
 dayu-web
 ```
 
-`dayu-web` 内部会执行与下列命令等价的启动链路：
-
-```bash
-python -m streamlit run dayu/web/streamlit_app.py
-```
-
 也可以用模块入口启动（等价）：
 
 ```bash
@@ -297,16 +291,9 @@ python -m dayu.web
 dayu-web --workspace /path/to/workspace
 ```
 
-功能：
-- 左侧自选股列表管理（添加、删除、编辑）
-- 选中股票后展示财报管理、交互式分析、分析报告三个 Tab
-- 财报管理：展示已下载财报列表；点击「下载财报」按钮在页面内展开下载设置（表单类型、日期范围等），提交后实时显示下载进度，完成后提示刷新列表；选中一行后可在新标签预览主文件
-- 交互式分析：默认引导「你对公司有什么问题？」与示例问题，可一键填入首屏输入框；首条发送后进入会话态，支持流式展示助手回复与同一标的下的多轮追问（按标的隔离会话状态）
+启动后，默认打开 Local URL: http://localhost:8501 （如果 8501 端口被占用将按尝试其他端口）
 
-附带的本地文件服务：
-- Streamlit 应用启动时会在 `127.0.0.1` 上随机端口启动一个只读 HTTP 子服务，仅暴露 `workspace/portfolio/<ticker>/filings/<document_id>/` 范围内的财报文件。
-- 端口随机分配，无需配置；启动失败时仅会禁用「在新标签打开文件」入口，不影响其他功能。
-- 服务仅监听本地回环地址，禁止目录列表与路径穿越。
+功能说明：详见[dayu/web/README.md](dayu/web/README.md)
 
 ### 2.3 WeChat 入口
 

@@ -44,7 +44,6 @@
 
 - 调用 `FinsService` 提交下载流程并消费下载事件。
 - 使用 `fins.storage` 仓储读取已下载文档列表和元数据用于展示。
-- 通过 `FileServerHandle` 生成本地可访问文件 URL（新标签打开）。
 
 ### `chat_tab`
 
@@ -120,7 +119,6 @@ flowchart LR
 
 - CLI 入口：`dayu-web`
 - 模块入口：`python -m dayu.web`
-- 直接运行：`streamlit run dayu/web/streamlit_app.py`
 - 工作区可通过 `--workspace` 指定。
 
 
