@@ -193,10 +193,38 @@ ACCEPTED_BY_HOST ─► PREPARED_BY_HOST ─► SENT_TO_LLM
   - `state ∈ {FAILED, UNSETTLED}` 且 `resumable=True` → **保留**（等 resume）；
   - `state == CANCELLED` 且 `resumable=True` 且 `reason=TIMEOUT` → **保留**（timeout 属于可恢复）；
   - 其它 → 删除。
-- **分支 C — 超保留期兜底删除**：`state ∈ {ACCEPTED_BY_HOST, PREPARED_BY_HOST}` 且 `updated_at` 超过 `retention_hours`（默认 168h=7 天）且 source_run 已终态 → 删除。对应"UI 迟迟未询问用户是否重发"的长尾。
+- **分支 C — 超保留期兜底删除**：`state ∈ {ACCEPTED_BY_HOST, PREPARED_BY_HOST}` 且 `updated_at` 超过 `retention_hours`（默认 168h=7 天）且 source_run 已终态 → 删除。该分支是 Host 对**分支 A / B 都走不到的长尾记录**的终结契约，保证 pending turn 生命周期自闭环，避免出现"Host 持有但永远不会主动释放"的状态。正常回到会话的路径由自动 resume 覆盖，不依赖 UI 接力。
 - **活跃 source_run 严格保留**：任何分支均不得删除"source_run 还在 ACTIVE" 的 pending turn。
 
 分支顺序是契约：A 先于 B 先于 C，避免误清 RESUMING 或误删仍在 active 的记录。
+
+### 6.5 自动 resume 与长尾兜底的分工
+
+Pending turn 的"回到会话"动作不由 UI 触发，也不由分支 C 触发——分支 C 只负责终结记录。Host 与 UI 通道共同构成两条正交防线：
+
+**正常路径 = 自动 resume**。各 UI 通道在**能自然触发的时机**自动走 `acquire_resume_lease → 起 run → release_lease`：
+
+- CLI `interactive` 进入 REPL 前，启动 hook 扫描当前 session 的可恢复 pending turn 并直接续上；
+- WeChat daemon 启动时 `_resume_pending_turns()` 全量恢复，之后每条入消息前再做一次 session 级恢复（`fail_fast=True`）；
+- Web 在前端显式触发 resume 端点时恢复。
+
+自动 resume 由 Host 侧 `acquire_resume_lease` 的三重门护住：`attempt_count < max_attempts`（默认 3）、RESUMING lease 10 分钟过期回退（分支 A）、`resumable=True` 的 scene 才允许。这几条约束保证"能自动 resume 的都会被自动 resume，失败次数有限、并发安全"。
+
+**长尾 = 自动 resume 永远跑不到**。分支 C 定位为此：
+
+- CLI 用户换了 workspace / 换了话题 / 再也不跑 `interactive`——启动 hook 不会再触发；
+- Web 用户关 tab 不再打开；
+- WeChat 用户永久沉默——daemon 的两个自动 resume 触发点（启动 / 入消息）都跑不到。
+
+这些记录会停在 `ACCEPTED_BY_HOST` / `PREPARED_BY_HOST`：不是 RESUMING（分支 A 不管）、source_run 终态但 `resumable=True`（分支 B 判为保留，等 resume）。分支 C 的 168h 兜底删就是为这层兜底而存在。
+
+**为什么不在长尾上再做 UI 询问**。这三种"自动 resume 永远跑不到"的情况，本质上是用户已经用脚投票放弃了这轮对话：
+
+- CLI 换 workspace / 换话题：意图很清楚，不想要那个结果；继续追问"要不要重发"反而打扰。
+- Web 关 tab 不回来：用户已离场。
+- WeChat 沉默：同上。
+
+因此 Host 层不提供"长尾 UI 询问窗口"这种接力机制；分支 C 是**静默终结**，不是"UI 未接力时的兜底"。UI 通道只需保持正常路径的自动 resume；不要在长尾上追加打扰用户的交互。
 
 ---
 
