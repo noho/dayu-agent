@@ -14,12 +14,17 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
 from dayu.log import Log
 
 MODULE = "HOST.STORE"
+_SQLITE_LOCK_TIMEOUT_SEC = 30.0
+_SQLITE_BUSY_TIMEOUT_MS = 30_000
+_SQLITE_JOURNAL_MODE = "WAL"
+_SQLITE_SYNCHRONOUS_MODE = "FULL"
 
 # ── Schema 定义 ──────────────────────────────────────────────────────
 
@@ -246,18 +251,81 @@ def _create_connection(db_path: Path) -> sqlite3.Connection:
         db_path: 数据库文件路径。
 
     Returns:
-        配置好 WAL 模式和外键约束的连接。
+        配置好 WAL 模式、autocommit 与外键约束的连接。写事务由
+        ``write_transaction`` 作为真源负责开启 / 提交 / 回滚。
+
+    Raises:
+        sqlite3.Error: SQLite 建连或 PRAGMA 配置失败时抛出。
     """
     conn = sqlite3.connect(
         str(db_path),
-        timeout=10.0,  # 写锁等待超时
+        timeout=_SQLITE_LOCK_TIMEOUT_SEC,
         check_same_thread=False,  # per-thread 模式下由 threading.local 保证线程安全
+        isolation_level=None,  # autocommit；写事务统一经 write_transaction 显式开启
     )
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(f"PRAGMA journal_mode={_SQLITE_JOURNAL_MODE}")
+    # WAL + FULL：锁竞争的根因已经由 `write_transaction`(BEGIN IMMEDIATE) 承担，
+    # 同步级别保持 FULL 以守住宿主真源（runs / pending_conversation_turns /
+    # reply_outbox / sessions）在崩溃/掉电后的持久化语义，不借放松 fsync 来换并发。
+    conn.execute(f"PRAGMA synchronous={_SQLITE_SYNCHRONOUS_MODE}")
     conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")  # 写冲突重试等待 5 秒
+    conn.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
     return conn
+
+
+@contextmanager
+def write_transaction(conn: sqlite3.Connection) -> Iterator[None]:
+    """在给定 SQLite 连接上开启一个显式写事务。
+
+    作为 host 层所有写路径的唯一事务入口：通过 ``BEGIN IMMEDIATE`` 在
+    事务开始时立刻获取 RESERVED 锁，使并发 writer 在入口排队而非在
+    ``COMMIT`` 时相互冲撞，从根上避免 Python sqlite3 默认
+    ``BEGIN DEFERRED`` 下的 upgrade deadlock（并发升级到 RESERVED
+    失败会直接返回 ``SQLITE_BUSY`` 且不走 busy_handler 重试）。
+
+    ``BEGIN IMMEDIATE`` / ``COMMIT`` 均可能失败（``SQLITE_BUSY`` / I/O 等）；
+    因此事务体、``COMMIT`` 自身的任何异常都会触发 ``ROLLBACK`` 清理，
+    避免 thread-local 共享连接被卡在"事务未收口"状态污染后续写入。
+    ``ROLLBACK`` 本身若再失败，只静默吞掉，保留原始异常。
+
+    用法示例::
+
+        with write_transaction(conn):
+            conn.execute("INSERT ...", params)
+
+    Args:
+        conn: 已配置为 autocommit（``isolation_level=None``）的连接。
+
+    Yields:
+        None。调用方在 ``with`` 块内执行任意写语句，块结束时自动提交。
+
+    Raises:
+        sqlite3.Error: ``BEGIN IMMEDIATE`` / ``COMMIT`` / ``ROLLBACK`` 本身
+            抛出的 SQLite 异常（``COMMIT`` 失败时已经先触发 ``ROLLBACK``）。
+        BaseException: 事务体中出现的任何异常将触发回滚后原样再抛出。
+    """
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:  # pragma: no cover - 回滚失败仅记录，不掩盖原始异常
+            pass
+        raise
+    try:
+        conn.execute("COMMIT")
+    except BaseException:
+        # COMMIT 自身失败（SQLITE_BUSY / I/O 等）时，连接仍处于事务中；
+        # 必须显式 ROLLBACK 回到干净态，避免同线程后续写撞上 "cannot start
+        # a transaction within a transaction"。
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:  # pragma: no cover - 清理失败不掩盖原始 COMMIT 异常
+            pass
+        raise
 
 
 def _ensure_runs_cancel_intent_columns(conn: sqlite3.Connection) -> None:
@@ -267,13 +335,18 @@ def _ensure_runs_cancel_intent_columns(conn: sqlite3.Connection) -> None:
         str(row["name"])
         for row in conn.execute("PRAGMA table_info(runs)").fetchall()
     }
+    missing_ddl: list[str] = []
     if "cancel_requested_at" not in columns:
-        conn.execute("ALTER TABLE runs ADD COLUMN cancel_requested_at TEXT")
+        missing_ddl.append("ALTER TABLE runs ADD COLUMN cancel_requested_at TEXT")
     if "cancel_requested_reason" not in columns:
-        conn.execute("ALTER TABLE runs ADD COLUMN cancel_requested_reason TEXT")
+        missing_ddl.append("ALTER TABLE runs ADD COLUMN cancel_requested_reason TEXT")
     if "cancel_reason" not in columns:
-        conn.execute("ALTER TABLE runs ADD COLUMN cancel_reason TEXT")
-    conn.commit()
+        missing_ddl.append("ALTER TABLE runs ADD COLUMN cancel_reason TEXT")
+    if not missing_ddl:
+        return
+    with write_transaction(conn):
+        for ddl in missing_ddl:
+            conn.execute(ddl)
 
 
 def _require_table_columns(

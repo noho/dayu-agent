@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
 from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, ReplyOutboxSubmitRequest
 from dayu.host._session_barrier import ensure_session_active
-from dayu.host.host_store import HostStore
+from dayu.host.host_store import HostStore, write_transaction
 from dayu.log import Log
 
 if TYPE_CHECKING:
@@ -509,31 +509,32 @@ class SQLiteReplyOutboxStore:
         delivery_id = f"delivery_{uuid.uuid4().hex[:12]}"
         conn = self._host_store.get_connection()
         # INSERT OR IGNORE 用于在数据库层原子收敛相同 delivery_key 的并发首写。
-        cursor = conn.execute(
-            """
-            INSERT OR IGNORE INTO reply_outbox (
-                delivery_id, delivery_key, session_id, scene_name, source_run_id,
-                reply_content, state, delivery_attempt_count, last_error_message,
-                created_at, updated_at, metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                delivery_id,
-                normalized_request.delivery_key,
-                normalized_request.session_id,
-                normalized_request.scene_name,
-                normalized_request.source_run_id,
-                normalized_request.reply_content,
-                ReplyOutboxState.PENDING_DELIVERY.value,
-                0,
-                None,
-                _serialize_dt(now),
-                _serialize_dt(now),
-                _serialize_metadata(normalized_request.metadata),
-            ),
-        )
-        conn.commit()
-        if cursor.rowcount == 0:
+        with write_transaction(conn):
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO reply_outbox (
+                    delivery_id, delivery_key, session_id, scene_name, source_run_id,
+                    reply_content, state, delivery_attempt_count, last_error_message,
+                    created_at, updated_at, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    delivery_id,
+                    normalized_request.delivery_key,
+                    normalized_request.session_id,
+                    normalized_request.scene_name,
+                    normalized_request.source_run_id,
+                    normalized_request.reply_content,
+                    ReplyOutboxState.PENDING_DELIVERY.value,
+                    0,
+                    None,
+                    _serialize_dt(now),
+                    _serialize_dt(now),
+                    _serialize_metadata(normalized_request.metadata),
+                ),
+            )
+            rowcount = cursor.rowcount
+        if rowcount == 0:
             existing = self.get_by_delivery_key(normalized_request.delivery_key)
             if existing is None:
                 raise RuntimeError(
@@ -651,32 +652,33 @@ class SQLiteReplyOutboxStore:
 
         normalized_delivery_id = _normalize_text(delivery_id, field_name="delivery_id")
         conn = self._host_store.get_connection()
-        cursor = conn.execute(
-            """
-            UPDATE reply_outbox
-            SET state = ?,
-                delivery_attempt_count = delivery_attempt_count + 1,
-                last_error_message = ?,
-                updated_at = ?
-            WHERE delivery_id = ?
-              AND state IN (?, ?)
-            """,
-            (
-                ReplyOutboxState.DELIVERY_IN_PROGRESS.value,
-                None,
-                _serialize_dt(_now_utc()),
-                normalized_delivery_id,
-                ReplyOutboxState.PENDING_DELIVERY.value,
-                ReplyOutboxState.FAILED_RETRYABLE.value,
-            ),
-        )
-        conn.commit()
+        with write_transaction(conn):
+            cursor = conn.execute(
+                """
+                UPDATE reply_outbox
+                SET state = ?,
+                    delivery_attempt_count = delivery_attempt_count + 1,
+                    last_error_message = ?,
+                    updated_at = ?
+                WHERE delivery_id = ?
+                  AND state IN (?, ?)
+                """,
+                (
+                    ReplyOutboxState.DELIVERY_IN_PROGRESS.value,
+                    None,
+                    _serialize_dt(_now_utc()),
+                    normalized_delivery_id,
+                    ReplyOutboxState.PENDING_DELIVERY.value,
+                    ReplyOutboxState.FAILED_RETRYABLE.value,
+                ),
+            )
+            rowcount = cursor.rowcount
         updated = self.get_reply(normalized_delivery_id)
-        if cursor.rowcount == 0 and updated is None:
+        if rowcount == 0 and updated is None:
             raise KeyError(f"reply delivery 不存在: {delivery_id}")
         if updated is None:
             raise RuntimeError(f"reply delivery 更新后读取失败: {normalized_delivery_id}")
-        if cursor.rowcount == 0:
+        if rowcount == 0:
             raise ValueError(
                 "reply delivery 当前状态不允许 claim: "
                 f"delivery_id={delivery_id}, state={updated.state.value}"
@@ -705,28 +707,29 @@ class SQLiteReplyOutboxStore:
         if existing.state == ReplyOutboxState.DELIVERED:
             return existing
         conn = self._host_store.get_connection()
-        cursor = conn.execute(
-            """
-            UPDATE reply_outbox
-            SET state = ?,
-                last_error_message = ?,
-                updated_at = ?
-            WHERE delivery_id = ?
-              AND state = ?
-            """,
-            (
-                ReplyOutboxState.DELIVERED.value,
-                None,
-                _serialize_dt(_now_utc()),
-                existing.delivery_id,
-                ReplyOutboxState.DELIVERY_IN_PROGRESS.value,
-            ),
-        )
-        conn.commit()
+        with write_transaction(conn):
+            cursor = conn.execute(
+                """
+                UPDATE reply_outbox
+                SET state = ?,
+                    last_error_message = ?,
+                    updated_at = ?
+                WHERE delivery_id = ?
+                  AND state = ?
+                """,
+                (
+                    ReplyOutboxState.DELIVERED.value,
+                    None,
+                    _serialize_dt(_now_utc()),
+                    existing.delivery_id,
+                    ReplyOutboxState.DELIVERY_IN_PROGRESS.value,
+                ),
+            )
+            rowcount = cursor.rowcount
         updated = self.get_reply(existing.delivery_id)
         if updated is None:
             raise RuntimeError(f"reply delivery 更新后读取失败: {existing.delivery_id}")
-        if cursor.rowcount == 0:
+        if rowcount == 0:
             if updated.state == ReplyOutboxState.DELIVERED:
                 return updated
             raise ValueError(
@@ -772,24 +775,25 @@ class SQLiteReplyOutboxStore:
             return existing
         normalized_error_message = _normalize_text(error_message, field_name="error_message")
         conn = self._host_store.get_connection()
-        cursor = conn.execute(
-            """
-            UPDATE reply_outbox
-            SET state = ?,
-                last_error_message = ?,
-                updated_at = ?
-            WHERE delivery_id = ? AND state != ?
-            """,
-            (
-                ReplyOutboxState.FAILED_RETRYABLE.value if retryable else ReplyOutboxState.FAILED_TERMINAL.value,
-                normalized_error_message,
-                _serialize_dt(_now_utc()),
-                existing.delivery_id,
-                ReplyOutboxState.DELIVERED.value,
-            ),
-        )
-        conn.commit()
-        if cursor.rowcount == 0:
+        with write_transaction(conn):
+            cursor = conn.execute(
+                """
+                UPDATE reply_outbox
+                SET state = ?,
+                    last_error_message = ?,
+                    updated_at = ?
+                WHERE delivery_id = ? AND state != ?
+                """,
+                (
+                    ReplyOutboxState.FAILED_RETRYABLE.value if retryable else ReplyOutboxState.FAILED_TERMINAL.value,
+                    normalized_error_message,
+                    _serialize_dt(_now_utc()),
+                    existing.delivery_id,
+                    ReplyOutboxState.DELIVERED.value,
+                ),
+            )
+            rowcount = cursor.rowcount
+        if rowcount == 0:
             # SQL 守卫命中：record 已被并发推进到 DELIVERED，等价于 Python 层的检查失败
             current = self.get_reply(existing.delivery_id)
             if current is not None and current.state == ReplyOutboxState.DELIVERED:
@@ -836,24 +840,24 @@ class SQLiteReplyOutboxStore:
         if not stale_ids:
             return []
         placeholders = ",".join(["?"] * len(stale_ids))
-        conn.execute(
-            f"""
-            UPDATE reply_outbox
-            SET state = ?,
-                last_error_message = ?,
-                updated_at = ?
-            WHERE delivery_id IN ({placeholders})
-              AND state = ?
-            """,
-            (
-                ReplyOutboxState.FAILED_RETRYABLE.value,
-                STALE_IN_PROGRESS_ERROR_MESSAGE,
-                now_ts,
-                *stale_ids,
-                ReplyOutboxState.DELIVERY_IN_PROGRESS.value,
-            ),
-        )
-        conn.commit()
+        with write_transaction(conn):
+            conn.execute(
+                f"""
+                UPDATE reply_outbox
+                SET state = ?,
+                    last_error_message = ?,
+                    updated_at = ?
+                WHERE delivery_id IN ({placeholders})
+                  AND state = ?
+                """,
+                (
+                    ReplyOutboxState.FAILED_RETRYABLE.value,
+                    STALE_IN_PROGRESS_ERROR_MESSAGE,
+                    now_ts,
+                    *stale_ids,
+                    ReplyOutboxState.DELIVERY_IN_PROGRESS.value,
+                ),
+            )
         Log.warn(
             f"reply outbox 清理 stale in_progress: count={len(stale_ids)}, ids={','.join(stale_ids)}",
             module=MODULE,
@@ -875,12 +879,13 @@ class SQLiteReplyOutboxStore:
 
         normalized = _normalize_text(session_id, field_name="session_id")
         conn = self._host_store.get_connection()
-        cursor = conn.execute(
-            "DELETE FROM reply_outbox WHERE session_id = ?",
-            (normalized,),
-        )
-        conn.commit()
-        return cursor.rowcount
+        with write_transaction(conn):
+            cursor = conn.execute(
+                "DELETE FROM reply_outbox WHERE session_id = ?",
+                (normalized,),
+            )
+            rowcount = cursor.rowcount
+        return rowcount
 
 
 def _row_to_reply_outbox_record(row: sqlite3.Row) -> ReplyOutboxRecord:

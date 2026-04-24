@@ -12,7 +12,7 @@ from typing import Any
 
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
 from dayu.contracts.session import SessionRecord, SessionSource, SessionState
-from dayu.host.host_store import HostStore
+from dayu.host.host_store import HostStore, write_transaction
 from dayu.host.protocols import SessionRegistryProtocol
 from dayu.log import Log
 
@@ -78,15 +78,15 @@ class SQLiteSessionRegistry(SessionRegistryProtocol):
         metadata_json = json.dumps(normalized_metadata, ensure_ascii=False)
 
         conn = self._host_store.get_connection()
-        conn.execute(
-            """
-            INSERT INTO sessions (session_id, source, state, scene_name,
-                                  created_at, last_activity_at, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (sid, source.value, SessionState.ACTIVE.value, scene_name, now_str, now_str, metadata_json),
-        )
-        conn.commit()
+        with write_transaction(conn):
+            conn.execute(
+                """
+                INSERT INTO sessions (session_id, source, state, scene_name,
+                                      created_at, last_activity_at, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (sid, source.value, SessionState.ACTIVE.value, scene_name, now_str, now_str, metadata_json),
+            )
 
         Log.debug(
             f"创建 session: session_id={sid}, source={source.value}, scene_name={scene_name or ''}",
@@ -121,21 +121,21 @@ class SQLiteSessionRegistry(SessionRegistryProtocol):
         conn = self._host_store.get_connection()
         # INSERT OR IGNORE：存在则忽略，不存在则插入
         existing = self.get_session(session_id)
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO sessions
-                (session_id, source, state, scene_name,
-                 created_at, last_activity_at, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (session_id, source.value, SessionState.ACTIVE.value, scene_name, now_str, now_str, metadata_json),
-        )
-        # 无论是否新插入，都 touch last_activity_at
-        conn.execute(
-            "UPDATE sessions SET last_activity_at = ? WHERE session_id = ?",
-            (now_str, session_id),
-        )
-        conn.commit()
+        with write_transaction(conn):
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO sessions
+                    (session_id, source, state, scene_name,
+                     created_at, last_activity_at, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (session_id, source.value, SessionState.ACTIVE.value, scene_name, now_str, now_str, metadata_json),
+            )
+            # 无论是否新插入，都 touch last_activity_at
+            conn.execute(
+                "UPDATE sessions SET last_activity_at = ? WHERE session_id = ?",
+                (now_str, session_id),
+            )
 
         row = conn.execute(
             "SELECT * FROM sessions WHERE session_id = ?",
@@ -192,12 +192,13 @@ class SQLiteSessionRegistry(SessionRegistryProtocol):
         """更新 session 最后活跃时间。"""
 
         conn = self._host_store.get_connection()
-        cursor = conn.execute(
-            "UPDATE sessions SET last_activity_at = ? WHERE session_id = ?",
-            (_serialize_dt(_now_utc()), session_id),
-        )
-        conn.commit()
-        if cursor.rowcount == 0:
+        with write_transaction(conn):
+            cursor = conn.execute(
+                "UPDATE sessions SET last_activity_at = ? WHERE session_id = ?",
+                (_serialize_dt(_now_utc()), session_id),
+            )
+            rowcount = cursor.rowcount
+        if rowcount == 0:
             raise KeyError(f"session 不存在: {session_id}")
         Log.debug(f"刷新 session 活跃时间: session_id={session_id}", module=MODULE)
 
@@ -205,12 +206,13 @@ class SQLiteSessionRegistry(SessionRegistryProtocol):
         """关闭 session。"""
 
         conn = self._host_store.get_connection()
-        cursor = conn.execute(
-            "UPDATE sessions SET state = ? WHERE session_id = ?",
-            (SessionState.CLOSED.value, session_id),
-        )
-        conn.commit()
-        if cursor.rowcount == 0:
+        with write_transaction(conn):
+            cursor = conn.execute(
+                "UPDATE sessions SET state = ? WHERE session_id = ?",
+                (SessionState.CLOSED.value, session_id),
+            )
+            rowcount = cursor.rowcount
+        if rowcount == 0:
             raise KeyError(f"session 不存在: {session_id}")
         Log.info(f"关闭 session: session_id={session_id}", module=MODULE)
 
@@ -257,11 +259,11 @@ class SQLiteSessionRegistry(SessionRegistryProtocol):
         closed_ids = [row["session_id"] for row in rows]
         if closed_ids:
             placeholders = ",".join("?" for _ in closed_ids)
-            conn.execute(
-                f"UPDATE sessions SET state = ? WHERE session_id IN ({placeholders})",  # noqa: S608
-                [SessionState.CLOSED.value, *closed_ids],
-            )
-            conn.commit()
+            with write_transaction(conn):
+                conn.execute(
+                    f"UPDATE sessions SET state = ? WHERE session_id IN ({placeholders})",  # noqa: S608
+                    [SessionState.CLOSED.value, *closed_ids],
+                )
             Log.info(
                 f"关闭空闲 session: count={len(closed_ids)}, session_ids={','.join(closed_ids)}",
                 module=MODULE,

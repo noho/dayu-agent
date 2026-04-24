@@ -21,7 +21,7 @@ from dayu.contracts.execution_metadata import (
     normalize_execution_delivery_context,
 )
 from dayu.host._session_barrier import ensure_session_active
-from dayu.host.host_store import HostStore
+from dayu.host.host_store import HostStore, write_transaction
 
 if TYPE_CHECKING:
     from dayu.host.protocols import SessionActivityQueryProtocol
@@ -649,10 +649,9 @@ class SQLitePendingConversationTurnStore:
         now = _now_utc()
         conn = self._host_store.get_connection()
         metadata_json = json.dumps(normalized_metadata, ensure_ascii=False, sort_keys=True)
-        pending_turn_id: str | None = None
-        try:
-            # 先获取写锁再读取当前槽位，避免 check-then-insert 竞争窗口。
-            conn.execute("BEGIN IMMEDIATE")
+        pending_turn_id: str = ""
+        # 先获取写锁再读取当前槽位，避免 check-then-insert 竞争窗口。
+        with write_transaction(conn):
             existing = _get_session_pending_turn_slot_in_connection(
                 conn,
                 session_id=normalized_session_id,
@@ -714,13 +713,6 @@ class SQLitePendingConversationTurnStore:
                         existing.pending_turn_id,
                     ),
                 )
-            conn.commit()
-        except Exception:
-            if conn.in_transaction:
-                conn.rollback()
-            raise
-        if pending_turn_id is None:
-            raise RuntimeError("pending turn 写入后缺少 pending_turn_id")
         updated = self.get_pending_turn(pending_turn_id)
         if updated is None:
             raise RuntimeError(f"pending turn 写入后读取失败: {pending_turn_id}")
@@ -807,16 +799,17 @@ class SQLitePendingConversationTurnStore:
             target_name="pending turn",
         )
         conn = self._host_store.get_connection()
-        cursor = conn.execute(
-            """
-            UPDATE pending_conversation_turns
-            SET state = ?, updated_at = ?
-            WHERE pending_turn_id = ?
-            """,
-            (state.value, _serialize_dt(_now_utc()), normalized_pending_turn_id),
-        )
-        conn.commit()
-        if cursor.rowcount == 0:
+        with write_transaction(conn):
+            cursor = conn.execute(
+                """
+                UPDATE pending_conversation_turns
+                SET state = ?, updated_at = ?
+                WHERE pending_turn_id = ?
+                """,
+                (state.value, _serialize_dt(_now_utc()), normalized_pending_turn_id),
+            )
+            rowcount = cursor.rowcount
+        if rowcount == 0:
             raise KeyError(f"pending turn 不存在: {normalized_pending_turn_id}")
         updated = self.get_pending_turn(normalized_pending_turn_id)
         if updated is None:
@@ -868,11 +861,15 @@ class SQLitePendingConversationTurnStore:
         conn = self._host_store.get_connection()
         acquirable_state_values = tuple(state.value for state in _RESUME_ACQUIRABLE_STATES)
         acquirable_placeholders = ",".join("?" for _ in acquirable_state_values)
-        # 用 BEGIN IMMEDIATE 序列化 CAS UPDATE / 失败判因 SELECT / 上限
-        # DELETE / re-read，避免并发下"UPDATE 胜出方读到记录已被 DELETE
-        # 分支抹掉"或"两方都认为自己 acquire 成功"的竞态。
-        conn.execute("BEGIN IMMEDIATE")
-        try:
+        # CAS UPDATE、观测、以及"达上限原子删除"全部收在同一 write_transaction 内，
+        # 使 observed_row 的语义与 DELETE 共享事务快照：DELETE 以
+        # resume_attempt_count >= max_attempts 作为与观测一致的谓词，
+        # 关闭"观测后、删除前"被其他 resumer 推进/回退的 TOCTOU 窗口。
+        acquired_row: sqlite3.Row | None = None
+        observed_row: sqlite3.Row | None = None
+        over_limit_deleted = False
+        over_limit_session_id = ""
+        with write_transaction(conn):
             cursor = conn.execute(
                 f"""
                 UPDATE pending_conversation_turns
@@ -894,56 +891,61 @@ class SQLitePendingConversationTurnStore:
                 ),
             )
             if cursor.rowcount == 0:
-                row = conn.execute(
+                observed_row = conn.execute(
                     "SELECT * FROM pending_conversation_turns WHERE pending_turn_id = ?",
                     (normalized_pending_turn_id,),
                 ).fetchone()
-                if row is None:
-                    conn.commit()
-                    raise KeyError(f"pending turn 不存在: {normalized_pending_turn_id}")
-                current_state = str(row["state"])
-                current_attempt_count = int(row["resume_attempt_count"] or 0)
-                current_session_id = str(row["session_id"])
-                if current_attempt_count >= max_attempts:
-                    # 已达上限：原子删除本记录，防止超限 pending turn
-                    # 卡死 session/scene。与旧行为一致。
-                    conn.execute(
-                        "DELETE FROM pending_conversation_turns WHERE pending_turn_id = ?",
-                        (normalized_pending_turn_id,),
+                if (
+                    observed_row is not None
+                    and int(observed_row["resume_attempt_count"] or 0) >= max_attempts
+                ):
+                    # 谓词与观测共识：只有仍然处于"达上限"语义的记录会被删除。
+                    delete_cursor = conn.execute(
+                        """
+                        DELETE FROM pending_conversation_turns
+                        WHERE pending_turn_id = ?
+                          AND resume_attempt_count >= ?
+                        """,
+                        (normalized_pending_turn_id, max_attempts),
                     )
-                    conn.commit()
-                    Log.warn(
-                        "pending turn 恢复次数已达到上限，已原子删除: "
-                        f"pending_turn_id={normalized_pending_turn_id}, "
-                        f"session_id={current_session_id}, "
-                        f"max_attempts={max_attempts}",
-                        module=MODULE,
-                    )
-                    raise ValueError(
-                        "pending turn 恢复次数已达到上限，已删除: "
-                        f"pending_turn_id={normalized_pending_turn_id}, max_attempts={max_attempts}"
-                    )
-                # 未达上限但 state 不在可 acquire 集合：被其他 resumer 占用。
-                conn.commit()
-                Log.warn(
-                    "pending turn 已被其他 resumer 持有，当前 acquire 失败: "
-                    f"pending_turn_id={normalized_pending_turn_id}, "
-                    f"session_id={current_session_id}, current_state={current_state}",
-                    module=MODULE,
-                )
-                raise PendingTurnResumeConflictError(normalized_pending_turn_id)
-            row = conn.execute(
-                "SELECT * FROM pending_conversation_turns WHERE pending_turn_id = ?",
-                (normalized_pending_turn_id,),
-            ).fetchone()
-            conn.commit()
-        except Exception:
-            if conn.in_transaction:
-                conn.rollback()
-            raise
-        if row is None:
-            raise RuntimeError(f"pending turn 更新后读取失败: {normalized_pending_turn_id}")
-        return _row_to_pending_turn(dict(row))
+                    if delete_cursor.rowcount > 0:
+                        over_limit_deleted = True
+                        over_limit_session_id = str(observed_row["session_id"])
+            else:
+                acquired_row = conn.execute(
+                    "SELECT * FROM pending_conversation_turns WHERE pending_turn_id = ?",
+                    (normalized_pending_turn_id,),
+                ).fetchone()
+
+        if acquired_row is not None:
+            return _row_to_pending_turn(dict(acquired_row))
+
+        if over_limit_deleted:
+            Log.warn(
+                "pending turn 恢复次数已达到上限，已原子删除: "
+                f"pending_turn_id={normalized_pending_turn_id}, "
+                f"session_id={over_limit_session_id}, "
+                f"max_attempts={max_attempts}",
+                module=MODULE,
+            )
+            raise ValueError(
+                "pending turn 恢复次数已达到上限，已删除: "
+                f"pending_turn_id={normalized_pending_turn_id}, max_attempts={max_attempts}"
+            )
+
+        # CAS 失败分支：按事务内观测的最新状态分类处理。
+        if observed_row is None:
+            raise KeyError(f"pending turn 不存在: {normalized_pending_turn_id}")
+        current_state = str(observed_row["state"])
+        current_session_id = str(observed_row["session_id"])
+        # 未达上限但 state 不在可 acquire 集合：被其他 resumer 占用。
+        Log.warn(
+            "pending turn 已被其他 resumer 持有，当前 acquire 失败: "
+            f"pending_turn_id={normalized_pending_turn_id}, "
+            f"session_id={current_session_id}, current_state={current_state}",
+            module=MODULE,
+        )
+        raise PendingTurnResumeConflictError(normalized_pending_turn_id)
 
     def release_resume_lease(self, pending_turn_id: str) -> PendingConversationTurn | None:
         """把 RESUMING 的 pending turn 原子回退到 ``pre_resume_state``。
@@ -961,52 +963,51 @@ class SQLitePendingConversationTurnStore:
 
         normalized_pending_turn_id = _normalize_text(pending_turn_id, field_name="pending_turn_id")
         conn = self._host_store.get_connection()
-        # BEGIN IMMEDIATE 序列化 SELECT + UPDATE，避免并发下 "释放胜出方读到
-        # state 已被再次 acquire" 的竞态。
-        conn.execute("BEGIN IMMEDIATE")
-        try:
+        # write_transaction(BEGIN IMMEDIATE) 序列化 SELECT + UPDATE，避免并发下
+        # "释放胜出方读到 state 已被再次 acquire" 的竞态。
+        early_row: sqlite3.Row | None = None
+        refreshed: sqlite3.Row | None = None
+        with write_transaction(conn):
             row = conn.execute(
                 "SELECT * FROM pending_conversation_turns WHERE pending_turn_id = ?",
                 (normalized_pending_turn_id,),
             ).fetchone()
             if row is None:
-                conn.commit()
-                return None
-            if str(row["state"]) != PendingConversationTurnState.RESUMING.value:
-                conn.commit()
-                return _row_to_pending_turn(dict(row))
-            pre_resume_state_raw = row["pre_resume_state"] if "pre_resume_state" in row.keys() else None
-            restored_state_value = (
-                str(pre_resume_state_raw)
-                if pre_resume_state_raw
-                else PendingConversationTurnState.ACCEPTED_BY_HOST.value
-            )
-            conn.execute(
-                """
-                UPDATE pending_conversation_turns
-                SET state = ?,
-                    pre_resume_state = NULL,
-                    updated_at = ?
-                WHERE pending_turn_id = ?
-                """,
-                (
-                    restored_state_value,
-                    _serialize_dt(_now_utc()),
-                    normalized_pending_turn_id,
-                ),
-            )
-            refreshed = conn.execute(
-                "SELECT * FROM pending_conversation_turns WHERE pending_turn_id = ?",
-                (normalized_pending_turn_id,),
-            ).fetchone()
-            conn.commit()
-        except Exception:
-            if conn.in_transaction:
-                conn.rollback()
-            raise
-        if refreshed is None:
-            raise RuntimeError(f"pending turn 释放 lease 后读取失败: {normalized_pending_turn_id}")
-        return _row_to_pending_turn(dict(refreshed))
+                early_row = None
+            elif str(row["state"]) != PendingConversationTurnState.RESUMING.value:
+                early_row = row
+            else:
+                pre_resume_state_raw = row["pre_resume_state"] if "pre_resume_state" in row.keys() else None
+                restored_state_value = (
+                    str(pre_resume_state_raw)
+                    if pre_resume_state_raw
+                    else PendingConversationTurnState.ACCEPTED_BY_HOST.value
+                )
+                conn.execute(
+                    """
+                    UPDATE pending_conversation_turns
+                    SET state = ?,
+                        pre_resume_state = NULL,
+                        updated_at = ?
+                    WHERE pending_turn_id = ?
+                    """,
+                    (
+                        restored_state_value,
+                        _serialize_dt(_now_utc()),
+                        normalized_pending_turn_id,
+                    ),
+                )
+                refreshed = conn.execute(
+                    "SELECT * FROM pending_conversation_turns WHERE pending_turn_id = ?",
+                    (normalized_pending_turn_id,),
+                ).fetchone()
+        if refreshed is not None:
+            return _row_to_pending_turn(dict(refreshed))
+        if early_row is None:
+            # 既未读取到记录（缺失），也未进入 UPDATE 分支。
+            # 事务内 row is None 时 early_row 保持 None，此处直接返回 None。
+            return None
+        return _row_to_pending_turn(dict(early_row))
 
     def rebind_source_run_id_for_resume(
         self,
@@ -1047,8 +1048,10 @@ class SQLitePendingConversationTurnStore:
             target_name="pending turn",
         )
         conn = self._host_store.get_connection()
-        conn.execute("BEGIN IMMEDIATE")
-        try:
+        refreshed: sqlite3.Row | None = None
+        cas_failed_row_missing = False
+        cas_failed_conflict = False
+        with write_transaction(conn):
             cursor = conn.execute(
                 """
                 UPDATE pending_conversation_turns
@@ -1069,19 +1072,19 @@ class SQLitePendingConversationTurnStore:
                     "SELECT * FROM pending_conversation_turns WHERE pending_turn_id = ?",
                     (normalized_pending_turn_id,),
                 ).fetchone()
-                conn.commit()
                 if row is None:
-                    raise KeyError(f"pending turn 不存在: {normalized_pending_turn_id}")
-                raise PendingTurnResumeConflictError(normalized_pending_turn_id)
-            refreshed = conn.execute(
-                "SELECT * FROM pending_conversation_turns WHERE pending_turn_id = ?",
-                (normalized_pending_turn_id,),
-            ).fetchone()
-            conn.commit()
-        except Exception:
-            if conn.in_transaction:
-                conn.rollback()
-            raise
+                    cas_failed_row_missing = True
+                else:
+                    cas_failed_conflict = True
+            else:
+                refreshed = conn.execute(
+                    "SELECT * FROM pending_conversation_turns WHERE pending_turn_id = ?",
+                    (normalized_pending_turn_id,),
+                ).fetchone()
+        if cas_failed_row_missing:
+            raise KeyError(f"pending turn 不存在: {normalized_pending_turn_id}")
+        if cas_failed_conflict:
+            raise PendingTurnResumeConflictError(normalized_pending_turn_id)
         if refreshed is None:
             raise RuntimeError(f"pending turn 重绑 source_run_id 后读取失败: {normalized_pending_turn_id}")
         return _row_to_pending_turn(dict(refreshed))
@@ -1107,62 +1110,60 @@ class SQLitePendingConversationTurnStore:
             target_name="pending turn",
         )
         conn = self._host_store.get_connection()
-        conn.execute("BEGIN IMMEDIATE")
-        try:
+        refreshed: sqlite3.Row | None = None
+        missing = False
+        with write_transaction(conn):
             row = conn.execute(
                 "SELECT * FROM pending_conversation_turns WHERE pending_turn_id = ?",
                 (normalized_pending_turn_id,),
             ).fetchone()
             if row is None:
-                conn.commit()
-                raise KeyError(f"pending turn 不存在: {normalized_pending_turn_id}")
-            current_state = str(row["state"])
-            if current_state == PendingConversationTurnState.RESUMING.value:
-                pre_resume_state_raw = row["pre_resume_state"] if "pre_resume_state" in row.keys() else None
-                restored_state_value = (
-                    str(pre_resume_state_raw)
-                    if pre_resume_state_raw
-                    else PendingConversationTurnState.ACCEPTED_BY_HOST.value
-                )
-                conn.execute(
-                    """
-                    UPDATE pending_conversation_turns
-                    SET state = ?,
-                        pre_resume_state = NULL,
-                        last_resume_error_message = ?,
-                        updated_at = ?
-                    WHERE pending_turn_id = ?
-                    """,
-                    (
-                        restored_state_value,
-                        normalized_error_message,
-                        _serialize_dt(_now_utc()),
-                        normalized_pending_turn_id,
-                    ),
-                )
+                missing = True
             else:
-                conn.execute(
-                    """
-                    UPDATE pending_conversation_turns
-                    SET last_resume_error_message = ?,
-                        updated_at = ?
-                    WHERE pending_turn_id = ?
-                    """,
-                    (
-                        normalized_error_message,
-                        _serialize_dt(_now_utc()),
-                        normalized_pending_turn_id,
-                    ),
-                )
-            refreshed = conn.execute(
-                "SELECT * FROM pending_conversation_turns WHERE pending_turn_id = ?",
-                (normalized_pending_turn_id,),
-            ).fetchone()
-            conn.commit()
-        except Exception:
-            if conn.in_transaction:
-                conn.rollback()
-            raise
+                current_state = str(row["state"])
+                if current_state == PendingConversationTurnState.RESUMING.value:
+                    pre_resume_state_raw = row["pre_resume_state"] if "pre_resume_state" in row.keys() else None
+                    restored_state_value = (
+                        str(pre_resume_state_raw)
+                        if pre_resume_state_raw
+                        else PendingConversationTurnState.ACCEPTED_BY_HOST.value
+                    )
+                    conn.execute(
+                        """
+                        UPDATE pending_conversation_turns
+                        SET state = ?,
+                            pre_resume_state = NULL,
+                            last_resume_error_message = ?,
+                            updated_at = ?
+                        WHERE pending_turn_id = ?
+                        """,
+                        (
+                            restored_state_value,
+                            normalized_error_message,
+                            _serialize_dt(_now_utc()),
+                            normalized_pending_turn_id,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE pending_conversation_turns
+                        SET last_resume_error_message = ?,
+                            updated_at = ?
+                        WHERE pending_turn_id = ?
+                        """,
+                        (
+                            normalized_error_message,
+                            _serialize_dt(_now_utc()),
+                            normalized_pending_turn_id,
+                        ),
+                    )
+                refreshed = conn.execute(
+                    "SELECT * FROM pending_conversation_turns WHERE pending_turn_id = ?",
+                    (normalized_pending_turn_id,),
+                ).fetchone()
+        if missing:
+            raise KeyError(f"pending turn 不存在: {normalized_pending_turn_id}")
         if refreshed is None:
             raise RuntimeError(f"pending turn 更新后读取失败: {normalized_pending_turn_id}")
         return _row_to_pending_turn(dict(refreshed))
@@ -1172,11 +1173,11 @@ class SQLitePendingConversationTurnStore:
 
         normalized_pending_turn_id = _normalize_text(pending_turn_id, field_name="pending_turn_id")
         conn = self._host_store.get_connection()
-        conn.execute(
-            "DELETE FROM pending_conversation_turns WHERE pending_turn_id = ?",
-            (normalized_pending_turn_id,),
-        )
-        conn.commit()
+        with write_transaction(conn):
+            conn.execute(
+                "DELETE FROM pending_conversation_turns WHERE pending_turn_id = ?",
+                (normalized_pending_turn_id,),
+            )
 
     def delete_by_session_id(self, session_id: str) -> int:
         """删除指定 session 的所有 pending turn。
@@ -1193,12 +1194,13 @@ class SQLitePendingConversationTurnStore:
 
         normalized = _normalize_text(session_id, field_name="session_id")
         conn = self._host_store.get_connection()
-        cursor = conn.execute(
-            "DELETE FROM pending_conversation_turns WHERE session_id = ?",
-            (normalized,),
-        )
-        conn.commit()
-        return cursor.rowcount
+        with write_transaction(conn):
+            cursor = conn.execute(
+                "DELETE FROM pending_conversation_turns WHERE session_id = ?",
+                (normalized,),
+            )
+            rowcount = cursor.rowcount
+        return rowcount
 
 
 def _row_to_pending_turn(row: dict[str, Any]) -> PendingConversationTurn:

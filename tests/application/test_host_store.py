@@ -5,11 +5,12 @@ from __future__ import annotations
 import sqlite3
 import threading
 from pathlib import Path
+from typing import cast
 from unittest.mock import Mock
 
 import pytest
 
-from dayu.host.host_store import HostStore
+from dayu.host.host_store import HostStore, write_transaction
 from dayu.log import Log
 
 
@@ -181,6 +182,29 @@ class TestConnection:
         assert conn.row_factory is sqlite3.Row
         store.close()
 
+    @pytest.mark.unit
+    def test_connection_uses_autocommit(self, tmp_path: Path) -> None:
+        """默认连接应启用 autocommit，缩短单语句写事务持锁时间。"""
+
+        store = HostStore(tmp_path / "test.db")
+        store.initialize_schema()
+
+        conn = store.get_connection()
+        assert conn.isolation_level is None
+        store.close()
+
+    @pytest.mark.unit
+    def test_busy_timeout_extended_for_cross_thread_writes(self, tmp_path: Path) -> None:
+        """默认连接应为跨线程写竞争配置更长的 busy timeout。"""
+
+        store = HostStore(tmp_path / "test.db")
+        store.initialize_schema()
+
+        conn = store.get_connection()
+        busy_timeout_ms = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        assert busy_timeout_ms == 30000
+        store.close()
+
 
 class TestClose:
     """关闭行为测试。"""
@@ -218,12 +242,12 @@ class TestConcurrentReadWrite:
             try:
                 conn = store.get_connection()
                 for i in range(10):
-                    conn.execute(
-                        "INSERT INTO sessions (session_id, source, state, created_at, last_activity_at) "
-                        "VALUES (?, 'cli', 'active', datetime('now'), datetime('now'))",
-                        (f"sess_{worker_id}_{i}",),
-                    )
-                    conn.commit()
+                    with write_transaction(conn):
+                        conn.execute(
+                            "INSERT INTO sessions (session_id, source, state, created_at, last_activity_at) "
+                            "VALUES (?, 'cli', 'active', datetime('now'), datetime('now'))",
+                            (f"sess_{worker_id}_{i}",),
+                        )
             except Exception as e:
                 errors.append(e)
 
@@ -250,24 +274,24 @@ class TestConcurrentReadWrite:
 
         # 预插入一些数据
         conn = store.get_connection()
-        for i in range(10):
-            conn.execute(
-                "INSERT INTO sessions (session_id, source, state, created_at, last_activity_at) "
-                "VALUES (?, 'cli', 'active', datetime('now'), datetime('now'))",
-                (f"sess_pre_{i}",),
-            )
-        conn.commit()
+        with write_transaction(conn):
+            for i in range(10):
+                conn.execute(
+                    "INSERT INTO sessions (session_id, source, state, created_at, last_activity_at) "
+                    "VALUES (?, 'cli', 'active', datetime('now'), datetime('now'))",
+                    (f"sess_pre_{i}",),
+                )
 
         def writer() -> None:
             try:
                 c = store.get_connection()
                 for i in range(20):
-                    c.execute(
-                        "INSERT INTO sessions (session_id, source, state, created_at, last_activity_at) "
-                        "VALUES (?, 'web', 'active', datetime('now'), datetime('now'))",
-                        (f"sess_w_{i}",),
-                    )
-                    c.commit()
+                    with write_transaction(c):
+                        c.execute(
+                            "INSERT INTO sessions (session_id, source, state, created_at, last_activity_at) "
+                            "VALUES (?, 'web', 'active', datetime('now'), datetime('now'))",
+                            (f"sess_w_{i}",),
+                        )
             except Exception as e:
                 errors.append(e)
 
@@ -287,6 +311,131 @@ class TestConcurrentReadWrite:
             t.join(timeout=30)
 
         assert errors == [], f"并发读写出错: {errors}"
+        store.close()
+
+    @pytest.mark.unit
+    def test_concurrent_writers_serialize_without_lock_error(self, tmp_path: Path) -> None:
+        """两个写线程经 write_transaction 序列化后不会触发 upgrade deadlock。"""
+
+        store = HostStore(tmp_path / "test.db")
+        store.initialize_schema()
+        errors: list[Exception] = []
+
+        def writer(worker_id: int) -> None:
+            try:
+                c = store.get_connection()
+                for i in range(30):
+                    with write_transaction(c):
+                        c.execute(
+                            "INSERT INTO sessions (session_id, source, state, created_at, last_activity_at) "
+                            "VALUES (?, 'cli', 'active', datetime('now'), datetime('now'))",
+                            (f"sess_cs_{worker_id}_{i}",),
+                        )
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+        threads = [threading.Thread(target=writer, args=(wid,)) for wid in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        assert errors == [], f"序列化写事务意外报错: {errors}"
+        conn = store.get_connection()
+        total = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        assert total == 60
+        store.close()
+
+    @pytest.mark.unit
+    def test_write_transaction_rolls_back_on_exception(self, tmp_path: Path) -> None:
+        """事务体抛异常时已写入内容被回滚，后续事务可正常继续。"""
+
+        store = HostStore(tmp_path / "test.db")
+        store.initialize_schema()
+        conn = store.get_connection()
+
+        class _InjectedError(RuntimeError):
+            """测试专用注入异常。"""
+
+        with pytest.raises(_InjectedError):
+            with write_transaction(conn):
+                conn.execute(
+                    "INSERT INTO sessions (session_id, source, state, created_at, last_activity_at) "
+                    "VALUES (?, 'cli', 'active', datetime('now'), datetime('now'))",
+                    ("sess_rollback",),
+                )
+                raise _InjectedError("boom")
+
+        count_after_rollback = conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE session_id = ?",
+            ("sess_rollback",),
+        ).fetchone()[0]
+        assert count_after_rollback == 0
+
+        # 证明连接未被卡在事务里：再开一次事务 INSERT 能成功提交。
+        with write_transaction(conn):
+            conn.execute(
+                "INSERT INTO sessions (session_id, source, state, created_at, last_activity_at) "
+                "VALUES (?, 'cli', 'active', datetime('now'), datetime('now'))",
+                ("sess_after_rollback",),
+            )
+        count_after_success = conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE session_id = ?",
+            ("sess_after_rollback",),
+        ).fetchone()[0]
+        assert count_after_success == 1
+        store.close()
+
+    @pytest.mark.unit
+    def test_write_transaction_rolls_back_on_commit_failure(self, tmp_path: Path) -> None:
+        """COMMIT 自身失败时必须触发 ROLLBACK，连接不能被卡在事务中。"""
+
+        store = HostStore(tmp_path / "test.db")
+        store.initialize_schema()
+        conn = store.get_connection()
+
+        class _CommitBoom(sqlite3.OperationalError):
+            """测试专用：模拟 SQLite COMMIT 阶段抛 OperationalError。"""
+
+        class _CommitFailingProxy:
+            """只拦截 COMMIT 的连接代理；其余调用透传给真实连接。"""
+
+            def __init__(self, real: sqlite3.Connection) -> None:
+                self._real = real
+
+            def execute(self, sql: str, *args: object, **kwargs: object) -> sqlite3.Cursor:
+                if sql.strip().upper() == "COMMIT":
+                    raise _CommitBoom("simulated commit failure")
+                return self._real.execute(sql, *args, **kwargs)  # type: ignore[arg-type]
+
+        proxy = cast(sqlite3.Connection, _CommitFailingProxy(conn))
+        with pytest.raises(_CommitBoom):
+            with write_transaction(proxy):
+                conn.execute(
+                    "INSERT INTO sessions (session_id, source, state, created_at, last_activity_at) "
+                    "VALUES (?, 'cli', 'active', datetime('now'), datetime('now'))",
+                    ("sess_commit_fail",),
+                )
+
+        # COMMIT 失败必须触发 ROLLBACK：未提交的 INSERT 不应落库。
+        count_after_failure = conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE session_id = ?",
+            ("sess_commit_fail",),
+        ).fetchone()[0]
+        assert count_after_failure == 0
+
+        # 连接不能被卡在事务里：下一个 write_transaction 仍能正常开启与提交。
+        with write_transaction(conn):
+            conn.execute(
+                "INSERT INTO sessions (session_id, source, state, created_at, last_activity_at) "
+                "VALUES (?, 'cli', 'active', datetime('now'), datetime('now'))",
+                ("sess_after_commit_fail",),
+            )
+        count_after_success = conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE session_id = ?",
+            ("sess_after_commit_fail",),
+        ).fetchone()[0]
+        assert count_after_success == 1
         store.close()
 
 

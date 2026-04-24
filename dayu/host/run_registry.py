@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-from dayu.host.host_store import HostStore
+from dayu.host.host_store import HostStore, write_transaction
 from dayu.host.protocols import RunRegistryProtocol
 from dayu.contracts.execution_metadata import (
     ExecutionDeliveryContext,
@@ -176,15 +176,15 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         metadata_json = json.dumps(metadata_typed, ensure_ascii=False)
 
         conn = self._host_store.get_connection()
-        conn.execute(
-            """
-            INSERT INTO runs (run_id, session_id, service_type, scene_name,
-                              state, created_at, owner_pid, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (run_id, session_id, service_type, scene_name, RunState.CREATED.value, now_str, pid, metadata_json),
-        )
-        conn.commit()
+        with write_transaction(conn):
+            conn.execute(
+                """
+                INSERT INTO runs (run_id, session_id, service_type, scene_name,
+                                  state, created_at, owner_pid, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (run_id, session_id, service_type, scene_name, RunState.CREATED.value, now_str, pid, metadata_json),
+            )
 
         Log.debug(
             _build_run_registration_debug_message(
@@ -290,28 +290,29 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         conn = self._host_store.get_connection()
         active_values = tuple(s.value for s in ACTIVE_STATES)
         placeholders = ",".join("?" for _ in active_values)
-        cursor = conn.execute(
-            f"""
-            UPDATE runs
-            SET cancel_requested_at = ?, cancel_requested_reason = ?
-            WHERE run_id = ?
-              AND state IN ({placeholders})
-              AND cancel_requested_at IS NULL
-            """,  # noqa: S608
-            [
-                _serialize_dt(_now_utc()),
-                cancel_reason.value,
-                run_id,
-                *active_values,
-            ],
-        )
-        conn.commit()
-        if cursor.rowcount > 0:
+        with write_transaction(conn):
+            cursor = conn.execute(
+                f"""
+                UPDATE runs
+                SET cancel_requested_at = ?, cancel_requested_reason = ?
+                WHERE run_id = ?
+                  AND state IN ({placeholders})
+                  AND cancel_requested_at IS NULL
+                """,  # noqa: S608
+                [
+                    _serialize_dt(_now_utc()),
+                    cancel_reason.value,
+                    run_id,
+                    *active_values,
+                ],
+            )
+            rowcount = cursor.rowcount
+        if rowcount > 0:
             Log.info(
                 f"登记 run 取消请求: run_id={run_id}, cancel_reason={cancel_reason.value}",
                 module=MODULE,
             )
-        return cursor.rowcount > 0
+        return rowcount > 0
 
     def is_cancel_requested(self, run_id: str) -> bool:
         """查询 run 是否已记录取消意图。"""
@@ -430,27 +431,27 @@ class SQLiteRunRegistry(RunRegistryProtocol):
             active_values = tuple(state.value for state in ACTIVE_STATES)
             placeholders = ",".join("?" for _ in active_values)
             orphan_ids: list[str] = []
-            for oid in candidate_orphan_ids:
-                # 写入 UNSETTLED + ORPHAN_RUN_ERROR_SUMMARY；
-                # ORPHAN_RUN_ERROR_SUMMARY 仅作为描述性填充，判定一律走 state == UNSETTLED。
-                cursor = conn.execute(
-                    """
-                    UPDATE runs SET state = ?, completed_at = ?,
-                           error_summary = ?
-                    WHERE run_id = ?
-                      AND state IN ({placeholders})
-                    """.format(placeholders=placeholders),
-                    (
-                        RunState.UNSETTLED.value,
-                        now_str,
-                        ORPHAN_RUN_ERROR_SUMMARY,
-                        oid,
-                        *active_values,
-                    ),
-                )
-                if cursor.rowcount > 0:
-                    orphan_ids.append(oid)
-            conn.commit()
+            with write_transaction(conn):
+                for oid in candidate_orphan_ids:
+                    # 写入 UNSETTLED + ORPHAN_RUN_ERROR_SUMMARY；
+                    # ORPHAN_RUN_ERROR_SUMMARY 仅作为描述性填充，判定一律走 state == UNSETTLED。
+                    cursor = conn.execute(
+                        """
+                        UPDATE runs SET state = ?, completed_at = ?,
+                               error_summary = ?
+                        WHERE run_id = ?
+                          AND state IN ({placeholders})
+                        """.format(placeholders=placeholders),
+                        (
+                            RunState.UNSETTLED.value,
+                            now_str,
+                            ORPHAN_RUN_ERROR_SUMMARY,
+                            oid,
+                            *active_values,
+                        ),
+                    )
+                    if cursor.rowcount > 0:
+                        orphan_ids.append(oid)
             if orphan_ids:
                 Log.info(
                     f"清理 orphan runs -> UNSETTLED: count={len(orphan_ids)}, run_ids={','.join(orphan_ids)}",
@@ -493,73 +494,73 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         """
 
         conn = self._host_store.get_connection()
-        row = conn.execute(
-            "SELECT * FROM runs WHERE run_id = ?",
-            (run_id,),
-        ).fetchone()
-        if row is None:
-            raise KeyError(f"run 不存在: {run_id}")
+        with write_transaction(conn):
+            row = conn.execute(
+                "SELECT * FROM runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"run 不存在: {run_id}")
 
-        current_state = RunState(row["state"])
-        is_owner_unsettled_recovery = False
-        if not is_valid_transition(current_state, target_state):
-            if (
-                current_state == RunState.UNSETTLED
-                and target_state == RunState.SUCCEEDED
-                and int(row["owner_pid"]) == os.getpid()
-            ):
-                is_owner_unsettled_recovery = True
-                Log.warn(
-                    (
-                        "检测到当前 owner 修复被误判为 orphan 的 run，"
-                        f"允许从 UNSETTLED 恢复成功终态: run_id={run_id}"
-                    ),
-                    module=MODULE,
-                )
-            else:
-                raise ValueError(
-                    f"非法状态转换: {current_state.value} -> {target_state.value} (run_id={run_id})"
-                )
+            current_state = RunState(row["state"])
+            is_owner_unsettled_recovery = False
+            if not is_valid_transition(current_state, target_state):
+                if (
+                    current_state == RunState.UNSETTLED
+                    and target_state == RunState.SUCCEEDED
+                    and int(row["owner_pid"]) == os.getpid()
+                ):
+                    is_owner_unsettled_recovery = True
+                    Log.warn(
+                        (
+                            "检测到当前 owner 修复被误判为 orphan 的 run，"
+                            f"允许从 UNSETTLED 恢复成功终态: run_id={run_id}"
+                        ),
+                        module=MODULE,
+                    )
+                else:
+                    raise ValueError(
+                        f"非法状态转换: {current_state.value} -> {target_state.value} (run_id={run_id})"
+                    )
 
-        # 构造 SET 子句
-        set_parts = ["state = ?"]
-        params: list[Any] = [target_state.value]
+            # 构造 SET 子句
+            set_parts = ["state = ?"]
+            params: list[Any] = [target_state.value]
 
-        if started_at is not None:
-            set_parts.append("started_at = ?")
-            params.append(_serialize_dt(started_at))
-        if completed_at is not None:
-            set_parts.append("completed_at = ?")
-            params.append(_serialize_dt(completed_at))
-        if error_summary is not None:
-            set_parts.append("error_summary = ?")
-            params.append(error_summary)
-        elif is_owner_unsettled_recovery:
-            # owner 把 UNSETTLED 修复回 SUCCEEDED 时清空 orphan 填充的 error_summary。
-            set_parts.append("error_summary = NULL")
-        if cancel_requested_at is not None:
-            set_parts.append("cancel_requested_at = ?")
-            params.append(_serialize_dt(cancel_requested_at))
-        if cancel_requested_reason is not None:
-            set_parts.append("cancel_requested_reason = ?")
-            params.append(cancel_requested_reason.value)
-        if cancel_reason is not None:
-            set_parts.append("cancel_reason = ?")
-            params.append(cancel_reason.value)
+            if started_at is not None:
+                set_parts.append("started_at = ?")
+                params.append(_serialize_dt(started_at))
+            if completed_at is not None:
+                set_parts.append("completed_at = ?")
+                params.append(_serialize_dt(completed_at))
+            if error_summary is not None:
+                set_parts.append("error_summary = ?")
+                params.append(error_summary)
+            elif is_owner_unsettled_recovery:
+                # owner 把 UNSETTLED 修复回 SUCCEEDED 时清空 orphan 填充的 error_summary。
+                set_parts.append("error_summary = NULL")
+            if cancel_requested_at is not None:
+                set_parts.append("cancel_requested_at = ?")
+                params.append(_serialize_dt(cancel_requested_at))
+            if cancel_requested_reason is not None:
+                set_parts.append("cancel_requested_reason = ?")
+                params.append(cancel_requested_reason.value)
+            if cancel_reason is not None:
+                set_parts.append("cancel_reason = ?")
+                params.append(cancel_reason.value)
 
-        set_clause = ", ".join(set_parts)
-        params.append(run_id)
-        conn.execute(
-            f"UPDATE runs SET {set_clause} WHERE run_id = ?",  # noqa: S608
-            params,
-        )
-        conn.commit()
+            set_clause = ", ".join(set_parts)
+            params.append(run_id)
+            conn.execute(
+                f"UPDATE runs SET {set_clause} WHERE run_id = ?",  # noqa: S608
+                params,
+            )
 
-        # 重新读取最终状态
-        updated_row = conn.execute(
-            "SELECT * FROM runs WHERE run_id = ?",
-            (run_id,),
-        ).fetchone()
+            # 事务内重新读取最终状态，保证与 UPDATE 原子一致。
+            updated_row = conn.execute(
+                "SELECT * FROM runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
         Log.debug(
             _build_run_transition_debug_message(
                 run_id=run_id,

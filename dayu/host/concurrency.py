@@ -9,7 +9,7 @@ import os
 import time
 import uuid
 
-from dayu.host.host_store import HostStore
+from dayu.host.host_store import HostStore, write_transaction
 from dayu.host.protocols import ConcurrencyGovernorProtocol, ConcurrencyPermit, LaneStatus
 from dayu.process_liveness import is_pid_alive
 
@@ -108,8 +108,9 @@ class SQLiteConcurrencyGovernor(ConcurrencyGovernorProtocol):
         """
 
         conn = self._host_store.get_connection()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
+        permits: list[ConcurrencyPermit] = []
+        over_capacity = False
+        with write_transaction(conn):
             # 先统一点名：任意一个不够就全部放弃。
             # 不同 lane 的 COUNT 查询在同一事务内读到的是一致快照，
             # 避免"先拿到 A、检查 B 时 A 的名额被抢"的逻辑漏洞。
@@ -120,37 +121,32 @@ class SQLiteConcurrencyGovernor(ConcurrencyGovernorProtocol):
                     (lane_name,),
                 ).fetchone()
                 if row["cnt"] >= max_concurrent:
-                    conn.execute("ROLLBACK")
-                    return None
+                    over_capacity = True
+                    break
 
-            now = _now_utc()
-            now_iso = now.isoformat()
-            pid = os.getpid()
-            permits: list[ConcurrencyPermit] = []
-            for lane_name in lanes:
-                permit_id = f"permit_{uuid.uuid4().hex[:12]}"
-                conn.execute(
-                    """
-                    INSERT INTO permits (permit_id, lane, owner_pid, acquired_at)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (permit_id, lane_name, pid, now_iso),
-                )
-                permits.append(
-                    ConcurrencyPermit(
-                        permit_id=permit_id,
-                        lane=lane_name,
-                        acquired_at=now,
+            if not over_capacity:
+                now = _now_utc()
+                now_iso = now.isoformat()
+                pid = os.getpid()
+                for lane_name in lanes:
+                    permit_id = f"permit_{uuid.uuid4().hex[:12]}"
+                    conn.execute(
+                        """
+                        INSERT INTO permits (permit_id, lane, owner_pid, acquired_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (permit_id, lane_name, pid, now_iso),
                     )
-                )
-            conn.execute("COMMIT")
-            return permits
-        except Exception:
-            try:
-                conn.execute("ROLLBACK")
-            except Exception:  # noqa: BLE001, S110
-                pass
-            raise
+                    permits.append(
+                        ConcurrencyPermit(
+                            permit_id=permit_id,
+                            lane=lane_name,
+                            acquired_at=now,
+                        )
+                    )
+        if over_capacity:
+            return None
+        return permits
 
     def try_acquire(self, lane: str) -> ConcurrencyPermit | None:
         """尝试立即获取并发许可（非阻塞）。"""
@@ -160,51 +156,41 @@ class SQLiteConcurrencyGovernor(ConcurrencyGovernorProtocol):
             raise ValueError(f"未配置的并发通道: {lane}")
 
         conn = self._host_store.get_connection()
-        try:
-            # BEGIN IMMEDIATE 保证跨进程写互斥
-            conn.execute("BEGIN IMMEDIATE")
+        permit: ConcurrencyPermit | None = None
+        with write_transaction(conn):
+            # write_transaction(BEGIN IMMEDIATE) 保证跨进程写互斥
             row = conn.execute(
                 "SELECT COUNT(*) AS cnt FROM permits WHERE lane = ?",
                 (lane,),
             ).fetchone()
             current_count = row["cnt"]
 
-            if current_count >= max_concurrent:
-                conn.execute("ROLLBACK")
-                return None
-
-            permit_id = f"permit_{uuid.uuid4().hex[:12]}"
-            now = _now_utc()
-            conn.execute(
-                """
-                INSERT INTO permits (permit_id, lane, owner_pid, acquired_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (permit_id, lane, os.getpid(), now.isoformat()),
-            )
-            conn.execute("COMMIT")
-            return ConcurrencyPermit(
-                permit_id=permit_id,
-                lane=lane,
-                acquired_at=now,
-            )
-        except Exception:
-            # 确保异常时回滚
-            try:
-                conn.execute("ROLLBACK")
-            except Exception:  # noqa: BLE001, S110
-                pass
-            raise
+            if current_count < max_concurrent:
+                permit_id = f"permit_{uuid.uuid4().hex[:12]}"
+                now = _now_utc()
+                conn.execute(
+                    """
+                    INSERT INTO permits (permit_id, lane, owner_pid, acquired_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (permit_id, lane, os.getpid(), now.isoformat()),
+                )
+                permit = ConcurrencyPermit(
+                    permit_id=permit_id,
+                    lane=lane,
+                    acquired_at=now,
+                )
+        return permit
 
     def release(self, permit: ConcurrencyPermit) -> None:
         """释放并发许可。"""
 
         conn = self._host_store.get_connection()
-        conn.execute(
-            "DELETE FROM permits WHERE permit_id = ?",
-            (permit.permit_id,),
-        )
-        conn.commit()
+        with write_transaction(conn):
+            conn.execute(
+                "DELETE FROM permits WHERE permit_id = ?",
+                (permit.permit_id,),
+            )
 
     def get_lane_status(self, lane: str) -> LaneStatus:
         """查询指定 lane 的当前状态。"""
@@ -241,11 +227,11 @@ class SQLiteConcurrencyGovernor(ConcurrencyGovernorProtocol):
                 stale_ids.append(row["permit_id"])
 
         if stale_ids:
-            conn.executemany(
-                "DELETE FROM permits WHERE permit_id = ?",
-                ((permit_id,) for permit_id in stale_ids),
-            )
-            conn.commit()
+            with write_transaction(conn):
+                conn.executemany(
+                    "DELETE FROM permits WHERE permit_id = ?",
+                    ((permit_id,) for permit_id in stale_ids),
+                )
 
         return stale_ids
 
