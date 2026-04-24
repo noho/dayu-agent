@@ -888,14 +888,17 @@
       }
     }
   },
-  "qwen3": {
+  "qwen-plus": {
     "runner_type": "openai_compatible",
-    "name": "qwen3",
+    "name": "qwen-plus",
     "endpoint_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
     "model": "qwen-plus",
     "headers": {
       "Authorization": "Bearer {{QWEN_API_KEY}}",
       "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "enable_thinking": false
     },
     "timeout": 3600,
     "stream_idle_timeout": 120.0,
@@ -905,7 +908,7 @@
     "supports_usage": true,
     "supports_stream_usage": true,
     "max_context_tokens": 1000000,
-    "description": "Qwen3 模型 (qwen-plus 稳定版) - 用于对话和内容生成（1M context, 32K output）",
+    "description": "Qwen Plus 模型 - 用于内容生成（1M context）",
     "runtime_hints": {
       "temperature_profiles": {
         "write": {
@@ -938,9 +941,9 @@
       }
     }
   },
-  "qwen3-thinking": {
+  "qwen-plus-thinking": {
     "runner_type": "openai_compatible",
-    "name": "qwen3-thinking",
+    "name": "qwen-plus-thinking",
     "endpoint_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
     "model": "qwen-plus",
     "headers": {
@@ -958,7 +961,7 @@
     "supports_usage": true,
     "supports_stream_usage": true,
     "max_context_tokens": 1000000,
-    "description": "Qwen3 Thinking 模型 (qwen-plus 稳定版) - 开启深度思考模式（1M context, 32K output）",
+    "description": "Qwen Plus Thinking 模型 - 开启深度思考模式（1M context）",
     "runtime_hints": {
       "temperature_profiles": {
         "write": {

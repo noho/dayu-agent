@@ -1150,7 +1150,7 @@ dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.html
 例如：
 
 - 想把 `write` 默认模型从 `mimo-v2.5-pro` 改成 `gpt-5.4`，就改 `workspace/config/prompts/manifests/write.json`
-- 想把 `interactive` 默认模型改成 `qwen3-thinking`，就改 `workspace/config/prompts/manifests/interactive.json`
+- 想把 `interactive` 默认模型改成 `qwen-plus-thinking`，就改 `workspace/config/prompts/manifests/interactive.json`
 - 想把 `audit` / `confirm` 默认模型换掉，就分别改 `audit.json` 和 `confirm.json`
 
 一个简单理解：

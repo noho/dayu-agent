@@ -854,7 +854,7 @@ class TestUpdateManifestSecondInit:
     """二次 init 换供应商时 manifest 应被正确替换。"""
 
     def test_switch_from_deepseek_to_qwen(self, tmp_path: Path) -> None:
-        """已经是 deepseek-v4-flash 的 manifest，换成 qwen3 应成功。"""
+        """已经是 deepseek-v4-flash 的 manifest，换成 qwen-plus 应成功。"""
         manifests = tmp_path / "prompts" / "manifests"
         manifests.mkdir(parents=True)
 
@@ -867,14 +867,14 @@ class TestUpdateManifestSecondInit:
             encoding="utf-8",
         )
 
-        count = _update_manifest_default_models(tmp_path, "qwen3", "qwen3-thinking")
+        count = _update_manifest_default_models(tmp_path, "qwen-plus", "qwen-plus-thinking")
         assert count == 2
 
         write_data = json.loads((manifests / "write.json").read_text(encoding="utf-8"))
-        assert write_data["model"]["default_name"] == "qwen3"
+        assert write_data["model"]["default_name"] == "qwen-plus"
 
         audit_data = json.loads((manifests / "audit.json").read_text(encoding="utf-8"))
-        assert audit_data["model"]["default_name"] == "qwen3-thinking"
+        assert audit_data["model"]["default_name"] == "qwen-plus-thinking"
 
     def test_ambiguous_model_uses_role_marker(self, tmp_path: Path) -> None:
         """thinking/non-thinking 同名模型（如 custom-openai）通过角色标记正确分类。"""
@@ -976,7 +976,7 @@ class TestUpdateManifestSecondInit:
             lambda: pkg_config,
         )
 
-        count = _update_manifest_default_models(tmp_path, "qwen3", "qwen3-thinking")
+        count = _update_manifest_default_models(tmp_path, "qwen-plus", "qwen-plus-thinking")
         assert count == 0
 
         data = json.loads((manifests / "custom.json").read_text(encoding="utf-8"))

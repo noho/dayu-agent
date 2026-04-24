@@ -26,7 +26,7 @@ _EXPECTED_THINKING_ALLOWED_NAMES: tuple[str, ...] = (
     "mimo-v2.5-pro-thinking-plan-sg",
     "deepseek-v4-flash-thinking",
     "deepseek-v4-pro-thinking",
-    "qwen3-thinking",
+    "qwen-plus-thinking",
     "qwen3:30b-thinking",
     "gpt-5.4-thinking",
     "claude-sonnet-4-6-thinking",

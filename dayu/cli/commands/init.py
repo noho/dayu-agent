@@ -137,10 +137,10 @@ _PROVIDER_OPTIONS: tuple[_ProviderOption, ...] = (
     ),
     _ProviderOption(
         option_key=_PROVIDER_OPTION_QWEN,
-        display_name="阿里通义千问",
+        display_name="Qwen Plus",
         api_key_name="QWEN_API_KEY",
-        non_thinking_model="qwen3",
-        thinking_model="qwen3-thinking",
+        non_thinking_model="qwen-plus",
+        thinking_model="qwen-plus-thinking",
     ),
     _ProviderOption(
         option_key=_PROVIDER_OPTION_CUSTOM_OPENAI,
