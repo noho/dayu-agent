@@ -163,6 +163,7 @@ def prepare_host_runtime_dependencies(
         host_store_path=host_config.store_path,
         lane_config=host_config.lane_config,
         pending_turn_resume_max_attempts=host_config.pending_turn_resume_max_attempts,
+        pending_turn_retention_hours=host_config.pending_turn_retention_hours,
         event_bus=None,
     )
     recover_host_startup_state(
@@ -218,6 +219,7 @@ def prepare_host_admin_dependencies(
         host_store_path=host_config.store_path,
         lane_config=host_config.lane_config,
         pending_turn_resume_max_attempts=host_config.pending_turn_resume_max_attempts,
+        pending_turn_retention_hours=host_config.pending_turn_retention_hours,
         event_bus=None,
     )
     return PreparedHostAdminDependencies(

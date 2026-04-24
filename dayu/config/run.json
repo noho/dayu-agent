@@ -60,6 +60,9 @@
     },
     "pending_turn_resume": {
       "max_attempts": 3
+    },
+    "pending_turn_retention": {
+      "retention_hours": 168
     }
   },
   "tool_trace_config": {

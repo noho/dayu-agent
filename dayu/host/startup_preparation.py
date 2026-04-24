@@ -15,6 +15,11 @@ from dayu.host.concurrency import DEFAULT_LANE_CONFIG
 from dayu.workspace_paths import HOST_STORE_RELATIVE_PATH, build_host_store_default_path
 
 DEFAULT_PENDING_TURN_RESUME_MAX_ATTEMPTS = 3
+# pending turn 在 ACCEPTED_BY_HOST / PREPARED_BY_HOST 状态下最长保留时间（小时）。
+# 超过该阈值后 `Host.cleanup_stale_pending_turns` 会兜底删除，避免因 UI 层始终
+# 未询问用户"是否重发"导致库无限累积。168 = 7 天，预留给 UI 的询问窗口，
+# 同时远大于正常 CLI / Web / WeChat 的实际询问周期（一般 <72 小时）。
+DEFAULT_PENDING_TURN_RETENTION_HOURS = 168
 
 
 @dataclass(frozen=True)
@@ -24,6 +29,7 @@ class ResolvedHostConfig:
     store_path: Path
     lane_config: dict[str, int]
     pending_turn_resume_max_attempts: int
+    pending_turn_retention_hours: int
 
 
 def resolve_host_config(
@@ -64,6 +70,7 @@ def resolve_host_config(
             explicit_lane_config=explicit_lane_config,
         ),
         pending_turn_resume_max_attempts=_resolve_pending_turn_resume_max_attempts(raw_host_config),
+        pending_turn_retention_hours=_resolve_pending_turn_retention_hours(raw_host_config),
     )
 
 
@@ -172,6 +179,29 @@ def _resolve_pending_turn_resume_max_attempts(raw_host_config: dict[str, Any]) -
     return raw_max_attempts
 
 
+def _resolve_pending_turn_retention_hours(raw_host_config: dict[str, Any]) -> int:
+    """解析 pending turn 超保留期阈值（小时）。"""
+
+    raw_retention_config = raw_host_config.get("pending_turn_retention")
+    if raw_retention_config is None:
+        return DEFAULT_PENDING_TURN_RETENTION_HOURS
+    if not isinstance(raw_retention_config, dict):
+        raise TypeError("run.json.host_config.pending_turn_retention 必须是对象")
+    raw_retention_hours = raw_retention_config.get(
+        "retention_hours",
+        DEFAULT_PENDING_TURN_RETENTION_HOURS,
+    )
+    if (
+        isinstance(raw_retention_hours, bool)
+        or not isinstance(raw_retention_hours, int)
+        or raw_retention_hours <= 0
+    ):
+        raise ValueError(
+            "run.json.host_config.pending_turn_retention.retention_hours 必须是正整数"
+        )
+    return raw_retention_hours
+
+
 def _normalize_lane_config(raw_lane_config: Any, *, source_name: str) -> dict[str, int]:
     """规范化并发 lane 配置。"""
 
@@ -190,6 +220,7 @@ def _normalize_lane_config(raw_lane_config: Any, *, source_name: str) -> dict[st
 
 __all__ = [
     "DEFAULT_PENDING_TURN_RESUME_MAX_ATTEMPTS",
+    "DEFAULT_PENDING_TURN_RETENTION_HOURS",
     "ResolvedHostConfig",
     "resolve_host_config",
 ]

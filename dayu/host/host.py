@@ -32,7 +32,10 @@ from dayu.host.pending_turn_store import (
     PendingTurnResumeConflictError,
     SQLitePendingConversationTurnStore,
 )
-from dayu.host.startup_preparation import DEFAULT_PENDING_TURN_RESUME_MAX_ATTEMPTS
+from dayu.host.startup_preparation import (
+    DEFAULT_PENDING_TURN_RESUME_MAX_ATTEMPTS,
+    DEFAULT_PENDING_TURN_RETENTION_HOURS,
+)
 from dayu.host.prepared_turn import (
     PreparedAgentTurnSnapshot,
     deserialize_prepared_agent_turn_snapshot,
@@ -210,6 +213,7 @@ class Host:
         host_store_path: Path | None = None,
         lane_config: dict[str, int] | None = None,
         pending_turn_resume_max_attempts: int = DEFAULT_PENDING_TURN_RESUME_MAX_ATTEMPTS,
+        pending_turn_retention_hours: int = DEFAULT_PENDING_TURN_RETENTION_HOURS,
         event_bus: RunEventBusProtocol | None = None,
         executor: HostExecutorProtocol | None = None,
         session_registry: SessionRegistryProtocol | None = None,
@@ -255,6 +259,7 @@ class Host:
             )
             self._event_bus = event_bus
             self._pending_turn_resume_max_attempts = pending_turn_resume_max_attempts
+            self._pending_turn_retention = timedelta(hours=pending_turn_retention_hours)
             self._conversation_store = conversation_store or _build_default_conversation_store(workspace)
             return
 
@@ -282,6 +287,7 @@ class Host:
         self._reply_outbox_store = reply_outbox_store or default_components._reply_outbox_store
         self._event_bus = event_bus
         self._pending_turn_resume_max_attempts = pending_turn_resume_max_attempts
+        self._pending_turn_retention = timedelta(hours=pending_turn_retention_hours)
         self._conversation_store = shared_conversation_store
 
     def create_session(
@@ -895,6 +901,7 @@ class Host:
             return []
         cleaned_ids: list[str] = []
         released_ids: list[str] = []
+        expired_ids: list[str] = []
         now = _now_utc()
         for record in records:
             # 分支 A：RESUMING 状态超时 → 回退 lease，允许后续 resume 重新 acquire。
@@ -924,22 +931,47 @@ class Host:
                     module=MODULE,
                 )
                 continue
+            # source_run 仍活跃时严格保留 pending turn：它是执行链路上的恢复真源，
+            # 即便 updated_at 已超过 retention 也禁止删除，避免 run 随后失败/超时
+            # 时本应可 resume 的记录已经丢失。
             if run is not None and not run.is_terminal():
                 continue
-            if not should_delete_pending_turn_after_terminal_run(
+            if should_delete_pending_turn_after_terminal_run(
                 run=run,
                 resumable=record.resumable,
             ):
+                try:
+                    self._pending_turn_store.delete_pending_turn(record.pending_turn_id)
+                    cleaned_ids.append(record.pending_turn_id)
+                except Exception as exc:
+                    Log.warn(
+                        f"Host 清理 stale pending turn 失败: "
+                        f"pending_turn_id={record.pending_turn_id}, error={exc}",
+                        module=MODULE,
+                    )
                 continue
-            try:
-                self._pending_turn_store.delete_pending_turn(record.pending_turn_id)
-                cleaned_ids.append(record.pending_turn_id)
-            except Exception as exc:
-                Log.warn(
-                    f"Host 清理 stale pending turn 失败: "
-                    f"pending_turn_id={record.pending_turn_id}, error={exc}",
-                    module=MODULE,
+            # 分支 C：source_run 已终态但分支 B 判为保留（FAILED/UNSETTLED+resumable、
+            # CANCELLED+TIMEOUT+resumable）且 updated_at 超过保留期 → 视作 UI 已错过
+            # 询问窗口，兜底删除避免库无限累积。白名单 state 防止 RESUMING / 未知态
+            # 被误删；活跃 run 已在上方 continue 掉，不会到达此处。
+            if (
+                record.state
+                in (
+                    PendingConversationTurnState.ACCEPTED_BY_HOST,
+                    PendingConversationTurnState.PREPARED_BY_HOST,
                 )
+                and now - record.updated_at >= self._pending_turn_retention
+            ):
+                try:
+                    self._pending_turn_store.delete_pending_turn(record.pending_turn_id)
+                except Exception as exc:
+                    Log.warn(
+                        "Host 清理超保留期 pending turn 失败: "
+                        f"pending_turn_id={record.pending_turn_id}, error={exc}",
+                        module=MODULE,
+                    )
+                    continue
+                expired_ids.append(record.pending_turn_id)
         if cleaned_ids:
             Log.info(
                 f"Host 清理 stale pending turns: count={len(cleaned_ids)}, "
@@ -952,7 +984,13 @@ class Host:
                 f"ids={','.join(released_ids)}",
                 module=MODULE,
             )
-        return cleaned_ids
+        if expired_ids:
+            Log.info(
+                f"Host 清理超保留期 pending turns: count={len(expired_ids)}, "
+                f"ids={','.join(expired_ids)}",
+                module=MODULE,
+            )
+        return cleaned_ids + expired_ids
 
     def get_all_lane_statuses(self) -> dict[str, LaneStatus]:
         """获取全部并发 lane 状态快照。

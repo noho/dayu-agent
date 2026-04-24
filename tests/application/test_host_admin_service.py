@@ -1034,3 +1034,293 @@ def test_cleanup_stale_pending_turns_removes_turns_with_terminal_runs() -> None:
     # chat (succ) + chat_c (missing run) 被清理；chat_a + chat_b 保留
     assert remaining_scenes == {"chat_a", "chat_b"}
     assert len(cleaned) == 2
+
+
+@pytest.mark.unit
+def test_cleanup_stale_pending_turns_retention_keeps_active_source_run() -> None:
+    """source_run 仍活跃时，即使 updated_at 超过保留期也严格保留 pending turn。
+
+    回归 Finding 071 review：分支 C 不得误删长任务 / 外部阻塞 / 人工调试场景下
+    仍在执行链路上的恢复真源。一旦该 run 随后失败或超时，本应可 resume 的
+    pending turn 必须仍然存在。
+    """
+
+    from dataclasses import replace
+    from datetime import timedelta
+
+    from dayu.host.pending_turn_store import (
+        InMemoryPendingConversationTurnStore,
+        PendingConversationTurnState,
+    )
+    from dayu.host.reply_outbox_store import InMemoryReplyOutboxStore
+
+    pending_store = InMemoryPendingConversationTurnStore()
+    outbox_store = InMemoryReplyOutboxStore()
+    session_registry = _FakeSessionRegistry()
+    run_registry = _FakeRunRegistry()
+
+    now = datetime.now(timezone.utc)
+    # _FakeRunRegistry fixture 里 run_1 已是 RUNNING（活跃态）。
+    record = pending_store.upsert_pending_turn(
+        session_id="session_1",
+        scene_name="chat_active_long",
+        user_text="long-running",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+    # 手工把 updated_at 设成 30 天前，远超 168 小时保留期。
+    pending_store._records[record.pending_turn_id] = replace(
+        pending_store._records[record.pending_turn_id],
+        updated_at=now - timedelta(days=30),
+    )
+
+    host = Host(
+        executor=SimpleNamespace(),  # type: ignore[arg-type]
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=run_registry,  # type: ignore[arg-type]
+        concurrency_governor=_FakeGovernor(),  # type: ignore[arg-type]
+        event_bus=AsyncQueueEventBus(run_registry=run_registry),  # type: ignore[arg-type]
+        pending_turn_store=pending_store,
+        reply_outbox_store=outbox_store,
+        pending_turn_retention_hours=168,
+    )
+
+    cleaned = host.cleanup_stale_pending_turns()
+
+    # 活跃 run 对应的 pending turn 必须完整保留，不得被 retention cleanup 吞掉。
+    assert cleaned == []
+    remaining = pending_store._records.get(record.pending_turn_id)
+    assert remaining is not None
+    assert remaining.state is PendingConversationTurnState.PREPARED_BY_HOST
+
+
+@pytest.mark.unit
+def test_cleanup_stale_pending_turns_expires_after_retention() -> None:
+    """pending turn 在 ACCEPTED/PREPARED 状态下超过保留期应被兜底删除。
+
+    回归 Finding 071：source_run 终态为 FAILED+resumable / CANCELLED+TIMEOUT+resumable
+    时分支 B 判为保留；若用户始终不触发 resume，需要 Host 层按保留期兜底清理，
+    避免库无限累积。
+    """
+
+    from dataclasses import replace
+    from datetime import timedelta
+
+    from dayu.host.pending_turn_store import (
+        InMemoryPendingConversationTurnStore,
+        PendingConversationTurnState,
+    )
+    from dayu.host.reply_outbox_store import InMemoryReplyOutboxStore
+
+    pending_store = InMemoryPendingConversationTurnStore()
+    outbox_store = InMemoryReplyOutboxStore()
+    session_registry = _FakeSessionRegistry()
+    run_registry = _FakeRunRegistry()
+
+    now = datetime.now(timezone.utc)
+    run_registry.records["run_failed_resumable"] = RunRecord(
+        run_id="run_failed_resumable",
+        session_id="session_1",
+        service_type="chat_turn",
+        scene_name="chat",
+        state=RunState.FAILED,
+        created_at=now,
+        started_at=now,
+        completed_at=now,
+    )
+    run_registry.records["run_timeout_resumable"] = RunRecord(
+        run_id="run_timeout_resumable",
+        session_id="session_1",
+        service_type="chat_turn",
+        scene_name="chat",
+        state=RunState.CANCELLED,
+        cancel_reason=RunCancelReason.TIMEOUT,
+        created_at=now,
+        started_at=now,
+        completed_at=now,
+    )
+
+    # 构造两条 PREPARED_BY_HOST 记录：一条 8 天前更新，一条 1 天前更新。
+    pending_store.upsert_pending_turn(
+        session_id="session_1",
+        scene_name="chat_stale",
+        user_text="stale-failed",
+        source_run_id="run_failed_resumable",
+        resumable=True,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+    pending_store.upsert_pending_turn(
+        session_id="session_1",
+        scene_name="chat_stale_timeout",
+        user_text="stale-timeout",
+        source_run_id="run_timeout_resumable",
+        resumable=True,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+    pending_store.upsert_pending_turn(
+        session_id="session_1",
+        scene_name="chat_fresh",
+        user_text="fresh",
+        source_run_id="run_failed_resumable",
+        resumable=True,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+
+    # 手工回调 updated_at：frozen dataclass 用 replace。
+    stale_before = now - timedelta(days=8)
+    fresh_before = now - timedelta(days=1)
+    for record in list(pending_store._records.values()):
+        if record.scene_name == "chat_stale":
+            pending_store._records[record.pending_turn_id] = replace(
+                record, updated_at=stale_before
+            )
+        elif record.scene_name == "chat_stale_timeout":
+            pending_store._records[record.pending_turn_id] = replace(
+                record, updated_at=stale_before
+            )
+        elif record.scene_name == "chat_fresh":
+            pending_store._records[record.pending_turn_id] = replace(
+                record, updated_at=fresh_before
+            )
+
+    host = Host(
+        executor=SimpleNamespace(),  # type: ignore[arg-type]
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=run_registry,  # type: ignore[arg-type]
+        concurrency_governor=_FakeGovernor(),  # type: ignore[arg-type]
+        event_bus=AsyncQueueEventBus(run_registry=run_registry),  # type: ignore[arg-type]
+        pending_turn_store=pending_store,
+        reply_outbox_store=outbox_store,
+        pending_turn_retention_hours=168,
+    )
+
+    cleaned = host.cleanup_stale_pending_turns()
+
+    remaining_scenes = {
+        record.scene_name for record in pending_store.list_pending_turns()
+    }
+    # 两条 8 天前的应被兜底删除；1 天前的保留等待 UI 询问。
+    assert remaining_scenes == {"chat_fresh"}
+    assert len(cleaned) == 2
+
+
+@pytest.mark.unit
+def test_cleanup_stale_pending_turns_retention_respects_resuming_first() -> None:
+    """RESUMING 状态即使 updated_at 超过保留期，也应走分支 A 回退 lease 而非直接删除。
+
+    回归 Finding 071 分支顺序约束：分支 A（RESUMING lease 回退）严格优先于
+    分支 C（超保留期删除），避免把 070 lease 机制保护的记录直接丢弃。
+    """
+
+    from dataclasses import replace
+    from datetime import timedelta
+
+    from dayu.host.pending_turn_store import (
+        InMemoryPendingConversationTurnStore,
+        PendingConversationTurnState,
+    )
+    from dayu.host.reply_outbox_store import InMemoryReplyOutboxStore
+
+    pending_store = InMemoryPendingConversationTurnStore()
+    outbox_store = InMemoryReplyOutboxStore()
+    session_registry = _FakeSessionRegistry()
+    run_registry = _FakeRunRegistry()
+
+    now = datetime.now(timezone.utc)
+    record = pending_store.upsert_pending_turn(
+        session_id="session_1",
+        scene_name="chat_resuming",
+        user_text="resuming",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+    # 先 acquire lease 进入 RESUMING，再手工把 updated_at 设置成 30 天前。
+    pending_store.record_resume_attempt(record.pending_turn_id, max_attempts=3)
+    after_acquire = pending_store._records[record.pending_turn_id]
+    assert after_acquire.state is PendingConversationTurnState.RESUMING
+    pending_store._records[record.pending_turn_id] = replace(
+        after_acquire, updated_at=now - timedelta(days=30)
+    )
+
+    host = Host(
+        executor=SimpleNamespace(),  # type: ignore[arg-type]
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=run_registry,  # type: ignore[arg-type]
+        concurrency_governor=_FakeGovernor(),  # type: ignore[arg-type]
+        event_bus=AsyncQueueEventBus(run_registry=run_registry),  # type: ignore[arg-type]
+        pending_turn_store=pending_store,
+        reply_outbox_store=outbox_store,
+        pending_turn_retention_hours=168,
+    )
+
+    cleaned = host.cleanup_stale_pending_turns()
+
+    # 记录应仍然存在，且 state 已回退到 PREPARED_BY_HOST（lease 释放），不是直接删除。
+    remaining = pending_store._records.get(record.pending_turn_id)
+    assert remaining is not None
+    assert remaining.state is PendingConversationTurnState.PREPARED_BY_HOST
+    assert record.pending_turn_id not in cleaned
+
+
+@pytest.mark.unit
+def test_cleanup_stale_pending_turns_retention_keeps_recent() -> None:
+    """保留期内的 pending turn 不得被分支 C 清理。
+
+    回归 Finding 071：默认保留期 168 小时，1 天前更新的记录应完整保留给 UI 询问。
+    """
+
+    from dataclasses import replace
+    from datetime import timedelta
+
+    from dayu.host.pending_turn_store import (
+        InMemoryPendingConversationTurnStore,
+        PendingConversationTurnState,
+    )
+    from dayu.host.reply_outbox_store import InMemoryReplyOutboxStore
+
+    pending_store = InMemoryPendingConversationTurnStore()
+    outbox_store = InMemoryReplyOutboxStore()
+    session_registry = _FakeSessionRegistry()
+    run_registry = _FakeRunRegistry()
+
+    now = datetime.now(timezone.utc)
+    run_registry.records["run_failed_resumable"] = RunRecord(
+        run_id="run_failed_resumable",
+        session_id="session_1",
+        service_type="chat_turn",
+        scene_name="chat",
+        state=RunState.FAILED,
+        created_at=now,
+        started_at=now,
+        completed_at=now,
+    )
+    record = pending_store.upsert_pending_turn(
+        session_id="session_1",
+        scene_name="chat_fresh",
+        user_text="fresh",
+        source_run_id="run_failed_resumable",
+        resumable=True,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+    pending_store._records[record.pending_turn_id] = replace(
+        pending_store._records[record.pending_turn_id],
+        updated_at=now - timedelta(hours=24),
+    )
+
+    host = Host(
+        executor=SimpleNamespace(),  # type: ignore[arg-type]
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=run_registry,  # type: ignore[arg-type]
+        concurrency_governor=_FakeGovernor(),  # type: ignore[arg-type]
+        event_bus=AsyncQueueEventBus(run_registry=run_registry),  # type: ignore[arg-type]
+        pending_turn_store=pending_store,
+        reply_outbox_store=outbox_store,
+        pending_turn_retention_hours=168,
+    )
+
+    cleaned = host.cleanup_stale_pending_turns()
+
+    assert cleaned == []
+    assert pending_store._records.get(record.pending_turn_id) is not None

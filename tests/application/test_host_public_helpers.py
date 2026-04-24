@@ -181,6 +181,7 @@ def test_resolve_host_config_supports_defaults_and_nested_overrides() -> None:
                     "store": {"path": "runtime/host.sqlite"},
                     "lane": {"default": 2, "writer": 3},
                     "pending_turn_resume": {"max_attempts": 5},
+                    "pending_turn_retention": {"retention_hours": 72},
                 }
             },
             explicit_lane_config={"writer": 7},
@@ -188,10 +189,12 @@ def test_resolve_host_config_supports_defaults_and_nested_overrides() -> None:
 
         assert default_config.store_path == (workspace_root / ".dayu/host/dayu_host.db").resolve()
         assert default_config.pending_turn_resume_max_attempts == 3
+        assert default_config.pending_turn_retention_hours == 168
         assert resolved.store_path == (workspace_root / "runtime/host.sqlite").resolve()
         assert resolved.lane_config["default"] == 2
         assert resolved.lane_config["writer"] == 7
         assert resolved.pending_turn_resume_max_attempts == 5
+        assert resolved.pending_turn_retention_hours == 72
 
 
 @pytest.mark.unit
@@ -227,6 +230,25 @@ def test_resolve_host_config_rejects_legacy_and_invalid_shapes() -> None:
             resolve_host_config(
                 workspace_root=workspace_root,
                 run_config={"host_config": {"pending_turn_resume": {"max_attempts": 0}}},
+            )
+        with pytest.raises(TypeError, match="pending_turn_retention 必须是对象"):
+            resolve_host_config(
+                workspace_root=workspace_root,
+                run_config={"host_config": {"pending_turn_retention": []}},
+            )
+        with pytest.raises(ValueError, match="retention_hours 必须是正整数"):
+            resolve_host_config(
+                workspace_root=workspace_root,
+                run_config={
+                    "host_config": {"pending_turn_retention": {"retention_hours": 0}}
+                },
+            )
+        with pytest.raises(ValueError, match="retention_hours 必须是正整数"):
+            resolve_host_config(
+                workspace_root=workspace_root,
+                run_config={
+                    "host_config": {"pending_turn_retention": {"retention_hours": True}}
+                },
             )
 
 
