@@ -87,7 +87,6 @@ def _build_model_config() -> OpenAICompatibleModelConfig:
         "model": "gpt-5.4",
         "runner_type": "openai_compatible",
         "max_context_tokens": 32000,
-        "max_output_tokens": 4096,
     }
 
 
@@ -191,7 +190,6 @@ class _FakeSceneExecutionAcceptancePreparer:
                 agent_running_config={
                     "max_iterations": 8,
                     "max_context_tokens": 32000,
-                    "max_output_tokens": 4096,
                 },
                 doc_tool_limits=DocToolLimits(),
                 fins_tool_limits=FinsToolLimits(),

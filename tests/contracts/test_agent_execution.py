@@ -106,7 +106,7 @@ def test_execution_contract_snapshot_roundtrip() -> None:
             model=AcceptedModelSpec(model_name="gpt-test", temperature=0.2),
             runtime=AcceptedRuntimeSpec(
                 runner_running_config={"tool_timeout_seconds": 12.0},
-                agent_running_config={"max_iterations": 6, "max_output_tokens": 4096},
+                agent_running_config={"max_iterations": 6},
             ),
             tools=AcceptedToolConfigSpec(
                 toolset_configs=_build_toolset_configs(

@@ -1187,7 +1187,6 @@ dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.html
   "supports_stream": true,
   "supports_tool_calling": true,
   "max_context_tokens": 128000,
-  "max_output_tokens": 16384,
   "runtime_hints": {
     "temperature_profiles": {
       "write": {
@@ -1215,7 +1214,6 @@ dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.html
 - `supports_stream`：是否支持流式输出。
 - `supports_tool_calling`：是否支持工具调用。用于 `prompt`、`interactive`、`write` 的模型通常需要支持。
 - `max_context_tokens`：模型可用上下文上限。
-- `max_output_tokens`：模型单次输出上限。
 
 `runtime_hints.temperature_profiles` 里最常看到的是 `temperature`：
 

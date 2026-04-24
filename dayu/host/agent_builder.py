@@ -88,14 +88,12 @@ def build_agent_create_args(
     agent_running = replace(
         resolved_execution_options.agent_running_config,
         max_context_tokens=int(model_config.get("max_context_tokens") or 0),
-        max_output_tokens=int(model_config.get("max_output_tokens") or 0),
     )
     return AgentCreateArgs(
         runner_type=runner_type.value,
         model_name=resolved_execution_options.model_name,
         max_turns=agent_running.max_iterations,
         max_context_tokens=agent_running.max_context_tokens,
-        max_output_tokens=agent_running.max_output_tokens,
         temperature=resolved_execution_options.temperature,
         runner_params=runner_params,
         runner_running_config=build_runner_running_config_snapshot(

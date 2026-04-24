@@ -69,7 +69,7 @@ def _write_minimal_startup_config(config_root: Path, *, run_config_text: str) ->
     config_root.mkdir(parents=True, exist_ok=True)
     (config_root / "run.json").write_text(run_config_text, encoding="utf-8")
     (config_root / "llm_models.json").write_text(
-        '{"defaults":{"temperature":0.2},"models":{"default":{"runner_type":"openai_compatible","endpoint_url":"http://example.com","model":"test","headers":{},"max_context_tokens":32000,"max_output_tokens":4096}}}',
+        '{"defaults":{"temperature":0.2},"models":{"default":{"runner_type":"openai_compatible","endpoint_url":"http://example.com","model":"test","headers":{},"max_context_tokens":32000}}}',
         encoding="utf-8",
     )
 

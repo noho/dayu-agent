@@ -63,7 +63,6 @@ def test_build_agent_create_args_maps_execution_options_to_openai_runner_params(
             "headers": {"Authorization": "Bearer token"},
             "name": "configured-name",
             "max_context_tokens": 8192,
-            "max_output_tokens": 1024,
             "extra_payloads": {"reasoning": True},
             "timeout": 30,
         },
@@ -78,7 +77,6 @@ def test_build_agent_create_args_maps_execution_options_to_openai_runner_params(
     assert created.model_name == "resolved-model"
     assert created.max_turns == 7
     assert created.max_context_tokens == 8192
-    assert created.max_output_tokens == 1024
     assert created.temperature == 0.4
     runner_params = cast(dict[str, object], created.runner_params)
     assert runner_params.get("endpoint_url") == "http://example.com"

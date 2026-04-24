@@ -911,7 +911,6 @@ def _build_custom_openai_catalog_entry(
         "supports_usage": True,
         "supports_stream_usage": True,
         "max_context_tokens": 131072,
-        "max_output_tokens": 8192,
         "extra_payloads": {},
         "description": description,
         "runtime_hints": runtime_hints,

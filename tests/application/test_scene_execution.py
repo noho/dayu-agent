@@ -264,7 +264,6 @@ def test_build_agent_running_config() -> None:
             model_name="test",
             max_turns=9,
             max_context_tokens=50000,
-            max_output_tokens=4096,
             agent_running_config={"fallback_mode": FallbackMode.FORCE_ANSWER},
         )
     )

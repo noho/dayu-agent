@@ -38,7 +38,15 @@ def test_apply_all_migrates_both_artifacts(tmp_path: Path, capsys: pytest.Captur
         )
         conn.execute(
             "INSERT INTO pending_conversation_turns VALUES (?, ?)",
-            ("p1", json.dumps({"host_policy": {"concurrency_lane": "write_chapter"}})),
+            (
+                "p1",
+                json.dumps(
+                    {
+                        "host_policy": {"concurrency_lane": "write_chapter"},
+                        "agent_create_args": {"max_output_tokens": 1024},
+                    }
+                ),
+            ),
         )
         conn.commit()
     finally:
@@ -61,10 +69,12 @@ def test_apply_all_migrates_both_artifacts(tmp_path: Path, capsys: pytest.Captur
         conn.close()
     migrated = json.loads(str(row[0]))
     assert migrated["host_policy"]["business_concurrency_lane"] == "write_chapter"
+    assert "max_output_tokens" not in migrated["agent_create_args"]
 
     captured = capsys.readouterr()
     assert "run.json" in captured.out
     assert "business_concurrency_lane" in captured.out
+    assert "max_output_tokens" in captured.out
 
 
 @pytest.mark.unit

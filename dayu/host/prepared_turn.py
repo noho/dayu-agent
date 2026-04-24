@@ -448,7 +448,6 @@ def _parse_agent_create_args(value: dict[str, PendingTurnSnapshotValue]) -> Agen
         model_name=_normalize_required_text(value.get("model_name"), field_name="model_name"),
         max_turns=_coerce_optional_int(value.get("max_turns"), field_name="max_turns"),
         max_context_tokens=_coerce_optional_int(value.get("max_context_tokens"), field_name="max_context_tokens"),
-        max_output_tokens=_coerce_optional_int(value.get("max_output_tokens"), field_name="max_output_tokens"),
         temperature=_coerce_optional_float(value.get("temperature"), field_name="temperature"),
         runner_params=_as_runner_params(value.get("runner_params")),
         runner_running_config=cast(

@@ -111,7 +111,6 @@ def test_build_agent_running_config_snapshot_and_restore_roundtrip() -> None:
         max_consecutive_failed_tool_batches=5,
         max_duplicate_tool_calls=4,
         max_context_tokens=64000,
-        max_output_tokens=4096,
         budget_soft_limit_ratio=0.6,
         budget_hard_limit_ratio=0.85,
         max_continuations=7,
@@ -144,7 +143,6 @@ def test_build_agent_running_config_from_snapshot_accepts_string_numbers() -> No
             "max_consecutive_failed_tool_batches": "4",
             "max_duplicate_tool_calls": "5",
             "max_context_tokens": "64000",
-            "max_output_tokens": "2048",
             "budget_soft_limit_ratio": "0.61",
             "budget_hard_limit_ratio": "0.88",
             "max_continuations": "6",
@@ -156,7 +154,6 @@ def test_build_agent_running_config_from_snapshot_accepts_string_numbers() -> No
     assert recovered.max_consecutive_failed_tool_batches == 4
     assert recovered.max_duplicate_tool_calls == 5
     assert recovered.max_context_tokens == 64000
-    assert recovered.max_output_tokens == 2048
     assert recovered.budget_soft_limit_ratio == pytest.approx(0.61)
     assert recovered.budget_hard_limit_ratio == pytest.approx(0.88)
     assert recovered.max_continuations == 6

@@ -82,7 +82,6 @@ Host / scene preparation
 - `model_name`
 - `max_turns`
 - `max_context_tokens`
-- `max_output_tokens`
 - `temperature`
 - `runner_params`
 - `runner_running_config`：跨层快照，不再使用未约束的配置袋子

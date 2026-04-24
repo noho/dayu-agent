@@ -680,7 +680,6 @@ class AgentCreateArgs:
     model_name: str
     max_turns: int | None = None
     max_context_tokens: int | None = None
-    max_output_tokens: int | None = None
     temperature: float | None = None
     runner_params: dict[str, Any] = field(default_factory=dict)
     runner_running_config: dict[str, Any] = field(default_factory=dict)

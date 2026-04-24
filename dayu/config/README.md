@@ -205,7 +205,6 @@ Prompt 装配还遵循一条 Prefix Cache 导向的顺序约束：
 | `supports_usage` | 是否支持 usage 采集 |
 | `supports_stream_usage` | 是否支持流式 usage 采集 |
 | `max_context_tokens` | 最大上下文 token |
-| `max_output_tokens` | 最大输出 token |
 | `extra_payloads` | Provider 扩展请求参数；禁止放入 `model`、`messages`、`temperature`、`stream`、`tools` 等显式字段 |
 
 ### 4.2 CLI runner 状态
@@ -278,7 +277,6 @@ export MIMO_API_KEY="sk-xxxxxxxx"
   "supports_usage": true,
   "supports_stream_usage": true,
   "max_context_tokens": 131072,
-  "max_output_tokens": 65536,
   "runtime_hints": {
     "temperature_profiles": {
       "write": {"temperature": 0.7},
@@ -295,7 +293,6 @@ export MIMO_API_KEY="sk-xxxxxxxx"
 - `headers`
 - `supports_tool_calling`
 - `max_context_tokens`
-- `max_output_tokens`
 
 其中：
 - `max_context_tokens` 是 Runtime 计算 memory 预算的重要输入。
@@ -376,7 +373,7 @@ Runtime 的选择规则是：
 
 - 环境变量占位符已配置，例如 `{{MY_PROVIDER_API_KEY}}`
 - `supports_tool_calling` 与实际模型能力一致
-- `max_context_tokens` / `max_output_tokens` 填写正确
+- `max_context_tokens` 填写正确
 - 目标 scene 的 `model.allowed_names` 已加入该模型
 - 目标 scene 的 `temperature_profile` 已在该模型的 `runtime_hints.temperature_profiles` 中配置
 - 如果要做多轮 `interactive`，已确认默认 memory 公式足够，或已补 `runtime_hints.conversation_memory`

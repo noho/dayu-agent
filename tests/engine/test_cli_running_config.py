@@ -3813,7 +3813,6 @@ def test_main_prompt_path_propagates_scene_manifest_prompt_assets_and_llm_model_
                 "supports_tool_calling": True,
                 "supports_stream_usage": True,
                 "max_context_tokens": 64000,
-                "max_output_tokens": 4096,
                 "runtime_hints": {
                     "temperature_profiles": {
                         "prompt_e2e": {

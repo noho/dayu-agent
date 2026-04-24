@@ -193,7 +193,6 @@ def _build_accepted_execution_spec(
     accepted_agent_running_config = replace(
         resolved_execution_options.agent_running_config,
         max_context_tokens=int(model_config.get("max_context_tokens") or 0),
-        max_output_tokens=int(model_config.get("max_output_tokens") or 0),
     )
     return AcceptedExecutionSpec(
         model=AcceptedModelSpec(

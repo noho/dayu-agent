@@ -1,7 +1,7 @@
 {
   "_comment": "LLM 模型配置文件 - 包含各个模型服务商的配置参数",
   "_usage": "使用时选择对应的配置名称，替换 YOUR_API_KEY 为实际的 API 密钥",
-  "_capabilities_note": "max_context_tokens / max_output_tokens 为模型静态能力声明（来自各供应商官方文档），用于 Agent 预算治理；supports_usage / supports_stream_usage 控制 Runner 是否采集 token 用量",
+  "_capabilities_note": "max_context_tokens 为模型静态能力声明（来自各供应商官方文档），用于 Agent 预算治理；supports_usage / supports_stream_usage 控制 Runner 是否采集 token 用量",
   "deepseek-chat": {
     "runner_type": "openai_compatible",
     "name": "deepseek-chat",
@@ -19,7 +19,6 @@
     "supports_usage": true,
     "supports_stream_usage": true,
     "max_context_tokens": 131072,
-    "max_output_tokens": 65536,
     "extra_payloads": {},
     "description": "DeepSeek Chat 模型 - 用于对话和内容生成",
     "runtime_hints": {
@@ -54,7 +53,6 @@
     "supports_usage": true,
     "supports_stream_usage": true,
     "max_context_tokens": 131072,
-    "max_output_tokens": 65536,
     "description": "DeepSeek Thinking 模型 - 用于深度推理和复杂任务（128K context, 64K output 含 COT）",
     "runtime_hints": {
       "temperature_profiles": {
@@ -100,7 +98,6 @@
     "supports_usage": true,
     "supports_stream_usage": true,
     "max_context_tokens": 1050000,
-    "max_output_tokens": 128000,
     "description": "OpenAI GPT-5.4 - 官方 1.05M context / 128K output，适合复杂专业任务与 agentic workflow",
     "runtime_hints": {
       "temperature_profiles": {
@@ -151,7 +148,6 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 1000000,
-    "max_output_tokens": 64000,
     "description": "Anthropic Claude Sonnet 4.6 - 官方 Sonnet 4.6 API 模型，1M context 为 beta；当前通过 Anthropic OpenAI 兼容层接入",
     "runtime_hints": {
       "temperature_profiles": {
@@ -202,7 +198,6 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 1048576,
-    "max_output_tokens": 65536,
     "description": "Google Gemini 2.5 Flash - 官方 1,048,576 context / 65,536 output，支持函数调用与 OpenAI 兼容入口",
     "runtime_hints": {
       "temperature_profiles": {
@@ -258,7 +253,6 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 262144,
-    "max_output_tokens": 65536,
     "description": "Mimo V2 Flash 模型 - 用于对话和内容生成（256K context, 65.5K output）",
     "runtime_hints": {
       "temperature_profiles": {
@@ -298,7 +292,6 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 262144,
-    "max_output_tokens": 65536,
     "description": "Mimo V2 Flash Thinking 模型 - 用于深度推理和复杂任务（256K context, 65.5K output）",
     "runtime_hints": {
       "temperature_profiles": {
@@ -350,7 +343,6 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 1048576,
-    "max_output_tokens": 131072,
     "description": "Mimo V2 Pro 模型 - 用于对话和内容生成（1M context, 131.1K output）",
     "runtime_hints": {
       "temperature_profiles": {
@@ -388,7 +380,6 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 1048576,
-    "max_output_tokens": 131072,
     "description": "Mimo V2 Pro Thinking 模型 - 用于深度推理和复杂任务（1M context, 131.1K output）",
     "runtime_hints": {
       "temperature_profiles": {
@@ -438,7 +429,6 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 1048576,
-    "max_output_tokens": 131072,
     "description": "Mimo V2 Pro 模型 - 用于对话和内容生成（1M context, 131.1K output）",
     "runtime_hints": {
       "temperature_profiles": {
@@ -476,7 +466,6 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 1048576,
-    "max_output_tokens": 131072,
     "description": "Mimo V2 Pro Thinking 模型 - 用于深度推理和复杂任务（1M context, 131.1K output）",
     "runtime_hints": {
       "temperature_profiles": {
@@ -526,7 +515,6 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 1048576,
-    "max_output_tokens": 131072,
     "description": "Mimo V2 Pro 模型 - 用于对话和内容生成（1M context, 131.1K output）",
     "runtime_hints": {
       "temperature_profiles": {
@@ -564,7 +552,6 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 1048576,
-    "max_output_tokens": 131072,
     "description": "Mimo V2 Pro Thinking 模型 - 用于深度推理和复杂任务（1M context, 131.1K output）",
     "runtime_hints": {
       "temperature_profiles": {
@@ -609,7 +596,6 @@
     "supports_usage": true,
     "supports_stream_usage": true,
     "max_context_tokens": 1000000,
-    "max_output_tokens": 32768,
     "description": "Qwen3 模型 (qwen-plus 稳定版) - 用于对话和内容生成（1M context, 32K output）",
     "runtime_hints": {
       "temperature_profiles": {
@@ -645,7 +631,6 @@
     "supports_usage": true,
     "supports_stream_usage": true,
     "max_context_tokens": 1000000,
-    "max_output_tokens": 32768,
     "description": "Qwen3 Thinking 模型 (qwen-plus 稳定版) - 开启深度思考模式（1M context, 32K output）",
     "runtime_hints": {
       "temperature_profiles": {
@@ -689,7 +674,6 @@
     "supports_usage": false,
     "supports_stream_usage": false,
     "max_context_tokens": 262144,
-    "max_output_tokens": 262144,
     "description": "Ollama 本地模型 - 请根据实际 num_ctx 配置调整 max_context_tokens",
     "runtime_hints": {
       "temperature_profiles": {

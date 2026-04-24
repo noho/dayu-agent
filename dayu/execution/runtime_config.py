@@ -147,7 +147,6 @@ class AgentRuntimeConfig:
     max_consecutive_failed_tool_batches: int = 2
     max_duplicate_tool_calls: int = 2
     max_context_tokens: int = 0
-    max_output_tokens: int = 0
     budget_soft_limit_ratio: float = 0.75
     budget_hard_limit_ratio: float = 0.90
     max_continuations: int = 3
@@ -189,7 +188,6 @@ def build_agent_running_config_snapshot(
         "max_consecutive_failed_tool_batches": running_config.max_consecutive_failed_tool_batches,
         "max_duplicate_tool_calls": running_config.max_duplicate_tool_calls,
         "max_context_tokens": running_config.max_context_tokens,
-        "max_output_tokens": running_config.max_output_tokens,
         "budget_soft_limit_ratio": running_config.budget_soft_limit_ratio,
         "budget_hard_limit_ratio": running_config.budget_hard_limit_ratio,
         "max_continuations": running_config.max_continuations,
@@ -262,7 +260,6 @@ def build_agent_running_config_from_snapshot(
         ),
         max_duplicate_tool_calls=_coerce_int(snapshot.get("max_duplicate_tool_calls"), default=2),
         max_context_tokens=_coerce_int(snapshot.get("max_context_tokens"), default=0),
-        max_output_tokens=_coerce_int(snapshot.get("max_output_tokens"), default=0),
         budget_soft_limit_ratio=_coerce_float(snapshot.get("budget_soft_limit_ratio"), default=0.75),
         budget_hard_limit_ratio=_coerce_float(snapshot.get("budget_hard_limit_ratio"), default=0.9),
         max_continuations=_coerce_int(snapshot.get("max_continuations"), default=3),

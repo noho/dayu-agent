@@ -16,6 +16,9 @@ from pathlib import Path
 from dayu.cli.workspace_migrations.host_store_rename_concurrency_lane import (
     migrate_host_store_rename_concurrency_lane,
 )
+from dayu.cli.workspace_migrations.host_store_strip_max_output_tokens import (
+    migrate_host_store_strip_max_output_tokens,
+)
 from dayu.cli.workspace_migrations.run_json_write_chapter_lane import (
     migrate_run_json_add_write_chapter_lane,
 )
@@ -45,4 +48,11 @@ def apply_all_workspace_migrations(*, base_dir: Path, config_dir: Path) -> None:
         print(
             "✓ 工作区迁移: Host SQLite pending turn 快照 "
             f"concurrency_lane → business_concurrency_lane（共 {rewritten} 行）"
+        )
+
+    stripped = migrate_host_store_strip_max_output_tokens(host_db_path)
+    if stripped > 0:
+        print(
+            "✓ 工作区迁移: Host SQLite pending turn 快照已剥离 "
+            f"max_output_tokens 字段（共 {stripped} 行）"
         )

@@ -51,7 +51,6 @@ class AgentRunningConfigSnapshot(TypedDict, total=False):
         max_continuations: 最大续写次数。
         max_compactions: 最大压缩次数。
         max_context_tokens: 最大上下文 token 数。
-        max_output_tokens: 最大输出 token 数。
     """
 
     max_iterations: int
@@ -68,7 +67,6 @@ class AgentRunningConfigSnapshot(TypedDict, total=False):
     max_continuations: int
     max_compactions: int
     max_context_tokens: int
-    max_output_tokens: int
 
 
 __all__ = [

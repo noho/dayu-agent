@@ -380,7 +380,6 @@ class AgentCreateArgs:
         model_name: 逻辑模型名。
         max_turns: 最大工具轮次。
         max_context_tokens: 最大上下文长度。
-        max_output_tokens: 最大输出长度。
         temperature: 最终 temperature。
         runner_params: Runner 构造参数。
         runner_running_config: Runner 运行时配置。
@@ -397,7 +396,6 @@ class AgentCreateArgs:
     model_name: str
     max_turns: int | None = None
     max_context_tokens: int | None = None
-    max_output_tokens: int | None = None
     temperature: float | None = None
     runner_params: RunnerParams = field(default_factory=_empty_runner_params)
     runner_running_config: RunnerRunningConfigSnapshot = field(default_factory=_empty_runner_running_config_snapshot)

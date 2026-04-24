@@ -106,7 +106,6 @@ class BaseModelConfig(TypedDict, total=False):
     model: str
     timeout: int | float
     max_context_tokens: int
-    max_output_tokens: int
     description: str
     runtime_hints: ModelRuntimeHints
 

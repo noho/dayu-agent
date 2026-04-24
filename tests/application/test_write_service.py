@@ -115,7 +115,7 @@ class _FakeConfigLoader:
     def load_llm_model(self, model_name: str) -> ModelConfig:
         """返回最小模型配置。"""
 
-        return {"model": model_name, "max_context_tokens": 32000, "max_output_tokens": 4096}
+        return {"model": model_name, "max_context_tokens": 32000}
 
     def load_toolset_registrars(self) -> dict[str, str]:
         """返回空 registrar 配置。"""
@@ -186,7 +186,7 @@ class _FakeModelCatalog(ModelCatalogProtocol):
     def load_model(self, model_name: str) -> ModelConfig:
         """返回最小模型配置。"""
 
-        return {"model": model_name, "max_context_tokens": 32000, "max_output_tokens": 4096}
+        return {"model": model_name, "max_context_tokens": 32000}
 
     def load_models(self) -> dict[str, ModelConfig]:
         """返回空模型表。"""
