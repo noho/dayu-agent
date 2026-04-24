@@ -202,6 +202,12 @@ git push -u github <feat/short-topic>
 gh pr create --fill --label full-integration
 ```
 
+这条命令当前会在 Actions 里出现两条不同 workflow：
+- `CI`：普通 PR 必跑层
+- `CI PR Extended`：因 `full-integration` label 触发的第一次扩展层补跑
+
+这样做是为了避免同一个 `CI` workflow 同时吃到 `opened` 和 `labeled` 事件后互相取消。
+
 或者 PR 创建后再加：
 ```bash
 gh pr edit --add-label full-integration
@@ -258,6 +264,9 @@ push 后 PR 自动更新，CI 重新跑。最终 merge 时用 **Squash and merge
        - `full-platform-validation windows-x64 (py3.11)`
        - `full-platform-validation macos-arm64 (py3.11)`
      - `macos-x64` 不在 PR 层阻塞，避免长期排队占用反馈时间
+   - 实现细节：
+     - 第一次加 label 时，会额外触发一个专用 workflow：`CI PR Extended`
+     - 之后只要 label 还在，PR 后续 `synchronize/reopened` 的常规 `CI` 也会继续带上扩展层
 
 3. `主线 / 定时 / 手工完整验证`
    - `push main`：自动跑扩展层与主线默认平台完整验证（`macos-x64` 不在 PR 层阻塞）
@@ -316,8 +325,10 @@ push 后 PR 自动更新，CI 重新跑。最终 merge 时用 **Squash and merge
      - `full-platform-validation macos-x64 (py3.11)`
 
 2. PR 加 label `full-integration`
-   - 触发 workflow：`CI`
-   - 会跑普通 PR 的全部 job，并额外跑：
+   - 触发 workflow：
+     - `CI`
+     - 第一次加 label 时额外触发 `CI PR Extended`
+   - 会跑普通 PR 的全部 job，并补上：
      - `extended integration (ubuntu-latest, py3.11)`
        - 用 `linux-x64` 锁定环境
        - 跑完整 `integration and not e2e`

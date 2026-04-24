@@ -1,0 +1,139 @@
+name: CI PR Extended
+
+on:
+  pull_request:
+    branches: [main]
+    types: [labeled]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  extended-integration:
+    name: extended integration (ubuntu-latest, py3.11)
+    runs-on: ubuntu-latest
+    if: >
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'full-integration'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install locked dependencies
+        uses: ./.github/actions/install-locked-env
+        with:
+          constraints-path: constraints/lock-linux-x64-py311.txt
+
+      - name: Run extended integration lane
+        run: pytest -q --timeout=120 -m "integration and not e2e"
+
+  full-platform-validation-linux-x64:
+    name: full-platform-validation linux-x64 (py3.11)
+    runs-on: ubuntu-latest
+    if: >
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'full-integration'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install locked dependencies
+        uses: ./.github/actions/install-locked-env
+        with:
+          constraints-path: constraints/lock-linux-x64-py311.txt
+
+      - name: Run pyright
+        run: pyright
+
+      - name: Run full pytest lane
+        run: pytest -q --timeout=60
+
+      - name: Build and smoke test offline bundle
+        uses: ./.github/actions/build-and-smoke-offline-bundle
+        with:
+          constraints-path: constraints/lock-linux-x64-py311.txt
+          platform-id: linux-x64
+
+  full-platform-validation-windows-x64:
+    name: full-platform-validation windows-x64 (py3.11)
+    runs-on: windows-latest
+    if: >
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'full-integration'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install locked dependencies
+        uses: ./.github/actions/install-locked-env
+        with:
+          constraints-path: constraints/lock-windows-x64-py311.txt
+
+      - name: Run pyright
+        shell: bash
+        run: pyright --pythonplatform Linux
+
+      - name: Run full pytest lane
+        run: pytest -q --timeout=60
+
+      - name: Build and smoke test offline bundle
+        uses: ./.github/actions/build-and-smoke-offline-bundle
+        with:
+          constraints-path: constraints/lock-windows-x64-py311.txt
+          platform-id: windows-x64
+
+  full-platform-validation-macos-arm64:
+    name: full-platform-validation macos-arm64 (py3.11)
+    runs-on: macos-14
+    if: >
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'full-integration'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install locked dependencies
+        uses: ./.github/actions/install-locked-env
+        with:
+          constraints-path: constraints/lock-macos-arm64-py311.txt
+
+      - name: Run pyright
+        run: pyright
+
+      - name: Run full pytest lane
+        run: pytest -q --timeout=60
+
+      - name: Build and smoke test offline bundle
+        uses: ./.github/actions/build-and-smoke-offline-bundle
+        with:
+          constraints-path: constraints/lock-macos-arm64-py311.txt
+          platform-id: macos-arm64

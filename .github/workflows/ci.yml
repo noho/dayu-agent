@@ -5,7 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       run_extended_integration:
@@ -27,7 +27,7 @@ on:
     - cron: "0 2 * * *"
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -97,6 +97,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' &&
         (inputs.run_extended_integration == true || inputs.run_full_matrix == true)) ||
       (github.event_name == 'pull_request' &&
+        github.event.action != 'opened' &&
         contains(github.event.pull_request.labels.*.name, 'full-integration'))
 
     steps:
@@ -126,6 +127,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' &&
         inputs.run_full_matrix == true) ||
       (github.event_name == 'pull_request' &&
+        github.event.action != 'opened' &&
         contains(github.event.pull_request.labels.*.name, 'full-integration'))
 
     steps:
@@ -164,6 +166,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' &&
         inputs.run_full_matrix == true) ||
       (github.event_name == 'pull_request' &&
+        github.event.action != 'opened' &&
         contains(github.event.pull_request.labels.*.name, 'full-integration'))
 
     steps:
@@ -203,6 +206,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' &&
         inputs.run_full_matrix == true) ||
       (github.event_name == 'pull_request' &&
+        github.event.action != 'opened' &&
         contains(github.event.pull_request.labels.*.name, 'full-integration'))
 
     steps:
