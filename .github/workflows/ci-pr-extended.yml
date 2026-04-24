@@ -3,7 +3,7 @@ name: CI PR Extended
 on:
   pull_request:
     branches: [main]
-    types: [labeled]
+    types: [labeled, synchronize, reopened]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -14,8 +14,7 @@ jobs:
     name: extended integration (ubuntu-latest, py3.11)
     runs-on: ubuntu-latest
     if: >
-      github.event.action == 'labeled' &&
-      github.event.label.name == 'full-integration'
+      contains(github.event.pull_request.labels.*.name, 'full-integration')
 
     steps:
       - name: Checkout
@@ -39,8 +38,7 @@ jobs:
     name: full-platform-validation linux-x64 (py3.11)
     runs-on: ubuntu-latest
     if: >
-      github.event.action == 'labeled' &&
-      github.event.label.name == 'full-integration'
+      contains(github.event.pull_request.labels.*.name, 'full-integration')
 
     steps:
       - name: Checkout
@@ -73,8 +71,7 @@ jobs:
     name: full-platform-validation windows-x64 (py3.11)
     runs-on: windows-latest
     if: >
-      github.event.action == 'labeled' &&
-      github.event.label.name == 'full-integration'
+      contains(github.event.pull_request.labels.*.name, 'full-integration')
 
     steps:
       - name: Checkout
@@ -108,8 +105,7 @@ jobs:
     name: full-platform-validation macos-arm64 (py3.11)
     runs-on: macos-14
     if: >
-      github.event.action == 'labeled' &&
-      github.event.label.name == 'full-integration'
+      contains(github.event.pull_request.labels.*.name, 'full-integration')
 
     steps:
       - name: Checkout
@@ -142,8 +138,7 @@ jobs:
     name: full-platform-validation macos-x64 (py3.11)
     runs-on: macos-13
     if: >
-      github.event.action == 'labeled' &&
-      github.event.label.name == 'full-integration'
+      contains(github.event.pull_request.labels.*.name, 'full-integration')
 
     steps:
       - name: Checkout

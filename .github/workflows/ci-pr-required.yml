@@ -1,0 +1,68 @@
+name: CI PR Required
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-required-min-compat:
+    name: pr-required min-compat (ubuntu-latest, py3.11)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install minimum supported dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test,dev,browser]" -c constraints/min-py311.txt
+
+      - name: Run pyright
+        run: pyright
+
+      - name: Run required pytest lane
+        run: pytest -q --timeout=60 -m "not integration and not slow and not e2e"
+
+  pr-required-lock-smoke:
+    name: pr-required lock-smoke (linux-x64, py3.11)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install locked dependencies
+        uses: ./.github/actions/install-locked-env
+        with:
+          constraints-path: constraints/lock-linux-x64-py311.txt
+
+      - name: Run required Docling integration smoke
+        run: |
+          pytest -q --timeout=120 \
+            tests/engine/test_docling_processor_integration.py \
+            tests/fins/test_docling_upload_service_integration.py \
+            tests/engine/test_web_fetch_docling_integration.py
+
+      - name: Build and smoke test offline bundle
+        uses: ./.github/actions/build-and-smoke-offline-bundle
+        with:
+          constraints-path: constraints/lock-linux-x64-py311.txt
+          platform-id: linux-x64
