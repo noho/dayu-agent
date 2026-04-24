@@ -47,6 +47,11 @@ class _ToolExecutorMixin:
 
         del callback
 
+    def get_tool_display_info(self, name: str) -> tuple[str, list[str] | None]:
+        """返回默认展示元数据。"""
+
+        return (name, None)
+
 
 def _messages(items: list[AgentMessage]) -> list[AgentMessage]:
     """把测试消息显式收窄为 AgentMessage 列表。"""

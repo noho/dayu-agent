@@ -48,6 +48,7 @@ from .events import (
     StreamEvent,
     error_event,
     final_answer_event,
+    iteration_start_event,
     warning_event,
 )
 
@@ -605,6 +606,10 @@ class AsyncAgent:
             iteration += 1
             iteration_counter += 1
             iteration_id = f"{run_id}_iteration_{iteration_counter}"
+            yield self._annotate_event(
+                iteration_start_event(iteration=iteration, run_id=run_id),
+                run_id=run_id, iteration_id=iteration_id,
+            )
             if stream:
                 Log.debug(f"[{iteration_id}] 开始第 {iteration} 次 agent iteration，消息数={len(messages)}", module=MODULE)
             else:

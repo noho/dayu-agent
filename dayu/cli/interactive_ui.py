@@ -30,8 +30,6 @@ _WIDE_EAST_ASIAN_WIDTHS = frozenset(("F", "W"))
 
 
 
-
-
 class _StatusLineController:
     """动态状态行控制器。
 
@@ -52,30 +50,42 @@ class _StatusLineController:
     _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧"
     _FRAME_INTERVAL = 0.08
     _TIMEOUT_THRESHOLD = 5.0
+    _MIN_DISPLAY_SEC = 1.0
 
     def __init__(self) -> None:
         self._label: str = "思考中..."
+        self._pending_label: str | None = None
         self._lock = threading.Lock()
         self._active: bool = False
         self._stopped: bool = False
         self._thread: threading.Thread | None = None
         self._last_update_time: float = 0.0
+        self._label_set_time: float = 0.0
 
     def update(self, text: str) -> None:
-        """更新状态行文本并启动动画（如果尚未运行）。"""
+        """更新状态行文本并启动动画（如果尚未运行）。
+
+        如果上一次文本设置不足 _MIN_DISPLAY_SEC，新文本缓存为 pending，
+        由动画线程在最小停留时间后自动切换，避免快速工具状态行闪烁。
+        """
 
         with self._lock:
             if self._stopped:
                 return
-            self._label = text
-            self._last_update_time = time.monotonic()
+            now = time.monotonic()
+            if self._active and (now - self._label_set_time) < self._MIN_DISPLAY_SEC:
+                self._pending_label = text
+            else:
+                self._label = text
+                self._pending_label = None
+                self._label_set_time = now
+                self._last_update_time = now
             if not self._active:
                 self._active = True
+                self._label_set_time = now
+                self._last_update_time = now
                 self._thread = threading.Thread(target=self._spin, daemon=True)
                 self._thread.start()
-
-    def tick(self) -> None:
-        """兼容接口，无操作（线程模式下不需要外部驱动）。"""
 
     def pause(self) -> None:
         """暂停动画并清行。join 后主线程独占 stdout，与正文输出严格串行。"""
@@ -84,6 +94,7 @@ class _StatusLineController:
             if self._stopped or not self._active:
                 return
             self._active = False
+            self._pending_label = None
             thread = self._thread
             self._thread = None
 
@@ -104,6 +115,7 @@ class _StatusLineController:
             self._stopped = True
             was_active = self._active
             self._active = False
+            self._pending_label = None
             thread = self._thread
             self._thread = None
 
@@ -122,16 +134,21 @@ class _StatusLineController:
         while True:
             with self._lock:
                 if not self._active or self._stopped:
-                    # 退出前清行，避免残影——无论是 pause() join 前还是 update() 重启前
-                    sys.stdout.write("\r\033[K")
-                    sys.stdout.flush()
                     break
+                now = time.monotonic()
+                if self._pending_label is not None and (now - self._label_set_time) >= self._MIN_DISPLAY_SEC:
+                    self._label = self._pending_label
+                    self._pending_label = None
+                    self._label_set_time = now
+                    self._last_update_time = now
                 label = self._label
-                elapsed = time.monotonic() - self._last_update_time
+                elapsed = now - self._last_update_time
 
             display = f"{label} (已等待 {int(elapsed)}s)" if elapsed > self._TIMEOUT_THRESHOLD else label
             frame = self._FRAMES[idx % len(self._FRAMES)]
-            # \r 回行首，\033[K 清到行尾，再写新内容——彻底消除短文本覆盖长文本的残影
+            # \r 回行首，\033[K 清到行尾，再写新内容。
+            # write/flush 在 lock 外执行；安全性由 pause()/stop() 先 join 线程
+            # 再操作 stdout 来保证——动画运行期间主线程不会写 stdout。
             sys.stdout.write(f"\r\033[K{frame} {display}")
             sys.stdout.flush()
             time.sleep(self._FRAME_INTERVAL)
@@ -351,79 +368,42 @@ def _render_stream_event(event: Any, state: _RenderState) -> None:
         if state.status_line is not None and isinstance(payload, dict):
             summary = _format_tool_event_summary(payload, state)
             if summary:
-                # content 未换行时先推到新行，避免动画 \r\033[K 清掉正文最后一行
+                # reasoning / content 未换行时先推到新行，避免动画 \r\033[K 清掉已输出文字
+                _ensure_reasoning_newline(state)
                 if state.line_open:
                     print(flush=True)
                     state.line_open = False
                 state.status_line.update(summary)
         return
 
-
-# P0 硬编码工具展示名映射，P1 完成后替换为 ToolProgressFormatter
-_TOOL_DISPLAY_NAMES: dict[str, str] = {
-    "search_web": "联网搜索",
-    "fetch_web_page": "抓取网页",
-    "search_document": "检索文档",
-    "read_document_section": "读取章节",
-    "query_xbrl_facts": "查询财务数据",
-    "list_documents": "列出文档",
-    "list_document_sections": "列出章节",
-    "get_document_info": "查看文档信息",
-    "search_xbrl_concepts": "搜索财务指标",
-    "list_xbrl_facts": "列出财务事实",
-    "compare_financial_data": "对比财务数据",
-    "download_filings": "下载财报",
-    "upload_filing": "上传财报",
-    "process_filing": "处理财报",
-    "get_current_time": "获取时间",
-    "fetch_more": "继续读取",
-}
-
-_TOOL_SUMMARY_PARAMS: dict[str, list[str]] = {
-    "search_web": ["query"],
-    "fetch_web_page": ["url"],
-    "search_document": ["query"],
-    "read_document_section": ["section_path"],
-    "query_xbrl_facts": ["concept"],
-    "list_documents": ["ticker"],
-    "list_document_sections": ["document_id"],
-    "get_document_info": ["document_id"],
-    "search_xbrl_concepts": ["keyword"],
-    "list_xbrl_facts": ["ticker"],
-    "compare_financial_data": ["concept"],
-    "download_filings": ["ticker"],
-    "upload_filing": ["ticker"],
-    "process_filing": ["ticker"],
-    "fetch_more": ["cursor_id"],
-}
+    if event_type == AppEventType.ITERATION_START.value:
+        if state.status_line is not None and isinstance(payload, dict):
+            iteration = int(payload.get("iteration", 1))
+            if iteration >= 2 and state.tool_calls_seen > 0:
+                _ensure_reasoning_newline(state)
+                if state.line_open:
+                    print(flush=True)
+                    state.line_open = False
+                state.status_line.update(f"思考中... [已调用 {state.tool_calls_seen} 次工具]")
+        return
 
 
 def _format_tool_event_summary(payload: dict[str, Any], state: _RenderState) -> str | None:
-    """将 TOOL_EVENT payload 格式化为状态行文本。P0 硬编码版本。"""
+    """将 TOOL_EVENT payload 格式化为状态行文本。
+
+    从 engine 层事件自带的 display_name / param_preview 读取展示信息。
+    """
 
     sub_type = payload.get("engine_event_type", "")
     data = payload.get("data") or {}
 
-    if sub_type == "tool_call_dispatched":
-        tool_name = data.get("name", "") if isinstance(data, dict) else ""
-        arguments = data.get("arguments") or {}
-        if isinstance(arguments, str):
-            import json
-            try:
-                arguments = json.loads(arguments)
-            except Exception:
-                arguments = {}
-        display = _TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
-        param_keys = _TOOL_SUMMARY_PARAMS.get(tool_name, [])
-        values = [v[:37] + "..." if len(v := str(arguments[k])) > 40 else v for k in param_keys if k in arguments]
+    if sub_type == "tool_call_dispatched" and isinstance(data, dict):
+        display = str(data.get("display_name") or data.get("name", ""))
+        param_preview = str(data.get("param_preview", ""))
         state.tool_calls_seen += 1
-        if values:
-            return f"{display} — {', '.join(values)}"
+        if param_preview:
+            return f"{display} — {param_preview}"
         return display
-
-    if sub_type == "tool_calls_batch_done":
-        # batch 完成后下一步是 LLM 推理，状态行切回"思考中..."
-        return "思考中..."
 
     return None
 
@@ -475,8 +455,6 @@ async def _consume_chat_turn_stream(
     )
     submission = await session.submit_turn(request)
     async for event in submission.event_stream:
-        if state.status_line is not None:
-            state.status_line.tick()
         _render_stream_event(event, state)
     return state.final_content, submission.session_id
 
@@ -524,8 +502,6 @@ def _resume_interactive_pending_turn_if_needed(
                 )
             )
             async for event in submission.event_stream:
-                if state.status_line is not None:
-                    state.status_line.tick()
                 _render_stream_event(event, state)
             return submission.session_id
 
@@ -590,8 +566,6 @@ async def _consume_prompt_stream(
     )
     submission = await session.submit(request)
     async for event in submission.event_stream:
-        if state.status_line is not None:
-            state.status_line.tick()
         _render_stream_event(event, state)
     return state.final_content
 
@@ -605,7 +579,6 @@ def _run_chat_turn_stream(
     ticker: str | None = None,
     execution_options: ExecutionOptions | None = None,
     show_thinking: bool = False,
-    show_waiting_spinner: bool = False,
 ) -> tuple[str, str]:
     """执行单轮 chat 的同步包装入口。
 
@@ -617,7 +590,6 @@ def _run_chat_turn_stream(
         ticker: 股票代码。
         execution_options: 请求级执行覆盖参数。
         show_thinking: 是否回显 thinking 增量。
-        show_waiting_spinner: 是否在首个可见输出前显示等待 spinner。
 
     Returns:
         `(最终答案文本, 本轮解析后的 session_id)`。
@@ -657,7 +629,6 @@ def _run_prompt_stream(
     ticker: str | None,
     execution_options: ExecutionOptions | None = None,
     show_thinking: bool = False,
-    show_waiting_spinner: bool = False,
 ) -> str:
     """执行单次 prompt 的同步包装入口。
 
@@ -667,7 +638,6 @@ def _run_prompt_stream(
         ticker: 股票代码。
         execution_options: 请求级执行覆盖参数。
         show_thinking: 是否回显 thinking 增量。
-        show_waiting_spinner: 是否在首个可见输出前显示等待 spinner。
 
     Returns:
         最终答案文本。
@@ -748,12 +718,15 @@ def interactive(
 
     session = PromptSession(multiline=True, key_bindings=kb)
     consecutive_eof = 0
-    _resume_interactive_pending_turn_if_needed(
-        agent_session,
-        session_id=session_id,
-        scene_name=scene_name,
-        show_thinking=show_thinking,
-    )
+    try:
+        _resume_interactive_pending_turn_if_needed(
+            agent_session,
+            session_id=session_id,
+            scene_name=scene_name,
+            show_thinking=show_thinking,
+        )
+    except KeyboardInterrupt:
+        print("\n[interrupted]")
 
     while True:
         try:
@@ -784,9 +757,10 @@ def interactive(
                 scene_name=scene_name,
                 execution_options=execution_options,
                 show_thinking=show_thinking,
-                show_waiting_spinner=True,
             )
         except KeyboardInterrupt:
+            # 已知限制：中断仅停止事件消费，不触发 CancellationToken 协作式取消。
+            # host 层残留的 running 状态 run 会在进程退出后由 cleanup_orphan_runs 回收。
             print("\n[interrupted]")
             continue
         except ValueError as exc:
@@ -828,8 +802,10 @@ def prompt(
             ticker=ticker,
             execution_options=execution_options,
             show_thinking=show_thinking,
-            show_waiting_spinner=True,
         )
+    except KeyboardInterrupt:
+        print("\n[interrupted]")
+        return 130
     except ValueError as exc:
         Log.error(str(exc), module=MODULE)
         return 2
@@ -878,9 +854,11 @@ def conversation_prompt(
             ticker=ticker,
             execution_options=execution_options,
             show_thinking=show_thinking,
-            show_waiting_spinner=not show_thinking,
         )
         _print_label_hint_box(label)
+    except KeyboardInterrupt:
+        print("\n[interrupted]")
+        return 130
     except ValueError as exc:
         Log.error(str(exc), module=MODULE)
         return 2

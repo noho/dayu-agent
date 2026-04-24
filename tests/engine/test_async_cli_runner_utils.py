@@ -42,6 +42,11 @@ class _NoopExecutor:
         del name
         return None
 
+    def get_tool_display_info(self, name: str) -> tuple[str, list[str] | None]:
+        """返回默认展示信息。"""
+
+        return name, None
+
     def register_response_middleware(self, callback) -> None:
         """测试桩忽略 response middleware。"""
 

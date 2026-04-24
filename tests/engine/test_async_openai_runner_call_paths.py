@@ -86,6 +86,11 @@ class _DummyExecutor:
         _ = name
         return None
 
+    def get_tool_display_info(self, name: str) -> tuple[str, list[str] | None]:
+        """返回默认展示元数据。"""
+
+        return (name, None)
+
     def register_response_middleware(self, callback: Any) -> None:
         """注册 response middleware（测试桩无操作）。"""
 

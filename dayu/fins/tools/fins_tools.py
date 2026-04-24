@@ -202,6 +202,8 @@ def _create_list_documents_tool(
         ),
         parameters=parameters,
         tags=FINS_TOOL_TAGS,
+        display_name="列出文档",
+        summary_params=["ticker"],
         truncate=ToolTruncateSpec(
             enabled=True,
             strategy="list_items",
@@ -278,6 +280,8 @@ def _create_get_document_sections_tool(
         description="读取文档章节结构，返回可定位的章节 ref 列表。",
         parameters=parameters,
         tags=FINS_TOOL_TAGS,
+        display_name="浏览财报结构",
+        summary_params=["ticker"],
         truncate=ToolTruncateSpec(
             enabled=True,
             strategy="list_items",
@@ -346,6 +350,7 @@ def _create_read_section_tool(
         description="读取章节全文。若正文里出现 [[t_XXXX]]，可用 get_table(t_XXXX) 读取对应表格。",
         parameters=parameters,
         tags=FINS_TOOL_TAGS,
+        display_name="读取财报章节",
         truncate=ToolTruncateSpec(
             enabled=True,
             strategy="text_chars",
@@ -436,6 +441,8 @@ def _create_search_document_tool(
         ),
         parameters=parameters,
         tags=FINS_TOOL_TAGS,
+        display_name="检索文档",
+        summary_params=["query"],
         truncate=ToolTruncateSpec(
             enabled=True,
             strategy="list_items",
@@ -536,6 +543,8 @@ def _create_list_tables_tool(
         description="列出文档内表格，返回可定位的 table_ref 列表。",
         parameters=parameters,
         tags=FINS_TOOL_TAGS,
+        display_name="列出表格",
+        summary_params=["ticker"],
         truncate=ToolTruncateSpec(
             enabled=True,
             strategy="list_items",
@@ -621,6 +630,7 @@ def _create_get_table_tool(
         description="按 table_ref 读取单个表格。",
         parameters=parameters,
         tags=FINS_TOOL_TAGS,
+        display_name="查看表格",
         truncate=ToolTruncateSpec(
             enabled=True,
             strategy="list_items",
@@ -686,6 +696,8 @@ def _create_get_page_content_tool(
         description="按页码读取同页内容。只有已有 page_range 且需要补同页上下文时才使用。",
         parameters=parameters,
         tags=FINS_TOOL_TAGS,
+        display_name="读取页面",
+        summary_params=["ticker"],
         truncate=ToolTruncateSpec(
             enabled=True,
             strategy="text_chars",
@@ -758,6 +770,8 @@ def _create_get_financial_statement_tool(
         ),
         parameters=parameters,
         tags=FINS_TOOL_TAGS,
+        display_name="查看财务报表",
+        summary_params=["statement_type"],
         truncate=ToolTruncateSpec(
             enabled=True,
             strategy="list_items",
@@ -839,6 +853,8 @@ def _create_query_xbrl_facts_tool(
         description="查询结构化 XBRL 数值 facts。",
         parameters=parameters,
         tags=FINS_TOOL_TAGS,
+        display_name="查询财务数据",
+        summary_params=["concepts"],  # list[str]，_build_param_preview 展开为逗号分隔
         truncate=ToolTruncateSpec(
             enabled=True,
             strategy="list_items",

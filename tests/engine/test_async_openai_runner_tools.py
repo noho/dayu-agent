@@ -34,6 +34,9 @@ class _DummyExecutor:
         del name
         return None
 
+    def get_tool_display_info(self, name: str) -> tuple[str, list[str] | None]:
+        return name, None
+
     def register_response_middleware(self, callback) -> None:
         del callback
 
@@ -262,6 +265,9 @@ async def test_emit_tool_batch_aborts_quickly_on_cancellation():
         def get_execution_context_param_name(self, name: str) -> str | None:
             del name
             return None
+
+        def get_tool_display_info(self, name: str) -> tuple[str, list[str] | None]:
+            return name, None
 
         def register_response_middleware(self, callback) -> None:
             del callback

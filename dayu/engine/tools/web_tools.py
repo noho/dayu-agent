@@ -868,6 +868,8 @@ def _create_search_web_tool(
         ),
         parameters=parameters,
         tags={"web"},
+        display_name="联网搜索",
+        summary_params=["query"],
         truncate=ToolTruncateSpec(
             enabled=True,
             strategy="list_items",
@@ -963,6 +965,8 @@ def _create_fetch_web_page_tool(
         parameters=parameters,
         tags={"web"},
         execution_context_param_name="execution_context",
+        display_name="抓取网页",
+        summary_params=["url"],
         truncate=ToolTruncateSpec(
             enabled=True,
             strategy="text_chars",

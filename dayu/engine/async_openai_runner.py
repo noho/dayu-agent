@@ -835,11 +835,17 @@ class AsyncOpenAIRunner:
         call_ids = [tc["id"] for tc in ordered_calls]
 
         for tc in ordered_calls:
+            display_name, summary_params = (
+                self._tool_executor.get_tool_display_info(tc["name"])
+                if self._tool_executor else (tc["name"], None)
+            )
             event = tool_call_dispatched(         # ← 工具调用已发起事件
                 tool_call_id=tc["id"],
                 name=tc["name"],
                 arguments=tc["arguments"],
                 index_in_iteration=tc["index_in_iteration"],
+                display_name=display_name,
+                summary_params=summary_params,
             )
             yield self._annotate_event(event, trace_meta)
 
@@ -904,12 +910,17 @@ class AsyncOpenAIRunner:
                     counts["cancelled"] += 1
                 else:
                     counts["error"] += 1
+            result_display_name, _ = (
+                self._tool_executor.get_tool_display_info(result["name"])
+                if self._tool_executor else (result["name"], None)
+            )
             event = tool_call_result(             # ← 工具调用结果事件
                 tool_call_id=result["id"],
                 name=result["name"],
                 arguments=result["arguments"],
                 index_in_iteration=result["index_in_iteration"],
                 result=result["result"],
+                display_name=result_display_name,
             )
             yield self._annotate_event(event, trace_meta)
 

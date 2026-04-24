@@ -13,6 +13,7 @@ from dayu.engine import (
     tool_call_result,
     tool_calls_batch_ready,
     tool_calls_batch_done,
+    iteration_start_event,
     error_event,
     warning_event,
     done_event,
@@ -168,6 +169,8 @@ class TestConvenienceFunctions:
             "name": "read_file",
             "arguments": '{"path":"test.txt"}',
             "index_in_iteration": 0,
+            "display_name": "read_file",
+            "param_preview": "",
         }
 
     def test_tool_call_dispatched_with_object_arguments(self):
@@ -195,8 +198,10 @@ class TestConvenienceFunctions:
             "name": "read_file",
             "arguments": {"path": "test.txt"},
             "index_in_iteration": 0,
+            "display_name": "read_file",
+            "param_preview": "",
         }
-    
+
     def test_tool_call_result(self):
         """测试 tool_call_result 函数"""
         event = tool_call_result(
@@ -214,6 +219,7 @@ class TestConvenienceFunctions:
             "arguments": {"path": "test.txt"},
             "index_in_iteration": 0,
             "result": {"ok": True, "value": "file content"},
+            "display_name": "read_file",
         }
 
     def test_tool_calls_batch_ready(self):
@@ -242,6 +248,13 @@ class TestConvenienceFunctions:
             "cancelled": 0,
         }
     
+    def test_iteration_start_event(self):
+        """测试 iteration_start_event 函数"""
+        event = iteration_start_event(iteration=2, run_id="run_abc")
+
+        assert event.type == EventType.ITERATION_START
+        assert event.data == {"iteration": 2, "run_id": "run_abc"}
+
     def test_error_event_simple(self):
         """测试 error_event 函数（简单）"""
         event = error_event("something failed")

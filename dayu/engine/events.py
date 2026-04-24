@@ -15,6 +15,7 @@
 - 支持结构化工具结果回填（tool_call_result.result 为 dict）
 """
 
+import json
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional
@@ -36,6 +37,9 @@ class EventType(Enum):
     TOOL_CALLS_BATCH_READY = "tool_calls_batch_ready" # 工具调用批次已就绪
     TOOL_CALLS_BATCH_DONE = "tool_calls_batch_done"   # 工具调用批次完成
     
+    # 迭代事件
+    ITERATION_START = "iteration_start"      # Agent 开始新一轮迭代
+
     # 错误和完成事件
     ERROR = "error"                          # 错误
     WARNING = "warning"                      # 警告
@@ -111,12 +115,51 @@ def tool_call_delta(tool_call_id: str, name: str, arguments_delta: str, **metada
     )
 
 
+_MAX_PARAM_PREVIEW_LEN = 40
+
+
+def _build_param_preview(arguments: Any, summary_params: list[str] | None) -> str:
+    """从工具调用参数中提取面向用户的摘要预览。
+
+    Args:
+        arguments: 工具调用参数（dict 或 JSON 字符串）。
+        summary_params: 需要展示的参数名列表；None 时返回空字符串。
+
+    Returns:
+        逗号分隔的参数值预览，超长值截断。
+    """
+    if not summary_params:
+        return ""
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except (json.JSONDecodeError, TypeError):
+            return ""
+    if not isinstance(arguments, dict):
+        return ""
+    values: list[str] = []
+    for key in summary_params:
+        if key not in arguments:
+            continue
+        val = arguments[key]
+        if isinstance(val, list):
+            text = ", ".join(str(item) for item in val)
+        else:
+            text = str(val)
+        if len(text) > _MAX_PARAM_PREVIEW_LEN:
+            text = text[:_MAX_PARAM_PREVIEW_LEN - 3] + "..."
+        values.append(text)
+    return ", ".join(values)
+
+
 def tool_call_dispatched(
     tool_call_id: str,
     name: str,
     arguments: Any,
     *,
     index_in_iteration: int,
+    display_name: str | None = None,
+    summary_params: list[str] | None = None,
     **metadata,
 ) -> StreamEvent:
     """创建工具调用已发起执行事件"""
@@ -127,6 +170,8 @@ def tool_call_dispatched(
             "name": name,
             "arguments": arguments,
             "index_in_iteration": index_in_iteration,
+            "display_name": display_name or name,
+            "param_preview": _build_param_preview(arguments, summary_params),
         },
         metadata=metadata,
     )
@@ -139,16 +184,18 @@ def tool_call_result(
     name: str,
     arguments: Any,
     index_in_iteration: int,
+    display_name: str | None = None,
     **metadata,
 ) -> StreamEvent:
     """创建工具调用结果事件
-    
+
     Args:
         tool_call_id: 工具调用ID
         result: 工具执行结果（结构化，包含 ok/value/error/meta）
         name: 工具名称
         arguments: 工具调用参数（与 tool_call_dispatched 保持一致）
         index_in_iteration: 工具调用在当前轮次的顺序
+        display_name: 面向用户的展示名，None 时 fallback 到 name
         **metadata: 额外元数据（如 error_type）
     """
     data = {
@@ -157,6 +204,7 @@ def tool_call_result(
         "arguments": arguments,
         "index_in_iteration": index_in_iteration,
         "result": result,
+        "display_name": display_name or name,
     }
     return StreamEvent(
         type=EventType.TOOL_CALL_RESULT,
@@ -193,6 +241,15 @@ def tool_calls_batch_done(
             "timeout": timeout,
             "cancelled": cancelled,
         },
+        metadata=metadata,
+    )
+
+
+def iteration_start_event(*, iteration: int, run_id: str, **metadata) -> StreamEvent:
+    """创建 Agent 迭代开始事件。"""
+    return StreamEvent(
+        type=EventType.ITERATION_START,
+        data={"iteration": iteration, "run_id": run_id},
         metadata=metadata,
     )
 

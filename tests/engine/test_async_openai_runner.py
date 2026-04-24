@@ -85,6 +85,11 @@ class DummyToolExecutor:
         del name
         return None
 
+    def get_tool_display_info(self, name: str) -> tuple[str, list[str] | None]:
+        """返回默认展示信息（fallback 到原始名）。"""
+
+        return name, None
+
     def register_response_middleware(
         self,
         callback: Callable[[str, dict[str, Any], ToolExecutionContext | None], dict[str, Any]],

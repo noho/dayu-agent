@@ -147,6 +147,7 @@ def _create_list_files_tool(registry: ToolRegistry, max_files: int):
         parameters=parameters,
         tags={"doc"},
         file_path_params=["directory"],
+        display_name="列出文件",
     )
     def list_files(
         directory: str,
@@ -249,6 +250,7 @@ def _create_get_file_sections_tool(registry: ToolRegistry, max_sections: int):
         parameters=parameters,
         tags={"doc"},
         file_path_params=["file_path"],
+        display_name="浏览文件结构",
     )
     def get_file_sections(
         file_path: str,
@@ -553,6 +555,8 @@ def _create_search_files_tool(registry: ToolRegistry, max_results: int):
         parameters=parameters,
         tags={"doc"},
         file_path_params=["directory"],
+        display_name="搜索文件",
+        summary_params=["query"],
     )
     def search_files(
         directory: str,
@@ -747,6 +751,7 @@ def _create_read_file_tool(registry: ToolRegistry, max_chars: int):
         parameters=parameters,
         tags={"doc"},
         file_path_params=["file_path"],
+        display_name="读取文件",
         truncate=ToolTruncateSpec(
             enabled=True,
             strategy="text_chars",
@@ -869,6 +874,7 @@ def _create_read_file_section_tool(registry: ToolRegistry, max_chars: int):
         parameters=parameters,
         tags={"doc"},
         file_path_params=["file_path"],
+        display_name="读取文件段落",
         truncate=ToolTruncateSpec(
             enabled=True,
             strategy="text_chars",

@@ -19,6 +19,7 @@ class AppEventType(Enum):
     FINAL_ANSWER = "final_answer"
     CANCELLED = "cancelled"
     TOOL_EVENT = "tool_event"
+    ITERATION_START = "iteration_start"
     WARNING = "warning"
     ERROR = "error"
     METADATA = "metadata"

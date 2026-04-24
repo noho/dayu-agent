@@ -50,6 +50,7 @@ def create_get_current_time_tool(registry=None) -> Tuple[str, Any, Any]:
         ),
         parameters=parameters,
         tags={"utils"},
+        display_name="获取时间",
     )
     def get_current_time(timezone: str = "Asia/Shanghai") -> Dict[str, Any]:
         """

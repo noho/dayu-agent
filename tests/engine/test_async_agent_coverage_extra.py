@@ -171,6 +171,21 @@ class _ToolExecutorStub:
         _ = name
         return None
 
+    def get_tool_display_info(self, name: str) -> tuple[str, list[str] | None]:
+        """返回默认展示元数据。
+
+        Args:
+            name: 工具名称。
+
+        Returns:
+            ``(name, None)`` 二元组。
+
+        Raises:
+            无。
+        """
+
+        return (name, None)
+
     def register_response_middleware(self, callback: Any) -> None:
         """忽略 response middleware 注册。
 

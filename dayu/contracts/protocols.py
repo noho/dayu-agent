@@ -180,6 +180,19 @@ class ToolExecutor(Protocol):
 
         ...
 
+    def get_tool_display_info(self, name: str) -> tuple[str, list[str] | None]:
+        """按工具名读取面向用户的展示元数据。
+
+        Args:
+            name: 工具名称。
+
+        Returns:
+            ``(display_name, summary_params)`` 二元组；display_name fallback 到 name，
+            summary_params 为 None 表示不展示参数摘要。
+        """
+
+        ...
+
     def register_response_middleware(
         self,
         callback: Callable[[str, dict[str, Any], ToolExecutionContext | None], dict[str, Any]],

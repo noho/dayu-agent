@@ -102,6 +102,11 @@ class DummyDupSpecToolExecutor:
         _ = name
         return None
 
+    def get_tool_display_info(self, name):
+        """返回默认展示信息。"""
+
+        return name, None
+
 
 class BlockingRunner:
     """用于并发运行防护测试的阻塞 Runner。"""
@@ -240,6 +245,9 @@ class DummyToolExecutor:
     def get_execution_context_param_name(self, name):
         _ = name
         return None
+
+    def get_tool_display_info(self, name):
+        return name, None
 
     def register_response_middleware(self, callback):
         self._middlewares.append(callback)

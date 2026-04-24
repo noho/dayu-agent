@@ -51,9 +51,6 @@ class _NoopStatusLine:
     def update(self, text: str) -> None:  # noqa: ARG002
         pass
 
-    def tick(self) -> None:
-        pass
-
     def pause(self) -> None:
         pass
 
@@ -1524,9 +1521,6 @@ def test_interactive_shows_waiting_spinner_when_thinking_disabled(
         def update(self, text: str) -> None:
             status_events.append(f"update:{text}")
 
-        def tick(self) -> None:
-            pass
-
         def pause(self) -> None:
             status_events.append("pause")
 
@@ -1594,9 +1588,6 @@ def test_interactive_shows_status_line_when_thinking_enabled(
 
         def update(self, text: str) -> None:
             status_events.append(f"update:{text}")
-
-        def tick(self) -> None:
-            pass
 
         def pause(self) -> None:
             status_events.append("pause")
@@ -1687,9 +1678,6 @@ def test_prompt_shows_waiting_spinner_when_thinking_disabled(
         def update(self, text: str) -> None:
             status_events.append(f"update:{text}")
 
-        def tick(self) -> None:
-            pass
-
         def pause(self) -> None:
             status_events.append("pause")
 
@@ -1730,9 +1718,6 @@ def test_prompt_shows_status_line_when_thinking_enabled(
 
         def update(self, text: str) -> None:
             status_events.append(f"update:{text}")
-
-        def tick(self) -> None:
-            pass
 
         def pause(self) -> None:
             status_events.append("pause")

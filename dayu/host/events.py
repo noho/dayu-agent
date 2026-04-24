@@ -41,6 +41,8 @@ def build_app_event_from_stream_event(event: StreamEvent) -> Optional[AppEvent]:
             "data": event.data,
         }
         return AppEvent(type=AppEventType.TOOL_EVENT, payload=payload, meta=dict(event.metadata or {}))
+    if event.type == EventType.ITERATION_START:
+        return AppEvent(type=AppEventType.ITERATION_START, payload=event.data, meta=dict(event.metadata or {}))
     if event.type == EventType.WARNING:
         return AppEvent(type=AppEventType.WARNING, payload=event.data, meta=dict(event.metadata or {}))
     if event.type == EventType.ERROR:
