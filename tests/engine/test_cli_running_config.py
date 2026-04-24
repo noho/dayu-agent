@@ -1190,7 +1190,7 @@ def test_parse_arguments_supports_tool_trace_flags(monkeypatch: pytest.MonkeyPat
             "--tool-trace-dir",
             "output/custom",
             "--model-name",
-            "mimo-v2-flash",
+            "mimo-v2.5-pro",
             "--temperature",
             "0.2",
         ],
@@ -1199,7 +1199,7 @@ def test_parse_arguments_supports_tool_trace_flags(monkeypatch: pytest.MonkeyPat
     assert parsed.enable_tool_trace is True
     assert parsed.tool_trace_dir == "output/custom"
     assert getattr(parsed, "ticker", None) is None
-    assert parsed.model_name == "mimo-v2-flash"
+    assert parsed.model_name == "mimo-v2.5-pro"
     assert parsed.temperature == 0.2
     assert parsed.thinking is False
 
@@ -1233,7 +1233,7 @@ def test_parse_arguments_supports_write_flags(monkeypatch: pytest.MonkeyPatch) -
             "--output",
             "./workspace/draft",
             "--audit-model-name",
-            "deepseek-thinking",
+            "deepseek-v4-flash-thinking",
             "--write-max-retries",
             "3",
             "--web-provider",
@@ -1248,7 +1248,7 @@ def test_parse_arguments_supports_write_flags(monkeypatch: pytest.MonkeyPatch) -
     assert parsed.command == "write"
     assert parsed.template.endswith("定性分析模板.md")
     assert parsed.output == "./workspace/draft"
-    assert parsed.audit_model_name == "deepseek-thinking"
+    assert parsed.audit_model_name == "deepseek-v4-flash-thinking"
     assert parsed.write_max_retries == 3
     assert parsed.web_provider == "serper"
     assert parsed.resume is False
@@ -1345,7 +1345,7 @@ def test_parse_arguments_supports_prompt_command(monkeypatch: pytest.MonkeyPatch
             "--ticker",
             "aapl",
             "--model-name",
-            "mimo-v2-flash-thinking",
+            "mimo-v2.5-pro-thinking",
             "--thinking",
             "--temperature",
             "0.1",
@@ -1357,7 +1357,7 @@ def test_parse_arguments_supports_prompt_command(monkeypatch: pytest.MonkeyPatch
     assert parsed.command == "prompt"
     assert parsed.prompt == "请总结最新财报风险"
     assert parsed.ticker == "aapl"
-    assert parsed.model_name == "mimo-v2-flash-thinking"
+    assert parsed.model_name == "mimo-v2.5-pro-thinking"
     assert parsed.temperature == 0.1
     assert parsed.thinking is True
 
@@ -1906,7 +1906,7 @@ def test_setup_write_config_uses_workspace_draft_ticker_by_default(tmp_path: Pat
         write_max_retries=2,
         resume=True,
         web_provider="auto",
-        audit_model_name="deepseek-thinking",
+        audit_model_name="deepseek-v4-flash-thinking",
         fast=True,
         force=True,
         infer=True,
@@ -1924,7 +1924,7 @@ def test_setup_write_config_uses_workspace_draft_ticker_by_default(tmp_path: Pat
 
     assert write_config.web_provider == "auto"
     assert write_config.output_dir == (workspace_dir / "draft" / "AAPL").resolve()
-    assert write_config.audit_model_override_name == "deepseek-thinking"
+    assert write_config.audit_model_override_name == "deepseek-v4-flash-thinking"
     assert write_config.fast is True
     assert write_config.force is True
     assert write_config.infer is True
@@ -1965,7 +1965,7 @@ def test_setup_write_config_reads_web_provider_from_running_config(tmp_path: Pat
         write_max_retries=2,
         resume=True,
         web_provider=None,
-        audit_model_name="deepseek-thinking",
+        audit_model_name="deepseek-v4-flash-thinking",
     )
 
     running_config = RunningConfig(
@@ -2361,7 +2361,7 @@ def test_main_interactive_path_returns_zero(monkeypatch: pytest.MonkeyPatch, tmp
         web_tools_config=WebToolsConfig(provider="auto"),
         tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
-    model_name = ModelName(model_name="mimo-v2-flash")
+    model_name = ModelName(model_name="mimo-v2.5-pro")
     args = Namespace(
         command="interactive",
         log_level=None,
@@ -2370,7 +2370,7 @@ def test_main_interactive_path_returns_zero(monkeypatch: pytest.MonkeyPatch, tmp
         info=False,
         quiet=False,
         thinking=True,
-        model_name="deepseek-thinking",
+        model_name="deepseek-v4-flash-thinking",
         new_session=False,
     )
 
@@ -2398,7 +2398,7 @@ def test_main_interactive_path_returns_zero(monkeypatch: pytest.MonkeyPatch, tmp
     monkeypatch.setattr("dayu.cli.commands.interactive.setup_paths", partial(_return_value, workspace_config))
     monkeypatch.setattr(
         "dayu.cli.commands.interactive._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     fake_dependencies = _FakeCliHostDependencies(
         running_config=running_config,
@@ -2420,7 +2420,7 @@ def test_main_interactive_path_returns_zero(monkeypatch: pytest.MonkeyPatch, tmp
     assert interactive_kwargs["session_id"] == build_interactive_session_id(state.interactive_key)
     assert interactive_kwargs["scene_name"] == "interactive"
     assert interactive_kwargs["show_thinking"] is True
-    assert interactive_execution_options.model_name == "deepseek-thinking"
+    assert interactive_execution_options.model_name == "deepseek-v4-flash-thinking"
     assert any('使用模型: {"name": "scene-interactive-model", "temperature": 0.0}' in item for item in collector.info_logs)
 
 
@@ -2444,7 +2444,7 @@ def test_main_interactive_path_rejects_second_instance(monkeypatch: pytest.Monke
         info=False,
         quiet=False,
         thinking=False,
-        model_name="deepseek-thinking",
+        model_name="deepseek-v4-flash-thinking",
         new_session=False,
     )
     error_logs: list[str] = []
@@ -2453,7 +2453,7 @@ def test_main_interactive_path_rejects_second_instance(monkeypatch: pytest.Monke
     monkeypatch.setattr("dayu.cli.commands.interactive.setup_paths", partial(_return_value, workspace_config))
     monkeypatch.setattr(
         "dayu.cli.commands.interactive._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     monkeypatch.setattr(
         "dayu.cli.commands.interactive._prepare_cli_host_dependencies",
@@ -2514,7 +2514,7 @@ def test_main_interactive_label_path_rejects_second_instance_with_label_specific
     monkeypatch.setattr("dayu.cli.commands.interactive.setup_paths", partial(_return_value, workspace_config))
     monkeypatch.setattr(
         "dayu.cli.commands.interactive._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     monkeypatch.setattr(
         "dayu.cli.commands.interactive.StateDirSingleInstanceLock.acquire",
@@ -2562,7 +2562,7 @@ def test_main_prompt_path_returns_prompt_exit_code(monkeypatch: pytest.MonkeyPat
         web_tools_config=WebToolsConfig(provider="auto"),
         tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
-    model_name = ModelName(model_name="mimo-v2-flash")
+    model_name = ModelName(model_name="mimo-v2.5-pro")
     args = Namespace(
         command="prompt",
         prompt="请总结风险",
@@ -2572,7 +2572,7 @@ def test_main_prompt_path_returns_prompt_exit_code(monkeypatch: pytest.MonkeyPat
         info=False,
         quiet=False,
         thinking=False,
-        model_name="deepseek-thinking",
+        model_name="deepseek-v4-flash-thinking",
     )
 
     prompt_kwargs: dict[str, object] = {}
@@ -2601,7 +2601,7 @@ def test_main_prompt_path_returns_prompt_exit_code(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("dayu.cli.commands.prompt.setup_paths", partial(_return_value, workspace_config))
     monkeypatch.setattr(
         "dayu.cli.commands.prompt._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     fake_dependencies = _FakeCliHostDependencies(
         running_config=running_config,
@@ -2618,7 +2618,7 @@ def test_main_prompt_path_returns_prompt_exit_code(monkeypatch: pytest.MonkeyPat
     prompt_execution_options = cast(Any, prompt_kwargs["execution_options"])
     assert prompt_kwargs["ticker"] == "AAPL"
     assert prompt_kwargs["show_thinking"] is False
-    assert prompt_execution_options.model_name == "deepseek-thinking"
+    assert prompt_execution_options.model_name == "deepseek-v4-flash-thinking"
 
 
 @pytest.mark.unit
@@ -2706,7 +2706,7 @@ def test_main_prompt_path_allows_missing_filings_dir(monkeypatch: pytest.MonkeyP
         web_tools_config=WebToolsConfig(provider="auto"),
         tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
-    model_name = ModelName(model_name="mimo-v2-flash")
+    model_name = ModelName(model_name="mimo-v2.5-pro")
     args = Namespace(
         command="prompt",
         prompt="请总结风险",
@@ -2716,7 +2716,7 @@ def test_main_prompt_path_allows_missing_filings_dir(monkeypatch: pytest.MonkeyP
         info=False,
         quiet=False,
         thinking=False,
-        model_name="deepseek-thinking",
+        model_name="deepseek-v4-flash-thinking",
     )
 
     prompt_kwargs: dict[str, object] = {}
@@ -2744,7 +2744,7 @@ def test_main_prompt_path_allows_missing_filings_dir(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr("dayu.cli.commands.prompt.setup_paths", partial(_return_value, workspace_config))
     monkeypatch.setattr(
         "dayu.cli.commands.prompt._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     fake_dependencies = _FakeCliHostDependencies(
         running_config=running_config,
@@ -2793,7 +2793,7 @@ def test_run_prompt_command_routes_labeled_prompt_to_conversation_turn(
         info=False,
         quiet=False,
         thinking=False,
-        model_name="deepseek-thinking",
+        model_name="deepseek-v4-flash-thinking",
         label="apple",
         label_session_id="cli_conv_apple",
         label_scene_name=None,
@@ -2812,7 +2812,7 @@ def test_run_prompt_command_routes_labeled_prompt_to_conversation_turn(
     monkeypatch.setattr("dayu.cli.commands.prompt.setup_paths", partial(_return_value, workspace_config))
     monkeypatch.setattr(
         "dayu.cli.commands.prompt._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     fake_dependencies = _FakeCliHostDependencies(
         running_config=running_config,
@@ -2833,7 +2833,7 @@ def test_run_prompt_command_routes_labeled_prompt_to_conversation_turn(
     assert prompt_kwargs["scene_name"] == "prompt_mt"
     assert prompt_kwargs["ticker"] == "AAPL"
     assert prompt_kwargs["show_thinking"] is False
-    assert prompt_execution_options.model_name == "deepseek-thinking"
+    assert prompt_execution_options.model_name == "deepseek-v4-flash-thinking"
     assert any("执行带标签 prompt，恢复标签: apple" in item for item in info_logs)
 
 
@@ -2867,7 +2867,7 @@ def test_run_prompt_command_labeled_prompt_respects_existing_scene_name(
         info=False,
         quiet=False,
         thinking=True,
-        model_name="deepseek-thinking",
+        model_name="deepseek-v4-flash-thinking",
         label="apple",
         label_session_id="cli_conv_apple",
         label_scene_name="interactive",
@@ -2886,7 +2886,7 @@ def test_run_prompt_command_labeled_prompt_respects_existing_scene_name(
     monkeypatch.setattr("dayu.cli.commands.prompt.setup_paths", partial(_return_value, workspace_config))
     monkeypatch.setattr(
         "dayu.cli.commands.prompt._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     fake_dependencies = _FakeCliHostDependencies(
         running_config=running_config,
@@ -2928,7 +2928,7 @@ def test_run_prompt_command_labeled_prompt_resolves_registry_when_session_id_mis
         info=False,
         quiet=False,
         thinking=False,
-        model_name="deepseek-thinking",
+        model_name="deepseek-v4-flash-thinking",
         label="apple",
         label_session_id=None,
         label_scene_name=None,
@@ -2946,7 +2946,7 @@ def test_run_prompt_command_labeled_prompt_resolves_registry_when_session_id_mis
     monkeypatch.setattr("dayu.cli.commands.prompt.setup_paths", partial(_return_value, workspace_config))
     monkeypatch.setattr(
         "dayu.cli.commands.prompt._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     fake_dependencies = _FakeCliHostDependencies(
         running_config=RunningConfig(
@@ -3006,7 +3006,7 @@ def test_run_prompt_command_labeled_prompt_prunes_missing_record_before_recreati
         info=False,
         quiet=False,
         thinking=False,
-        model_name="deepseek-thinking",
+        model_name="deepseek-v4-flash-thinking",
         label="apple",
         label_session_id=None,
         label_scene_name=None,
@@ -3024,7 +3024,7 @@ def test_run_prompt_command_labeled_prompt_prunes_missing_record_before_recreati
     monkeypatch.setattr("dayu.cli.commands.prompt.setup_paths", partial(_return_value, workspace_config))
     monkeypatch.setattr(
         "dayu.cli.commands.prompt._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     fake_dependencies = _FakeCliHostDependencies(
         running_config=RunningConfig(
@@ -3086,7 +3086,7 @@ def test_run_prompt_command_labeled_prompt_recreates_closed_label_with_warning(
         info=False,
         quiet=False,
         thinking=False,
-        model_name="deepseek-thinking",
+        model_name="deepseek-v4-flash-thinking",
         label="apple",
         label_session_id=None,
         label_scene_name=None,
@@ -3104,7 +3104,7 @@ def test_run_prompt_command_labeled_prompt_recreates_closed_label_with_warning(
     monkeypatch.setattr("dayu.cli.commands.prompt.setup_paths", partial(_return_value, workspace_config))
     monkeypatch.setattr(
         "dayu.cli.commands.prompt._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     fake_dependencies = _FakeCliHostDependencies(
         running_config=RunningConfig(
@@ -3168,7 +3168,7 @@ def test_run_prompt_command_labeled_prompt_rejects_busy_label(
         info=False,
         quiet=False,
         thinking=False,
-        model_name="deepseek-thinking",
+        model_name="deepseek-v4-flash-thinking",
         label="apple",
         label_session_id=None,
         label_scene_name=None,
@@ -3181,7 +3181,7 @@ def test_run_prompt_command_labeled_prompt_rejects_busy_label(
         monkeypatch.setattr("dayu.cli.commands.prompt.setup_paths", partial(_return_value, workspace_config))
         monkeypatch.setattr(
             "dayu.cli.commands.prompt._build_execution_options",
-            lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+            lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
         )
         monkeypatch.setattr(
             "dayu.cli.commands.prompt._prepare_cli_host_dependencies",
@@ -3218,7 +3218,7 @@ def test_run_prompt_command_labeled_prompt_releases_label_lease_after_completion
         info=False,
         quiet=False,
         thinking=False,
-        model_name="deepseek-thinking",
+        model_name="deepseek-v4-flash-thinking",
         label="apple",
         label_session_id=None,
         label_scene_name=None,
@@ -3228,7 +3228,7 @@ def test_run_prompt_command_labeled_prompt_releases_label_lease_after_completion
     monkeypatch.setattr("dayu.cli.commands.prompt.setup_paths", partial(_return_value, workspace_config))
     monkeypatch.setattr(
         "dayu.cli.commands.prompt._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     fake_dependencies = _FakeCliHostDependencies(
         running_config=RunningConfig(
@@ -3273,8 +3273,8 @@ def test_resolve_labeled_prompt_target_rejects_non_conversational_scene(
             {
                 "scene": "prompt_mt",
                 "model": {
-                    "default_name": "mimo-v2-pro-thinking-plan",
-                    "allowed_names": ["mimo-v2-pro-thinking-plan"],
+                    "default_name": "mimo-v2.5-pro-thinking-plan",
+                    "allowed_names": ["mimo-v2.5-pro-thinking-plan"],
                     "temperature_profile": "prompt",
                 },
                 "version": "v1",
@@ -3348,7 +3348,7 @@ def test_main_prompt_path_propagates_cli_options_to_mock_agent(
             "--ticker",
             "AAPL",
             "--model-name",
-            "gpt-5.4",
+            "gpt-5.4-thinking",
             "--temperature",
             "0.35",
             "--tool-timeout-seconds",
@@ -3393,7 +3393,7 @@ def test_main_prompt_path_propagates_cli_options_to_mock_agent(
     assert recorder.tool_trace_recorder_factory is not None
     assert recorder.session_id
     assert recorder.run_id
-    assert recorder.agent_create_args.model_name == "gpt-5.4"
+    assert recorder.agent_create_args.model_name == "gpt-5.4-thinking"
     assert recorder.agent_create_args.temperature == pytest.approx(0.35)
     assert recorder.agent_create_args.max_turns == 3
     assert recorder.agent_create_args.runner_running_config["tool_timeout_seconds"] == pytest.approx(12.0)
@@ -3406,7 +3406,7 @@ def test_main_prompt_path_propagates_cli_options_to_mock_agent(
     assert recorder.trace_identity["agent_name"] == "prompt_agent"
     assert recorder.trace_identity["agent_kind"] == "scene_agent"
     assert recorder.trace_identity["scene_name"] == "prompt"
-    assert recorder.trace_identity["model_name"] == "gpt-5.4"
+    assert recorder.trace_identity["model_name"] == "gpt-5.4-thinking"
     assert recorder.trace_identity["session_id"] == recorder.session_id
     assert recorder.tool_trace_recorder_factory is not None
     assert recorder.tool_trace_recorder_factory._store._output_dir == trace_dir
@@ -3964,7 +3964,7 @@ def test_main_non_interactive_path_returns_zero(monkeypatch: pytest.MonkeyPatch,
         web_tools_config=WebToolsConfig(provider="auto"),
         tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
-    model_name = ModelName(model_name="mimo-v2-flash")
+    model_name = ModelName(model_name="mimo-v2.5-pro")
     args = Namespace(command=None, log_level=None, debug=False, verbose=False, info=False, quiet=False)
 
     monkeypatch.setattr("dayu.cli.main.parse_arguments", partial(_return_value, args))
@@ -4002,7 +4002,7 @@ def test_main_write_mode_requires_ticker(monkeypatch: pytest.MonkeyPatch, tmp_pa
         web_tools_config=WebToolsConfig(provider="auto"),
         tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
-    model_name = ModelName(model_name="mimo-v2-flash")
+    model_name = ModelName(model_name="mimo-v2.5-pro")
     args = Namespace(
         command="write",
         log_level=None,
@@ -4015,7 +4015,7 @@ def test_main_write_mode_requires_ticker(monkeypatch: pytest.MonkeyPatch, tmp_pa
         write_max_retries=2,
         resume=True,
         web_provider="auto",
-        audit_model_name="deepseek-thinking",
+        audit_model_name="deepseek-v4-flash-thinking",
     )
 
     monkeypatch.setattr("dayu.cli.commands.write.setup_loglevel", lambda _args: None)
@@ -4023,7 +4023,7 @@ def test_main_write_mode_requires_ticker(monkeypatch: pytest.MonkeyPatch, tmp_pa
     monkeypatch.setattr("dayu.cli.commands.write.setup_model_name", partial(_return_value, model_name))
     monkeypatch.setattr(
         "dayu.cli.commands.write._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     monkeypatch.setattr("dayu.cli.commands.write.Log.error", lambda *args, **kwargs: None)
 
@@ -4061,7 +4061,7 @@ def test_main_write_summary_mode_requires_ticker(monkeypatch: pytest.MonkeyPatch
         web_tools_config=WebToolsConfig(provider="auto"),
         tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
-    model_name = ModelName(model_name="mimo-v2-flash")
+    model_name = ModelName(model_name="mimo-v2.5-pro")
     args = Namespace(
         command="write",
         summary=True,
@@ -4075,7 +4075,7 @@ def test_main_write_summary_mode_requires_ticker(monkeypatch: pytest.MonkeyPatch
         write_max_retries=2,
         resume=True,
         web_provider="auto",
-        audit_model_name="deepseek-thinking",
+        audit_model_name="deepseek-v4-flash-thinking",
     )
 
     collector = _CallCollector()
@@ -4084,7 +4084,7 @@ def test_main_write_summary_mode_requires_ticker(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr("dayu.cli.commands.write.setup_model_name", partial(_return_value, model_name))
     monkeypatch.setattr(
         "dayu.cli.commands.write._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     monkeypatch.setattr("dayu.cli.commands.write.Log.error", collector.capture_error)
 
@@ -4125,7 +4125,7 @@ def test_main_write_summary_mode_calls_print_report(monkeypatch: pytest.MonkeyPa
         web_tools_config=WebToolsConfig(provider="auto"),
         tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
-    model_name = ModelName(model_name="mimo-v2-flash")
+    model_name = ModelName(model_name="mimo-v2.5-pro")
     args = Namespace(
         command="write",
         summary=True,
@@ -4139,7 +4139,7 @@ def test_main_write_summary_mode_calls_print_report(monkeypatch: pytest.MonkeyPa
         write_max_retries=2,
         resume=True,
         web_provider="auto",
-        audit_model_name="deepseek-thinking",
+        audit_model_name="deepseek-v4-flash-thinking",
     )
 
     captured_output_dir: dict[str, Path] = {}
@@ -4169,7 +4169,7 @@ def test_main_write_summary_mode_calls_print_report(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr("dayu.cli.commands.write.setup_model_name", partial(_return_value, model_name))
     monkeypatch.setattr(
         "dayu.cli.commands.write._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     monkeypatch.setattr("dayu.cli.commands.write.WriteService.print_report", _FakeWriteService.print_report)
     monkeypatch.setattr("dayu.cli.commands.write.run_write_pipeline", lambda **_kwargs: pytest.fail("summary 分支不应进入写作流水线"))
@@ -4211,7 +4211,7 @@ def test_main_write_mode_calls_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_pat
         web_tools_config=WebToolsConfig(provider="auto"),
         tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
-    model_name = ModelName(model_name="mimo-v2-flash")
+    model_name = ModelName(model_name="mimo-v2.5-pro")
     args = Namespace(
         command="write",
         log_level=None,
@@ -4224,7 +4224,7 @@ def test_main_write_mode_calls_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_pat
         write_max_retries=2,
         resume=True,
         web_provider="auto",
-        audit_model_name="deepseek-thinking",
+        audit_model_name="deepseek-v4-flash-thinking",
     )
 
     collector = _CallCollector()
@@ -4233,7 +4233,7 @@ def test_main_write_mode_calls_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_pat
     monkeypatch.setattr("dayu.cli.commands.write.setup_model_name", partial(_return_value, model_name))
     monkeypatch.setattr(
         "dayu.cli.commands.write._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     fake_dependencies = _FakeCliHostDependencies(running_config=running_config)
     monkeypatch.setattr(
@@ -4288,7 +4288,7 @@ def test_main_write_mode_uses_resolved_company_name_and_normalized_model_overrid
         write_max_retries=2,
         resume=True,
         web_provider="auto",
-        audit_model_name="deepseek-thinking",
+        audit_model_name="deepseek-v4-flash-thinking",
         model_name=None,
     )
 
@@ -4359,7 +4359,7 @@ def test_main_write_mode_logs_success_when_pipeline_returns_zero(
         web_tools_config=WebToolsConfig(provider="auto"),
         tool_trace_config=TraceSettings(enabled=True, output_dir=tmp_path / "trace"),
     )
-    model_name = ModelName(model_name="mimo-v2-flash")
+    model_name = ModelName(model_name="mimo-v2.5-pro")
     args = Namespace(
         command="write",
         log_level=None,
@@ -4372,7 +4372,7 @@ def test_main_write_mode_logs_success_when_pipeline_returns_zero(
         write_max_retries=2,
         resume=True,
         web_provider="auto",
-        audit_model_name="deepseek-thinking",
+        audit_model_name="deepseek-v4-flash-thinking",
     )
 
     collector = _CallCollector()
@@ -4381,7 +4381,7 @@ def test_main_write_mode_logs_success_when_pipeline_returns_zero(
     monkeypatch.setattr("dayu.cli.commands.write.setup_model_name", partial(_return_value, model_name))
     monkeypatch.setattr(
         "dayu.cli.commands.write._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     fake_dependencies = _FakeCliHostDependencies(running_config=running_config)
     monkeypatch.setattr(
@@ -4433,7 +4433,7 @@ def test_main_write_mode_logs_elapsed_when_pipeline_raises(
         web_tools_config=WebToolsConfig(provider="auto"),
         tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
-    model_name = ModelName(model_name="mimo-v2-flash")
+    model_name = ModelName(model_name="mimo-v2.5-pro")
     args = Namespace(
         command="write",
         log_level=None,
@@ -4446,7 +4446,7 @@ def test_main_write_mode_logs_elapsed_when_pipeline_raises(
         write_max_retries=2,
         resume=True,
         web_provider="auto",
-        audit_model_name="deepseek-thinking",
+        audit_model_name="deepseek-v4-flash-thinking",
     )
 
     collector = _CallCollector()
@@ -4456,7 +4456,7 @@ def test_main_write_mode_logs_elapsed_when_pipeline_raises(
     monkeypatch.setattr("dayu.cli.commands.write.setup_model_name", partial(_return_value, model_name))
     monkeypatch.setattr(
         "dayu.cli.commands.write._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     fake_dependencies = _FakeCliHostDependencies(running_config=running_config)
     monkeypatch.setattr(
@@ -4497,7 +4497,7 @@ def test_main_write_returns_130_when_run_write_pipeline_is_cancelled(
         web_tools_config=WebToolsConfig(provider="auto"),
         tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
     )
-    model_name = ModelName(model_name="mimo-v2-flash")
+    model_name = ModelName(model_name="mimo-v2.5-pro")
     args = Namespace(
         command="write",
         log_level=None,
@@ -4510,7 +4510,7 @@ def test_main_write_returns_130_when_run_write_pipeline_is_cancelled(
         write_max_retries=2,
         resume=True,
         web_provider="auto",
-        audit_model_name="deepseek-thinking",
+        audit_model_name="deepseek-v4-flash-thinking",
     )
 
     collector = _CallCollector()
@@ -4520,7 +4520,7 @@ def test_main_write_returns_130_when_run_write_pipeline_is_cancelled(
     monkeypatch.setattr("dayu.cli.commands.write.setup_model_name", partial(_return_value, model_name))
     monkeypatch.setattr(
         "dayu.cli.commands.write._build_execution_options",
-        lambda _args: SimpleNamespace(model_name="deepseek-thinking"),
+        lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     fake_dependencies = _FakeCliHostDependencies(running_config=running_config)
     monkeypatch.setattr(

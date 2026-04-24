@@ -140,12 +140,11 @@ dayu-cli init
 `init` 会依次执行：
 
 1. 复制包内默认配置到 `./workspace/config/` ，复制包内默认写作模板到 `./workspace/assets/` 。
-2. 让你选择初始化模型方案（Mimo Token Plan / Mimo Token Plan SG / Mimo Pro / Mimo Flash / DeepSeek / OpenAI / Anthropic / Gemini / 通义千问 / 自定义 OpenAI 兼容 API）
+2. 让你选择初始化模型方案（Mimo Token Plan / Mimo Token Plan SG / Mimo Pro / DeepSeek Pro / DeepSeek Flash / OpenAI / Anthropic / Gemini / 通义千问 / 自定义 OpenAI 兼容 API）。
 3. 输入对应 API Key 并永久写入环境变量。
 4. 可选配置联网检索 API Key（TAVILY / SERPER / FMP）
 5. 自动检测 HuggingFace 官方 Hub 连通性：不可达时默认启用镜像加速，可达时默认跳过。可选配置 `HF_TOKEN` 提升下载稳定性。
 
-如果工作区已经存在 `config/` 且你没有传 `--overwrite`，`init` 不会重置现有配置；但会增量补齐包内后来新增、而本地尚未存在的 `workspace/config/prompts/**` 资产。这个路径适合给老 workspace 补 `prompt_mt.json`、`prompt_mt.md` 之类的新 prompt 资产，同时保留你本地已经改过的模型配置。
 
 可选参数：
 
@@ -163,10 +162,10 @@ API Key 申请地址：
 - SERPER_API_KEY：https://serper.dev/
 
 说明：
-- 默认推荐 Mimo Token Plan（mimo-v2-pro-plan），性价比最优。（注： MIMO_PLAN_API_KEY / MIMO_API_KEY 是两个不同的KEY，不能混用）。
+- 默认推荐 Mimo Token Plan（mimo-v2.5-pro-plan），性价比最优。（注： MIMO_PLAN_API_KEY / MIMO_API_KEY 是两个不同的KEY，不能混用）。
 - 海外用户选Mimo Token Plan SG。
 - 如需接入 OpenRouter 等聚合服务，可在 `init` 中选择“自定义 OpenAI 兼容 API”，填写 `CUSTOM_OPENAI_API_KEY`、Base URL 与模型 ID。
-- `--reset` 确认后会删除 `workspace/.dayu/`、`workspace/config/`、`workspace/assets/`，再按首次初始化流程重建；它比 `--overwrite` 更强，会一并清空运行时状态。
+- `--reset` 确认后会删除 `workspace/.dayu/`、`workspace/config/`、`workspace/assets/`，再按首次初始化流程重建；它比 `--overwrite` 更彻底，会一并清空运行时状态。
 - 联网搜索默认可走 `auto`，若配置了 Tavily / Serper，会优先使用对应 provider。
 - 若运行环境需要访问 `localhost`、私网 IP 或内网域名，可在 `workspace/config/run.json` 的 `web_tools_config.allow_private_network_url` 中显式打开内网访问开关。
 - 修改默认模型请参考 [8. 模型配置](#model-config)。
@@ -470,7 +469,7 @@ dayu-cli prompt "总结苹果最新财报中的主要风险"
 dayu-cli prompt "总结最新财报中的主要风险" --ticker AAPL
 dayu-cli prompt "总结苹果最新财报中的主要风险" --thinking
 dayu-cli prompt --label apple "先总结苹果最新财报中的主要风险"
-dayu-cli prompt "总结苹果最新财报中的主要风险" --model-name mimo-v2-flash
+dayu-cli prompt "总结苹果最新财报中的主要风险" --model-name mimo-v2.5-pro
 dayu-cli prompt "总结苹果最新财报中的主要风险" --debug
 ```
 
@@ -506,7 +505,7 @@ dayu-cli interactive
 常见命令示例：
 
 ```bash
-dayu-cli interactive --model-name mimo-v2-flash
+dayu-cli interactive --model-name mimo-v2.5-pro
 dayu-cli interactive --temperature 0.2
 dayu-cli interactive --thinking
 dayu-cli interactive --label apple
@@ -559,12 +558,12 @@ dayu-cli interactive --verbose
 ```bash
 # 实例 A：扫码主体 A 登录，安装并启动 service
 dayu-wechat login --label a
-dayu-wechat service install --label a --model-name mimo-v2-flash-thinking
+dayu-wechat service install --label a --model-name mimo-v2.5-pro-thinking
 dayu-wechat service start --label a
 
 # 实例 B：扫码主体 B 登录，安装并启动 service
 dayu-wechat login --label b
-dayu-wechat service install --label b --model-name deepseek-thinking
+dayu-wechat service install --label b --model-name deepseek-v4-flash-thinking
 dayu-wechat service start --label b
 
 # 列出当前 workspace 下已安装的实例
@@ -584,7 +583,7 @@ dayu-wechat run
 
 ```bash
 dayu-wechat login --relogin
-dayu-wechat run --model-name mimo-v2-flash-thinking --temperature 0.4
+dayu-wechat run --model-name mimo-v2.5-pro-thinking --temperature 0.4
 dayu-wechat run --enable-tool-trace
 dayu-wechat service install
 dayu-wechat service start
@@ -1133,11 +1132,11 @@ dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.html
 
 ```json
 "model": {
-  "default_name": "mimo-v2-pro",
+  "default_name": "mimo-v2.5-pro",
   "allowed_names": [
-    "mimo-v2-flash",
-    "mimo-v2-pro",
-    "deepseek-chat"
+    "mimo-v2.5-pro",
+    "mimo-v2.5-pro",
+    "deepseek-v4-flash"
   ],
   "temperature_profile": "write"
 }
@@ -1150,7 +1149,7 @@ dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.html
 
 例如：
 
-- 想把 `write` 默认模型从 `mimo-v2-pro` 改成 `gpt-5.4`，就改 `workspace/config/prompts/manifests/write.json`
+- 想把 `write` 默认模型从 `mimo-v2.5-pro` 改成 `gpt-5.4`，就改 `workspace/config/prompts/manifests/write.json`
 - 想把 `interactive` 默认模型改成 `qwen3-thinking`，就改 `workspace/config/prompts/manifests/interactive.json`
 - 想把 `audit` / `confirm` 默认模型换掉，就分别改 `audit.json` 和 `confirm.json`
 

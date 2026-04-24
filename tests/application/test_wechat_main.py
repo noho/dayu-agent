@@ -40,7 +40,7 @@ def test_build_execution_options_supports_interactive_like_overrides() -> None:
         [
             "run",
             "--model-name",
-            "mimo-v2-flash",
+            "mimo-v2.5-pro",
             "--temperature",
             "0.4",
             "--web-provider",
@@ -74,7 +74,7 @@ def test_build_execution_options_supports_interactive_like_overrides() -> None:
     options = wechat_arg_module._build_execution_options(args)
 
     assert isinstance(options, ExecutionOptions)
-    assert options.model_name == "mimo-v2-flash"
+    assert options.model_name == "mimo-v2.5-pro"
     assert options.temperature == 0.4
     assert options.web_provider == "duckduckgo"
     assert options.debug_sse is True
@@ -358,7 +358,7 @@ def test_build_run_cli_arguments_includes_overrides(tmp_path: Path) -> None:
             "--delivery-max-attempts",
             "5",
             "--model-name",
-            "deepseek-chat",
+            "deepseek-v4-flash",
             "--debug-sse",
             "--debug-tool-delta",
             "--debug-sse-sample-rate",
@@ -395,7 +395,7 @@ def test_build_run_cli_arguments_includes_overrides(tmp_path: Path) -> None:
     assert "--delivery-max-attempts" in cli_arguments
     assert "5" in cli_arguments
     assert "--model-name" in cli_arguments
-    assert "deepseek-chat" in cli_arguments
+    assert "deepseek-v4-flash" in cli_arguments
     assert "--debug-sse" in cli_arguments
     assert "--debug-tool-delta" in cli_arguments
     assert "--debug-sse-sample-rate" in cli_arguments

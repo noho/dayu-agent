@@ -114,7 +114,7 @@ def test_main_non_interactive_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_pa
     llm_models_path.write_text(
         json.dumps(
             {
-                "mimo-v2-pro-thinking-plan": {
+                "mimo-v2.5-pro-thinking-plan": {
                     "runner_type": "openai_compatible",
                     "temperature": 0.8,
                     "runtime_hints": {
@@ -125,7 +125,7 @@ def test_main_non_interactive_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_pa
                         }
                     },
                 },
-                "mimo-v2-pro-thinking": {
+                "mimo-v2.5-pro-thinking": {
                     "runner_type": "openai_compatible",
                     "temperature": 0.8,
                     "runtime_hints": {
@@ -136,7 +136,7 @@ def test_main_non_interactive_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_pa
                         }
                     },
                 },
-                "deepseek-thinking": {
+                "deepseek-v4-flash-thinking": {
                     "runner_type": "openai_compatible",
                     "temperature": 0.8,
                     "runtime_hints": {
@@ -417,8 +417,8 @@ def test_interactive_command_with_label_rejects_non_conversational_scene(
             {
                 "scene": "prompt_mt",
                 "model": {
-                    "default_name": "mimo-v2-pro-thinking-plan",
-                    "allowed_names": ["mimo-v2-pro-thinking-plan"],
+                    "default_name": "mimo-v2.5-pro-thinking-plan",
+                    "allowed_names": ["mimo-v2.5-pro-thinking-plan"],
                     "temperature_profile": "prompt",
                 },
                 "version": "v1",
@@ -950,7 +950,7 @@ def _build_interactive_inputs(tmp_path: Path) -> tuple[Any, Any, Any]:
         ),
         tool_trace_config=SimpleNamespace(enabled=False, output_dir=str(tmp_path)),
     )
-    model_config = SimpleNamespace(model_name="deepseek-chat")
+    model_config = SimpleNamespace(model_name="deepseek-v4-flash")
     return workspace_config, run_config, model_config
 
 
@@ -1833,7 +1833,7 @@ def test_prompt_passes_execution_options_into_prompt_request(
         ]
     )
     agent_session = fake_session_cls.create()
-    execution_options = ExecutionOptions(model_name="deepseek-thinking", max_iterations=9)
+    execution_options = ExecutionOptions(model_name="deepseek-v4-flash-thinking", max_iterations=9)
 
     monkeypatch.setattr(
         app_interactive,
@@ -1901,7 +1901,7 @@ def test_interactive_passes_execution_options_into_chat_turn_request(
         ]
     )
     agent_session = fake_session_cls.create()
-    execution_options = ExecutionOptions(model_name="deepseek-thinking", max_iterations=9)
+    execution_options = ExecutionOptions(model_name="deepseek-v4-flash-thinking", max_iterations=9)
     prompts = iter(["问题一", None, None])
 
     monkeypatch.setattr(

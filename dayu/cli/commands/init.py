@@ -53,8 +53,8 @@ class _ProviderOption:
 _PROVIDER_OPTION_MIMO_PLAN = "mimo_plan"
 _PROVIDER_OPTION_MIMO_PLAN_SG = "mimo_plan_sg"
 _PROVIDER_OPTION_MIMO_PRO = "mimo_pro"
-_PROVIDER_OPTION_MIMO_FLASH = "mimo_flash"
-_PROVIDER_OPTION_DEEPSEEK = "deepseek"
+_PROVIDER_OPTION_DEEPSEEK_FLASH = "deepseek_flash"
+_PROVIDER_OPTION_DEEPSEEK_PRO = "deepseek_pro"
 _PROVIDER_OPTION_OPENAI = "openai"
 _PROVIDER_OPTION_ANTHROPIC = "anthropic"
 _PROVIDER_OPTION_GEMINI = "gemini"
@@ -83,57 +83,57 @@ _PROVIDER_OPTIONS: tuple[_ProviderOption, ...] = (
         option_key=_PROVIDER_OPTION_MIMO_PLAN,
         display_name="Mimo Token Plan",
         api_key_name="MIMO_PLAN_API_KEY",
-        non_thinking_model="mimo-v2-pro-plan",
-        thinking_model="mimo-v2-pro-thinking-plan",
+        non_thinking_model="mimo-v2.5-pro-plan",
+        thinking_model="mimo-v2.5-pro-thinking-plan",
     ),
     _ProviderOption(
         option_key=_PROVIDER_OPTION_MIMO_PLAN_SG,
         display_name="Mimo Token Plan (海外)",
         api_key_name="MIMO_PLAN_SG_API_KEY",
-        non_thinking_model="mimo-v2-pro-plan-sg",
-        thinking_model="mimo-v2-pro-thinking-plan-sg",
+        non_thinking_model="mimo-v2.5-pro-plan-sg",
+        thinking_model="mimo-v2.5-pro-thinking-plan-sg",
     ),
     _ProviderOption(
         option_key=_PROVIDER_OPTION_MIMO_PRO,
         display_name="Mimo Pro（常规 API）",
         api_key_name="MIMO_API_KEY",
-        non_thinking_model="mimo-v2-pro",
-        thinking_model="mimo-v2-pro-thinking",
+        non_thinking_model="mimo-v2.5-pro",
+        thinking_model="mimo-v2.5-pro-thinking",
     ),
     _ProviderOption(
-        option_key=_PROVIDER_OPTION_MIMO_FLASH,
-        display_name="Mimo Flash（常规 API）",
-        api_key_name="MIMO_API_KEY",
-        non_thinking_model="mimo-v2-flash",
-        thinking_model="mimo-v2-flash-thinking",
-    ),
-    _ProviderOption(
-        option_key=_PROVIDER_OPTION_DEEPSEEK,
-        display_name="DeepSeek",
+        option_key=_PROVIDER_OPTION_DEEPSEEK_PRO,
+        display_name="DeepSeek Pro",
         api_key_name="DEEPSEEK_API_KEY",
-        non_thinking_model="deepseek-chat",
-        thinking_model="deepseek-thinking",
+        non_thinking_model="deepseek-v4-pro",
+        thinking_model="deepseek-v4-pro-thinking",
+    ),
+    _ProviderOption(
+        option_key=_PROVIDER_OPTION_DEEPSEEK_FLASH,
+        display_name="DeepSeek Flash",
+        api_key_name="DEEPSEEK_API_KEY",
+        non_thinking_model="deepseek-v4-flash",
+        thinking_model="deepseek-v4-flash-thinking",
     ),
     _ProviderOption(
         option_key=_PROVIDER_OPTION_OPENAI,
         display_name="OpenAI",
         api_key_name="OPENAI_API_KEY",
         non_thinking_model="gpt-5.4",
-        thinking_model="gpt-5.4",
+        thinking_model="gpt-5.4-thinking",
     ),
     _ProviderOption(
         option_key=_PROVIDER_OPTION_ANTHROPIC,
         display_name="Anthropic",
         api_key_name="ANTHROPIC_API_KEY",
         non_thinking_model="claude-sonnet-4-6",
-        thinking_model="claude-sonnet-4-6",
+        thinking_model="claude-sonnet-4-6-thinking",
     ),
     _ProviderOption(
         option_key=_PROVIDER_OPTION_GEMINI,
         display_name="Google Gemini",
         api_key_name="GEMINI_API_KEY",
         non_thinking_model="gemini-2.5-flash",
-        thinking_model="gemini-2.5-flash",
+        thinking_model="gemini-2.5-flash-thinking",
     ),
     _ProviderOption(
         option_key=_PROVIDER_OPTION_QWEN,
@@ -170,6 +170,12 @@ _INIT_ROLE_KEY = "_init_model_role"
 
 _ROLE_NON_THINKING = "non_thinking"
 _ROLE_THINKING = "thinking"
+
+# 记录用户上次 init 选择的 provider option_key，写入环境变量后供下次 init 作为默认推荐。
+# 这里只记录 option_key（例如 ``deepseek_pro``），不记录 API Key，避免把共享同一
+# API Key 的方案（DeepSeek Flash/Pro、Mimo Plan/Plan-SG/Pro）在 re-init 按 Enter
+# 时静默降级到声明顺序靠前的另一档。
+_INIT_PROVIDER_OPTION_ENV = "DAYU_INIT_PROVIDER_OPTION"
 
 _OPTIONAL_SEARCH_KEYS: list[str] = [
     TAVILY_API_KEY_ENV,
@@ -618,7 +624,7 @@ def _classify_model_role(current_name: str, stored_role: str) -> str | None:
 def _resolve_role_from_package_manifest(manifest_filename: str) -> str | None:
     """从包内原始 manifest 推断 scene 的模型角色。
 
-    包内原始 manifest 使用无歧义的默认模型名（``mimo-v2-pro-plan`` / ``mimo-v2-pro-thinking-plan``），
+    包内原始 manifest 使用无歧义的默认模型名（``mimo-v2.5-pro-plan`` / ``mimo-v2.5-pro-thinking-plan``），
     可作为 fallback 判断角色。
 
     Args:
@@ -736,6 +742,14 @@ def _prompt_provider_selection() -> str:
 
     已在环境变量中设置了 API Key 的方案会标注「✓ 已配置」。
 
+    默认推荐策略（按优先级）：
+      1. 读取 ``DAYU_INIT_PROVIDER_OPTION`` 环境变量：若其值命中某个 option_key，
+         直接作为默认推荐。该变量由上一次成功 init 时写入，用于在共享 API Key 的
+         多套方案（如 DeepSeek Flash/Pro）间保留用户的历史偏好，避免 re-init 按
+         Enter 时静默降级到声明顺序靠前的另一档。
+      2. 否则选第一个已在环境变量中配置 API Key 的方案；共享同一 API Key 的方案
+         按声明顺序优先。
+
     Returns:
         选中的方案 key。
 
@@ -743,21 +757,31 @@ def _prompt_provider_selection() -> str:
         SystemExit: 用户输入无效或 EOF 时退出。
     """
 
-    # 找第一个已配置的方案作为默认推荐；共享同一 API Key 的方案按声明顺序优先。
-    first_configured_idx = 0
-    for i, option in enumerate(_PROVIDER_OPTIONS):
-        if os.environ.get(option.api_key_name):
-            first_configured_idx = i
-            break
+    default_idx = 0
+    saved_option_key = os.environ.get(_INIT_PROVIDER_OPTION_ENV, "").strip()
+    if saved_option_key:
+        for i, option in enumerate(_PROVIDER_OPTIONS):
+            if option.option_key == saved_option_key:
+                default_idx = i
+                break
+        else:
+            # 保存的 option_key 已失效（旧版本写入、菜单被裁剪），回退到 first_configured
+            saved_option_key = ""
+
+    if not saved_option_key:
+        for i, option in enumerate(_PROVIDER_OPTIONS):
+            if os.environ.get(option.api_key_name):
+                default_idx = i
+                break
 
     print("\n请选择你要使用的初始化模型方案（输入编号）：\n")
     for i, option in enumerate(_PROVIDER_OPTIONS, 1):
         configured = "  ✓ 已配置" if os.environ.get(option.api_key_name) else ""
-        default_marker = "（默认）" if (i - 1) == first_configured_idx else ""
+        default_marker = "（默认）" if (i - 1) == default_idx else ""
         print(f"  {i}. {option.display_name}  — {option.api_key_name}{configured}{default_marker}")
 
     print()
-    default_num = first_configured_idx + 1
+    default_num = default_idx + 1
     try:
         raw = input(f"选择 [{default_num}]: ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -765,7 +789,7 @@ def _prompt_provider_selection() -> str:
         sys.exit(1)
 
     if raw == "":
-        return _PROVIDER_OPTIONS[first_configured_idx].option_key
+        return _PROVIDER_OPTIONS[default_idx].option_key
 
     try:
         idx = int(raw)
@@ -1172,6 +1196,9 @@ def run_init_command(args: Namespace) -> int:
     # 2. 选择初始化模型方案 + 输入 API Key（已有则跳过）
     chosen_option_key = _prompt_provider_selection()
     chosen_option = _PROVIDER_OPTIONS_BY_KEY[chosen_option_key]
+    # 持久化用户选择，供下次 init 在共享 API Key 的多套方案间保留偏好；
+    # 即便当前 init 后续步骤失败，用户明确做过的选择也应被记住。
+    _persist_env_var(_INIT_PROVIDER_OPTION_ENV, chosen_option_key)
     env_vars_written = False
     main_key_persist_failed = False
 

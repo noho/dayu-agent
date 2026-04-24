@@ -24,7 +24,7 @@
 {
   "deepseek_chat": {
     "endpoint_url": "https://api.deepseek.com/v1/chat/completions",
-    "model": "deepseek-chat",
+    "model": "deepseek-v4-flash",
     "temperature": 0.7,
     "headers": {
       "Authorization": "Bearer {{DEEPSEEK_API_KEY}}",
@@ -463,7 +463,7 @@ class AsyncOpenAIRunner:
       "deepseek_chat": {
         "runner_type": "openai_compatible",
         "endpoint_url": "https://api.deepseek.com/v1/chat/completions",
-        "model": "deepseek-chat",
+        "model": "deepseek-v4-flash",
         "temperature": 0.7,
         "headers": {
           "Authorization": "{{DEEPSEEK_API_KEY}}",
