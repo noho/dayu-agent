@@ -31,54 +31,111 @@ _WIDE_EAST_ASIAN_WIDTHS = frozenset(("F", "W"))
 
 
 
-class _SpinnerController:
-    """命令行旋转指示器。"""
 
-    def __init__(self, *, label: str = "Waiting") -> None:
-        """初始化旋转指示器。
+class _StatusLineController:
+    """动态状态行控制器。
 
-        Args:
-            label: 旋转指示器前缀文本。
+    - 单行覆写（\\r + ANSI 清行），不向上滚动
+    - braille 点阵动画（⠋⠙⠹⠸⠼⠴⠦⠧）
+    - 支持 update() 更新文本、pause() 暂停显示、stop() 永久停止
+    - 可恢复：pause() 后 update() 可重新激活
+    - 超时提示：工具执行超 5 秒时追加 (已等待 Xs)
 
-        Returns:
-            无。
+    线程模型：
+    - 动画线程只负责写帧，不做任何清行操作
+    - pause() / stop() 先 join 线程（等待最后一帧写完），再由主线程清行
+    - join 完成后 stdout 完全归主线程，正文输出与清行严格串行，无竞争
+    - asyncio 事件消费在主线程，join 阻塞主线程期间事件流同样暂停，
+      不会有并发的 update() 调用，join 期间不存在重启线程的竞争
+    """
 
-        Raises:
-            无。
-        """
+    _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧"
+    _FRAME_INTERVAL = 0.08
+    _TIMEOUT_THRESHOLD = 5.0
 
-        self._label = label
-        self._stop = threading.Event()
+    def __init__(self) -> None:
+        self._label: str = "思考中..."
+        self._lock = threading.Lock()
+        self._active: bool = False
+        self._stopped: bool = False
         self._thread: threading.Thread | None = None
+        self._last_update_time: float = 0.0
 
-    def start(self) -> None:
-        """启动旋转指示器。"""
+    def update(self, text: str) -> None:
+        """更新状态行文本并启动动画（如果尚未运行）。"""
 
-        if self._thread is not None:
-            return
+        with self._lock:
+            if self._stopped:
+                return
+            self._label = text
+            self._last_update_time = time.monotonic()
+            if not self._active:
+                self._active = True
+                self._thread = threading.Thread(target=self._spin, daemon=True)
+                self._thread.start()
 
-        self._thread = threading.Thread(target=self._spin, daemon=True)
-        self._thread.start()
+    def tick(self) -> None:
+        """兼容接口，无操作（线程模式下不需要外部驱动）。"""
+
+    def pause(self) -> None:
+        """暂停动画并清行。join 后主线程独占 stdout，与正文输出严格串行。"""
+
+        with self._lock:
+            if self._stopped or not self._active:
+                return
+            self._active = False
+            thread = self._thread
+            self._thread = None
+
+        # 等线程完全退出，此后 stdout 无竞争
+        if thread is not None:
+            thread.join()
+
+        # 主线程清行，后续正文 print 直接跟上
+        sys.stdout.write("\r\033[K")
+        sys.stdout.flush()
 
     def stop(self) -> None:
-        """停止旋转指示器。"""
+        """永久停止状态行（turn 结束时调用）。"""
 
-        if self._thread is None:
-            return
-        self._stop.set()
-        self._thread.join()
-        self._thread = None
+        with self._lock:
+            if self._stopped:
+                return
+            self._stopped = True
+            was_active = self._active
+            self._active = False
+            thread = self._thread
+            self._thread = None
+
+        if thread is not None:
+            thread.join()
+
+        # 只有动画还在显示时才需要清行；内容已输出后不能清，否则会抹掉最后一行
+        if was_active:
+            sys.stdout.write("\r\033[K")
+            sys.stdout.flush()
 
     def _spin(self) -> None:
-        """循环输出旋转动画。"""
+        """动画循环。退出时清行，确保 stdout 干净交还主线程。"""
 
-        frames = "|/-\\"
         idx = 0
-        while not self._stop.is_set():
-            print(f"\r{self._label} {frames[idx % len(frames)]}", end="", flush=True)
-            time.sleep(0.1)
+        while True:
+            with self._lock:
+                if not self._active or self._stopped:
+                    # 退出前清行，避免残影——无论是 pause() join 前还是 update() 重启前
+                    sys.stdout.write("\r\033[K")
+                    sys.stdout.flush()
+                    break
+                label = self._label
+                elapsed = time.monotonic() - self._last_update_time
+
+            display = f"{label} (已等待 {int(elapsed)}s)" if elapsed > self._TIMEOUT_THRESHOLD else label
+            frame = self._FRAMES[idx % len(self._FRAMES)]
+            # \r 回行首，\033[K 清到行尾，再写新内容——彻底消除短文本覆盖长文本的残影
+            sys.stdout.write(f"\r\033[K{frame} {display}")
+            sys.stdout.flush()
+            time.sleep(self._FRAME_INTERVAL)
             idx += 1
-        print("\r" + " " * (len(self._label) + 2) + "\r", end="", flush=True)
 
 
 @dataclass
@@ -86,13 +143,14 @@ class _RenderState:
     """终端事件渲染状态。"""
 
     show_thinking: bool = False
-    spinner: _SpinnerController | None = None
+    status_line: _StatusLineController | None = None
     content_streamed: bool = False
     reasoning_streamed: bool = False
     reasoning_line_open: bool = False
     line_open: bool = False
     final_content: str = ""
     filtered: bool = False
+    tool_calls_seen: int = 0
 
 
 def _measure_display_width(text: str) -> int:
@@ -135,34 +193,6 @@ def _print_label_hint_box(label: str) -> None:
     print(top_bottom)
 
 
-def _stop_spinner_if_needed(state: _RenderState) -> None:
-    """在首次可见输出前停止 spinner。"""
-
-    if state.spinner is None:
-        return
-    state.spinner.stop()
-    state.spinner = None
-
-
-def _start_spinner_if_needed(state: _RenderState, *, enabled: bool) -> None:
-    """按需启动等待 spinner。
-
-    Args:
-        state: 渲染状态。
-        enabled: 是否允许启动 spinner。
-
-    Returns:
-        无。
-
-    Raises:
-        无。
-    """
-
-    if not enabled or state.spinner is not None:
-        return
-    state.spinner = _SpinnerController()
-    state.spinner.start()
-
 
 def _ensure_newline(state: _RenderState) -> None:
     """在当前行为内容流时补一个换行。"""
@@ -197,7 +227,16 @@ def _render_content_delta(state: _RenderState, text: str) -> None:
 
     if not text:
         return
-    _stop_spinner_if_needed(state)
+    # 过滤纯空白 delta：
+    # - 尚未输出实质内容时：完全跳过，避免工具调用前的 \n 产生空行
+    # - 已输出内容但当前行未开（上一个 delta 已换行）：跳过，避免工具循环间的 \n\n 叠加产生大段空行
+    if not text.strip():
+        if not state.content_streamed:
+            return
+        if not state.line_open:
+            return
+    if state.status_line is not None:
+        state.status_line.pause()
     if state.reasoning_streamed and not state.content_streamed:
         _ensure_reasoning_newline(state)
         print(flush=True)  # reasoning 和 content 之间加空行
@@ -213,7 +252,8 @@ def _render_reasoning_delta(state: _RenderState, text: str) -> None:
         return
     if not text:
         return
-    _stop_spinner_if_needed(state)
+    if state.status_line is not None:
+        state.status_line.pause()
     if not state.reasoning_streamed:
         print("Thinking...", file=sys.stderr, flush=True)
     print(text, end="", file=sys.stderr, flush=True)
@@ -224,7 +264,8 @@ def _render_reasoning_delta(state: _RenderState, text: str) -> None:
 def _render_warning_or_error(state: _RenderState, message: str) -> None:
     """渲染告警或错误。"""
 
-    _stop_spinner_if_needed(state)
+    if state.status_line is not None:
+        state.status_line.pause()
     _ensure_reasoning_newline(state)
     _ensure_newline(state)
     print(message, file=sys.stderr, flush=True)
@@ -306,6 +347,86 @@ def _render_stream_event(event: Any, state: _RenderState) -> None:
         _render_warning_or_error(state, _format_cancelled_message(payload))
         return
 
+    if event_type == AppEventType.TOOL_EVENT.value:
+        if state.status_line is not None and isinstance(payload, dict):
+            summary = _format_tool_event_summary(payload, state)
+            if summary:
+                # content 未换行时先推到新行，避免动画 \r\033[K 清掉正文最后一行
+                if state.line_open:
+                    print(flush=True)
+                    state.line_open = False
+                state.status_line.update(summary)
+        return
+
+
+# P0 硬编码工具展示名映射，P1 完成后替换为 ToolProgressFormatter
+_TOOL_DISPLAY_NAMES: dict[str, str] = {
+    "search_web": "联网搜索",
+    "fetch_web_page": "抓取网页",
+    "search_document": "检索文档",
+    "read_document_section": "读取章节",
+    "query_xbrl_facts": "查询财务数据",
+    "list_documents": "列出文档",
+    "list_document_sections": "列出章节",
+    "get_document_info": "查看文档信息",
+    "search_xbrl_concepts": "搜索财务指标",
+    "list_xbrl_facts": "列出财务事实",
+    "compare_financial_data": "对比财务数据",
+    "download_filings": "下载财报",
+    "upload_filing": "上传财报",
+    "process_filing": "处理财报",
+    "get_current_time": "获取时间",
+    "fetch_more": "继续读取",
+}
+
+_TOOL_SUMMARY_PARAMS: dict[str, list[str]] = {
+    "search_web": ["query"],
+    "fetch_web_page": ["url"],
+    "search_document": ["query"],
+    "read_document_section": ["section_path"],
+    "query_xbrl_facts": ["concept"],
+    "list_documents": ["ticker"],
+    "list_document_sections": ["document_id"],
+    "get_document_info": ["document_id"],
+    "search_xbrl_concepts": ["keyword"],
+    "list_xbrl_facts": ["ticker"],
+    "compare_financial_data": ["concept"],
+    "download_filings": ["ticker"],
+    "upload_filing": ["ticker"],
+    "process_filing": ["ticker"],
+    "fetch_more": ["cursor_id"],
+}
+
+
+def _format_tool_event_summary(payload: dict[str, Any], state: _RenderState) -> str | None:
+    """将 TOOL_EVENT payload 格式化为状态行文本。P0 硬编码版本。"""
+
+    sub_type = payload.get("engine_event_type", "")
+    data = payload.get("data") or {}
+
+    if sub_type == "tool_call_dispatched":
+        tool_name = data.get("name", "") if isinstance(data, dict) else ""
+        arguments = data.get("arguments") or {}
+        if isinstance(arguments, str):
+            import json
+            try:
+                arguments = json.loads(arguments)
+            except Exception:
+                arguments = {}
+        display = _TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
+        param_keys = _TOOL_SUMMARY_PARAMS.get(tool_name, [])
+        values = [v[:37] + "..." if len(v := str(arguments[k])) > 40 else v for k in param_keys if k in arguments]
+        state.tool_calls_seen += 1
+        if values:
+            return f"{display} — {', '.join(values)}"
+        return display
+
+    if sub_type == "tool_calls_batch_done":
+        # batch 完成后下一步是 LLM 推理，状态行切回"思考中..."
+        return "思考中..."
+
+    return None
+
 
 def _format_cancelled_message(payload: Any) -> str:
     """将取消事件负载格式化为 CLI 提示。"""
@@ -354,6 +475,8 @@ async def _consume_chat_turn_stream(
     )
     submission = await session.submit_turn(request)
     async for event in submission.event_stream:
+        if state.status_line is not None:
+            state.status_line.tick()
         _render_stream_event(event, state)
     return state.final_content, submission.session_id
 
@@ -389,7 +512,9 @@ def _resume_interactive_pending_turn_if_needed(
         return
     pending_turn = pending_turns[0]
     state = _RenderState(show_thinking=show_thinking)
-    _start_spinner_if_needed(state, enabled=not show_thinking)
+    status_line = _StatusLineController()
+    status_line.update("思考中...")
+    state.status_line = status_line
     try:
         async def _resume_and_consume() -> str:
             submission = await session.resume_pending_turn(
@@ -399,6 +524,8 @@ def _resume_interactive_pending_turn_if_needed(
                 )
             )
             async for event in submission.event_stream:
+                if state.status_line is not None:
+                    state.status_line.tick()
                 _render_stream_event(event, state)
             return submission.session_id
 
@@ -425,7 +552,8 @@ def _resume_interactive_pending_turn_if_needed(
                 return
             raise
     finally:
-        _stop_spinner_if_needed(state)
+        status_line.stop()
+        state.status_line = None
         _ensure_reasoning_newline(state)
         _ensure_newline(state)
 
@@ -462,6 +590,8 @@ async def _consume_prompt_stream(
     )
     submission = await session.submit(request)
     async for event in submission.event_stream:
+        if state.status_line is not None:
+            state.status_line.tick()
         _render_stream_event(event, state)
     return state.final_content
 
@@ -498,7 +628,9 @@ def _run_chat_turn_stream(
     """
 
     state = _RenderState(show_thinking=show_thinking)
-    _start_spinner_if_needed(state, enabled=show_waiting_spinner)
+    status_line = _StatusLineController()
+    status_line.update("思考中...")
+    state.status_line = status_line
     try:
         return asyncio.run(
             _consume_chat_turn_stream(
@@ -512,7 +644,8 @@ def _run_chat_turn_stream(
             )
         )
     finally:
-        _stop_spinner_if_needed(state)
+        status_line.stop()
+        state.status_line = None
         _ensure_reasoning_newline(state)
         _ensure_newline(state)
 
@@ -545,7 +678,9 @@ def _run_prompt_stream(
     """
 
     state = _RenderState(show_thinking=show_thinking)
-    _start_spinner_if_needed(state, enabled=show_waiting_spinner)
+    status_line = _StatusLineController()
+    status_line.update("思考中...")
+    state.status_line = status_line
     try:
         return asyncio.run(
             _consume_prompt_stream(
@@ -557,7 +692,8 @@ def _run_prompt_stream(
             )
         )
     finally:
-        _stop_spinner_if_needed(state)
+        status_line.stop()
+        state.status_line = None
         _ensure_reasoning_newline(state)
         _ensure_newline(state)
 
@@ -624,6 +760,9 @@ def interactive(
             user_input = session.prompt(">>> ")
         except EOFError:
             break
+        except KeyboardInterrupt:
+            print()
+            continue
         if user_input is None:
             consecutive_eof += 1
             if consecutive_eof >= 2:
@@ -645,8 +784,11 @@ def interactive(
                 scene_name=scene_name,
                 execution_options=execution_options,
                 show_thinking=show_thinking,
-                show_waiting_spinner=not show_thinking,
+                show_waiting_spinner=True,
             )
+        except KeyboardInterrupt:
+            print("\n[interrupted]")
+            continue
         except ValueError as exc:
             Log.error(str(exc), module=MODULE)
             continue
@@ -686,7 +828,7 @@ def prompt(
             ticker=ticker,
             execution_options=execution_options,
             show_thinking=show_thinking,
-            show_waiting_spinner=not show_thinking,
+            show_waiting_spinner=True,
         )
     except ValueError as exc:
         Log.error(str(exc), module=MODULE)

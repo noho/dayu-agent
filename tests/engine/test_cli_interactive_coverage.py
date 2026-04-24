@@ -45,6 +45,28 @@ from dayu.services.contracts import (
 )
 
 
+class _NoopStatusLine:
+    """测试用无操作状态行控制器，避免启动动画线程干扰输出断言。"""
+
+    def update(self, text: str) -> None:  # noqa: ARG002
+        pass
+
+    def tick(self) -> None:
+        pass
+
+    def pause(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _patch_status_line_controller(monkeypatch: pytest.MonkeyPatch) -> None:
+    """全局 patch _StatusLineController，防止动画线程向 stdout 写入干扰测试断言。"""
+    monkeypatch.setattr(app_interactive, "_StatusLineController", lambda: _NoopStatusLine())
+
+
 def _build_workspace(tmp_path: Path, *, ticker: str = "AAPL") -> Path:
     """构造最小可运行 workspace 目录结构。
 
@@ -1092,12 +1114,6 @@ def test_run_chat_turn_stream_uses_submit_turn_protocol_only(monkeypatch: pytest
 
             raise AssertionError(f"unexpected stream_turn call: {request}")
 
-    monkeypatch.setattr(
-        app_interactive,
-        "_SpinnerController",
-        lambda label="Waiting": SimpleNamespace(start=lambda: None, stop=lambda: None),
-    )
-
     final_content, resolved_session_id = app_interactive._run_chat_turn_stream(
         cast(Any, _Session()),
         "问题一",
@@ -1172,11 +1188,6 @@ def test_interactive_uses_custom_scene_for_pending_turn_restore_and_new_turns(
 
             return ChatTurnSubmission(session_id=request.session_id or "test-session", event_stream=_stream())
 
-    monkeypatch.setattr(
-        app_interactive,
-        "_SpinnerController",
-        lambda label="Waiting": SimpleNamespace(start=lambda: None, stop=lambda: None),
-    )
     monkeypatch.setattr(app_interactive.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     monkeypatch.setattr(app_interactive.Log, "error", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(builtins, "print", lambda *args, **kwargs: None)
@@ -1234,12 +1245,6 @@ def test_run_prompt_stream_uses_submit_protocol_only(monkeypatch: pytest.MonkeyP
             """旧兼容接口不应被 interactive 使用。"""
 
             raise AssertionError(f"unexpected stream call: {request}")
-
-    monkeypatch.setattr(
-        app_interactive,
-        "_SpinnerController",
-        lambda label="Waiting": SimpleNamespace(start=lambda: None, stop=lambda: None),
-    )
 
     final_content = app_interactive._run_prompt_stream(
         cast(Any, _Session()),
@@ -1468,7 +1473,6 @@ def test_interactive_streams_content_delta_to_stdout(
     agent_session = fake_session_cls.create()
     prompts = iter(["问题一", None, None])
 
-    monkeypatch.setattr(app_interactive, "_SpinnerController", lambda label="Waiting": SimpleNamespace(start=lambda: None, stop=lambda: None))
     monkeypatch.setattr(app_interactive.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     monkeypatch.setattr(app_interactive.Log, "error", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(builtins, "print", lambda message="", *args, **kwargs: outputs.append(str(message)))
@@ -1500,9 +1504,9 @@ def test_interactive_shows_waiting_spinner_when_thinking_disabled(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """验证 interactive 在非 thinking 模式下会显示等待 spinner。"""
+    """验证 interactive 在非 thinking 模式下会显示动态状态行。"""
 
-    spinner_events: list[tuple[str, str] | str] = []
+    status_events: list[str] = []
     fake_session_cls = _build_event_session(
         [
             StreamEvent(type=EventType.FINAL_ANSWER, data={"content": "done", "degraded": False}, metadata={}),
@@ -1511,35 +1515,25 @@ def test_interactive_shows_waiting_spinner_when_thinking_disabled(
     agent_session = fake_session_cls.create()
     prompts = iter(["问题一", None, None])
 
-    class SpinnerRecorder:
-        """记录 spinner 生命周期。"""
+    class StatusLineRecorder:
+        """记录 _StatusLineController 生命周期。"""
 
-        def __init__(self, *, label: str = "Waiting") -> None:
-            """初始化记录器。
+        def __init__(self) -> None:
+            status_events.append("init")
 
-            Args:
-                label: spinner 标签。
+        def update(self, text: str) -> None:
+            status_events.append(f"update:{text}")
 
-            Returns:
-                无。
+        def tick(self) -> None:
+            pass
 
-            Raises:
-                无。
-            """
-
-            spinner_events.append(("init", label))
-
-        def start(self) -> None:
-            """记录启动事件。"""
-
-            spinner_events.append("start")
+        def pause(self) -> None:
+            status_events.append("pause")
 
         def stop(self) -> None:
-            """记录停止事件。"""
+            status_events.append("stop")
 
-            spinner_events.append("stop")
-
-    monkeypatch.setattr(app_interactive, "_SpinnerController", SpinnerRecorder)
+    monkeypatch.setattr(app_interactive, "_StatusLineController", StatusLineRecorder)
     monkeypatch.setattr(app_interactive.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     monkeypatch.setattr(app_interactive.Log, "error", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(builtins, "print", lambda *args, **kwargs: None)
@@ -1571,17 +1565,19 @@ def test_interactive_shows_waiting_spinner_when_thinking_disabled(
 
     app_interactive.interactive(agent_session, session_id="test-session", show_thinking=False)
 
-    assert spinner_events == [("init", "Waiting"), "start", "stop"]
+    assert "init" in status_events
+    assert any(e.startswith("update:") for e in status_events)
+    assert "stop" in status_events
 
 
 @pytest.mark.unit
-def test_interactive_skips_waiting_spinner_when_thinking_enabled(
+def test_interactive_shows_status_line_when_thinking_enabled(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """验证 interactive 在 thinking 模式下不会显示等待 spinner。"""
+    """验证 interactive 在 thinking 模式下也会显示 status line（不互斥）。"""
 
-    spinner_events: list[tuple[str, str] | str] = []
+    status_events: list[str] = []
     fake_session_cls = _build_event_session(
         [
             StreamEvent(type=EventType.FINAL_ANSWER, data={"content": "done", "degraded": False}, metadata={}),
@@ -1590,35 +1586,25 @@ def test_interactive_skips_waiting_spinner_when_thinking_enabled(
     agent_session = fake_session_cls.create()
     prompts = iter(["问题一", None, None])
 
-    class SpinnerRecorder:
-        """记录 spinner 生命周期。"""
+    class StatusLineRecorder:
+        """记录 _StatusLineController 生命周期。"""
 
-        def __init__(self, *, label: str = "Waiting") -> None:
-            """初始化记录器。
+        def __init__(self) -> None:
+            status_events.append("init")
 
-            Args:
-                label: spinner 标签。
+        def update(self, text: str) -> None:
+            status_events.append(f"update:{text}")
 
-            Returns:
-                无。
+        def tick(self) -> None:
+            pass
 
-            Raises:
-                无。
-            """
-
-            spinner_events.append(("init", label))
-
-        def start(self) -> None:
-            """记录启动事件。"""
-
-            spinner_events.append("start")
+        def pause(self) -> None:
+            status_events.append("pause")
 
         def stop(self) -> None:
-            """记录停止事件。"""
+            status_events.append("stop")
 
-            spinner_events.append("stop")
-
-    monkeypatch.setattr(app_interactive, "_SpinnerController", SpinnerRecorder)
+    monkeypatch.setattr(app_interactive, "_StatusLineController", StatusLineRecorder)
     monkeypatch.setattr(app_interactive.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     monkeypatch.setattr(app_interactive.Log, "error", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(builtins, "print", lambda *args, **kwargs: None)
@@ -1650,7 +1636,9 @@ def test_interactive_skips_waiting_spinner_when_thinking_enabled(
 
     app_interactive.interactive(agent_session, session_id="test-session", show_thinking=True)
 
-    assert spinner_events == []
+    assert "init" in status_events
+    assert any(e.startswith("update:") for e in status_events)
+    assert "stop" in status_events
 
 
 @pytest.mark.unit
@@ -1667,7 +1655,6 @@ def test_prompt_hides_reasoning_delta_by_default(monkeypatch: pytest.MonkeyPatch
     )
     agent_session = fake_session_cls.create()
 
-    monkeypatch.setattr(app_interactive, "_SpinnerController", lambda label="Waiting": SimpleNamespace(start=lambda: None, stop=lambda: None))
     monkeypatch.setattr(builtins, "print", lambda message="", *args, **kwargs: stderr_outputs.append(str(message)) if kwargs.get("file") is sys.stderr else None)
 
     result = app_interactive.prompt(agent_session, "测试问题")
@@ -1681,9 +1668,9 @@ def test_prompt_shows_waiting_spinner_when_thinking_disabled(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """验证 prompt 在非 thinking 模式下会显示等待 spinner。"""
+    """验证 prompt 在非 thinking 模式下会显示动态状态行。"""
 
-    spinner_events: list[tuple[str, str] | str] = []
+    status_events: list[str] = []
     fake_session_cls = _build_event_session(
         [
             StreamEvent(type=EventType.FINAL_ANSWER, data={"content": "done", "degraded": False}, metadata={}),
@@ -1691,71 +1678,43 @@ def test_prompt_shows_waiting_spinner_when_thinking_disabled(
     )
     agent_session = fake_session_cls.create()
 
-    class SpinnerRecorder:
-        """记录 spinner 生命周期。"""
+    class StatusLineRecorder:
+        """记录 _StatusLineController 生命周期。"""
 
-        def __init__(self, *, label: str = "Waiting") -> None:
-            """初始化记录器。
+        def __init__(self) -> None:
+            status_events.append("init")
 
-            Args:
-                label: spinner 标签。
+        def update(self, text: str) -> None:
+            status_events.append(f"update:{text}")
 
-            Returns:
-                无。
+        def tick(self) -> None:
+            pass
 
-            Raises:
-                无。
-            """
-
-            spinner_events.append(("init", label))
-
-        def start(self) -> None:
-            """记录启动事件。
-
-            Args:
-                无。
-
-            Returns:
-                无。
-
-            Raises:
-                无。
-            """
-
-            spinner_events.append("start")
+        def pause(self) -> None:
+            status_events.append("pause")
 
         def stop(self) -> None:
-            """记录停止事件。
+            status_events.append("stop")
 
-            Args:
-                无。
-
-            Returns:
-                无。
-
-            Raises:
-                无。
-            """
-
-            spinner_events.append("stop")
-
-    monkeypatch.setattr(app_interactive, "_SpinnerController", SpinnerRecorder)
+    monkeypatch.setattr(app_interactive, "_StatusLineController", StatusLineRecorder)
     monkeypatch.setattr(builtins, "print", lambda *args, **kwargs: None)
 
     result = app_interactive.prompt(agent_session, "测试问题", show_thinking=False)
 
     assert result == 0
-    assert spinner_events == [("init", "Waiting"), "start", "stop"]
+    assert "init" in status_events
+    assert any(e.startswith("update:") for e in status_events)
+    assert "stop" in status_events
 
 
 @pytest.mark.unit
-def test_prompt_skips_waiting_spinner_when_thinking_enabled(
+def test_prompt_shows_status_line_when_thinking_enabled(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """验证 prompt 在 thinking 模式下不会显示等待 spinner。"""
+    """验证 prompt 在 thinking 模式下也会显示 status line（不互斥）。"""
 
-    spinner_events: list[tuple[str, str] | str] = []
+    status_events: list[str] = []
     fake_session_cls = _build_event_session(
         [
             StreamEvent(type=EventType.FINAL_ANSWER, data={"content": "done", "degraded": False}, metadata={}),
@@ -1763,61 +1722,33 @@ def test_prompt_skips_waiting_spinner_when_thinking_enabled(
     )
     agent_session = fake_session_cls.create()
 
-    class SpinnerRecorder:
-        """记录 spinner 生命周期。"""
+    class StatusLineRecorder:
+        """记录 _StatusLineController 生命周期。"""
 
-        def __init__(self, *, label: str = "Waiting") -> None:
-            """初始化记录器。
+        def __init__(self) -> None:
+            status_events.append("init")
 
-            Args:
-                label: spinner 标签。
+        def update(self, text: str) -> None:
+            status_events.append(f"update:{text}")
 
-            Returns:
-                无。
+        def tick(self) -> None:
+            pass
 
-            Raises:
-                无。
-            """
-
-            spinner_events.append(("init", label))
-
-        def start(self) -> None:
-            """记录启动事件。
-
-            Args:
-                无。
-
-            Returns:
-                无。
-
-            Raises:
-                无。
-            """
-
-            spinner_events.append("start")
+        def pause(self) -> None:
+            status_events.append("pause")
 
         def stop(self) -> None:
-            """记录停止事件。
+            status_events.append("stop")
 
-            Args:
-                无。
-
-            Returns:
-                无。
-
-            Raises:
-                无。
-            """
-
-            spinner_events.append("stop")
-
-    monkeypatch.setattr(app_interactive, "_SpinnerController", SpinnerRecorder)
+    monkeypatch.setattr(app_interactive, "_StatusLineController", StatusLineRecorder)
     monkeypatch.setattr(builtins, "print", lambda *args, **kwargs: None)
 
     result = app_interactive.prompt(agent_session, "测试问题", show_thinking=True)
 
     assert result == 0
-    assert spinner_events == []
+    assert "init" in status_events
+    assert any(e.startswith("update:") for e in status_events)
+    assert "stop" in status_events
 
 
 @pytest.mark.unit
@@ -1835,11 +1766,6 @@ def test_prompt_passes_execution_options_into_prompt_request(
     agent_session = fake_session_cls.create()
     execution_options = ExecutionOptions(model_name="deepseek-v4-flash-thinking", max_iterations=9)
 
-    monkeypatch.setattr(
-        app_interactive,
-        "_SpinnerController",
-        lambda label="Waiting": SimpleNamespace(start=lambda: None, stop=lambda: None),
-    )
     monkeypatch.setattr(builtins, "print", lambda *args, **kwargs: None)
 
     result = app_interactive.prompt(
@@ -1866,12 +1792,6 @@ def test_conversation_prompt_prints_label_hint_box(
         ]
     )
     agent_session = fake_session_cls.create()
-
-    monkeypatch.setattr(
-        app_interactive,
-        "_SpinnerController",
-        lambda label="Waiting": SimpleNamespace(start=lambda: None, stop=lambda: None),
-    )
 
     result = app_interactive.conversation_prompt(
         agent_session,
@@ -1904,11 +1824,6 @@ def test_interactive_passes_execution_options_into_chat_turn_request(
     execution_options = ExecutionOptions(model_name="deepseek-v4-flash-thinking", max_iterations=9)
     prompts = iter(["问题一", None, None])
 
-    monkeypatch.setattr(
-        app_interactive,
-        "_SpinnerController",
-        lambda label="Waiting": SimpleNamespace(start=lambda: None, stop=lambda: None),
-    )
     monkeypatch.setattr(app_interactive.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     monkeypatch.setattr(app_interactive.Log, "error", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(builtins, "print", lambda *args, **kwargs: None)
@@ -1958,7 +1873,6 @@ def test_prompt_renders_reasoning_delta_to_stderr_when_enabled(
     )
     agent_session = fake_session_cls.create()
 
-    monkeypatch.setattr(app_interactive, "_SpinnerController", lambda label="Waiting": SimpleNamespace(start=lambda: None, stop=lambda: None))
     monkeypatch.setattr(
         builtins,
         "print",
@@ -1987,12 +1901,6 @@ def test_prompt_inserts_newline_between_reasoning_and_content(
         ]
     )
     agent_session = fake_session_cls.create()
-
-    monkeypatch.setattr(
-        app_interactive,
-        "_SpinnerController",
-        lambda label="Waiting": SimpleNamespace(start=lambda: None, stop=lambda: None),
-    )
 
     def _capture_print(message="", *args: Any, **kwargs: Any) -> None:
         target = "stderr" if kwargs.get("file") is sys.stderr else "stdout"
@@ -2048,12 +1956,6 @@ def test_prompt_no_extra_newlines_between_multiple_reasoning_deltas(
     )
     agent_session = fake_session_cls.create()
 
-    monkeypatch.setattr(
-        app_interactive,
-        "_SpinnerController",
-        lambda label="Waiting": SimpleNamespace(start=lambda: None, stop=lambda: None),
-    )
-
     def _capture_print(message="", *args: Any, **kwargs: Any) -> None:
         target = "stderr" if kwargs.get("file") is sys.stderr else "stdout"
         rendered.append((target, str(message)))
@@ -2098,7 +2000,6 @@ def test_interactive_rebuilds_agent_every_turn(monkeypatch: pytest.MonkeyPatch, 
     agent_session = fake_session_cls.create()
 
     monkeypatch.setattr(app_interactive.sys, "stdin", SimpleNamespace(isatty=lambda: True))
-    monkeypatch.setattr(app_interactive, "_SpinnerController", lambda label="Waiting": SimpleNamespace(start=lambda: None, stop=lambda: None))
     monkeypatch.setattr(app_interactive.Log, "error", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(builtins, "print", lambda *args, **kwargs: None)
 
@@ -2193,11 +2094,6 @@ def test_interactive_reuses_provided_session_id_within_each_launch(
     second_agent_session = fake_session_cls.create()
 
     monkeypatch.setattr(app_interactive.sys, "stdin", SimpleNamespace(isatty=lambda: True))
-    monkeypatch.setattr(
-        app_interactive,
-        "_SpinnerController",
-        lambda label="Waiting": SimpleNamespace(start=lambda: None, stop=lambda: None),
-    )
     monkeypatch.setattr(app_interactive.Log, "error", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(builtins, "print", lambda *args, **kwargs: None)
 
@@ -2326,7 +2222,6 @@ def test_prompt_prints_single_response(monkeypatch: pytest.MonkeyPatch, tmp_path
     )
     agent_session = fake_session_cls.create()
 
-    monkeypatch.setattr(app_interactive, "_SpinnerController", lambda label="Waiting": SimpleNamespace(start=lambda: None, stop=lambda: None))
     monkeypatch.setattr(builtins, "print", lambda message="", *args, **kwargs: outputs.append(str(message)))
 
     result = app_interactive.prompt(agent_session, "测试问题")
