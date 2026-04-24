@@ -137,3 +137,37 @@ jobs:
         with:
           constraints-path: constraints/lock-macos-arm64-py311.txt
           platform-id: macos-arm64
+
+  full-platform-validation-macos-x64:
+    name: full-platform-validation macos-x64 (py3.11)
+    runs-on: macos-13
+    if: >
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'full-integration'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install locked dependencies
+        uses: ./.github/actions/install-locked-env
+        with:
+          constraints-path: constraints/lock-macos-x64-py311.txt
+
+      - name: Run pyright
+        run: pyright
+
+      - name: Run full pytest lane
+        run: pytest -q --timeout=60
+
+      - name: Build and smoke test offline bundle
+        uses: ./.github/actions/build-and-smoke-offline-bundle
+        with:
+          constraints-path: constraints/lock-macos-x64-py311.txt
+          platform-id: macos-x64

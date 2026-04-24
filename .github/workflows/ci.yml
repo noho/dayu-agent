@@ -240,9 +240,12 @@ jobs:
     name: full-platform-validation macos-x64 (py3.11)
     runs-on: macos-13
     if: >
-      github.event_name == 'workflow_dispatch' &&
-      inputs.run_full_matrix == true &&
-      inputs.include_macos_x64 == true
+      (github.event_name == 'workflow_dispatch' &&
+        inputs.run_full_matrix == true &&
+        inputs.include_macos_x64 == true) ||
+      (github.event_name == 'pull_request' &&
+        github.event.action != 'opened' &&
+        contains(github.event.pull_request.labels.*.name, 'full-integration'))
 
     steps:
       - name: Checkout

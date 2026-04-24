@@ -259,11 +259,12 @@ push 后 PR 自动更新，CI 重新跑。最终 merge 时用 **Squash and merge
        - `linux-x64`
        - `windows-x64`
        - `macos-arm64`
+       - `macos-x64`
      - GitHub Checks 中固定展示为三个显式任务：
        - `full-platform-validation linux-x64 (py3.11)`
        - `full-platform-validation windows-x64 (py3.11)`
        - `full-platform-validation macos-arm64 (py3.11)`
-     - `macos-x64` 不在 PR 层阻塞，避免长期排队占用反馈时间
+       - `full-platform-validation macos-x64 (py3.11)`
    - 实现细节：
      - 第一次加 label 时，会额外触发一个专用 workflow：`CI PR Extended`
      - 之后只要 label 还在，PR 后续 `synchronize/reopened` 的常规 `CI` 也会继续带上扩展层
@@ -283,8 +284,11 @@ push 后 PR 自动更新，CI 重新跑。最终 merge 时用 **Squash and merge
 - `windows-x64`
 - `macos-arm64`
 
-`macos-x64` 因为 GitHub runner 长期稀缺，不放进 `PR`、`push main`、`schedule` 的阻塞层，只保留在：
+`macos-x64` 现在会进入带 `full-integration` label 的 `PR 扩展`，以及手工完整验证与正式发布层；但默认普通 PR、`push main`、`schedule` 仍不跑它，避免把所有主链反馈都绑在稀缺 runner 上。
 
+也就是说，`macos-x64` 当前保留在：
+
+- `pull_request + full-integration`
 - `workflow_dispatch(run_full_matrix=true, include_macos_x64=true)`
 - `release` 正式发布工作流
 
@@ -335,15 +339,14 @@ push 后 PR 自动更新，CI 重新跑。最终 merge 时用 **Squash and merge
      - `full-platform-validation linux-x64 (py3.11)`
      - `full-platform-validation windows-x64 (py3.11)`
      - `full-platform-validation macos-arm64 (py3.11)`
-       - 这三个平台完整验证 job 都会：
+      - `full-platform-validation macos-x64 (py3.11)`
+       - 这四个平台完整验证 job 都会：
          - 用各自平台的锁定依赖安装项目
          - 跑 `pyright`
          - 跑完整 `pytest -q --timeout=60`
          - 构建 wheel
          - 构建对应平台离线包
          - 对离线包做 smoke test
-   - 仍不会跑：
-     - `full-platform-validation macos-x64 (py3.11)`
 
 3. `push main`
    - 触发 workflow：`CI`
@@ -356,6 +359,56 @@ push 后 PR 自动更新，CI 重新跑。最终 merge 时用 **Squash and merge
      - `full-platform-validation macos-arm64 (py3.11)`
    - 不会跑：
      - `full-platform-validation macos-x64 (py3.11)`
+
+### 4.2 GitHub Merge 门禁设置
+
+当前建议是：
+
+- 任何准备 merge 到 `main` 的 PR，都先加 `full-integration`
+- GitHub branch protection 里的 required checks 也按这个目标来配
+- 唯一继续排除在 merge 门禁之外的是 `macos-x64`，原因不是它不重要，而是 GitHub 上该 runner 长期稀缺；一旦把它设成 required，PR 会因为长时间 `queued/pending` 被硬卡住
+
+GitHub 网页设置路径：
+
+1. 打开仓库 `Settings -> Branches`
+2. 编辑 `main` 对应的 branch protection rule
+3. 勾选 `Require a pull request before merging`
+4. 勾选 `Require status checks to pass before merging`
+5. 在 required checks 里添加这些 merge 前必须通过的检查：
+   - `pr-required min-compat (ubuntu-latest, py3.11)`
+   - `pr-required lock-smoke (linux-x64, py3.11)`
+   - `extended integration (ubuntu-latest, py3.11)`
+   - `full-platform-validation linux-x64 (py3.11)`
+   - `full-platform-validation windows-x64 (py3.11)`
+   - `full-platform-validation macos-arm64 (py3.11)`
+6. 不要把这个 check 设成 required：
+   - `full-platform-validation macos-x64 (py3.11)`
+7. 日常准备 merge 的 PR，都走这条流程：
+   - 创建 PR 时直接带 label：`gh pr create --fill --label full-integration`
+   - 或创建后立刻补 label：`gh pr edit --add-label full-integration`
+8. 若某个 PR 没有 `full-integration` label，上面这些 required checks 中有一部分就不会出现，因此该 PR 也不应 merge
+
+不要把下面这些“不是 merge 门禁”的项目混进 required：
+   - `workflow_dispatch` 才会出现的手工完整验证附加项
+   - `Release Offline Bundles` workflow 下的 release checks
+
+也不要把 `macos-x64` 误判成“可以随便不看”：
+
+- 它仍然会在 `pull_request + full-integration` 时跑出来，供你在 PR 阶段观察
+- 它仍然会在 `workflow_dispatch(run_full_matrix=true, include_macos_x64=true)` 和 `release` 中收口
+- 只是因为 runner 稀缺，当前不把它设成 required merge gate
+
+这样配置后的效果是：
+
+- 普通 PR 默认只会先跑 `PR 必跑`
+- 准备 merge 的 PR 必须补上 `full-integration`，并等待以下门禁全部为绿：
+  - `pr-required min-compat (ubuntu-latest, py3.11)`
+  - `pr-required lock-smoke (linux-x64, py3.11)`
+  - `extended integration (ubuntu-latest, py3.11)`
+  - `full-platform-validation linux-x64 (py3.11)`
+  - `full-platform-validation windows-x64 (py3.11)`
+  - `full-platform-validation macos-arm64 (py3.11)`
+- `macos-x64` 仍会跑，但不会因为 GitHub runner 排队把所有 merge 长时间卡死
 
 4. `release`
    - 触发 workflow：`Release Offline Bundles`
