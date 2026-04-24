@@ -51,7 +51,7 @@ class TestBuildSourceDistributionWheels:
 
         monkeypatch.setattr(module, "_run_command", _fake_run_command)
 
-        module._build_source_distribution_wheels(tmp_path)
+        module._build_source_distribution_wheels(tmp_path, wheel_cache_dir=None)
 
         assert command_calls == []
 
@@ -82,7 +82,7 @@ class TestBuildSourceDistributionWheels:
 
         monkeypatch.setattr(module, "_run_command", _fake_run_command)
 
-        module._build_source_distribution_wheels(tmp_path)
+        module._build_source_distribution_wheels(tmp_path, wheel_cache_dir=None)
 
         assert len(command_calls) == 1
         assert command_calls[0][:5] == [module.sys.executable, "-m", "pip", "wheel", "--no-deps"]
@@ -91,3 +91,65 @@ class TestBuildSourceDistributionWheels:
         assert existing_wheel.exists()
         assert (tmp_path / "demo_pkg-1.0.0.tar-py3-none-any.whl").exists()
         assert (tmp_path / "other_pkg-2.0.0-py3-none-any.whl").exists()
+
+    def test_writes_back_newly_built_wheels_to_cache_dir(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """构建得到的新 wheel 应被回写到缓存目录；原有 wheel 不应被回写。"""
+
+        wheelhouse_dir = tmp_path / "wheelhouse"
+        wheelhouse_dir.mkdir()
+        cache_dir = tmp_path / "cache"
+
+        source_tar = wheelhouse_dir / "demo_pkg-1.0.0.tar.gz"
+        existing_wheel = wheelhouse_dir / "keep_pkg-3.0.0-py3-none-any.whl"
+        source_tar.write_text("tar", encoding="utf-8")
+        existing_wheel.write_text("wheel", encoding="utf-8")
+
+        def _fake_run_command(command: list[str], *, env: dict[str, str] | None = None) -> None:
+            del env
+            wheel_dir = Path(command[command.index("--wheel-dir") + 1])
+            source_paths = [Path(path_text) for path_text in command[command.index(str(wheel_dir)) + 1 :]]
+            for source_path in source_paths:
+                wheel_name = f"{source_path.stem}-py3-none-any.whl"
+                (wheel_dir / wheel_name).write_text("built", encoding="utf-8")
+
+        monkeypatch.setattr(module, "_run_command", _fake_run_command)
+
+        module._build_source_distribution_wheels(wheelhouse_dir, wheel_cache_dir=cache_dir)
+
+        assert cache_dir.is_dir()
+        cached_names = {path.name for path in cache_dir.iterdir()}
+        assert cached_names == {"demo_pkg-1.0.0.tar-py3-none-any.whl"}
+        assert not (cache_dir / "keep_pkg-3.0.0-py3-none-any.whl").exists()
+
+    def test_cache_writeback_skips_existing_same_name(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """缓存目录已存在同名 wheel 时不应覆盖。"""
+
+        wheelhouse_dir = tmp_path / "wheelhouse"
+        wheelhouse_dir.mkdir()
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+
+        (wheelhouse_dir / "demo_pkg-1.0.0.tar.gz").write_text("tar", encoding="utf-8")
+        preexisting_cached = cache_dir / "demo_pkg-1.0.0.tar-py3-none-any.whl"
+        preexisting_cached.write_text("preexisting", encoding="utf-8")
+
+        def _fake_run_command(command: list[str], *, env: dict[str, str] | None = None) -> None:
+            del env
+            wheel_dir = Path(command[command.index("--wheel-dir") + 1])
+            source_paths = [Path(path_text) for path_text in command[command.index(str(wheel_dir)) + 1 :]]
+            for source_path in source_paths:
+                (wheel_dir / f"{source_path.stem}-py3-none-any.whl").write_text("built", encoding="utf-8")
+
+        monkeypatch.setattr(module, "_run_command", _fake_run_command)
+
+        module._build_source_distribution_wheels(wheelhouse_dir, wheel_cache_dir=cache_dir)
+
+        assert preexisting_cached.read_text(encoding="utf-8") == "preexisting"

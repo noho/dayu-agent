@@ -392,18 +392,40 @@ python utils/smoke_test_offline_bundle.py \
 gh pr checkout <PR号> --force
 ```
 
-然后再执行 `macos-x64` 的离线包构建和 smoke：
+然后再执行 `macos-x64` 的离线包构建和 smoke。由于当前 `macos-x64` 上部分依赖
+（如 `docling-parse`）上游未发布预编译 wheel，`pip download` 会落到 sdist 并
+现场编译为 wheel，首次构建通常明显更慢。为避免每次 PR 前验证都重复编译，这里
+额外传入 `--wheel-cache-dir`，把编译产物持久化到本机缓存目录，后续构建在
+`pip download` 阶段会通过 `--find-links` 直接命中缓存 wheel，跳过 sdist 下载
+与再次编译：
 
 ```bash
+CACHE_DIR="$HOME/.cache/dayu-agent/macos-x64-offline-verify/wheels"
+mkdir -p "$CACHE_DIR"
+
 source .venv/bin/activate && python -m pip install --upgrade pip build
 rm -rf dist build && python -m build --wheel && python utils/build_offline_bundle.py \
   --wheel "$(ls dist/dayu_agent-*.whl | tail -n1)" \
   --constraints constraints/lock-macos-x64-py311.txt \
   --platform-id macos-x64 \
-  --output-dir dist/offline
+  --output-dir dist/offline \
+  --wheel-cache-dir "$CACHE_DIR"
 python utils/smoke_test_offline_bundle.py \
   --archive "$(ls dist/offline/dayu-agent-*-macos-x64-offline.tar.gz | tail -n1)"
 ```
+
+说明：
+
+- 首次构建仍会执行 sdist → wheel 编译，耗时不变；之后只要 constraints 锁定的
+  版本不变，`pip download` 就能直接从 `$CACHE_DIR` 命中，省去下载与再编译。
+- 该缓存目录只应在单机本地验证中使用，不要跨机器复用——脚本与 pip 都不做任何
+  "这个 wheel 是不是本机产物" 的校验，跨机器共用等于把信任链扩大到别处。
+  切换 Python 版本、升级 sdist 依赖版本、或任何怀疑污染的情况下，手工
+  `rm -rf "$CACHE_DIR"` 清空重建即可。
+- `--wheel-cache-dir` 仅用于本地 PR 前验证。正式 release 由 GitHub Actions
+  执行，不会传入该参数，产物始终从上游重新解析，避免跨机器缓存污染。
+- 该参数通用于所有平台：未来若 `linux-x64` / `windows-x64` / `macos-arm64`
+  上游 wheel 缩水、出现 sdist 编译，同样可以按此法在本机加缓存。
 
 #### 7.3 `linux-x64`（Docker）
 
