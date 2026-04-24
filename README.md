@@ -15,6 +15,7 @@
 
 如果你要参与开发，而不是只使用系统：
 - 总览开发手册：[dayu/README.md](dayu/README.md)
+- Host 手册：[dayu/host/README.md](dayu/host/README.md)
 - Engine 手册：[dayu/engine/README.md](dayu/engine/README.md)
 - Fins 手册：[dayu/fins/README.md](dayu/fins/README.md)
 - 配置手册：[dayu/config/README.md](dayu/config/README.md)
