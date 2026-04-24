@@ -892,7 +892,7 @@
     "runner_type": "openai_compatible",
     "name": "qwen-plus",
     "endpoint_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-    "model": "qwen-plus",
+    "model": "qwen3.6-plus",
     "headers": {
       "Authorization": "Bearer {{QWEN_API_KEY}}",
       "Content-Type": "application/json"
@@ -945,7 +945,7 @@
     "runner_type": "openai_compatible",
     "name": "qwen-plus-thinking",
     "endpoint_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-    "model": "qwen-plus",
+    "model": "qwen3.6-plus",
     "headers": {
       "Authorization": "Bearer {{QWEN_API_KEY}}",
       "Content-Type": "application/json"
