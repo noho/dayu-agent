@@ -522,6 +522,74 @@ pip install -e ".[test,dev,browser]" -c constraints/lock-linux-x64-py311.txt
 export PATH=$PATH:/tmp/home/.local/bin
 ```
 
+##### 7.3.1 Host SQLite 锁竞争复现（外挂慢盘 / 方案 A）
+
+用途：本地**放大**"fsync 慢 × 并发 writer"这个撞锁前提，用来验证 `dayu/host/host_store.py::write_transaction`（`BEGIN IMMEDIATE` + autocommit）是否真把 Host SQLite 上的 upgrade deadlock 根除。不是替代 Windows CI，**仅用于本地根因复现**；Windows lane 是否绿色仍以 `full-platform-validation windows-x64 (py3.11)` 为准。
+
+原理：`windows-latest` runner 撞锁的根因不是"Windows 语义差异"，而是 Azure VM 盘 fsync 延迟大、commit 窗口长。USB 机械硬盘（HDD）单次 fsync 约 10–30ms，比 Azure Windows VM 还慢一个量级，能把并发 writer 的锁争抢放到显微镜下。
+
+前置条件：
+
+- 外接 HDD 挂载点为 `/Volumes/WD-1`。`ls /Volumes/WD-1` 能看到内容即可。
+- macOS Docker Desktop → Settings → Resources → File Sharing，把 `/Volumes/WD-1` 加入共享路径（默认不含 `/Volumes`，不加会导致挂卷为空）。
+- 仍然只用已构建好的 `dayu-linux-x64-verify` 镜像，不新增镜像维护。
+
+复现步骤：
+
+```bash
+# 1. 在慢盘上准备 pytest basetemp。放在慢盘是关键——测试走的 tmp_path 必须落到 HDD 上，撞锁窗口才会被放大。
+SLOW_ROOT="/Volumes/WD-1/dayu-lock-repro"
+mkdir -p "$SLOW_ROOT/pytest-basetemp" "$SLOW_ROOT/pip-cache"
+
+# 2. 启动 linux/amd64 容器：repo 走 SSD（编译/安装快），pytest basetemp 单独挂到慢盘。
+docker run --rm -it \
+  --platform linux/amd64 \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/tmp/home \
+  -e PIP_CACHE_DIR=/tmp/pip-cache \
+  -v "$SLOW_ROOT/pip-cache:/tmp/pip-cache" \
+  -v "$PWD:/dayu-agent" \
+  -v "$SLOW_ROOT/pytest-basetemp:/slow" \
+  -w /dayu-agent \
+  dayu-linux-x64-verify \
+  /bin/sh -lc 'mkdir -p "$HOME" "$PIP_CACHE_DIR" && exec /bin/bash'
+```
+
+容器内执行：
+
+```bash
+# 3. 装测试依赖（复用宿主缓存，通常很快）。
+pip install -e ".[test]" -c constraints/lock-linux-x64-py311.txt
+pip install pytest-repeat        # 用于一条命令跑 N 轮
+export PATH=$PATH:/tmp/home/.local/bin
+
+# 4. 冒烟一次，确认 basetemp 真的落到慢盘（应当看到 /slow/pytest-of-... 目录生成）。
+pytest --basetemp=/slow/pytest \
+       tests/application/test_host_store.py::TestConcurrentReadWrite::test_concurrent_inserts \
+       -q -s
+ls /slow/pytest
+
+# 5. 大批量复现：并发 writer × N 轮；HDD fsync 放大了锁争抢窗口。
+#    --count 控制轮次；本地先跑 50 看稳定性，再扩到 500~1000。
+pytest --basetemp=/slow/pytest \
+       tests/application/test_host_store.py::TestConcurrentReadWrite \
+       -q --count=500 2>&1 | tee /slow/lock-repro.log
+
+# 6. 汇总 `database is locked` 出现次数。契约化后期望是 0。
+grep -c "database is locked" /slow/lock-repro.log || echo "0 次"
+```
+
+判定口径：
+
+- 契约化修复生效时，上面第 5 步 500 轮 **应当 0 次** `database is locked`，且 `--count=500` 的整体耗时随机波动，不出现陡增。
+- 若仍出现 `database is locked`，说明还有一条没走 `write_transaction` 的写路径，或事务内混进了长时阻塞 I/O；需要对照 `grep -n "conn.commit\|BEGIN IMMEDIATE\|conn.rollback" dayu/host` 再审一遍。
+- 跑完记得清理：`rm -rf "$SLOW_ROOT/pytest-basetemp"`（pip-cache 可以保留，下次复现能直接复用）。
+
+限制：
+
+- 这条路径只证明"Host SQLite 写路径在 fsync 慢 × 并发 writer 下不再 upgrade deadlock"。它**不能**证明 Windows 语义层面的其他差异（路径分隔符、进程存活探测、信号模型）已经 OK——这些仍需 `windows-x64` CI lane 真绿色。
+- `/Volumes/WD-1` 实际 fsync 速率取决于磁盘型号、接线（USB 2.0 / 3.x）、是否启用写缓存。若发现撞锁次数远低于预期，可在容器内 `python -c "import os,time;f=open('/slow/t','wb');[(f.write(b'x'),f.flush(),os.fsync(f.fileno())) for _ in range(50)];f.close();"` 测一下单次 fsync 是否真在 10ms+ 量级。
+
 #### 7.4 `windows-x64`
 
 在 Windows x64 宿主机上执行同样流程，示意如下：
