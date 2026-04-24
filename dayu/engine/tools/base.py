@@ -107,6 +107,8 @@ class ToolExtra:
     __truncate__: ToolTruncateSpec
     __dup_call__: Optional[DupCallSpec]
     __execution_context_param_name__: str | None
+    __display_name__: str | None = None
+    __summary_params__: list[str] | None = None
 
 
 class DecoratedToolCallable(Protocol[P, R]):
@@ -135,6 +137,8 @@ def tool(
     dup_call: Optional[Union[DupCallSpec, Dict[str, Any]]] = None,
     file_path_params: Optional[list[str]] = None,
     execution_context_param_name: str | None = None,
+    display_name: str | None = None,
+    summary_params: list[str] | None = None,
 ) -> Callable[[Callable[P, R]], DecoratedToolCallable[P, R]]:
     """工具函数装饰器。
 
@@ -154,6 +158,8 @@ def tool(
             （如 ``["file_path", "directory"]``）。
         execution_context_param_name: 工具函数中接收 execution context 的显式参数名；
             为 ``None`` 表示该工具不接收 execution context。
+        display_name: 面向用户展示的工具名（中文），``None`` 时 fallback 到 ``name``。
+        summary_params: 调用时摘要展示的参数名列表，``None`` 时只展示工具名。
 
     Returns:
         装饰器函数，它会返回挂有工具元数据的可调用对象。
@@ -202,6 +208,8 @@ def tool(
                 if execution_context_param_name is not None and str(execution_context_param_name).strip()
                 else None
             ),
+            __display_name__=display_name,
+            __summary_params__=summary_params,
         )
         return decorated_func
 

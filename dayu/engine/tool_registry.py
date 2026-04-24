@@ -31,6 +31,8 @@ class ToolDescriptor:
     tags: set = field(default_factory=set)
     dup_call: Optional[DupCallSpec] = None
     execution_context_param_name: str | None = None
+    display_name: str | None = None
+    summary_params: list[str] | None = None
 
 
 def _format_tool_business_error_log(name: str, error: ToolBusinessError) -> str:
@@ -150,6 +152,8 @@ class ToolRegistry:
             tags=set(raw_tags) if raw_tags else set(),
             dup_call=getattr(raw_extra, "__dup_call__", None),
             execution_context_param_name=getattr(raw_extra, "__execution_context_param_name__", None),
+            display_name=getattr(raw_extra, "__display_name__", None),
+            summary_params=getattr(raw_extra, "__summary_params__", None),
         )
 
         Log.debug(f"注册工具: {name}", module=MODULE)
