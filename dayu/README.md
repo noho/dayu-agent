@@ -17,6 +17,7 @@
 相关文档：
 
 - [../docs/architect.md](../docs/architect.md)
+- [host/README.md](host/README.md)
 - [engine/README.md](engine/README.md)
 - [fins/README.md](fins/README.md)
 - [config/README.md](config/README.md)
