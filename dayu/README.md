@@ -251,26 +251,11 @@ sequenceDiagram
 
 ### 3.3 Host
 
-`Host` 是通用托管执行层。
+`Host` 是通用托管执行层，承担 Session / Run / 并发治理 / 事件发布 / timeout / cancel / resume / 多轮会话托管 / reply outbox 九项能力，把 `Execution Contract` 收敛为 `Agent` 可执行输入。
 
-它负责：
+本总览只给出能力边界；Host 的能力契约、状态机、启动恢复顺序、清理分支等机制细节全部收口在 [host/README.md](host/README.md)，总览不重复。
 
-- Host Session
-- Host Run
-- 取消、恢复、并发治理
-- 事件发布
-- 多轮 transcript 与 memory
-- `scene preparation`
-- 把 `Execution Contract` 收敛为 `Agent` 可执行输入
-- 为 direct operation 提供统一取消语义；同步路径只向上暴露 `HostedRunContext` 这类稳定窄边界，由 Service/Runtime 协作下传取消检查，不能把 Host 内部取消桥接细节泄漏给业务实现
-
-`cancel_session` 的执行顺序与防御链：
-
-1. 先 `close_session` 推进 session 到 `CLOSED`，把仓储层写入屏障立起来；
-2. 再批量取消该 session 下的活跃 run；
-3. 最后做一次幂等 delete sweep 清理 `reply_outbox` 与 `pending_turn`。
-
-Host 在仓储层对 `pending_turn_store.upsert_pending_turn / update_state / record_resume_attempt / record_resume_failure` 与 `reply_outbox_store.submit_reply` 施加 session 活性屏障：当目标 session 不存在或已 `CLOSED`，写入路径会抛 `SessionClosedError`。`DefaultHostExecutor` 在登记 pending turn 时吸收该异常并降级为 no-op，从而杜绝 `cancel_session` 窗口期内 executor 迟到写入产生的孤儿数据。
+UI / Service 的**消费者视角使用指南**（调用序、稳定接口、必须处理的错误、禁止越界动作、装配/测试约束）见 [host/README.md §14 作为 Host 的上游：UI / Service 使用指南](host/README.md#14-作为-host-的上游uiservice-使用指南)。
 
 它不负责：
 
@@ -833,7 +818,7 @@ LLM tool call
 
 Host 是 Dayu 的通用托管执行层。它的价值不在于“帮 Service 调一下 Agent”，而在于把一次执行真正收敛成可治理、可观察、可取消、可恢复、可补投递的宿主能力。
 
-当前 Host 可以稳定理解为一组能力集合，而不是一个单纯的数据中转对象：
+当前 Host 稳定能力可归纳为：
 
 - Session 能力：统一长期会话身份。
 - Run 能力：统一一次执行尝试的生命周期。
@@ -845,200 +830,23 @@ Host 是 Dayu 的通用托管执行层。它的价值不在于“帮 Service 调
 - 多轮会话托管能力：统一 transcript、memory、compaction 调度。
 - reply outbox 能力：把出站交付真源作为可选宿主能力托管。
 
-默认实现上，这些能力由 `Host` 内部拥有的一组子组件共同完成，例如 session registry、run registry、并发治理器、pending turn store、reply outbox store、event bus 和默认执行器；`UI` 只消费启动期 public API 返回的 `Host`，不负责复制或拆开这些默认内部实现。
+本章只给出上述能力的**对外边界**：`Service` 只依赖 Host public API 与协议契约，不构造内部子组件（session/run registry、并发治理器、pending turn / reply outbox 仓储、event bus、默认执行器等均由 Host 自行拥有）。
 
-### 6.1 Session 能力
+### 6.1 三套真源边界
 
-作用：
+聊天主链简化为：`User -> 渠道 UI -> Service -> Host -> Service -> 渠道 UI -> User`。其中三套真源必须保持分离：
 
-- 给一次长期对话或交互路径提供稳定 `session_id`。
-- 让 CLI、Web、WeChat、多轮 transcript、事件订阅共用同一套会话身份。
-- 把“哪一轮属于哪条会话”固定在 Host，而不是让各个 UI 自己定义第二套 session 体系。
+- **入站交付真源**：回答“用户消息是否已经被系统可靠拿到”，属于 `UI` / 渠道适配层。
+- **执行真源**：回答“这条请求在 Host 内是否还未完成、是否可恢复、是否已经 internal success”，属于 `Host`。
+- **出站交付真源**：回答“final answer 是否已经可靠送达用户”，可以作为 `Host` 的一项可选通用能力被托管。
 
-实现机制：
+resume 属于执行真源；reply outbox 属于出站交付真源。Host internal success 不会自动入 outbox，是否补投递由 `Service` 显式决定（例如 `ReplyDeliveryService`）。
 
-- Dayu 当前只有一个 session 概念，就是 `Host Session`。
-- `Service` 在提交执行前通过 `Host.create_session()`、`ensure_session()`、`touch_session()` 这类对外接口处理会话身份。
-- `RunRecord.session_id`、conversation transcript、session 级事件订阅都挂在这套 `Host Session` 之下。
-- `Host Session` 只持有托管执行所需的通用字段，例如 `session_id`、`source`、`state`、`scene_name`、时间戳和非结构化 `metadata`，不持有 `ticker` 之类业务字段。
-- 如果业务要跨轮保留 `ticker` 等领域参数，应该由对应 UI / Service 自己持有，而不是把领域状态塞回 Host session。
+### 6.2 能力机制
 
-### 6.2 Run 能力
+Host 九项能力的具体机制（包括 Session / Run 状态机、pending turn 与 reply outbox 状态机与 CAS 契约、并发治理 lane 合并顺序、cancel 两层语义、启动恢复顺序、分层记忆裁剪与 compaction 乐观锁等）统一收口到 [host/README.md](host/README.md)。本总览不复述。
 
-作用：
-
-- 为每次托管执行分配权威 `run_id`。
-- 统一 run 的创建、启动、成功、失败、取消终态。
-- 让一次执行拥有清晰的宿主级上下文，而不是散落在 Service 和 Agent 之间。
-
-实现机制：
-
-- 每次 `run_agent_stream()`、`run_agent_and_wait()` 或其它被 Host 托管的 operation，都会先在 run registry 里登记 run。
-- `Host Run` 是“一次执行尝试”，不是长期会话，也不是 Agent 内部 iteration。
-- `DefaultHostExecutor` 在 run 开始时统一完成四件事：注册 run、建立取消桥、建立 deadline watcher、按需获取并发许可。
-- `run_id` 由 Host 生成后作为执行级上下文传给 Agent；Agent 不自己发明 run identity。
-- `Host Run` 只保存 `run_id`、`session_id`、`service_type`、`scene_name`、状态、时间戳和 `metadata`；`metadata` 类型固定为 `ExecutionDeliveryContext`（`delivery_channel` / `delivery_target` / `delivery_thread_id` / `delivery_group_id` / `interactive_key` / `chat_key` 等稳定交付字段），不再作为自由 `dict[str, Any]` 承载业务参数，也不结构化持久化 `ticker` 这类业务字段。
-
-### 6.3 并发治理能力
-
-作用：
-
-- 控制不同执行 lane 的并发上限。
-- 防止某个场景或某类执行把宿主资源打满。
-- 把“能不能开始跑”从业务判断里剥离出来，固定成宿主治理能力。
-
-实现机制：
-
-- `Service` 只在 `ExecutionHostPolicy.business_concurrency_lane`（以及 `HostedRunSpec.business_concurrency_lane`）里声明这次执行要占用的**业务** lane，例如 `write_chapter`、`sec_download`。
-- Host 自治 lane `llm_api` 由 `DefaultHostExecutor` 根据调用路径自动叠加（`run_agent_stream` / `run_prepared_turn_stream` 路径必叠加；`run_operation_*` 路径不叠加），Service 代码不出现 `"llm_api"` 字面量、也不参与是否加 llm_api 的业务判断。
-- 同一次 run 可能同时持有多条 lane 的 permit：`DefaultHostExecutor` 在 run 启动时把全部必需 lane 按字母序传给 `ConcurrencyGovernorProtocol.acquire_many`，由 governor 在**单个持久化事务**内完成"全部 lane 额度检查 + 全部 permit 写入"，要么全拿要么全不拿；结束时按逆序释放。进程在 acquire_many 期间被 SIGKILL / OOM 杀死时，事务未 COMMIT 等于未写，不会残留半截 permit。executor 层不再承担多 lane 之间的 permit 回滚逻辑。
-- `ConcurrencyGovernor` 的 lane 配置由 Host 启动期聚合：Host 默认（只含 `llm_api`）→ Service 业务默认（`SERVICE_DEFAULT_LANE_CONFIG`，含 `write_chapter`、`sec_download`）→ `run.json.host_config.lane` → 显式覆盖，后者覆盖前者。
-- 业务层要读取 lane 上限时走 `HostGovernanceProtocol.get_all_lane_statuses()`（例如写作流水线读 `write_chapter.max_concurrent` 作为 in-process ThreadPoolExecutor 的 worker 上限，保持进程内并发与跨进程 permit 数同源）。
-
-### 6.4 事件发布能力
-
-作用：
-
-- 把 Agent 执行产生的流式事件稳定暴露给上层 UI。
-- 支撑 CLI 流式打印、Web SSE、管理面观察等宿主视图。
-- 让 UI 不需要直接理解 Engine 原始流事件。
-
-实现机制：
-
-- Agent 产出的 stream event 会先被 Host 映射成 `AppEvent`。
-- `DefaultHostExecutor` 在事件流经过时按需发布到 event bus，并同时把 `AppEvent` 返回给 `Service`。
-- `Host` 对外暴露的是 run / session 级订阅能力，而不是把 event bus 内部对象泄漏给 UI。
-
-### 6.5 timeout 能力
-
-作用：
-
-- 让执行 deadline 成为宿主规则，而不是某个具体 Agent 或工具实现的偶然行为。
-- 保证 timeout 会被收敛成明确的 run 取消原因，便于恢复、管理面展示和后续治理。
-
-实现机制：
-
-- `Service` 只在 `ExecutionContract.host_policy.timeout_ms` 里声明“这次执行接受的 deadline”。
-- `DefaultHostExecutor` 在 run 启动时创建 `RunDeadlineWatcher`。
-- watcher 内部用 `threading.Timer` 计时；到点后不会直接把 run 改终态，而是先调用 `run_registry.request_cancel(..., cancel_reason=TIMEOUT)` 记录取消意图，再触发进程内 `CancellationToken.cancel()`。
-- 执行链随后在 Host 生命周期边界统一把 run 收敛为 `CANCELLED`，并写入最终 `cancel_reason=timeout`。
-- 这意味着 `timeout_ms=None` 只是“不启用 deadline”，不是把 timeout 逻辑下放给 Agent。
-
-### 6.6 cancel 能力
-
-作用：
-
-- 支持 UI、管理面或宿主内部逻辑对运行中执行发出取消请求。
-- 区分“已经请求取消”与“已经收口为取消终态”，避免状态语义混乱。
-- 支撑跨线程 / 跨进程可见的取消传播。
-
-实现机制：
-
-- 取消分成两层：取消意图和取消终态。
-- `request_cancel()` 只会在 run registry 中写入 `cancel_requested_at` 和 `cancel_requested_reason`，不会直接把 state 改成 `CANCELLED`。
-- `CancellationBridge` 在后台线程轮询 run 状态；一旦发现 `cancel_requested_at` 已写入，就触发进程内 `CancellationToken`。
-- `DefaultHostExecutor` 在流式事件循环、异常收口和同步执行边界统一检查 `token.is_cancelled()` 或 `run_registry.is_cancel_requested(run_id)`。
-- 真正的终态写入由 Host 统一通过 `_finalize_cancelled()` 收敛，最终写成 `RunState.CANCELLED` 和明确的 `cancel_reason`。
-- 这样管理面和 API 可以同时看到“已请求取消但尚未退出”和“已完成取消收口”两层信息。
-
-### 6.7 resume 能力
-
-作用：
-
-- 让多轮聊天在中断、失败或 timeout 后可以按 Host 规则恢复。
-- 把恢复真源固定在 Host，而不是 transcript、UI 本地状态或渠道侧自定义逻辑。
-- 保证恢复重放的是原始已受理执行，而不是“现在重新猜一遍应该怎么跑”。
-
-实现机制：
-
-- V1 resume 的真源是独立的 pending `conversation turn` 仓储，不是 transcript。
-- `DefaultHostExecutor` 在 resumable turn 被 Host 接受后会立即登记 pending turn，状态先进入 `accepted_by_host`；scene preparation 成功后升级为 `prepared_by_host`；收到本轮 Agent 的首个流事件后再推进到 `sent_to_llm`。
-- pending turn 持久化的是 Host 自己的恢复真源，而不是回退到 Service 的 `ExecutionContract` snapshot：`accepted_by_host` 阶段保存 Host-owned accepted snapshot，`prepared_by_host` / `sent_to_llm` 阶段保存 Host-owned prepared snapshot；后者包含最终 system prompt、messages、AgentCreateArgs、工具权限、`toolset_configs` 与多轮 transcript 快照。
-- Host 恢复时不是继续旧 run，而是在同一 `session` 下创建一个新 run：`accepted_by_host` 会重新进入 scene preparation，`prepared_by_host` / `sent_to_llm` 则直接从 prepared snapshot 重建执行。
-- Host 对 Service 暴露的是稳定的 pending turn 公开摘要与直接恢复入口，而不是内部仓储记录类型或 `ExecutionContract`。
-- `Host.resume_pending_turn_stream()` 会统一做 gate 校验：
-  - 请求里的 `session_id` 必须与 pending turn 自身归属完全一致，禁止跨 session 恢复。
-  - 只有 `resumable=True` 且有完整 `resume_source_json` 的记录才能恢复。
-  - `source_run.state=FAILED` 可以恢复。
-  - `source_run.state=CANCELLED` 且 `cancel_reason=timeout` 可以恢复。
-  - `CREATED / QUEUED / RUNNING / SUCCEEDED` 一律不能恢复。
-  - `user_cancelled` 也不能恢复。
-  - Host 会把恢复失败次数作为 pending turn 真源的一部分持久化；默认最多允许恢复 `3` 次，达到上限后直接删除该 pending turn。
-- pending turn 只属于执行真源：
-  - 成功完成后立即删除。
-  - 失败时如果 scene 不可恢复则删除；可恢复则保留。
-  - timeout 取消且 scene 可恢复时保留；其它取消则删除。
-  - prepare 阶段 timeout / failure 也属于可恢复范围，因此 accepted snapshot 不能丢失。
-- `interactive` 和 `wechat` 这类 UI 路径只能通过 `Service` 暴露的 resume/list 入口使用这项能力，不能直接读写 Host 内部仓储。
-
-### 6.8 多轮会话托管能力
-
-作用：
-
-- 统一多轮 transcript、working memory、episode summary 和 compaction 调度。
-- 把“历史消息怎么裁剪、何时压缩、压缩后如何再回放”固定成 Host 规则。
-- 让 Agent 只看到最终 messages，而不感知 transcript 存储和压缩机制。
-
-实现机制：
-
-- 多轮会话托管由 `scene preparation` 和 conversation memory 组件完成，属于 Host 能力的一部分。
-- Host 在进入 Agent 之前读取 transcript、构建 memory block、选择 working memory，并把当前轮用户消息与 system prompt 一起装配成最终 messages。
-- 当前轮完成后，Host 再负责把结果写回 transcript，并调度后台 compaction。
-- 这部分具体机制见后文“8. 多轮会话机制”；这里要强调的是：多轮会话属于 Host，不属于 Agent，也不应该回退给 UI 自己管理。
-
-### 6.9 三套真源与 reply outbox 能力
-
-从渠道侧看，聊天主链可以简化为：
-
-`User -> 渠道 UI -> Service -> Host -> Service -> 渠道 UI -> User`
-
-这里必须区分三套真源：
-
-- 入站交付真源：回答“用户消息是否已经被系统可靠拿到”，属于 `UI` / 渠道适配层。
-- 执行真源：回答“这条请求在 Host 内是否还未完成、是否可恢复、是否已经 internal success”，属于 `Host`。
-- 出站交付真源：回答“final answer 是否已经可靠送达用户”，可以作为 `Host` 的一项可选通用能力被托管。
-
-reply outbox 这项能力的作用是：
-
-- 把“最终回复是否已交付”从 pending turn 里拆出来，形成独立真源。
-- 支撑发送重试、渠道回执、补投递和交付状态查询。
-- 让 `interactive` 这类不需要可靠出站补投递的路径可以完全不用它；让 `web`、`wechat` 等路径按需显式启用。
-
-reply outbox 的实现机制是：
-
-- Host 侧有独立 `reply_outbox` 仓储和状态机，状态包括 `pending_delivery`、`delivery_in_progress`、`delivered`、`failed_retryable`、`failed_terminal`。
-- Host store 里有独立 `reply_outbox` 表，并对 `delivery_key` 做唯一约束，对 `source_run_id` 建索引。
-- `delivery_key` 是业务显式提供的幂等键；相同 key 重复提交时，只允许负载完全一致，避免覆盖真源。
-- Host 对外接口提供 `submit / get / list / claim / mark_delivered / mark_failed` 这组稳定能力，但 Host internal success 不会自动入队。
-- SQLite 默认实现里的 `claim` 是数据库级原子状态迁移：只有 `pending_delivery` 或 `failed_retryable` 记录才能成功领取发送权，避免多个投递 worker 同时发送同一条回复。
-- `ack` 只允许确认已经处于 `delivery_in_progress` 的记录；不能绕过 `claim` 直接把 `pending_delivery` 或失败态记录写成 `delivered`。
-- 正确主链是：Host 先把 terminal result 返回给 `Service`，再由 `Service` 显式决定是否调用 reply outbox。
-- 当前 Phase 2 已进一步把这条边界固定为 `ReplyDeliveryService`：`web`、`wechat` 等渠道适配层通过 Service API 提交 delivery、claim 发送权并回写 delivered / failed，而不是直接触碰 Host 内部仓储。
-- delivery 的重试上限属于 UI / worker 自己的策略，不属于 Host 配置；例如 WeChat worker 当前默认最多发送 `3` 次，并把 `iLink ret != 0`、HTTP `4xx` 与缺少 delivery 目标字段的失败直接收口为 `failed_terminal`。
-- 对外暴露 reply outbox REST API 时，也必须保留同样的独占领取语义，正确顺序是 `list -> claim -> 实际发送 -> ack/nack`。
-
-当前实现还刻意停在“独占领取发送权”这一层，没有把 `ack / nack` 绑定到某个领取者身份。这意味着它已经能防止多个 worker 同时开始发送同一条 reply，但还没有进一步约束“只有当前领取者才能回写终态”。
-
-如果后续需要更强的分布式 delivery worker 保障，推荐沿 reply outbox 真源继续增强 `lease / owner token` 机制，而不是把这层约束下放给 `web`、`wechat` 等渠道适配层自己维护。稳定方向应是：
-
-- `claim` 返回可验证的领取身份或 lease。
-- `ack / nack / renew` 必须携带当前有效 lease，防止旧 worker 在失去发送权后继续回写。
-- lease 过期后的重新接管仍由 Host 托管的 reply outbox 状态机统一裁决。
-
-如果未来给 Web 增加独立 delivery worker，还要额外守住四点：
-
-- Web worker 只能消费 `ReplyDeliveryService` 暴露的 `list -> claim -> 实际发送 -> ack/nack` 顺序，不能直接读写 Host 内部 reply outbox 仓储。
-- Web worker 不得把浏览器 SSE 断开、页面刷新或 HTTP 请求结束误当成“消息已送达”；可靠交付真源仍然只能是 reply outbox。
-- Web worker 启动时也必须处理遗留的 `delivery_in_progress` 记录，至少要把“上一进程领走但未完成回写”的记录回收到可重试态，否则补发会永久卡死。
-- 如果 Web worker 同时承担任何 pending turn 自动恢复职责，它也必须先经过统一的 Host-owned 启动恢复，再尝试 resume；不能把恢复 gate 建立在陈旧的 `runs.state=running` 上。
-
-因此，resume 和 outbox 的边界也固定了：
-
-- pending `conversation turn` 只负责 Host 内执行恢复，不负责 reply 补投递。
-- 一旦达到 Host internal success，pending turn 就应结束。
-- 如果产品需要可靠补发 reply，必须使用独立的 reply outbox 真源，而不是延长 pending turn 生命周期。
-
-### 6.10 sub-agent 扩展边界
+### 6.3 sub-agent 扩展边界
 
 当前第一版没有 `parent_run_id`。
 
@@ -1145,173 +953,9 @@ Scene 当前负责声明：
 └──────────────────────────────────────────────────────────┘
 ```
 
-当前固定机制是：
+当前固定机制概述：当前轮用户输入由 `ExecutionContract.message_inputs.user_message` 带入，`system_prompt` 由 scene preparation 生成；Host 在本轮开始前执行同步压缩，再装配历史消息、memory block 与当前轮输入；compaction 预算从最终模型上下文窗口推导。具体裁剪规则、触发阈值、乐观锁写回、默认配置表见 [host/README.md](host/README.md)。
 
-- 当前轮用户输入来自 `ExecutionContract.message_inputs.user_message`
-- `system_prompt` 由 scene preparation 生成
-- Host 基于 `Host Session` 读取 transcript
-- `DefaultConversationMemoryManager` 在当前轮开始前执行同步压缩，再装配历史消息、memory block 与当前轮输入
-- compaction 的预算来源于最终 `agent_create_args.max_context_tokens`
-
-### 8.1 Transcript 存储
-
-`ConversationTranscript` 是多轮会话的权威持久化载体。它同时保存三类内容：
-
-- `turns`：所有原始 turn 记录
-- `episodes`：已压缩完成的 episode 摘要
-- `pinned_state`：跨 episode 的最小状态槽
-
-`compacted_turn_count` 标记已压缩的 turn 数量，用来分隔"已压缩区"和"未压缩区"：
-
-```text
-turns[0 : compacted_turn_count]       → 已被压缩为 episodes，不再回放
-turns[compacted_turn_count :]          → 未压缩的 raw tail，供 working memory 选择
-```
-
-存储实现是 `FileConversationStore`，每个 session 对应 `workspace/.dayu/session/{session_id}.json`。保存时使用 `revision` 做乐观锁，防止并发写入冲突。
-
-当前轮执行完成后，`DefaultHostExecutor` 调用 `ConversationSessionState.persist_turn()` 将本轮结果追加到 transcript 并调度后台压缩。
-
-### 8.2 Working Memory
-
-Working memory 负责把最近的 raw turns 以高保真方式回放给 Agent，让 Agent 能看到近期对话的完整上下文。
-
-当前实现是 `DefaultWorkingMemoryPolicy.select_turns()`，选择策略如下：
-
-1. 从 transcript 的未压缩区（`turns[compacted_turn_count:]`）提取候选 turn
-2. 从后向前逐 turn 选择，直到触及以下任意边界：
-   - 轮数上限：`working_memory_max_turns`（默认 6）
-   - token 预算耗尽
-
-token 预算的计算公式为：
-
-```text
-computed = max_context_tokens × working_memory_token_budget_ratio
-budget   = max(floor, min(cap, computed))
-```
-
-默认值：`ratio = 0.08`，`floor = 1500`，`cap = 12000`。
-
-每个选中的 turn 被转换为 `WorkingMemoryTurnView`，包含：
-
-- `user_text`：原始用户输入
-- `assistant_text`：助手回复 + 工具调用摘要块
-
-当最新一轮的完整内容超出剩余预算时，不会整轮丢弃，而是构建最小保真视图。裁剪顺序固定：
-
-1. 保留完整 `user_text`
-2. 若预算足够则保留完整 `assistant_final`
-3. 若不足，优先丢弃工具摘要
-4. 若仍不足，截断 `assistant_final` 并附加 `...<truncated>` 标记
-
-token 估算使用保守字符近似：中文字符按 1.0 token、ASCII 字符按 0.5 token 计。
-
-### 8.3 Episode Summary 与 Compaction
-
-Episode summary 是将一段连续的 raw turns 压缩为结构化阶段摘要的过程。压缩由 LLM 执行，使用 `conversation_compaction` scene。
-
-Host 在这条链路上只通过 Host 自有的 prepared scene 视图和 compaction agent 句柄复用 scene preparation 结果；共享边界不再直接暴露 `ToolRegistry`、`AsyncAgent` 这类 engine 具体实现对象。
-
-#### 8.3.1 触发条件
-
-当以下任一条件满足时触发压缩：
-
-- 未压缩 turn 数 > `compaction_trigger_turn_count`（默认 8）
-- 未压缩 token 总量 > working memory 预算 × `compaction_trigger_token_ratio`（默认 1.5）
-
-同时始终保留最新 `compaction_tail_preserve_turns`（默认 4）轮不参与压缩，确保最近的 turn 不会被压缩掉。
-
-#### 8.3.2 压缩输入
-
-压缩器向 `conversation_compaction` scene 发送 JSON payload，包含：
-
-- `task`：固定指令文本
-- `pinned_state`：当前 pinned state（目标、对象、约束、问题）
-- `recent_episodes`：最近 `compaction_context_episode_window`（默认 2）个已有 episode 摘要，供 LLM 理解上下文连续性
-- `turns`：待压缩的 turn 列表（含 user_text、assistant_final、tool_uses、warnings、errors）
-
-#### 8.3.3 压缩输出
-
-LLM 返回严格 JSON，包含两部分：
-
-- `episode_summary`：本段的结构化摘要
-  - `title`：阶段标题
-  - `goal`：阶段目标
-  - `completed_actions`：已完成动作
-  - `confirmed_facts`：已确认事实
-  - `user_constraints`：用户约束
-  - `open_questions`：未决问题
-  - `next_step`：建议下一步
-  - `tool_findings`：工具发现
-- `pinned_state_patch`：对 pinned state 的增量更新（仅包含需要变更的字段）
-
-压缩结果写回 transcript 时：
-
-- `pinned_state_patch` 通过 `apply_to()` 合并到现有 pinned state（未出现的字段沿用旧值）
-- 新的 `episode_summary` 追加到 `episodes` 列表
-- `compacted_turn_count` 增加已压缩 turn 数
-
-#### 8.3.4 同步压缩与后台压缩
-
-压缩有两个执行时机：
-
-- **同步压缩**：在 `prepare_transcript()` 中，当前轮开始前检查并循环压缩直到不再满足触发条件。这保证 Agent 看到的消息列表始终在预算内。
-- **后台压缩**：在 `persist_turn()` 中，当前轮完成后通过 `ConversationCompactionCoordinator` 异步调度。后台压缩使用 `revision` 乐观锁，如果写回时 transcript 已被其他操作修改（revision 不匹配），则静默跳过。
-
-### 8.4 消息组装
-
-`DefaultConversationMemoryManager.build_messages()` 按固定顺序组装最终消息列表：
-
-```text
-1. system prompt                   ← scene preparation 生成
-2. [Conversation Memory] block     ← pinned state + episode summaries
-3. working memory turns            ← 高保真历史 turn 回放（user/assistant 交替）
-4. 当前轮 user message             ← ExecutionContract.message_inputs.user_message
-```
-
-其中 `[Conversation Memory]` block 是一个独立的 system message，渲染格式为：
-
-```text
-[Conversation Memory]
-
-Pinned State:
-- 当前主任务：...
-- 已确认对象：...
-- 用户约束：...
-- 未决问题：...
-
-Episode Summaries:
-Episode ep_xxxx: 阶段标题
-- 阶段目标：...
-- 已完成动作：...
-- 已确认事实：...
-- 未决问题：...
-- 建议下一步：...
-- 工具发现：...
-```
-
-episode summaries 的 token 预算独立计算：`ratio = 0.02`，`floor = 2000`，`cap = 12000`。从最近的 episode 向前回溯选入，直到预算耗尽。pinned state 不受预算限制，始终全量包含。
-
-### 8.5 配置
-
-分层记忆配置由 `ConversationMemorySettings` 承载，来源为 `run.json` 的 `conversation_memory.default` 节，模型级 runtime hints 可覆盖部分字段。当前默认值：
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `working_memory_max_turns` | 6 | working memory 最多回放轮数 |
-| `working_memory_token_budget_ratio` | 0.08 | working memory token 预算占上下文比例 |
-| `working_memory_token_budget_floor` | 1500 | working memory 最小 token 预算 |
-| `working_memory_token_budget_cap` | 12000 | working memory 最大 token 预算 |
-| `episodic_memory_token_budget_ratio` | 0.02 | episodic memory token 预算占上下文比例 |
-| `episodic_memory_token_budget_floor` | 2000 | episodic memory 最小 token 预算 |
-| `episodic_memory_token_budget_cap` | 12000 | episodic memory 最大 token 预算 |
-| `compaction_trigger_turn_count` | 8 | 触发压缩的未压缩 turn 数阈值 |
-| `compaction_trigger_token_ratio` | 1.5 | 触发压缩的 token 倍数阈值 |
-| `compaction_tail_preserve_turns` | 4 | 压缩时始终保留的最新 turn 数 |
-| `compaction_context_episode_window` | 2 | 压缩时回溯的已有 episode 数 |
-| `compaction_scene_name` | `conversation_compaction` | 压缩使用的 scene |
-
-### 8.6 为什么多轮会话属于 Host
+### 8.1 为什么多轮会话属于 Host
 
 多轮会话涉及：
 
@@ -1322,9 +966,9 @@ episode summaries 的 token 预算独立计算：`ratio = 0.02`，`floor = 2000`
 - compaction 后台任务
 - 取消与恢复
 
-这些都属于托管执行能力，因此必须归 `Host`，而不是归 `Agent`。
+这些都属于托管执行能力，因此必须归 `Host`，而不是归 `Agent`。分层记忆模型（Pinned State / Episodic Memory / Working Memory / Raw Transcript）、裁剪顺序、compaction 触发条件、同步/后台压缩的乐观锁语义、配置默认值等机制细节收口于 [host/README.md](host/README.md)，总览不复述。
 
-### 8.7 Durable Memory / Retrieval 扩展边界
+### 8.2 Durable Memory / Retrieval 扩展边界
 
 当前 memory 只实现了：
 

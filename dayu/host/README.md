@@ -1,0 +1,547 @@
+# Host 开发手册
+
+> 面向对象：参与 dayu 开源开发的贡献者。
+>
+> 本文只写 **设计意图、稳定契约、机制与状态机**；具体实现类名/字段名随代码演进，以 `dayu/host/` 源码为准。
+
+---
+
+## 1. Host 的定位
+
+在分层架构 `UI -> Service -> Host -> Agent` 中，Host 居中：
+
+- **对上**（Service / UI）暴露"会话 + 运行 + 回复投递"的稳定门面，屏蔽 Agent 引擎细节与并发/持久化细节。
+- **对下**（Agent / Engine）提供受托执行环境：准备输入、下发 run、收集事件、落库、兜底清理。
+- **不做**：不做业务决策（不解释财报、不挑 prompt）、不拼装 UI 回复、不直接与 LLM 交互。
+
+一句话：**Host 是"多会话、多租户、可中断、可恢复、可治理"的运行时底座**。Agent 是"这一次运行里干什么"，Host 是"所有运行合在一起怎么跑、怎么停、怎么捡回来"。
+
+---
+
+## 2. 九项能力地图
+
+Host 对外承担九项稳定能力：
+
+| 能力 | 稳定契约（对上） | 内部机制关键词 |
+| --- | --- | --- |
+| Session 管理 | 按 `SessionSource` 创建/确认/关闭/列举会话，活性屏障保护写入 | 会话活性门 + 批量级联清理 |
+| Run 生命周期 | 创建 / 查询 / 取消 / 订阅事件 / 终态落库 | 7 态状态机 + 终态守门 |
+| 并发治理 | 按 lane 申请/释放 permit，多 lane 原子批量申请 | ConcurrencyGovernor + lane 合并顺序 |
+| 事件发布 | 订阅 run/session 事件流（流式 + 终态） | 事件总线 + 订阅者解耦 |
+| Timeout 控制 | 注册 run 截止时间，到点触发 cancel | Deadline watcher + 取消桥 |
+| Cancel 控制 | 双层语义：取消意图 vs 终态落库 | CancellationToken + CancellationBridge |
+| Resume | 按 pending turn lease 重发用户轮，受 max_attempts 门控 | CAS lease + attempt_count 门控 |
+| 多轮会话托管 | Pinned / Episodic / Working / Raw 四层记忆 | 同步裁剪 + 后台 compaction + 乐观锁 |
+| Reply outbox | 对外回复的"至少一次 + 幂等 + 失败可重试" | 5 态状态机 + delivery_key 幂等 |
+
+**稳定契约 vs 当前默认实现**：
+
+- **稳定契约**：能力语义、状态机、事件类型、错误分类（如 `SessionClosedError`、`PendingTurnResumeConflictError`）、配置键名。下游代码只应依赖这一层。
+- **当前默认实现**：SQLite 持久化、内存事件总线、in-process 并发治理、threading 执行器。随版本演进可替换。
+
+---
+
+## 3. 公共入口与装配
+
+Host 的公共导出极窄：
+
+- `Host`：门面类，集中暴露能力 3；
+- `HostExecutorProtocol`：执行器协议，被 Host 调用，由 Service/UI 装配具体实现；
+- `ResolvedHostConfig` + `resolve_host_config(...)`：Host 启动配置的规范化入口。
+
+配置层约定（由 `resolve_host_config` 规范化，拒绝旧顶层键）：
+
+```
+host_config:
+  store: { path: ".dayu/host/dayu_host.db" }          # Host 存储位置
+  lane:  { default: 1, writer: 2, ... }               # UI 级 lane 覆盖
+  pending_turn_resume:    { max_attempts: 3 }         # resume 尝试次数上限
+  pending_turn_retention: { retention_hours: 168 }    # UI 未询问窗口的兜底删除阈值（7 天）
+```
+
+lane 合并顺序（后者覆盖前者）：
+
+1. Host 内置 `DEFAULT_LANE_CONFIG`（仅 Host 自治 lane）
+2. Service 启动期注入的业务 lane 默认值
+3. `run.json.host_config.lane`
+4. UI/CLI 启动期传入的显式 lane 覆盖
+
+这一顺序保证"Host 不感知业务 lane 语义、上层能覆盖底层但底层能兜底所有 lane 定义"。
+
+---
+
+## 4. Session 状态机
+
+```
+           create / ensure
+    ┌──────────────────────►  ACTIVE  ◄──────── touch (刷新 last_activity_at)
+    │                           │
+    │                       cancel_session
+    │                           ▼
+ （创建）                     CLOSED  ───────► 不再接受任何写入
+                                        （pending turn / reply outbox / run 新建）
+```
+
+- `SessionState` 仅两态：`ACTIVE` / `CLOSED`。
+- `SessionSource` 标识来源（CLI / WEB / WECHAT / GUI / API / INTERNAL），语义上是"谁是这条会话的主使者"。
+- **活性屏障**：所有依赖 session 的写入路径（pending turn 写、reply outbox 写、run 新建）统一经过"会话必须处于 ACTIVE"检查，违反即抛 `SessionClosedError`。这把 session 从 TOCTOU 竞态里抽出来，由持久层做一致性保证。
+- **cancel_session 顺序（稳定契约）**：
+  1. 先把 session 置 CLOSED（关门）；
+  2. 再批量 cancel 关联的 active run（不再接新活）；
+  3. 再幂等清扫同 session_id 下的 pending turn 与 reply outbox（关门后残留物兜底）。
+
+顺序倒置会出现"关门前有新 run 进来"或"清扫后仍能写入"的并发漏洞；该顺序是契约而非实现细节。
+
+---
+
+## 5. Run 状态机
+
+```
+       CREATED
+          │  enqueue
+          ▼
+       QUEUED
+          │  start
+          ▼
+       RUNNING
+          │
+  ┌───────┼─────────────────────────────┐
+  ▼       ▼             ▼               ▼
+SUCCEEDED FAILED    CANCELLED       UNSETTLED
+                    (user/timeout)  (owner-process gone)
+```
+
+**关键区分**：
+
+- `FAILED` 是"业务失败"：LLM 报错、工具异常、约束违反——由正常代码路径落库。
+- `UNSETTLED` 是"orphan 吸收态"：拥有该 run 的进程没了（kill -9 / OOM / 掉电）。Host 启动时 `cleanup_orphan_runs` 用 `owner_pid` 匹配把这些"没人管的运行中"落到 `UNSETTLED`，避免永远 RUNNING。
+- `CANCELLED` 携带 `RunCancelReason`：`USER_CANCELLED` 与 `TIMEOUT` 必须显式区分，决定 pending turn 是否保留（见 §6）。
+
+**取消的两层语义**（稳定契约）：
+
+- **取消意图**：`CancellationToken` 被设置；运行中的 Agent 会在下一个 checkpoint 看到并主动退出。
+- **取消终态**：`Run.state = CANCELLED` 被落库。两者时间点可分离——intent 可以立即设置，但终态由实际退出路径写入。
+
+`CancellationBridge` 桥接引擎回调与 Host 取消链；`RunDeadlineWatcher` 在 timeout 到点时设置 intent，然后依赖同一路径走到终态。
+
+**终态守门**：Run 一旦进入 `TERMINAL_STATES`（SUCCEEDED/FAILED/CANCELLED/UNSETTLED）不再接受任何状态转移，也不再触发事件。转移表在 `dayu/contracts/run.py` 中集中。
+
+**`RunRecord.metadata` 字段契约（稳定）**：
+
+- `metadata` 的类型是 **`ExecutionDeliveryContext`**（强类型结构体），**不是** 自由 dict、不是业务参数袋。
+- 承载字段仅限"把一次 run 的回复送回正确的外部通道"所需的投递坐标：`delivery_channel` / `delivery_target` / `delivery_thread_id` / `delivery_group_id` / `interactive_key` / `chat_key`。
+- 业务参数（模型选择、工具开关、prompt 变量等）走 `ExecutionOptions` / scene preparer，禁止塞进 metadata。这是"Host 不感知业务语义"的硬边界。
+
+---
+
+## 6. Pending turn 状态机（用户轮的"未交付给 Agent"暂存）
+
+Pending turn 记录"用户已经把一轮输入递给了 Host，但 Agent 还没跑完"的中间状态。它是 **resume** 能力的底座。
+
+### 6.1 状态定义
+
+主状态（与 Agent 生命周期对齐）：
+
+- `ACCEPTED_BY_HOST` — Host 已收到用户输入，尚未构造 run；
+- `PREPARED_BY_HOST` — 已准备好 run 输入（prompt / 上下文 / 资源），等待排队；
+- `SENT_TO_LLM` — 已送入 Agent/LLM 执行中。
+
+正交 lease：
+
+- `RESUMING` — **原子 lease**，表示"某个 resumer 当前正在基于此 pending turn 重发"。lease 期间 `pre_resume_state` 记录 acquire 前的源状态，释放时按需回写。
+
+### 6.2 转换图
+
+```
+   新建
+    │
+    ▼
+ACCEPTED_BY_HOST ─► PREPARED_BY_HOST ─► SENT_TO_LLM
+                                              │
+       ▲                 ▲                    │
+       │ release_lease   │ release_lease      │
+       │ (restore        │ (restore           │
+       │  pre_resume)    │  pre_resume)       │
+       │                 │                    │
+       └──acquire_resume_lease (CAS)──────────┘
+                     │
+                     ▼
+                  RESUMING ─► delete on success / over-limit
+                          └► rebind_source_run_id_for_resume (新 run 接手)
+                          └► record_resume_failure（保留 lease 继续尝试或转交）
+```
+
+### 6.3 Resume acquire 契约（CAS，事务级原子）
+
+一次 `acquire_resume_lease` 必须原子满足：
+
+1. 当前状态 ∈ **acquirable set** = `{ACCEPTED_BY_HOST, PREPARED_BY_HOST, SENT_TO_LLM}`；
+2. `attempt_count < max_attempts`（默认 3）；
+3. 记录未被其它 resumer 持有。
+
+三种失败分别以 `PendingTurnResumeConflictError` 的不同 reason 抛出（冲突 vs 超限 vs 记录缺失 vs 不可恢复），上层据此决定"重试 / 跳过 / 转告用户"。
+
+**超限即删除**（稳定契约）：在同一事务内发现 `attempt_count >= max_attempts`，直接删除该 pending turn，避免进入半永久残留。
+
+### 6.4 Pending turn cleanup 三分支（启动恢复 + 周期性兜底）
+
+`cleanup_stale_pending_turns` 严格按以下分支顺序：
+
+- **分支 A — RESUMING 过期 lease 回退**：`state == RESUMING` 且 `updated_at` 超过 10 分钟 → 释放 lease，按 `pre_resume_state` 回写。保护"resumer 进程中断但 lease 未释放"场景。
+- **分支 B — source_run 终态联动**：`source_run` 已是终态时，按 `should_delete_pending_turn_after_terminal_run` 真值表判定：
+  - `run is None` → 删除；
+  - `state ∈ {FAILED, UNSETTLED}` 且 `resumable=True` → **保留**（等 resume）；
+  - `state == CANCELLED` 且 `resumable=True` 且 `reason=TIMEOUT` → **保留**（timeout 属于可恢复）；
+  - 其它 → 删除。
+- **分支 C — 超保留期兜底删除**：`state ∈ {ACCEPTED_BY_HOST, PREPARED_BY_HOST}` 且 `updated_at` 超过 `retention_hours`（默认 168h=7 天）且 source_run 已终态 → 删除。对应"UI 迟迟未询问用户是否重发"的长尾。
+- **活跃 source_run 严格保留**：任何分支均不得删除"source_run 还在 ACTIVE" 的 pending turn。
+
+分支顺序是契约：A 先于 B 先于 C，避免误清 RESUMING 或误删仍在 active 的记录。
+
+---
+
+## 7. Reply outbox 状态机（对外回复的"至少一次 + 幂等"）
+
+Reply outbox 存放 Host 需要向 UI/外部通道投递的回复。它把"回复生成"与"回复投递"解耦，使得 UI 重连、进程崩溃、下游接口抖动都可以不丢消息。
+
+### 7.1 状态定义
+
+- `PENDING_DELIVERY` — 待投递；
+- `DELIVERY_IN_PROGRESS` — 某 worker 已 claim，正在投递；
+- `DELIVERED` — 投递成功（**吸收态**）；
+- `FAILED_RETRYABLE` — 本次投递失败但可重入（可再次 claim）；
+- `FAILED_TERMINAL` — 永久失败（**吸收态**，幂等 mark_failed 可重复）。
+
+### 7.2 转换图
+
+```
+             submit (INSERT OR IGNORE by delivery_key)
+                        │
+                        ▼
+                PENDING_DELIVERY ◄──────────────┐
+                        │ claim (CAS)           │
+                        ▼                       │
+                DELIVERY_IN_PROGRESS ───────────┤
+                     │    │                     │ 15min stale 回退
+           mark_    │    │ mark_failed         │ (同时打标 STALE_IN_PROGRESS)
+        delivered   │    │  retryable=True     │
+                   ▼    ▼                     │
+              DELIVERED  FAILED_RETRYABLE ────┘
+             （吸收态）         │
+                               │ mark_failed retryable=False
+                               ▼
+                         FAILED_TERMINAL
+                           （吸收态）
+```
+
+### 7.3 关键不变量（稳定契约）
+
+- **claim 谓词**：`claim` 的 CAS 条件是 `state ∈ {PENDING_DELIVERY, FAILED_RETRYABLE}`；两者共享"可再次取出投递"的语义。
+- **mark_delivered 谓词**：CAS 条件是 `state == DELIVERY_IN_PROGRESS`；若记录已是 `DELIVERED`，幂等返回，不是错误——这是"同一条回复被重复确认"的正常场景。
+- **DELIVERED 拒绝失败转移**：一旦 DELIVERED，`mark_failed` 直接报错；业务层不得反悔。
+- **FAILED_TERMINAL 幂等**：重复 mark_failed(retryable=False) 不抛错。
+- **delivery_key 幂等**：`submit` 用 `INSERT OR IGNORE` + 同 key 的 payload 一致性检查保证"同一 delivery_key 只入库一次且 payload 未被偷偷改掉"。这是对上游重复提交的幂等防线。
+- **Stale in-progress 兜底**：超过 15 分钟仍停在 `DELIVERY_IN_PROGRESS` 的记录，被 `cleanup_stale_reply_outbox_deliveries` 回退到 `FAILED_RETRYABLE` 并打上 `STALE_IN_PROGRESS_ERROR_MESSAGE`，供后续 claim 重入。
+- **claim/ack 与 worker 身份解耦**：当前实现不绑定 owner；任何合法 worker 均可推进状态机。lease/owner-token 是可选演进方向，不属于当前契约。
+
+### 7.4 UI worker 契约延伸（非 Host 内部）
+
+Reply outbox 的状态机由 Host 拥有，但"谁把 `PENDING_DELIVERY` 拉出来、如何打给外部通道、失败如何分类"由 UI 层的 worker 决定。以下是 UI worker 必须遵守的契约延伸点（具体实现与重试数值见各 UI 包 README）：
+
+- **投递路径唯一**：UI 必须经由统一的回复投递服务（`ReplyDeliveryService`）走 outbox，禁止绕过 outbox 直接向通道写。
+- **DELIVERED 语义**：只有下游通道真正确认收下，才能打 `mark_delivered`；SSE 断连、HTTP 超时均**不**等于 DELIVERED。
+- **失败分类**：通道的业务级永久错误（如 IM 返回 ret != 0、HTTP 4xx、缺失投递目标）应落到 `FAILED_TERMINAL`；网络抖动/下游 5xx 走 `FAILED_RETRYABLE`。
+- **启动恢复协作**：UI worker 启动时不能自行"清库"，必须依赖 Host 的 `cleanup_stale_reply_outbox_deliveries` 把 stale in-progress 回退后再 claim。
+- **Resume 入口统一**：UI 侧触发 pending turn 重发必须走 Host 的 resume 门（acquire lease），禁止自行构造等价 run。
+
+这些延伸契约由 Host 的 outbox/pending turn 语义"自然推出"，但归属在 UI 层文档（WeChat、Web、CLI 各自 README），不是 Host 内部细节。
+
+---
+
+## 8. 并发治理
+
+Host 内建 `ConcurrencyGovernor`，按 lane 限制同时运行的 run 数。
+
+- **lane 合并顺序**见 §3。
+- **`acquire_many`**：一次申请多条 lane 的 permit，要么全部拿到、要么一个都不拿（事务性）。用于避免"拿到 A、拿不到 B 然后半开状态"造成的局部死锁。
+- **stale permit 回收**：启动恢复阶段扫描"permit 持有者已不在 active run 集合"的残留，直接回收。这是 orphan 进程后的配套清理。
+
+Host **不**感知业务 lane 的意义（例如"writer"、"retrieval"）；它只按 lane 名字做计数限流。业务层自己决定分 lane 的粒度。
+
+**Host 自治 lane `llm_api`（稳定契约）**：
+
+- `llm_api` 是 Host 内置的自治 lane，用于限制同一进程内对 LLM API 的**并发调用数**（与业务 lane 正交）。
+- **Service 代码禁止**显式写"llm_api"字面量或在 lane 覆盖里指定 `llm_api`；lane 名由 Host 侧常量统一拥有。
+- **自动叠加**：agent-stream 执行路径由 `DefaultHostExecutor` **自动**把 `llm_api` lane 叠加到 `acquire_many` 的申请集合中；直接 operation 路径（不经 agent-stream）不自动叠加。
+- 这一设计让业务方只需声明业务 lane；"避免打爆外部 API"的自治防线由 Host 自动接管，不依赖上层正确配置。
+
+---
+
+## 9. 事件发布
+
+Host 暴露的事件只有两类：
+
+- **Run 流式事件**：来源于 Agent/Engine，被 Host 透明转发给订阅者。Host 不做内容理解，只负责路由 + 终态封口。
+- **Session 生命周期事件**：create / close / cancel，用于 UI 做会话列表刷新。
+
+设计约束：
+
+- 订阅接口不暴露内部事件总线类型；上层仅依赖"事件类型枚举 + payload 契约"。
+- 终态事件保证"在状态落库之后发出"，订阅者看到的事件顺序与持久化顺序一致。
+
+---
+
+## 10. 多轮会话托管（分层记忆）
+
+多轮会话的上下文由四层组成，层次从"永远保留"到"原始流水"：
+
+| 层 | 语义 | 典型内容 |
+| --- | --- | --- |
+| Pinned State | 会话级固定信息，写入后只改不丢 | 用户画像、固化偏好、当前任务主线 |
+| Episodic Memory | 摘要化的历史片段 | 过往轮次的浓缩总结 |
+| Working Memory | 近期轮次的结构化视图 | 最近若干轮的可直接喂给 LLM 的表示 |
+| Raw Transcript | 原始事件流 | 审计/回放用的完整日志 |
+
+### 10.1 Raw Transcript 的分区策略
+
+Raw transcript 是一个按时间递增的 turn 列表，通过会话级字段 **`compacted_turn_count`** 把列表划分成两个区：
+
+- **已压缩区**：下标 `< compacted_turn_count` 的 turn，语义上"已被摘要进 episodic memory"，**不再参与**后续 working memory 选择与消息拼装（防止 episode 摘要与原文双发，制造冗余与矛盾）。
+- **未压缩尾区**：下标 `>= compacted_turn_count` 的 turn，是 working memory 的候选池；同时也是下一次 compaction 的输入来源。
+
+`compacted_turn_count` 只由 compaction 成功写入时**单调推进**，杜绝"压缩后再回放原文"。
+
+### 10.2 Working Memory 选择策略
+
+Working memory 的构造过程是**从未压缩尾区的最新一轮向前回溯**，直到触发任一边界为止：
+
+- **轮数上限**：保证消息列表"人类可读规模"不膨胀；
+- **Token 预算**：保证最终消息列表在模型窗口与 Host 留白之内。
+
+两条边界**都要满足**（取先触发者），这是"双重预算"约束——单维度约束会在长 turn / 多轮小 turn 两种极端下任一失控。
+
+**最新一轮整轮超预算时的降级顺序**（稳定契约，保证"最新用户意图永远不丢"）：
+
+1. 保留 user_text；
+2. 保留完整的 assistant_final；
+3. 丢弃 tool 调用/结果摘要；
+4. 仍超预算，则对 assistant_final 做末尾截断，并附显式截断标记（如 `...<truncated>`）以免下游把不完整答案当完整答案。
+
+降级顺序是契约：任何实现不得颠倒"先丢工具后截最终答复"的优先级。
+
+### 10.3 Compaction 触发策略
+
+Compaction 何时发生由两个维度联合判定（策略级，具体阈值属实现调参）：
+
+- **未压缩轮数**超过策略阈值；**或**
+- **未压缩 token 量**超过 working memory 预算的若干倍。
+
+同时**始终保留尾部若干轮不参与压缩**，以保护当前对话的连续性与用户体感——最近几轮必须以原文形式继续回放，不能被摘要抹平。
+
+### 10.4 Compaction 的输入/输出语义
+
+**输入**（给 LLM 的压缩上下文）语义上包括：
+
+- 固定的压缩任务指令；
+- 当前 pinned state（让 LLM 知道会话主线与稳定偏好）；
+- 最近若干已有 episode 摘要（维持"摘要风格的延续感"，避免每轮重写）；
+- 本次待压缩的 turns（来自未压缩区但保留尾部以外的那一段）。
+
+**输出**语义上包括两件事：
+
+- **`episode_summary`**：对本段对话的结构化摘要，追加进 episodic memory；
+- **`pinned_state_patch`**：对 pinned state 的**增量补丁**。合并语义（`apply_to`）是"只覆盖明确给出的字段、缺省字段沿用旧值"，保证 LLM 每次不需要重述整个 pinned state，也不会因为漏输出某字段而把旧值清空。
+
+"先得到结果、再按乐观锁写回"是语义分离点：得到 patch 不等于已落库。
+
+### 10.5 消息组装的四段固定顺序
+
+每轮发给 LLM 的消息列表按以下**固定顺序**拼接，顺序是契约：
+
+1. **System Prompt**：角色与任务描述；
+2. **Conversation Memory 段**：pinned state + episode 摘要，统一以一条 system 级消息承载，给模型"这是背景而不是对话"的信号；
+3. **Working Memory 段**：§10.2 选中的若干轮，按 user/assistant 原始交替回放；
+4. **当前轮 user message**：最新用户输入。
+
+这一顺序保证：背景信息在对话之前、历史对话保真回放、当前意图在最末尾（减少 LLM 忽略当前指令的概率）。
+
+### 10.6 同步与后台 Compaction 的调度策略
+
+Compaction 有两条触发路径，职责分离：
+
+- **同步 compaction**：**在本轮开始前**，如果未压缩区已越过硬阈值（消息列表若不压缩就会超预算），同步执行压缩，确保本轮能立即开跑。这条路径是"必做功"，以保证可用性。
+- **后台 compaction**：**在上一轮结束后**，如果越过软阈值，异步调度。用于"用户感觉不到延迟地缩小 raw 区"。
+
+两条路径共享同一套输入/输出语义（§10.4），差异只在调度时机。
+
+**乐观锁并发冲突策略**：compaction 的写回以会话级 **revision** 作为乐观锁——读入时记录 revision，写回前比对；若不一致（说明期间已有其它 compactor/会话写入），**直接丢弃本次摘要结果，不覆盖**。这与"后来者胜"相反：在"继续跑"与"保持一致"之间选择一致。丢弃的代价是下次重算，可接受。
+
+### 10.7 层间关系的稳定不变量
+
+- **Pinned 永不被 compaction 挤掉**，只由显式 API 或 compaction 的 `pinned_state_patch` 改写；其它层都可以在预算压力下被重塑。
+- **Episode 只能追加**，不支持回改；若 episode 本身需要再浓缩（episode-of-episodes），属于演进方向，不在当前契约内。
+- **Raw Transcript 永不被 compaction 物理删除**，只通过 `compacted_turn_count` 标记为"已摘要"；审计/回放总能拿到全量原文。
+
+具体的 token 预算数值、默认窗口大小、触发阈值倍数属于实现调参，不在本文档范围；以 `dayu/host/conversation_*.py` 与 `dayu/config/` 为准。
+
+---
+
+## 11. 场景准备（scene preparation）
+
+Host 内部的 `scene_preparer` 把"这一次运行需要哪些材料"集中起来：prompt 资产、模型配置、工具 schema、执行选项。它是 Host 内部 public 模块（Service/UI 可见但不应绕过 Host 直接调用 Agent）。
+
+设计理由：让 Agent 启动参数在 Host 边界内完成规范化，避免 UI/Service 直接把"未完成的半成品输入"下发到 Engine。这也是所有 run 之所以能被 Host 重建（resume）的前提——材料来源稳定，所以同一 pending turn 可以重新构造等价的 run 输入。
+
+---
+
+## 12. 启动恢复契约
+
+Host 启动时按固定顺序执行：
+
+1. **`cleanup_orphan_runs`** — 把上轮宿主进程遗留的 RUNNING run 吸收到 `UNSETTLED`（按 owner_pid 精确匹配）；
+2. **`cleanup_stale_permits`** — 回收已无主 run 的 lane permit；
+3. **`cleanup_stale_reply_outbox_deliveries`** — 15 分钟 in-progress 回退到 `FAILED_RETRYABLE`；
+4. **`cleanup_stale_pending_turns`** — 执行 §6.4 的三分支（A → B → C）。
+
+顺序是契约：先把"谁还活着"定死（run 吸收），再依此判定其它子系统里谁可以动（permit / outbox / pending turn）。
+
+运行期另有 `shutdown_active_runs_for_owner`：SIGTERM/SIGHUP/atexit 钩子主动把本进程持有的 active run 落到 `UNSETTLED`，尽量减少需要下次启动 orphan 扫描才发现的遗留。
+
+---
+
+## 13. 扩展点
+
+稳定扩展入口：
+
+- **`HostExecutorProtocol`**：替换执行器实现（例如改成远程执行或异步 worker 池）；
+- **存储协议**：pending turn / reply outbox / run / session / conversation 均以 Protocol 暴露，可整体替换为非 SQLite 后端；
+- **事件订阅者**：UI 通道、日志管道、审计都通过订阅事件接入，不改 Host 核心；
+- **lane 注入**：Service 层可按业务注入 lane 默认值，无需触碰 Host 代码。
+
+可预见的演进方向（不属于当前契约，仅备忘）：
+
+- Reply outbox claim 加 lease/owner-token 做强隔离；
+- Pending turn 的多租户/分片；
+- Agent lineage（sub-agent 父子关系）的一等公民化；
+- 持久化外置（PostgreSQL / 远端 KV）。
+
+---
+
+## 14. 作为 Host 的上游：UI / Service 使用指南
+
+本节面向**只消费 Host** 的 UI / Service 开发者，把 Host 当黑盒，回答"我要调什么、按什么顺序调、必须处理哪些错误、不能越界做什么"。Host 内部如何实现（状态机、存储、并发）在前几节，本节不重复。
+
+### 14.1 一次典型请求的生命周期（调用序）
+
+一次"用户输入 → 外部通道看到回复"的路径，UI / Service 共同经过以下阶段，每阶段的拥有者固定：
+
+1. **UI**：收到用户输入，构造 `Request DTO` + `ExecutionDeliveryContext`（投递坐标）。
+2. **UI → Service**：调用对应 Service 入口；不绕过 Service 直接访问 Host。
+3. **Service**：解释业务语义，决定 scene / prompt contributions / execution options，生成 `ExecutionContract`。
+4. **Service → Host**（下述 §14.2 的稳定接口）：
+   - 解析或创建 session（活性屏障在此层把关）；
+   - 提交 pending turn（承接用户输入，取得 pending_turn_id）；
+   - 下发 run（Host 内部走 scene preparation → executor → engine）；
+   - 订阅事件并把 Host 事件映射到 `AppEvent` 返回给 UI。
+5. **Host → UI**（经 reply outbox）：Agent 产生的回复经 `ReplyDeliveryService` 进入 outbox；UI 的 worker claim / deliver / ack。
+6. **取消 / 超时 / resume**：Service 调 Host 的 cancel / resume 接口；Host 内部自行维护语义。
+
+**顺序契约**：session → pending turn → run，**不可**省略 pending turn 直接起 run——否则 resume 与 cleanup 所需的因果链会断。
+
+### 14.2 Service 应该调的 Host 稳定接口
+
+按能力分组，Service/UI 只应依赖以下入口（具体方法名以 `dayu/host/__init__.py` 与 protocol 文件为准）：
+
+| 能力 | Service 典型调用 | 消费者注意事项 |
+| --- | --- | --- |
+| Session | `create_session / ensure_session / get_session / list_sessions / cancel_session / touch_session` | 所有写入路径的活性屏障由 Host 兜底，上游只需处理 `SessionClosedError` |
+| Pending turn | `submit_pending_turn / get_pending_turn / list_pending_turns / acquire_resume_lease / release_resume_lease` | Resume 必须先 acquire 再 release；异常必走 release 分支 |
+| Run | `start_run / get_run / cancel_run / subscribe_events` | 订阅事件必须在 start 之前完成，避免丢首个事件 |
+| Reply outbox | `submit_reply / claim_next_pending_reply / mark_reply_delivered / mark_reply_failed` | UI worker 专属；Service 只写入，不 claim |
+| Governor | 不直接调用 | lane 配置在启动期注入，运行期由 Host 自治 |
+| Admin / cleanup | 不直接调用 | 启动恢复与周期性清理由 Host 自行编排 |
+
+**禁止**（硬边界）：
+- 不得从 Host 内部模块直接 import（例如 `from dayu.host.pending_turn_store import ...`）；只从 `dayu.host` 顶层导入。
+- 不得绕过 outbox 向通道直接投递回复。
+- 不得自行构造"等价 run"做重发，必须走 resume 接口。
+- 不得在 `RunRecord.metadata` 里塞业务参数（见 §5 字段契约）；业务参数走 `ExecutionContract`。
+- 不得在 `lane` 覆盖里出现 Host 自治 lane 名字（见 §8）。
+
+### 14.3 Session 解析策略（Service 侧规则）
+
+Service 对 "session_id 从哪来、能不能新建" 有三条稳定策略，归口在 Service 的 `SessionResolutionPolicy`；Host 只提供底层 create/ensure/get 原语：
+
+- **AUTO**：无 session_id → 新建；有且存在 → 复用并 touch；有但不存在 → 报错或新建（由 Service 策略决定）。
+- **REQUIRE_EXISTING**：必须给 session_id 且必须已存在；否则拒绝。用于"明确接续既有会话"的请求。
+- **ENSURE_DETERMINISTIC**：按确定性 id（例如 `{source}:{external_key}`）ensure；用于 WeChat/Web 这种由外部 id 推导 session 的场景。
+
+策略本身属于 Service 层，Host 只按"按 id 找 / 按 id 确保"两条原语配合。
+
+### 14.4 必须处理的 Host 错误（上游契约）
+
+Host 抛出的错误分两类：**业务可恢复** vs **上游编程错**。前者必须显式处理，后者是 bug。
+
+**业务可恢复（必须 catch）**：
+
+- `SessionClosedError` — 目标 session 已 CLOSED；UI 应提示用户"会话已结束"。
+- `PendingTurnResumeConflictError` — 按 reason 分流：
+  - `attempt_exhausted` → 告知用户"已超最大重试"，不再 resume；
+  - `lease_conflict` → 有其它 resumer 在跑，通常等一下或跳过；
+  - `not_resumable` / `record_missing` → 对应"状态不合法"与"记录已不存在"，UI 按"静默丢弃 / 提示"处理。
+- Run 超时 / 取消抛出的事件在事件流里以 `ERROR` / `CANCELLED` 呈现；UI 按事件处理，**不要**等异常。
+
+**上游编程错（不该 catch）**：
+
+- 向 CLOSED session 写 pending turn、往 DELIVERED outbox 上再 mark_failed、用非法 lane 名——都是契约违反，应让其冒泡成 bug。
+
+### 14.5 事件消费规则
+
+Host 的事件订阅面是 Service → UI 流的中继点：
+
+- **订阅必须在 `start_run` 之前**完成；否则会漏掉首事件。
+- **终态事件保证在落库之后发出**（见 §9）；UI 看到 `DONE/ERROR/CANCELLED` 后再查 Run 状态一定一致。
+- **SSE/WebSocket 断连 ≠ 事件丢失**：断连只是订阅端断开；重新订阅可重放（当前实现不保留历史事件，但 run 已落库状态 + outbox 仍在，是语义等价的恢复点）。
+- **UI 不要自行推断"中间状态"**：只消费 Host 发出的事件类型，不做"没收到 DONE 就当失败"这种推断，容易与 UNSETTLED 吸收态打架。
+
+### 14.6 取消、超时、Resume 的上游语义
+
+- **取消**：Service 调 `cancel_run(run_id, reason=USER_CANCELLED)`；Host 异步推进到 CANCELLED 终态。**不要**自己维护 run 生命周期。
+- **Session 级关停**：调 `cancel_session`；Host 内部按 §4 三步顺序执行，无需 Service 配合清理。
+- **超时**：Service 不自己看表；在提交 run 时把 deadline 作为执行选项传下去，由 Host 的 deadline watcher 负责。
+- **Resume**：总是走 `acquire_resume_lease → 基于 pending turn 重新起 run → release_resume_lease`；**acquire 失败按 §14.4 分流**。
+
+### 14.7 启动期装配约束
+
+UI 在 composition root 装配 Service 时需要：
+
+- **一个** `Host` 实例在进程内共享（多 Service 共用同一 Host 是契约，避免两把清理/governor 互相踩）。
+- 通过 `resolve_host_config(...)` 规范化配置后再构造 Host；禁止绕过规范化直接塞字典。
+- Host 构造完成后**必须**调用 Host 提供的启动恢复入口（`recover_host_startup_state` 等）；恢复未跑就开始接请求，相当于在未知脏数据上继续跑。
+
+这些装配动作在 `dayu/services/startup_preparation.py` 里已有一次收敛，UI 直接复用即可，不必重新发明。
+
+### 14.8 测试接缝建议
+
+Service 单测写"如何调 Host"时：
+
+- **Mock 只针对 Host 的 Protocol**（`SessionOperationsProtocol`、`PendingTurnStoreProtocol`、`ReplyDeliveryProtocol` 等），不 mock 内部实现类；Protocol 是稳定契约，实现会变。
+- **不要**在测试里去 patch Host 内部的状态机或事务方法；那是 Host 自己的单元测试职责。
+- E2E 层用真实 `Host` + in-memory / tmp SQLite；这是唯一能验证"调用序是否正确"的层面。
+
+---
+
+## 15. 阅读代码的建议顺序
+
+1. `dayu/host/__init__.py` — 看清楚对外只导出什么；
+2. `dayu/contracts/` 下 `run.py` / `session.py` / `reply_outbox.py` — 把状态机枚举与合法转移先吃透；
+3. `dayu/host/host.py` — 门面与清理入口；
+4. `dayu/host/pending_turn_store.py` — resume CAS 的关键；
+5. `dayu/host/reply_outbox_store.py` — delivery 幂等与 stale 回退；
+6. `dayu/host/executor.py` / `host_execution.py` — 执行路径与 `should_delete_pending_turn_after_terminal_run` 真值表；
+7. `dayu/host/concurrency.py` — lane 合并与 `acquire_many`；
+8. `dayu/host/conversation_*.py` — 分层记忆与 compaction；
+9. `dayu/host/startup_preparation.py` — 配置规范化与默认值；
+10. `dayu/host/host_cleanup.py` — 启动恢复的编排。
+
+最后，任何与本文叙述冲突之处以代码为准；发现不一致请修正 README，而不是反过来。
