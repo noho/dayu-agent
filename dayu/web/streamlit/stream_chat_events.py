@@ -13,71 +13,90 @@ import re
 from dayu.contracts.events import AppEvent, AppEventType
 
 _CANCELLED_DEFAULT_MESSAGE = "执行已取消"
-_CANCELLED_REASON_PREFIX = "执行已取消："
 _TEXT_PAYLOAD_KEYS: tuple[str, ...] = ("content", "text", "answer")
-_FENCED_CODE_BLOCK_PATTERN = re.compile(r"```[\s\S]*?```")
-_INLINE_HEADING_WITHOUT_BREAK_PATTERN = re.compile(r"(?m)([^\n`])\s*(#{2,6})(?=[^\s#])")
-_MARKDOWN_HEADING_PATTERN = re.compile(r"(?m)^(#{1,6})([^\s#])")
-_HEADING_INLINE_LIST_PATTERN = re.compile(r"(?m)^(#{1,6}\s[^\n*]+)\s*(\*\s+)")
+
+# Markdown 语法解析相关正则表达式, 修复 Markdown 语法解析错误。
+_CODE_FENCE_PATTERN = re.compile(r"(```[\s\S]*?```)")
+_INLINE_HEADING_PATTERN = re.compile(r"([^\n])(#{2,6})(?=[^#\s])")
+_HEADING_SPACE_PATTERN = re.compile(r"(?m)^(#{1,6})([^ #\n])")
+_INLINE_STAR_LIST_PATTERN = re.compile(r"(\S)(?<!\*)(\* )")
+_INLINE_SEC_BULLET_PATTERN = re.compile(r"(\S)(- SEC EDGAR)")
+_HEADING_INLINE_BOLD_DASH_LIST_PATTERN = re.compile(r"(?m)^(#{1,6}\s[^\n|]+?)(-\s+\*\*)")
+_HEADING_INLINE_TABLE_PATTERN = re.compile(r"(?m)^(#{1,6}\s[^\n|]+?)(\|)")
+_INLINE_TABLE_START_PATTERN = re.compile(r"^([^|\n][^|\n]*?)(\|.+\|)$")
+_INLINE_TABLE_ROW_SPLIT_PATTERN = re.compile(r"\|\s+\|")
+_SEC_LINE_WITHOUT_BULLET_PATTERN = re.compile(r"(?m)^(SEC EDGAR \|)")
 
 
-def _normalize_markdown_headings(text: str) -> str:
-    """规范化常见标题格式，避免 Streamlit Markdown 解析失败。
+def _normalize_markdown_outside_code_fence(text: str) -> str:
+    """规整非代码块区域的 Markdown 字符串。
 
-    Args:
-        text: 已完成换行解码的文本。
+    参数:
+        text: 原始 Markdown 文本。
 
-    Returns:
-        规范化后的文本。
+    返回值:
+        规整后的 Markdown 文本。
 
-    Raises:
+    异常:
         无。
     """
 
-    with_heading_break = _INLINE_HEADING_WITHOUT_BREAK_PATTERN.sub(r"\1\n\2", text)
-    heading_spaced = _MARKDOWN_HEADING_PATTERN.sub(r"\1 \2", with_heading_break)
-    return _HEADING_INLINE_LIST_PATTERN.sub(r"\1\n\2", heading_spaced)
-
-
-def _normalize_markdown_structures_outside_code_blocks(text: str) -> str:
-    """只在代码块外执行 Markdown 结构纠偏。
-
-    Args:
-        text: 已完成换行解码的文本。
-
-    Returns:
-        规范化后的文本。
-
-    Raises:
-        无。
-    """
-
-    normalized_parts: list[str] = []
-    last_end = 0
-    for block in _FENCED_CODE_BLOCK_PATTERN.finditer(text):
-        normalized_parts.append(_normalize_markdown_headings(text[last_end:block.start()]))
-        normalized_parts.append(block.group(0))
-        last_end = block.end()
-    normalized_parts.append(_normalize_markdown_headings(text[last_end:]))
-    return "".join(normalized_parts)
+    normalized = text.replace("\\n", "\n")
+    normalized = _INLINE_HEADING_PATTERN.sub(r"\1\n\2", normalized)
+    normalized = _HEADING_SPACE_PATTERN.sub(r"\1 \2", normalized)
+    normalized = _INLINE_STAR_LIST_PATTERN.sub(r"\1\n\2", normalized)
+    normalized = _INLINE_SEC_BULLET_PATTERN.sub(r"\1\n\2", normalized)
+    normalized = _HEADING_INLINE_BOLD_DASH_LIST_PATTERN.sub(r"\1\n\2", normalized)
+    normalized = _HEADING_INLINE_TABLE_PATTERN.sub(r"\1\n\2", normalized)
+    normalized = normalized.replace("\n\n##", "\n##")
+    if "|---|---| |" in normalized:
+        normalized = normalized.replace("|---|---| |", "|---|---|\n|")
+    if " | | " in normalized:
+        normalized = normalized.replace(" | | ", " |\n| ")
+    ends_with_newline = normalized.endswith("\n")
+    normalized_lines: list[str] = []
+    for raw_line in normalized.split("\n"):
+        line = raw_line
+        if ("|---" in line) and (line.count("|") >= 6):
+            table_start_match = _INLINE_TABLE_START_PATTERN.match(line)
+            if table_start_match is not None:
+                line = f"{table_start_match.group(1)}\n{table_start_match.group(2)}"
+            line = _INLINE_TABLE_ROW_SPLIT_PATTERN.sub("|\n| ", line)
+        normalized_lines.append(line)
+    normalized = "\n".join(normalized_lines)
+    if ends_with_newline and (not normalized.endswith("\n")):
+        normalized = f"{normalized}\n"
+    normalized = re.sub(r"(?m)^\|\s{2,}", "| ", normalized)
+    if "- SEC EDGAR |" in normalized:
+        normalized = _SEC_LINE_WITHOUT_BULLET_PATTERN.sub(r"- \1", normalized)
+    return normalized
 
 
 def normalize_stream_text_for_markdown(text: str) -> str:
-    """把常见转义换行规范化为 Markdown 可渲染换行。
+    """规整流式 Markdown 文本，避免结构被压扁。
 
-    Args:
-        text: 原始文本片段。
+    参数:
+        text: 原始流式文本。
 
-    Returns:
-        规范化后的文本。
+    返回值:
+        规整后的 Markdown 文本；代码块内容保持原样。
 
-    Raises:
+    异常:
         无。
     """
 
-    unescaped_text = text.replace("\\r\\n", "\n").replace("\\n", "\n")
-    return _normalize_markdown_structures_outside_code_blocks(unescaped_text)
-
+    if not text:
+        return ""
+    parts = _CODE_FENCE_PATTERN.split(text)
+    normalized_parts: list[str] = []
+    for part in parts:
+        if not part:
+            continue
+        if part.startswith("```") and part.endswith("```"):
+            normalized_parts.append(part.replace("\\n", "\n"))
+            continue
+        normalized_parts.append(_normalize_markdown_outside_code_fence(part))
+    return "".join(normalized_parts)
 
 def _payload_to_text(payload: str | dict[str, str | bool]) -> str:
     """将事件负载规范化为文本。
@@ -93,15 +112,14 @@ def _payload_to_text(payload: str | dict[str, str | bool]) -> str:
     """
 
     if isinstance(payload, str):
-        normalized = normalize_stream_text_for_markdown(payload)
-        return normalized if normalized.strip() else ""
+        if payload.strip():
+            return normalize_stream_text_for_markdown(payload)
     if isinstance(payload, dict):
         for key in _TEXT_PAYLOAD_KEYS:
             candidate = payload.get(key)
             if isinstance(candidate, str):
-                normalized = normalize_stream_text_for_markdown(candidate)
-                if normalized.strip():
-                    return normalized
+                if candidate.strip():
+                    return normalize_stream_text_for_markdown(candidate)
     return ""
 
 
@@ -128,7 +146,6 @@ def _payload_message(payload: str | dict[str, str | bool]) -> str:
                 if normalized_message:
                     return normalized_message
         return str(payload).strip()
-    return ""
 
 
 def _format_cancelled_message(payload: str | dict[str, str | bool]) -> str:
@@ -147,7 +164,7 @@ def _format_cancelled_message(payload: str | dict[str, str | bool]) -> str:
     if isinstance(payload, dict):
         reason = payload.get("cancel_reason")
         if isinstance(reason, str) and reason.strip():
-            return f"{_CANCELLED_REASON_PREFIX}{reason.strip()}"
+            return f"{_CANCELLED_DEFAULT_MESSAGE}：{reason.strip()}"
     return _CANCELLED_DEFAULT_MESSAGE
 
 

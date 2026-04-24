@@ -52,7 +52,7 @@ def ensure_pandoc_v3_or_newer() -> None:
 def convert_to_html(report_path: Path, ticker: str) -> tuple[bytes, str, str]:
     """将 Markdown 报告转换为 HTML 格式。"""
 
-    render_dir = Path(__file__).resolve().parent.parent.parent.parent / "render"
+    render_dir = Path(__file__).parents[4] / "render"
     assets_dir = render_dir
     diagram_filter = assets_dir / "diagram.lua"
     ensure_pandoc_v3_or_newer()
@@ -95,7 +95,7 @@ def convert_to_html(report_path: Path, ticker: str) -> tuple[bytes, str, str]:
 def convert_to_pdf(report_path: Path, ticker: str) -> tuple[bytes, str, str]:
     """将 Markdown 报告转换为 PDF 格式。"""
 
-    render_dir = Path(__file__).resolve().parent.parent.parent.parent / "render"
+    render_dir = Path(__file__).parents[4] / "render"
     assets_dir = render_dir
     diagram_filter = assets_dir / "diagram.lua"
     ensure_pandoc_v3_or_newer()

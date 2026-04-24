@@ -20,11 +20,10 @@ from dayu.startup.workspace_initializer import (
     update_manifest_default_models,
 )
 
-_WORKSPACE_SETUP_FEEDBACK_KEY = "workspace_setup_feedback"
-_RUNTIME_RELOAD_FLAG_KEY = "streamlit_needs_reinitialize"
 _INIT_ROLE_KEY = "_init_model_role"
 _ROLE_NON_THINKING = "non_thinking"
 _ROLE_THINKING = "thinking"
+_CONFIG_NEEDS_REFRESH_KEY = "config_needs_refresh"
 
 
 @dataclass(frozen=True)
@@ -124,171 +123,6 @@ def save_watchlist_items(workspace_root: Path, items: list[WatchlistItem]) -> No
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
-def run_sidebar_workspace_initialization(
-    workspace_root: Path,
-    *,
-    overwrite: bool,
-    reset: bool,
-) -> tuple[WorkspaceInitializationResult, tuple[Path, ...]]:
-    """执行侧栏触发的工作区初始化。
-
-    Args:
-        workspace_root: 工作区根目录。
-        overwrite: 是否覆盖已有 config/assets。
-        reset: 是否先清理 `.dayu` / `config` / `assets`。
-
-    Returns:
-        二元组 `(初始化结果, 实际被删除的路径元组)`。
-
-    Raises:
-        OSError: 删除或复制目录失败时抛出。
-    """
-
-    removed_targets: tuple[Path, ...] = ()
-    if reset:
-        removed_targets = reset_workspace_init_targets(workspace_root)
-    initialization_result = initialize_workspace_configuration(
-        workspace_root,
-        overwrite=overwrite,
-    )
-    return initialization_result, removed_targets
-
-
-def persist_sidebar_default_models(
-    workspace_root: Path,
-    *,
-    non_thinking_model: str,
-    thinking_model: str,
-) -> int:
-    """持久化侧栏选择的默认模型。
-
-    Args:
-        workspace_root: 工作区根目录。
-        non_thinking_model: non-thinking 默认模型名。
-        thinking_model: thinking 默认模型名。
-
-    Returns:
-        被更新的 manifest 文件数量。
-
-    Raises:
-        FileNotFoundError: 配置目录不存在时抛出。
-        OSError: manifest 读写失败时抛出。
-        json.JSONDecodeError: manifest JSON 非法时抛出。
-    """
-
-    config_dir = (workspace_root / "config").resolve()
-    if not config_dir.exists():
-        raise FileNotFoundError(f"配置目录不存在: {config_dir}")
-    return update_manifest_default_models(
-        config_dir,
-        non_thinking_model=non_thinking_model,
-        thinking_model=thinking_model,
-    )
-
-
-def load_sidebar_model_options(workspace_root: Path) -> tuple[str, ...]:
-    """读取侧栏模型切换可选项。
-
-    Args:
-        workspace_root: 工作区根目录。
-
-    Returns:
-        可选模型名元组。
-
-    Raises:
-        FileNotFoundError: 配置目录不存在时抛出。
-        OSError: 模型配置文件读取失败时抛出。
-    """
-
-    config_dir = (workspace_root / "config").resolve()
-    if not config_dir.exists():
-        raise FileNotFoundError(f"配置目录不存在: {config_dir}")
-    return load_available_model_names(config_dir)
-
-
-def load_sidebar_selected_models(workspace_root: Path) -> tuple[str | None, str | None]:
-    """读取当前已生效的默认模型选择。
-
-    Args:
-        workspace_root: 工作区根目录。
-
-    Returns:
-        `(non_thinking_model, thinking_model)`；未识别时对应项为 `None`。
-
-    Raises:
-        无：读取失败时返回 `(None, None)`。
-    """
-
-    manifests_dir = (workspace_root / "config" / "prompts" / "manifests").resolve()
-    if not manifests_dir.exists():
-        return None, None
-    non_thinking_model: str | None = None
-    thinking_model: str | None = None
-    for manifest_path in sorted(manifests_dir.glob("*.json")):
-        try:
-            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, dict):
-            continue
-        model_section = payload.get("model")
-        if not isinstance(model_section, dict):
-            continue
-        default_name = model_section.get("default_name")
-        if not isinstance(default_name, str) or not default_name.strip():
-            continue
-        role = model_section.get(_INIT_ROLE_KEY, "")
-        if role == _ROLE_NON_THINKING and non_thinking_model is None:
-            non_thinking_model = default_name
-            continue
-        if role == _ROLE_THINKING and thinking_model is None:
-            thinking_model = default_name
-            continue
-        if "thinking" in default_name and thinking_model is None:
-            thinking_model = default_name
-            continue
-        if non_thinking_model is None:
-            non_thinking_model = default_name
-    return non_thinking_model, thinking_model
-
-
-def _set_workspace_setup_feedback(message: str, *, is_error: bool) -> None:
-    """写入侧栏操作反馈消息。
-
-    Args:
-        message: 要展示的消息内容。
-        is_error: 是否为错误消息。
-
-    Returns:
-        无。
-
-    Raises:
-        无。
-    """
-
-    st.session_state[_WORKSPACE_SETUP_FEEDBACK_KEY] = {
-        "message": message,
-        "is_error": is_error,
-    }
-
-
-def set_sidebar_workspace_setup_feedback(message: str, *, is_error: bool) -> None:
-    """对外暴露侧栏反馈写入能力。
-
-    Args:
-        message: 反馈消息。
-        is_error: 是否为错误消息。
-
-    Returns:
-        无。
-
-    Raises:
-        无。
-    """
-
-    _set_workspace_setup_feedback(message, is_error=is_error)
-
-
 def _render_workspace_setup_section(workspace_root: Path) -> None:
     """渲染侧栏工作区配置入口，仅显示配置按钮。
 
@@ -303,15 +137,6 @@ def _render_workspace_setup_section(workspace_root: Path) -> None:
     Raises:
         无。
     """
-
-    feedback = st.session_state.pop(_WORKSPACE_SETUP_FEEDBACK_KEY, None)
-    if isinstance(feedback, dict):
-        message = feedback.get("message")
-        if isinstance(message, str) and message:
-            if bool(feedback.get("is_error", False)):
-                st.sidebar.error(message)
-            else:
-                st.sidebar.success(message)
 
     if st.sidebar.button(
         "⚙️ 模型配置",
@@ -387,9 +212,8 @@ def render_sidebar(
 
     # 如果刷新了数据，检查当前选中的股票是否还在列表中，不在则清除选中状态
     selected_ticker = st.session_state.get("selected_ticker")
-    if needs_refresh and isinstance(selected_ticker, str) and selected_ticker:
-        current_ticker = selected_ticker
-        if not any(item.ticker == current_ticker for item in watchlist):
+    if needs_refresh:
+        if selected_ticker is not None and not any(item.ticker == selected_ticker for item in watchlist):
             st.session_state["selected_ticker"] = None
 
     # 自选股标题行：左侧标题，右侧管理按钮（icon 按钮，更小）

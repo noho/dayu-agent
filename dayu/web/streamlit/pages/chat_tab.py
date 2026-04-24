@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+import time
 import streamlit as st
 
 from dayu.log import Log
@@ -24,16 +25,14 @@ MODULE = "dayu.web.streamlit.pages.chat_tab"
 _WELCOME_MARKDOWN = "大禹 Agent 将基于当前股票的财报及相关材料进行交互式分析。"
 _INPUT_PLACEHOLDER = "例如：公司的核心竞争力是什么？增长的主要驱动因素有哪些？"
 _INPUT_LABEL = "输入你的分析问题"
-_SEND_BUTTON_TEXT = "开始分析"
-_SEND_BUTTON_ICON = "🚀"
 _EMPTY_INPUT_WARNING = "请输入问题后再提交。"
 _MISSING_SERVICE_WARNING = "交互式分析服务未就绪，请检查服务初始化状态。"
 _EMPTY_ASSISTANT_REPLY_WARNING = "本轮未收到可展示的回复，请稍后重试或检查模型与网络配置。"
 _THINKING_EXPANDER_TITLE = "思考内容"
-_SCREENSHOT_COPY_EXPANDER_TITLE = "截图版（可复制 Markdown）"
-_SCREENSHOT_COPY_CODE_LANGUAGE = "markdown"
 _USER_MESSAGE_COLUMN_SPEC: list[int] = [1, 3]
 _ASSISTANT_MESSAGE_COLUMN_SPEC: list[int] = [4, 1]
+_STREAM_RENDER_MIN_INTERVAL_SECONDS = 0.08
+_STREAM_RENDER_MIN_CHAR_DELTA = 24
 _StreamQueueItem = StreamQueueItem
 
 
@@ -91,32 +90,11 @@ def _render_message_history(messages: list[_ChatMessage]) -> None:
             with st.chat_message(message.role):
                 if message.role == "assistant" and message.reasoning_content.strip():
                     with st.expander(_THINKING_EXPANDER_TITLE, expanded=True):
-                        st.markdown(normalize_stream_text_for_markdown(message.reasoning_content))
+                        st.markdown(message.reasoning_content)
                 if message.role == "assistant":
-                    st.markdown(normalize_stream_text_for_markdown(message.content))
-                    _render_copyable_screenshot_markdown(message.content)
+                    st.markdown(message.content)
                 else:
                     st.markdown(message.content)
-
-
-def _render_copyable_screenshot_markdown(answer_markdown: str) -> None:
-    """渲染可复制的截图版 Markdown 文本。
-
-    参数:
-        answer_markdown: 助手最终回答的 Markdown 文本。
-
-    返回值:
-        无。
-
-    异常:
-        无。
-    """
-
-    normalized_markdown = normalize_stream_text_for_markdown(answer_markdown)
-    if not normalized_markdown.strip():
-        return
-    with st.expander(_SCREENSHOT_COPY_EXPANDER_TITLE, expanded=False):
-        st.code(normalized_markdown, language=_SCREENSHOT_COPY_CODE_LANGUAGE)
 
 
 def _sync_stream_via_asyncio(
@@ -149,23 +127,94 @@ def _sync_stream_via_asyncio(
 
 
 def _render_stream_markdown(chunks: Iterator[StreamQueueItem]) -> tuple[str, str]:
-    """按 Markdown 语义分区流式渲染思考与正文。"""
+    """按 Markdown 语义分区流式渲染思考与正文。
+
+    参数:
+        chunks: 后端产出的流式分片迭代器。
+
+    返回值:
+        二元组 ``(reasoning_text, answer_text)``，分别表示思考与正文完整文本。
+
+    异常:
+        无。
+    """
 
     with st.expander(_THINKING_EXPANDER_TITLE, expanded=True):
         reasoning_placeholder = st.empty()
     answer_placeholder = st.empty()
     reasoning_parts: list[str] = []
     answer_parts: list[str] = []
+    rendered_reasoning_length = 0
+    rendered_answer_length = 0
+    last_render_timestamp = 0.0
+
+    def _should_flush_stream(*, accumulated_text: str, rendered_length: int, current_timestamp: float) -> bool:
+        """判断是否需要刷新 Markdown 占位符。
+
+        参数:
+            accumulated_text: 当前完整累计文本。
+            rendered_length: 上一次已渲染的文本长度。
+            current_timestamp: 当前时间戳（秒）。
+
+        返回值:
+            满足最小时间间隔或结构边界条件时返回 ``True``。
+
+        异常:
+            无。
+        """
+
+        delta_length = len(accumulated_text) - rendered_length
+        if delta_length <= 0:
+            return False
+        has_markdown_boundary = (
+            ("\n\n" in accumulated_text[rendered_length:])
+            or ("\n- " in accumulated_text[rendered_length:])
+            or ("\n* " in accumulated_text[rendered_length:])
+            or ("\n# " in accumulated_text[rendered_length:])
+            or ("```" in accumulated_text[rendered_length:])
+        )
+        interval_reached = (current_timestamp - last_render_timestamp) >= _STREAM_RENDER_MIN_INTERVAL_SECONDS
+        return (
+            delta_length >= _STREAM_RENDER_MIN_CHAR_DELTA
+            or has_markdown_boundary
+            or interval_reached
+        )
+
     for item in chunks:
+        current_timestamp = time.perf_counter()
         if item.kind == "reasoning":
             reasoning_parts.append(item.chunk)
-            reasoning_placeholder.markdown(normalize_stream_text_for_markdown("".join(reasoning_parts)))
+            reasoning_text = "".join(reasoning_parts)
+            rendered_reasoning_text = normalize_stream_text_for_markdown(reasoning_text)
+            if _should_flush_stream(
+                accumulated_text=reasoning_text,
+                rendered_length=rendered_reasoning_length,
+                current_timestamp=current_timestamp,
+            ):
+                reasoning_placeholder.markdown(rendered_reasoning_text)
+                rendered_reasoning_length = len(reasoning_text)
+                last_render_timestamp = current_timestamp
             continue
         answer_parts.append(item.chunk)
-        answer_placeholder.markdown(normalize_stream_text_for_markdown("".join(answer_parts)))
+        answer_text = "".join(answer_parts)
+        rendered_answer_text = normalize_stream_text_for_markdown(answer_text)
+        if _should_flush_stream(
+            accumulated_text=answer_text,
+            rendered_length=rendered_answer_length,
+            current_timestamp=current_timestamp,
+        ):
+            answer_placeholder.markdown(rendered_answer_text)
+            rendered_answer_length = len(answer_text)
+            last_render_timestamp = current_timestamp
+    final_reasoning_text = normalize_stream_text_for_markdown("".join(reasoning_parts))
+    final_answer_text = normalize_stream_text_for_markdown("".join(answer_parts))
+    if len(final_reasoning_text) != rendered_reasoning_length:
+        reasoning_placeholder.markdown(final_reasoning_text)
+    if len(final_answer_text) != rendered_answer_length:
+        answer_placeholder.markdown(final_answer_text)
     return (
-        normalize_stream_text_for_markdown("".join(reasoning_parts)),
-        normalize_stream_text_for_markdown("".join(answer_parts)),
+        final_reasoning_text,
+        final_answer_text,
     )
 
 
@@ -273,7 +322,7 @@ def render_chat_tab(
         height=120,
     )
     send_button_key = _build_state_key(ticker, "send_button")
-    if not st.button(f"{_SEND_BUTTON_ICON} {_SEND_BUTTON_TEXT}", type="primary", key=send_button_key):
+    if not st.button("🚀开始分析", type="primary", key=send_button_key):
         return
 
     normalized_user_text = user_text.strip()
@@ -339,7 +388,7 @@ def render_chat_tab(
                 reasoning_content=assistant_reasoning_text,
             )
         )
-    except BaseException as exception:  # noqa: BLE001
+    except Exception as exception:
         Log.error(f"[{trace_id}] 交互式分析执行失败: {exception}", exc_info=True, module=MODULE)
         st.error(f"交互式分析执行失败：{exception}")
         return

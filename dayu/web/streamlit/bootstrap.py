@@ -12,15 +12,15 @@ from typing import TYPE_CHECKING
 
 import streamlit as st
 
+from dayu.log import Log
+
 if TYPE_CHECKING:
     from dayu.services.startup_preparation import PreparedHostRuntimeDependencies
     from dayu.services.protocols import ChatServiceProtocol, FinsServiceProtocol, WriteServiceProtocol
-    from dayu.web.streamlit.file_server import FileServerHandle
     from dayu.web.streamlit.pages.chat.chat_client import ChatServiceClient
-
+from dayu.startup.workspace_initializer import initialize_workspace_configuration
 
 MODULE = "WEB.STREAMLIT.BOOTSTRAP"
-
 
 def initialize_services() -> tuple[Path, FinsServiceProtocol | None, WriteServiceProtocol | None, ChatServiceClient | None]:
     """初始化 Streamlit 页面所需 Service 依赖。
@@ -36,6 +36,14 @@ def initialize_services() -> tuple[Path, FinsServiceProtocol | None, WriteServic
     """
 
     workspace_root = resolve_workspace_root()
+    
+    # 初始化工作区配置
+    config_dir = (workspace_root / "config").resolve()
+    assets_dir = (workspace_root / "assets").resolve()
+    if not config_dir.exists() or not assets_dir.exists():
+        initialize_workspace_configuration(base_dir=workspace_root, overwrite=True)
+        Log.info(f"✓ 初始化工作区配置，config: `{config_dir}`, assets: `{assets_dir}`", module=MODULE)
+
     prepared_runtime_dependencies: PreparedHostRuntimeDependencies | None = None
     try:
         prepared_runtime_dependencies = _prepare_host_runtime_dependencies(workspace_root)
@@ -84,8 +92,7 @@ def resolve_workspace_root() -> Path:
 
     优先级：
     1. 命令行参数 `--workspace` / `-w`
-    2. 环境变量 `DAYU_WORKSPACE`
-    3. 当前目录下的 `workspace`
+    2. 当前目录下的 `workspace`
 
     参数:
         无。
@@ -103,33 +110,7 @@ def resolve_workspace_root() -> Path:
     if parsed_args.workspace:
         return Path(parsed_args.workspace).resolve()
 
-    env_workspace = os.environ.get("DAYU_WORKSPACE")
-    if env_workspace:
-        return Path(env_workspace).resolve()
-
     return (Path.cwd() / "workspace").resolve()
-
-
-def start_file_server_safely(workspace_root: Path) -> FileServerHandle | None:
-    """安全启动本地文件服务，失败时降级为 `None`。
-
-    参数:
-        workspace_root: 工作区根目录。
-
-    返回值:
-        启动成功返回文件服务句柄；失败返回 `None`。
-
-    异常:
-        无。所有异常都转为 warning。
-    """
-
-    from dayu.web.streamlit.file_server import start_file_server
-
-    try:
-        return start_file_server(workspace_root)
-    except Exception as exception:  # noqa: BLE001
-        st.warning(f"本地文件服务启动失败，将无法在新标签打开财报文件: {exception}")
-        return None
 
 
 def _prepare_host_runtime_dependencies(workspace_root: Path) -> PreparedHostRuntimeDependencies:

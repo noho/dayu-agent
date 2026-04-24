@@ -27,9 +27,7 @@ from dayu.fins.domain.enums import SourceKind
 from dayu.fins.storage import FsSourceDocumentRepository
 from dayu.services.protocols import FinsServiceProtocol
 from dayu.web.streamlit.components.sidebar import WatchlistItem
-from dayu.web.streamlit.file_server import FileServerHandle
 
-_DATAFRAME_DEFAULT_VISIBLE_ROWS = 15
 _DATAFRAME_ROW_HEIGHT_PX = 35
 _DATAFRAME_HEADER_HEIGHT_PX = 38
 
@@ -55,6 +53,7 @@ class DownloadTaskState:
         current_document_id: 当前处理的文档 ID。
         message: 状态描述信息。
         downloaded_count: 已下载文件数。
+        downloaded_filing_count: 已下载财报数。
         total_count: 预计总文件数。
         errors: 错误信息列表。
         started_at: 开始时间。
@@ -69,6 +68,7 @@ class DownloadTaskState:
     current_document_id: str | None = None
     message: str = "等待开始..."
     downloaded_count: int = 0
+    downloaded_filing_count: int = 0
     total_count: int | None = None
     errors: list[str] = field(default_factory=list)
     logs: list[dict[str, str]] = field(default_factory=list)
@@ -86,6 +86,7 @@ class DownloadTaskState:
             "current_document_id": self.current_document_id,
             "message": self.message,
             "downloaded_count": self.downloaded_count,
+            "downloaded_filing_count": self.downloaded_filing_count,
             "total_count": self.total_count,
             "errors": self.errors,
             "logs": self.logs,
@@ -105,6 +106,7 @@ class DownloadTaskState:
             current_document_id=data.get("current_document_id"),
             message=data.get("message", "等待开始..."),
             downloaded_count=data.get("downloaded_count", 0),
+            downloaded_filing_count=data.get("downloaded_filing_count", 0),
             total_count=data.get("total_count"),
             errors=data.get("errors", []),
             logs=data.get("logs", []),
@@ -298,7 +300,6 @@ def _add_log_entry(task: DownloadTaskState, message: str, level: str = "info") -
     })
 
 
-
 def _update_download_progress(session_id: str, payload: DownloadProgressPayload) -> None:
     """更新下载任务进度。
 
@@ -346,11 +347,13 @@ def _update_download_progress(session_id: str, payload: DownloadProgressPayload)
         task.message = error_msg
         _add_log_entry(task, error_msg, level="error")
     elif event_type == FinsProgressEventName.FILING_COMPLETED:
+        task.downloaded_filing_count += 1
         task.message, log_level = _build_filing_completed_message(
             payload.form_type,
             payload.filing_result,
             payload.reason,
         )
+       
         _add_log_entry(task, task.message, level=log_level)
         # 如果有 file_count 信息，更新总数
         if payload.file_count is not None:
@@ -539,8 +542,6 @@ def _get_filing_list(workspace_root: Path, ticker: str) -> list[dict]:
             create_directories=False,
         )
 
-        file_server_handle = _get_file_server_handle()
-
         # 获取 filing 文档 ID 列表
         document_ids = source_repo.list_source_document_ids(ticker, SourceKind.FILING)
 
@@ -549,12 +550,11 @@ def _get_filing_list(workspace_root: Path, ticker: str) -> list[dict]:
             try:
                 # 读取文档元数据
                 meta = source_repo.get_source_meta(ticker, doc_id, SourceKind.FILING)
-                file_name, file_path, file_url = _resolve_primary_file_display(
+                file_name, file_path = _resolve_primary_file_display(
                     source_repo=source_repo,
                     workspace_root=workspace_root,
                     ticker=ticker,
                     document_id=doc_id,
-                    file_server_handle=file_server_handle,
                 )
 
                 # 提取关键信息
@@ -562,7 +562,6 @@ def _get_filing_list(workspace_root: Path, ticker: str) -> list[dict]:
                     "document_id": doc_id,
                     "file_name": file_name,
                     "file_path": file_path,
-                    "file_url": file_url,
                     "form_type": meta.get("form_type", "未知"),
                     "filing_date": meta.get("filing_date", "未知"),
                     "report_date": meta.get("report_date", "未知"),
@@ -589,19 +588,17 @@ def _resolve_primary_file_display(
     workspace_root: Path,
     ticker: str,
     document_id: str,
-    file_server_handle: FileServerHandle | None,
-) -> tuple[str, str, str]:
-    """解析源文档主文件的展示名称、路径与浏览器可访问 URL。
+) -> tuple[str, str]:
+    """解析源文档主文件的展示名称、路径。
 
     Args:
         source_repo: 源文档仓储实例。
         workspace_root: 工作区根目录。
         ticker: 股票代码。
         document_id: 文档 ID。
-        file_server_handle: 本地文件服务句柄；为 None 时返回空 URL。
 
     Returns:
-        三元组 `(文件名, 文件路径展示值, 文件访问 URL)`。
+        二元组 `(文件名, 文件路径展示值)`。
 
     Raises:
         无：解析失败时返回“未知”占位，不向调用方抛出异常。
@@ -616,35 +613,9 @@ def _resolve_primary_file_display(
             file_path = str(relative_path)
         except ValueError:
             file_path = str(materialized_path)
-        file_url = ""
-        if file_server_handle is not None and filename != "未知":
-            try:
-                file_url = file_server_handle.build_filing_url(
-                    ticker=ticker,
-                    document_id=document_id,
-                    filename=filename,
-                )
-            except ValueError:
-                file_url = ""
-        return filename, file_path, file_url
+        return filename, file_path
     except Exception:
-        return "未知", "未知", ""
-
-
-def _get_file_server_handle() -> FileServerHandle | None:
-    """从 Streamlit 会话状态获取本地文件服务句柄。
-
-    Returns:
-        当前会话绑定的 `FileServerHandle`；未启动时返回 None。
-
-    Raises:
-        无。
-    """
-
-    candidate = st.session_state.get("file_server_handle")
-    if isinstance(candidate, FileServerHandle):
-        return candidate
-    return None
+        return "未知", "未知"
 
 
 def _render_filing_table(filings: list[dict]) -> None:
@@ -670,13 +641,13 @@ def _render_filing_table(filings: list[dict]) -> None:
 
     if df_data:
         df = pd.DataFrame(df_data)
-        table_height = _calculate_dataframe_height(_DATAFRAME_DEFAULT_VISIBLE_ROWS)
-        selection_event = st.dataframe(
+        table_height = _calculate_dataframe_height(len(df_data))
+        st.dataframe(
             df,
             width="stretch",
             hide_index=True,
             height=table_height,
-            on_select="rerun",
+            on_select="ignore",
             selection_mode="single-row",
             key="filing_table",
             column_config={
@@ -690,52 +661,9 @@ def _render_filing_table(filings: list[dict]) -> None:
                 "状态": st.column_config.TextColumn("状态", width="small"),
             },
         )
-        selected_row_index = _extract_selected_row_index(selection_event)
-        if selected_row_index is not None and selected_row_index < len(filings):
-            selected_filing = filings[selected_row_index]
-            file_url = str(selected_filing.get("file_url", "")).strip()
-            if file_url:
-                st.markdown(
-                    (
-                        f'<a href="{escape(file_url, quote=True)}" '
-                        'target="_blank" rel="noopener noreferrer">在新标签打开文件</a>'
-                    ),
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.caption("本地文件服务未启动或主文件无法定位，无法在浏览器中打开")
+        
     else:
         st.info("暂无有效财报数据")
-
-
-def _extract_selected_row_index(selection_event: object) -> int | None:
-    """从 DataFrame 选中事件中提取单行选中索引。
-
-    Args:
-        selection_event: `st.dataframe` 返回的选中事件对象。
-
-    Returns:
-        选中行索引；未选中或结构不匹配时返回 None。
-
-    Raises:
-        无：解析失败时返回 None，不向调用方抛出异常。
-    """
-
-    if not isinstance(selection_event, Mapping):
-        return None
-    raw_selection = selection_event.get("selection")
-    if not isinstance(raw_selection, Mapping):
-        return None
-    raw_rows = raw_selection.get("rows")
-    if not isinstance(raw_rows, list):
-        return None
-    if not raw_rows:
-        return None
-    first_row = raw_rows[0]
-    if isinstance(first_row, int):
-        return first_row
-    return None
-
 
 def _calculate_dataframe_height(visible_rows: int) -> int:
     """按可见行数计算 DataFrame 组件高度（像素）。
@@ -877,21 +805,26 @@ def _render_download_settings(
             key=f"download_form_types_{ticker}",
         )
 
+        import datetime
+        today = datetime.date.today()
+        three_years_ago = today.replace(year=today.year - 3)
+
         col1, col2 = st.columns(2)
         with col1:
             start_date = st.date_input(
                 "开始日期",
-                value=None,
-                help="可选，留空表示不限制开始日期",
+                value=three_years_ago,
+                help="可选，默认三年前，留空表示不限制开始日期",
                 key=f"download_start_date_{ticker}",
             )
         with col2:
             end_date = st.date_input(
                 "结束日期",
-                value=None,
-                help="可选，留空表示不限制结束日期",
+                value=today,
+                help="可选，默认今天，留空表示不限制结束日期",
                 key=f"download_end_date_{ticker}",
             )
+       
 
         overwrite = st.checkbox(
             "覆盖已有文件",
@@ -1009,7 +942,7 @@ def _render_download_settings(
                             status_container.update(
                                 label="✅ 下载完成！", state="complete", expanded=True
                             )
-                            st.success(f"已成功下载 {final_task.downloaded_count} 个文件")
+                            st.success(f"已成功下载 {final_task.downloaded_filing_count} 个财报，{final_task.downloaded_count} 个文件")
 
                             # 显示错误汇总（如果有）
                             if final_task.errors:

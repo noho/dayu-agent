@@ -18,7 +18,6 @@ _REPORT_PANEL_MAX_HEIGHT_PX = 4800
 _REPORT_PANEL_BASE_HEIGHT_PX = 1200
 _REPORT_PANEL_HEIGHT_PER_CONTENT_LINE_PX = 0.2
 _REPORT_PANEL_HEIGHT_PER_HEADING_PX = 4
-_REPORT_PANEL_HEIGHT_CALIBRATION_FACTOR = 1.0
 
 
 @dataclass(frozen=True)
@@ -186,12 +185,11 @@ def get_report_panel_container_height_px(markdown_content: str, headings: list[M
     """动态计算报告双栏容器高度。"""
 
     content_line_count = len(markdown_content.splitlines())
-    estimated_height_px = (
+    estimated_height_px = int(
         _REPORT_PANEL_BASE_HEIGHT_PX
         + content_line_count * _REPORT_PANEL_HEIGHT_PER_CONTENT_LINE_PX
         + len(headings) * _REPORT_PANEL_HEIGHT_PER_HEADING_PX
     )
-    estimated_height_px = int(estimated_height_px * _REPORT_PANEL_HEIGHT_CALIBRATION_FACTOR)
     return clamp_report_panel_height_px(estimated_height_px)
 
 

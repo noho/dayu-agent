@@ -21,12 +21,11 @@ Usage:
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, cast
 
-import streamlit as streamlit_module
+import streamlit as st
 
 # 添加项目根目录到路径
 project_root = Path(__file__).parent.parent.parent
@@ -35,37 +34,9 @@ sys.path.insert(0, str(project_root))
 if TYPE_CHECKING:
     from dayu.services.protocols import FinsServiceProtocol, WriteServiceProtocol
     from dayu.web.streamlit.components.sidebar import WatchlistItem
-    from dayu.web.streamlit.file_server import FileServerHandle
     from dayu.web.streamlit.pages.chat.chat_client import ChatServiceClient
-from dayu.web.streamlit.bootstrap import initialize_services, start_file_server_safely
+from dayu.web.streamlit.bootstrap import initialize_services
 
-
-class _StreamlitAppProtocol(Protocol):
-    """streamlit_app 所需最小 Streamlit 协议。"""
-
-    session_state: dict[str, object]
-
-    def set_page_config(
-        self,
-        *,
-        page_title: str,
-        page_icon: str,
-        layout: str,
-        initial_sidebar_state: str,
-    ) -> None:
-        """设置页面配置。"""
-        ...
-
-    def error(self, body: str) -> None:
-        """展示错误消息。"""
-        ...
-
-    def stop(self) -> None:
-        """中断当前渲染。"""
-        ...
-
-
-st = cast(_StreamlitAppProtocol, streamlit_module)
 
 
 def _configure_streamlit_page() -> None:
@@ -90,27 +61,6 @@ def _ensure_session_state_initialized() -> None:
         st.session_state["chat_service_client"] = None
         st.session_state["host_admin_service"] = None
         st.session_state["file_server_handle"] = None
-        st.session_state["streamlit_needs_reinitialize"] = False
-
-
-def _reset_runtime_state_for_reinitialize() -> None:
-    """在下次渲染前重置运行时依赖，触发重新初始化。
-
-    Args:
-        无。
-
-    Returns:
-        无。
-
-    Raises:
-        无。
-    """
-
-    st.session_state["initialized"] = False
-    st.session_state["fins_service"] = None
-    st.session_state["write_service"] = None
-    st.session_state["chat_service_client"] = None
-    st.session_state["host_admin_service"] = None
 
 
 def main() -> None:
@@ -122,9 +72,6 @@ def main() -> None:
     _configure_streamlit_page()
     _ensure_session_state_initialized()
 
-    if bool(st.session_state.pop("streamlit_needs_reinitialize", False)):
-        _reset_runtime_state_for_reinitialize()
-
     # 初始化服务（只执行一次）
     if not bool(st.session_state["initialized"]):
         try:
@@ -133,32 +80,13 @@ def main() -> None:
             st.session_state["fins_service"] = fins_service
             st.session_state["write_service"] = write_service
             st.session_state["chat_service_client"] = chat_service_client
-            existing_file_server_handle = cast(
-                "FileServerHandle | None",
-                st.session_state["file_server_handle"],
-            )
-            if (
-                existing_file_server_handle is not None
-                and existing_file_server_handle.workspace_root.resolve() == workspace_root.resolve()
-            ):
-                st.session_state["file_server_handle"] = existing_file_server_handle
-            else:
-                st.session_state["file_server_handle"] = start_file_server_safely(workspace_root)
             st.session_state["initialized"] = True
         except Exception as e:
             st.error(f"服务初始化失败: {e}")
             st.stop()
 
     # 从会话状态获取工作区路径和服务
-    workspace_root_raw = st.session_state["workspace_root"]
-    config_dir = f"{workspace_root_raw}/config"
-    assets_dir = f"{workspace_root_raw}/assets"
-    if not isinstance(workspace_root_raw, Path) or not workspace_root_raw.exists() or not os.path.exists(config_dir) or not os.path.exists(assets_dir):
-        st.error("工作区路径未初始化，请先运行初始化配置。")
-        st.stop()
-        return
-
-    workspace_root = workspace_root_raw
+    workspace_root = st.session_state["workspace_root"]
     fins_service = cast("FinsServiceProtocol | None", st.session_state["fins_service"])
     write_service = cast("WriteServiceProtocol | None", st.session_state["write_service"])
     chat_service_client = cast("ChatServiceClient | None", st.session_state["chat_service_client"])

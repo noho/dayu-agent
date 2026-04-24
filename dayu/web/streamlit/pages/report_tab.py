@@ -291,104 +291,6 @@ def _extract_markdown_headings(markdown_content: str) -> list[MarkdownHeading]:
     ]
 
 
-def _is_markdown_fence_line(stripped_line: str) -> bool:
-    """判断当前行是否为 Markdown 围栏代码块分隔符。
-
-    Args:
-        stripped_line: 去除首尾空白后的单行文本。
-
-    Returns:
-        `True` 表示当前行为围栏代码块起止符，否则返回 `False`。
-
-    Raises:
-        无。
-    """
-
-    return report_markdown_view.is_markdown_fence_line(stripped_line)
-
-
-def _normalize_markdown_heading_title(raw_title: str) -> str:
-    """规范化 Markdown 标题文本。
-
-    Args:
-        raw_title: 正则提取出的标题原文。
-
-    Returns:
-        去除尾随 `#` 与多余空白后的标题文本。
-
-    Raises:
-        无。
-    """
-
-    return report_markdown_view.normalize_markdown_heading_title(raw_title)
-
-
-def _slugify_markdown_heading(title: str) -> str:
-    """将标题文本转换为稳定锚点。
-
-    Args:
-        title: 标题展示文本。
-
-    Returns:
-        可用于 HTML `id` 与锚点链接的稳定字符串。
-
-    Raises:
-        无。
-    """
-
-    return report_markdown_view.slugify_markdown_heading(title)
-
-
-def _build_report_toc_html(headings: list[MarkdownHeading]) -> str:
-    """构建报告目录 HTML。
-
-    Args:
-        headings: Markdown 标题目录项列表。
-
-    Returns:
-        可直接传给 `st.markdown(..., unsafe_allow_html=True)` 的 HTML 字符串。
-
-    Raises:
-        无。
-    """
-
-    normalized_headings = [
-        report_markdown_view.MarkdownHeading(
-            line_index=heading.line_index,
-            level=heading.level,
-            title=heading.title,
-            anchor=heading.anchor,
-        )
-        for heading in headings
-    ]
-    return report_markdown_view.build_report_toc_html(normalized_headings)
-
-
-def _inject_heading_anchors(markdown_content: str, headings: list[MarkdownHeading]) -> str:
-    """为 Markdown 标题注入锚点。
-
-    Args:
-        markdown_content: 原始 Markdown 文本。
-        headings: 预先解析出的标题目录项列表。
-
-    Returns:
-        注入锚点后的 Markdown 文本。
-
-    Raises:
-        无。
-    """
-
-    normalized_headings = [
-        report_markdown_view.MarkdownHeading(
-            line_index=heading.line_index,
-            level=heading.level,
-            title=heading.title,
-            anchor=heading.anchor,
-        )
-        for heading in headings
-    ]
-    return report_markdown_view.inject_heading_anchors(markdown_content, normalized_headings)
-
 
 def _render_markdown_report(markdown_content: str) -> None:
     """按“目录 + 正文”布局渲染报告 Markdown。
@@ -404,51 +306,6 @@ def _render_markdown_report(markdown_content: str) -> None:
     """
 
     report_markdown_view.render_markdown_report(markdown_content)
-
-
-def _get_report_panel_container_height_px(
-    markdown_content: str,
-    headings: list[MarkdownHeading],
-) -> int:
-    """动态计算报告双栏容器高度。
-
-    Args:
-        markdown_content: 原始 Markdown 报告内容。
-        headings: 报告标题目录项列表。
-
-    Returns:
-        报告目录区与正文区共享的容器高度（像素）。
-
-    Raises:
-        无。
-    """
-
-    normalized_headings = [
-        report_markdown_view.MarkdownHeading(
-            line_index=heading.line_index,
-            level=heading.level,
-            title=heading.title,
-            anchor=heading.anchor,
-        )
-        for heading in headings
-    ]
-    return report_markdown_view.get_report_panel_container_height_px(markdown_content, normalized_headings)
-
-
-def _clamp_report_panel_height_px(estimated_height_px: int) -> int:
-    """将动态估算高度约束在可读区间内。
-
-    Args:
-        estimated_height_px: 根据正文与标题估算得到的容器高度。
-
-    Returns:
-        限制在最小高度与最大高度之间的像素值。
-
-    Raises:
-        无。
-    """
-
-    return report_markdown_view.clamp_report_panel_height_px(estimated_height_px)
 
 
 def _init_write_task_state() -> None:
@@ -996,6 +853,34 @@ def _update_task_settings(ticker: str, **kwargs: Any) -> None:
     write_task_settings[key] = settings
 
 
+def _prepare_write_output_dir(output_dir: Path, *, resume: bool) -> None:
+    """准备写作任务输出目录。
+
+    Args:
+        output_dir: 写作输出目录路径（通常为 ``workspace/draft/{ticker}``）。
+        resume: 是否启用断点恢复；为 ``False`` 时表示覆盖模式。
+
+    Returns:
+        无。
+
+    Raises:
+        OSError: 目录创建或目录清理失败时抛出。
+    """
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if resume:
+        return
+
+    for child in output_dir.iterdir():
+        if child.is_symlink():
+            child.unlink()
+            continue
+        if child.is_dir():
+            shutil.rmtree(child)
+            continue
+        child.unlink()
+
+
 def _start_write_task(
     ticker: str,
     company_name: str,
@@ -1035,9 +920,16 @@ def _start_write_task(
         _update_write_task(ticker, status=_TASK_STATUS_FAILED, message=f"模板文件不存在: {template}")
         return
 
-    # 设置输出目录
+    # 设置输出目录（覆盖模式下先清理目录内容）
     output_dir = _get_draft_dir(workspace_root, ticker)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        _prepare_write_output_dir(output_dir, resume=resume)
+    except OSError as exc:
+        _add_task_log(ticker, f"准备输出目录失败: {output_dir}, error={exc}", level="error")
+        _update_write_task(ticker, status=_TASK_STATUS_FAILED, message=f"准备输出目录失败: {exc}")
+        return
+    if not resume:
+        _add_task_log(ticker, f"覆盖模式已启用，已清理输出目录: {output_dir}")
     expected_chapter_count = _estimate_template_chapter_count(template)
 
     # 创建 WriteRunConfig
@@ -1195,8 +1087,8 @@ def _build_state1_guide_card_content(guide_headings: list[MarkdownHeading]) -> s
 """
 
 
-def _render_state1_no_report_no_task(selected_stock: WatchlistItem) -> None:
-    """渲染状态1：无报告 + 无任务运行。
+def _render_state_no_report(selected_stock: WatchlistItem) -> None:
+    """渲染状态：无报告。
 
     引导用户从页头按钮启动分析任务。
 
@@ -1291,10 +1183,10 @@ def _render_task_logs(logs: list[dict[str, str]]) -> str:
     return "".join(lines)
 
 
-def _render_state2_no_report_with_task(
+def _render_task_status(
     selected_stock: WatchlistItem,
 ) -> None:
-    """渲染状态2：无报告 + 有任务运行。
+    """渲染任务状态。
 
     展示详细的任务状态。
 
@@ -1305,14 +1197,13 @@ def _render_state2_no_report_with_task(
     task = _get_ticker_active_write_task(ticker)
 
     if task is None:
-        # 任务可能刚结束，重新加载
-        st.rerun()
+        st.info("任务状态已关闭，返回报告视图。")
         return
 
     _refresh_task_status_from_manifest(ticker, task)
     task = _get_ticker_active_write_task(ticker)
     if task is None:
-        st.rerun()
+        st.info("任务状态已关闭，返回报告视图。")
         return
     task = _bind_write_task_run_id_from_host(ticker, task)
     task = _sync_write_task_status_from_host(ticker, task)
@@ -1373,12 +1264,12 @@ def _render_state2_no_report_with_task(
         st.rerun()
 
 
-def _render_state3_has_report_no_task(
+def _render_state_has_report(
     selected_stock: WatchlistItem,
     workspace_root: Path,
     write_service: WriteServiceProtocol | None,
 ) -> None:
-    """渲染状态3：有报告 + 无任务运行。
+    """渲染状态：有报告。
 
     展示详细的分析报告。
 
@@ -1400,7 +1291,7 @@ def _render_state3_has_report_no_task(
 
         settings = _get_task_settings(ticker)
 
-        template_path = st.text_input(
+        st.text_input(
             "分析模板路径",
             value=settings.get("template_path", default_template_path),
             key=f"regen_template_{ticker}",
@@ -1462,123 +1353,44 @@ def _render_state3_has_report_no_task(
         
     st.markdown("---")
 
-    st.markdown("#### 基本信息")
-    # 报告概览卡片
-    summary = report_state.summary or {}
-    chapter_count = summary.get("chapter_count", "未知")
-    failed_count = summary.get("failed_count", 0)
-    gen_time = _format_time(report_state.modified_time).split()[0] if report_state.modified_time else "未知"
-    file_name = report_state.report_path.name if report_state.report_path else "未知"
+    if _get_ticker_active_write_task(ticker) is None:
+        st.markdown("#### 基本信息")
+        # 报告概览卡片
+        summary = report_state.summary or {}
+        chapter_count = summary.get("chapter_count", "未知")
+        failed_count = summary.get("failed_count", 0)
+        gen_time = _format_time(report_state.modified_time).split()[0] if report_state.modified_time else "未知"
+        file_name = report_state.report_path.name if report_state.report_path else "未知"
 
-    st.markdown(
-        f"""
-        | 章节数 | 失败章节 | 生成时间 | 文件名 |
-        | :--- | :--- | :--- | :--- |
-        | {chapter_count} | {failed_count if failed_count == 0 else f'**{failed_count}**'} | {gen_time} | `{file_name}` |
-        """
-    )
+        st.markdown(
+            f"""
+            | 章节数 | 失败章节 | 生成时间 | 文件名 |
+            | :--- | :--- | :--- | :--- |
+            | {chapter_count} | {failed_count if failed_count == 0 else f'**{failed_count}**'} | {gen_time} | `{file_name}` |
+            """
+        )
 
-    # 如果有失败章节，显示警告
-    failed_chapters = summary.get("failed_chapters", [])
-    if failed_chapters:
-        with st.expander(f"⚠️ 失败章节详情 ({len(failed_chapters)}个)", expanded=True):
-            for fc in failed_chapters:
-                title = fc.get("title", "未知章节")
-                reason = fc.get("reason", "未知原因")
-                retries = fc.get("retry_count", 0)
-                st.warning(f"**{title}**: {reason} (重试{retries}次)")
+        # 如果有失败章节，显示警告
+        failed_chapters = summary.get("failed_chapters", [])
+        if failed_chapters:
+            with st.expander(f"⚠️ 失败章节详情 ({len(failed_chapters)}个)", expanded=True):
+                for fc in failed_chapters:
+                    title = fc.get("title", "未知章节")
+                    reason = fc.get("reason", "未知原因")
+                    retries = fc.get("retry_count", 0)
+                    st.warning(f"**{title}**: {reason} (重试{retries}次)")
 
-    st.markdown("#### 报告内容")
+        st.markdown("#### 报告内容")
 
-    # 加载并显示报告内容
-    if report_state.report_path and report_state.report_path.exists():
-        content = _load_report_content(report_state.report_path)
-        if content:
-            _render_markdown_report(content)
+        # 加载并显示报告内容
+        if report_state.report_path and report_state.report_path.exists():
+            content = _load_report_content(report_state.report_path)
+            if content:
+                _render_markdown_report(content)
+            else:
+                st.error("报告内容加载失败")
         else:
-            st.error("报告内容加载失败")
-    else:
-        st.error("报告文件不存在")
-
-def _generate_report_file(report_path: Path, output_format: str) -> tuple[bytes, str, str]:
-    """根据格式生成报告文件内容。
-
-    Args:
-        report_path: 原始 Markdown 报告文件路径。
-        output_format: 输出格式，支持 "markdown", "html", "pdf"。
-
-    Returns:
-        三元组：(文件字节内容, 下载文件名, MIME 类型)。
-
-    Raises:
-        RuntimeError: 格式转换失败时抛出。
-    """
-    return report_export.generate_report_file(report_path, output_format)
-
-
-def _ensure_pandoc_v3_or_newer() -> None:
-    """校验 pandoc 版本是否满足 3.0+ 要求。
-
-    Args:
-        无。
-
-    Returns:
-        无。
-
-    Raises:
-        RuntimeError: 未安装 pandoc、版本解析失败或版本低于 3.0 时抛出。
-    """
-    report_export.ensure_pandoc_v3_or_newer()
-
-
-def _convert_to_html(report_path: Path, ticker: str) -> tuple[bytes, str, str]:
-    """将 Markdown 报告转换为 HTML 格式。
-
-    Args:
-        report_path: 原始 Markdown 报告文件路径。
-        ticker: 股票代码，用于生成文件名。
-
-    Returns:
-        三元组：(HTML 文件字节内容, 下载文件名, MIME 类型)。
-
-    Raises:
-        RuntimeError: HTML 转换失败时抛出。
-    """
-    return report_export.convert_to_html(report_path, ticker)
-
-
-def _convert_to_pdf(report_path: Path, ticker: str) -> tuple[bytes, str, str]:
-    """将 Markdown 报告转换为 PDF 格式。
-
-    Args:
-        report_path: 原始 Markdown 报告文件路径。
-        ticker: 股票代码，用于生成文件名。
-
-    Returns:
-        三元组：(PDF 文件字节内容, 下载文件名, MIME 类型)。
-
-    Raises:
-        RuntimeError: PDF 转换失败时抛出。
-    """
-    return report_export.convert_to_pdf(report_path, ticker)
-
-
-def _get_report_primary_action_label(report_exists: bool) -> str:
-    """获取报告主操作按钮文案。
-
-    Args:
-        report_exists: 当前股票是否已有报告文件。
-
-    Returns:
-        头部主操作按钮文案。
-
-    Raises:
-        无。
-    """
-
-    if report_exists:
-        return "🔄 重新生成"
-    return "🚀 生成"
+            st.error("报告文件不存在")
 
 
 def _resolve_template_path(template_path: str) -> Path:
@@ -1680,13 +1492,12 @@ def _render_report_header_actions(
     """
 
     regenerate_column, download_column = st.columns(2)
-    primary_action_label = _get_report_primary_action_label(report_exists)
     primary_action_disabled = has_active_task
     download_action_disabled = has_active_task or not _is_report_download_available(report_path)
 
     with regenerate_column:
         if st.button(
-            primary_action_label,
+            "🔄 重新生成" if report_exists else "🚀 生成",
             type="secondary",
             use_container_width=True,
             disabled=primary_action_disabled,
@@ -1709,7 +1520,7 @@ def _render_report_header_actions(
             with st.popover("💾 导出报告", use_container_width=True):
                 # Markdown 格式
                 try:
-                    file_bytes, file_name, mime_type = _generate_report_file(report_path, "markdown")
+                    file_bytes, file_name, mime_type = report_export.generate_report_file(report_path, "markdown")
                     st.download_button(
                         label="📄 Markdown",
                         data=file_bytes,
@@ -1729,7 +1540,7 @@ def _render_report_header_actions(
 
                 # HTML 格式
                 try:
-                    file_bytes, file_name, mime_type = _generate_report_file(report_path, "html")
+                    file_bytes, file_name, mime_type = report_export.generate_report_file(report_path, "html")
                     st.download_button(
                         label="🌐 HTML",
                         data=file_bytes,
@@ -1749,7 +1560,7 @@ def _render_report_header_actions(
 
                 # PDF 格式
                 try:
-                    file_bytes, file_name, mime_type = _generate_report_file(report_path, "pdf")
+                    file_bytes, file_name, mime_type = report_export.generate_report_file(report_path, "pdf")
                     st.download_button(
                         label="📑 PDF",
                         data=file_bytes,
@@ -1799,9 +1610,8 @@ def render_report_tab(
     """渲染分析报告 Tab。
 
     根据报告存在性和任务运行状态，展示三种不同UI：
-    1. 无报告 + 无任务：引导用户启动分析任务
-    2. 无报告 + 有任务：展示详细任务状态
-    3. 有报告 + 无任务：展示详细分析报告
+    1. 无报告：引导用户启动分析任务
+    2. 有报告：展示详细分析报告
 
     Args:
         selected_stock: 当前选中的自选股。
@@ -1813,11 +1623,16 @@ def render_report_tab(
     # 初始化状态
     _init_write_task_state()
 
-    # 检查报告是否存在
-    report_state = _load_report_state(workspace_root, ticker)
-
     # 检查是否有活跃任务
     active_task = _get_ticker_active_write_task(ticker)
+
+    report_exists = False
+    report_path: Path | None = None
+    report_state: ReportState | None = None
+    if active_task is None:
+        report_state = _load_report_state(workspace_root, ticker)
+        report_exists = report_state.exists
+        report_path = report_state.report_path
 
     title_column, actions_column = st.columns([4, 1], gap="small", vertical_alignment="center")
     with title_column:
@@ -1828,18 +1643,18 @@ def render_report_tab(
             workspace_root=workspace_root,
             write_service=write_service,
             ticker=ticker,
-            report_exists=report_state.exists,
-            report_path=report_state.report_path,
+            report_exists=report_exists,
+            report_path=report_path,
             has_active_task=active_task is not None,
         )
 
     # 状态路由
     if active_task is not None:
-        # 有任务正在运行（无论报告是否存在，都优先显示任务状态）
-        _render_state2_no_report_with_task(selected_stock)
-    elif report_state.exists:
-        # 有报告，无任务
-        _render_state3_has_report_no_task(selected_stock, workspace_root, write_service)
+        # 有任务运行
+        _render_task_status(selected_stock)
+    elif report_state is not None and report_state.exists:
+        # 有报告
+        _render_state_has_report(selected_stock, workspace_root, write_service)
     else:
-        # 无报告，无任务
-        _render_state1_no_report_no_task(selected_stock)
+        # 无报告
+        _render_state_no_report(selected_stock)

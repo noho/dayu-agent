@@ -297,13 +297,6 @@ python -m dayu.web
 dayu-web --workspace /path/to/workspace
 ```
 
-或通过环境变量设置：
-
-```bash
-export DAYU_WORKSPACE=/path/to/workspace
-dayu-web
-```
-
 功能：
 - 左侧自选股列表管理（添加、删除、编辑）
 - 选中股票后展示财报管理、交互式分析、分析报告三个 Tab

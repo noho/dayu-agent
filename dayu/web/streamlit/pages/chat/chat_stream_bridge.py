@@ -16,7 +16,10 @@ from dayu.contracts.events import AppEvent, AppEventType
 from dayu.log import Log
 from dayu.services.contracts import ChatTurnRequest, SessionResolutionPolicy
 from dayu.services.protocols import ChatServiceProtocol
-from dayu.web.streamlit.stream_chat_events import fold_app_events_to_assistant_text, normalize_stream_text_for_markdown
+from dayu.web.streamlit.stream_chat_events import (
+    fold_app_events_to_assistant_text,
+    normalize_stream_text_for_markdown,
+)
 
 MODULE = "dayu.web.streamlit.pages.chat_stream_bridge"
 _SCENE_NAME_INTERACTIVE = "interactive"
@@ -37,17 +40,25 @@ class StreamQueueItem:
 
 
 def extract_stream_text(payload: str | dict[str, str | bool]) -> str:
-    """提取流式事件可展示文本。"""
+    """提取流式事件可展示文本，并保留 Markdown 所需空白。
+
+    参数:
+        payload: 流式事件负载，支持字符串或字典。
+
+    返回值:
+        可展示文本；当负载仅包含空白时返回空字符串。
+
+    异常:
+        无。
+    """
 
     if isinstance(payload, str):
-        normalized = normalize_stream_text_for_markdown(payload)
-        return normalized if normalized.strip() else ""
+        return normalize_stream_text_for_markdown(payload) if payload.strip() else ""
     for key in _STREAM_TEXT_KEYS:
         candidate = payload.get(key)
         if isinstance(candidate, str):
-            normalized = normalize_stream_text_for_markdown(candidate)
-            if normalized.strip():
-                return normalized
+            if candidate.strip():
+                return normalize_stream_text_for_markdown(candidate)
     return ""
 
 

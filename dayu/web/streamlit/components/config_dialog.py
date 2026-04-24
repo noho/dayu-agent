@@ -9,51 +9,12 @@ import json
 from pathlib import Path
 import streamlit as st
 
-from dayu.startup.workspace_initializer import (
-    WorkspaceInitializationResult,
-    initialize_workspace_configuration,
-    load_available_model_names,
-    reset_workspace_init_targets,
-)
+from dayu.startup.workspace_initializer import load_available_model_names
 
 _INIT_ROLE_KEY = "_init_model_role"
 _ROLE_NON_THINKING = "non_thinking"
 _ROLE_THINKING = "thinking"
-_RUNTIME_RELOAD_FLAG_KEY = "streamlit_needs_reinitialize"
-_WORKSPACE_SETUP_FEEDBACK_KEY = "workspace_setup_feedback"
-
-
-def _resolve_workspace_paths(workspace_root: Path) -> tuple[Path, Path]:
-    """解析工作区初始化相关目录路径。
-
-    Args:
-        workspace_root: 工作区根目录。
-
-    Returns:
-        `(config_dir, assets_dir)`。
-
-    Raises:
-        无。
-    """
-
-    return workspace_root / "config", workspace_root / "assets"
-
-
-def _is_workspace_initialized(workspace_root: Path) -> bool:
-    """判断工作区是否已完成初始化。
-
-    Args:
-        workspace_root: 工作区根目录。
-
-    Returns:
-        `config` 与 `assets` 目录都存在时返回 `True`。
-
-    Raises:
-        无。
-    """
-
-    config_dir, assets_dir = _resolve_workspace_paths(workspace_root)
-    return config_dir.exists() and assets_dir.exists()
+_SIDEBAR_REFRESH_REQUEST_KEY = "sidebar_needs_refresh"
 
 
 def _load_scene_manifests(workspace_root: Path) -> list[dict]:
@@ -257,34 +218,7 @@ def _build_simplified_updated_models(
     return updated_models
 
 
-def run_config_initialization(
-    workspace_root: Path,
-    *,
-    overwrite: bool,
-    reset: bool,
-) -> tuple[WorkspaceInitializationResult, tuple[Path, ...]]:
-    """执行配置初始化。
-
-    Args:
-        workspace_root: 工作区根目录。
-        overwrite: 是否覆盖已有 config/assets。
-        reset: 是否先清理 `.dayu` / `config` / `assets`。
-
-    Returns:
-        二元组 `(初始化结果, 实际被删除的路径元组)`。
-    """
-
-    removed_targets: tuple[Path, ...] = ()
-    if reset:
-        removed_targets = reset_workspace_init_targets(workspace_root)
-    initialization_result = initialize_workspace_configuration(
-        workspace_root,
-        overwrite=overwrite,
-    )
-    return initialization_result, removed_targets
-
-
-@st.dialog("配置", width="large")
+@st.dialog("模型配置", width="large")
 def render_config_dialog(workspace_root: Path) -> None:
     """渲染配置对话框，提供初始化与模型切换功能。
 
@@ -292,39 +226,6 @@ def render_config_dialog(workspace_root: Path) -> None:
         workspace_root: 工作区根目录。
     """
 
-    # 区域1: 初始化配置
-    st.markdown("#### 工作区相关配置")
-
-    config_dir, assets_dir = _resolve_workspace_paths(workspace_root)
-    workspace_initialized = _is_workspace_initialized(workspace_root)
-    if workspace_initialized:
-        st.markdown(f"- config: `{config_dir.resolve()}`")
-        st.markdown(f"- assets: `{assets_dir.resolve()}`")
-    else:
-        st.info("检测到工作区缺少 config 或 assets 目录，请先执行初始化配置。")
-        if st.button(
-            "初始化配置",
-            key="config_dialog_run_init",
-            type="primary",
-            use_container_width=True,
-        ):
-            try:
-                initialization_result, _removed_targets = run_config_initialization(
-                    workspace_root,
-                    overwrite=True,
-                    reset=True,
-                )
-                st.session_state[_RUNTIME_RELOAD_FLAG_KEY] = True
-                st.success("初始化完成")
-                st.markdown(f"- config: `{initialization_result.config_dir}`")
-                st.markdown(f"- assets: `{initialization_result.assets_dir}`")
-            except Exception as exception:
-                st.error(f"初始化失败: {exception}")
-
-    st.divider()
-
-    # 区域2: 模型切换（按场景）
-    st.markdown("#### 模型配置")
     mode = st.radio(
         "配置模式",
         options=("简化配置", "按场景配置"),
@@ -438,7 +339,6 @@ def render_config_dialog(workspace_root: Path) -> None:
                         )
                         updated_count += 1
 
-                st.session_state[_RUNTIME_RELOAD_FLAG_KEY] = True
                 st.success(f"已更新 {updated_count} 个场景")
             except Exception as exception:
                 st.error(f"保存模型配置失败: {exception}")
