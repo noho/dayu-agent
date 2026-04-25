@@ -3,3 +3,7 @@
 
 torch==2.4.1
 torchvision==0.19.1
+transformers==5.5.4
+huggingface_hub==1.11.0
+numpy==2.4.4
+opencv-python==4.13.0.92
