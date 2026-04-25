@@ -3,6 +3,12 @@
 
 torch==2.2.2
 torchvision==0.17.2
+# transformers 5.x 运行时硬性要求 torch>=2.4，macOS x64 最高只有 2.2.2，降级到 4.x 最新版
+transformers==4.57.6
+huggingface_hub==0.36.2
+# torch 2.2.2 用 numpy 1.x 编译，与 common 锁定的 numpy 2.x 不兼容
+numpy==1.26.4
+opencv-python==4.10.0.84
 ocrmac==1.0.1
 pyobjc-core==12.1
 pyobjc-framework-Cocoa==12.1
