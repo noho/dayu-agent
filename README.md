@@ -125,6 +125,7 @@ playwright install chromium
 
 ```bash
 dayu-cli --help
+dayu-web --help
 dayu-wechat --help
 dayu-render --help
 ```
@@ -269,7 +270,27 @@ dayu-cli <subcommand> [参数]
 - 宿主管理命令同样支持 `--base` / `--config` / 日志参数；例如 `dayu-cli host --base ./workspace status`、`dayu-cli sessions --base ./workspace --source cli --scene interactive`、`dayu-cli conv --base ./workspace list`。
 - `interactive` 默认会续接本地绑定的同一个多轮会话；如果上一次回答还没完整回显到终端，重启 CLI 会先把那次回答补完，再进入新的输入循环。
 
-### 2.2 WeChat 入口
+### 2.2 Web 入口（Streamlit）
+
+基于 Streamlit 的 Web UI：
+
+```bash
+dayu-web
+```
+
+也可以用模块入口启动（等价）：
+
+```bash
+python -m dayu.web
+```
+
+默认使用 `./workspace` 作为工作区
+
+启动后，默认打开 Local URL: http://localhost:8501 （如果 8501 端口被占用将按尝试其他端口）
+
+功能说明：详见[dayu/web/README.md](dayu/web/README.md)
+
+### 2.3 WeChat 入口
 
 统一入口：
 

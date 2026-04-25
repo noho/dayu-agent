@@ -58,6 +58,7 @@ dependencies = [
     "markdownify>=0.13.1",
     "html2text>=2024.2.26",
     "tabulate>=0.9.0",
+    "streamlit>=1.40.0",
 ]
 
 [project.optional-dependencies]
@@ -90,8 +91,10 @@ Issues = "https://github.com/noho/dayu-agent/issues"
 
 [project.scripts]
 dayu-cli = "dayu.cli.main:main"
+dayu-web = "dayu.web.__main__:main"
 dayu-wechat = "dayu.wechat.main:main"
 dayu-render = "dayu.render.render:main"
+
 
 [tool.setuptools.packages.find]
 where = ["."]
