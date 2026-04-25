@@ -1325,14 +1325,16 @@ def test_http_private_methods_retry_and_failure(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
     downloader._sleep_seconds = 0.2
     monkeypatch.setattr(downloader, "_reserve_global_request_slot", lambda min_interval: 0.0)
-    # 设置为当前时间，使 rate_limit 认为刚刚发过请求需要等待
-    import time
-    downloader._last_request_time = time.monotonic()
+    # 用 stub 替换 sec_downloader 模块内的 time.monotonic，使 elapsed = 0，
+    # 从而 wait = sleep_seconds = 0.2，避免依赖宿主机时钟粒度造成 flaky。
+    import dayu.fins.downloaders.sec_downloader as _sd
+    monkeypatch.setattr(_sd.time, "monotonic", lambda: 1000.0)
+    downloader._last_request_time = _sd.time.monotonic()
     _run(downloader._rate_limit())
     _run(downloader._retry_backoff(0))
     _run(downloader._retry_backoff(1))
-    # _rate_limit 至少等待 max(0.12, 0.2) = 0.2 秒
-    assert _sleep_calls[0] == pytest.approx(0.2, abs=0.02)
+    # _rate_limit 应等待 max(0.12, 0.2) - 0 = 0.2 秒（精确，因 monotonic 已 stub）
+    assert _sleep_calls[0] == pytest.approx(0.2, abs=1e-9)
     assert _sleep_calls[1] == 0.8
     _run(downloader.close())
 
