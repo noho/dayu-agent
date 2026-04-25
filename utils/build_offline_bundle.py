@@ -39,6 +39,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--constraints", type=Path, required=True, help="用于离线包的锁定 constraints 文件。")
     parser.add_argument("--platform-id", required=True, help="平台标识，例如 macos-arm64 / linux-x64。")
     parser.add_argument("--output-dir", type=Path, required=True, help="离线包输出目录。")
+    parser.add_argument(
+        "--wheel-cache-dir",
+        type=Path,
+        default=None,
+        help=(
+            "可选的 wheel 缓存目录，用于缓存 sdist 编译产物，避免重复构建。"
+            "release 流程不应传入该参数；仅用于本地 PR 前的平台验证。"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -283,18 +292,24 @@ def _is_source_distribution(artifact_path: Path) -> bool:
     return any(normalized_name.endswith(suffix) for suffix in _SOURCE_DISTRIBUTION_SUFFIXES)
 
 
-def _build_source_distribution_wheels(wheelhouse_dir: Path) -> None:
+def _build_source_distribution_wheels(
+    wheelhouse_dir: Path,
+    *,
+    wheel_cache_dir: Path | None,
+) -> None:
     """把 wheelhouse 中的源码分发包预构建为 wheel 并删除源码归档。
 
     参数：
         wheelhouse_dir：wheelhouse 目录。
+        wheel_cache_dir：可选的 wheel 缓存目录；若非空，编译得到的新 wheel 会
+            回写到该目录（同名文件跳过），供后续构建通过 `--find-links` 直接命中。
 
     返回值：
         无。
 
     异常：
         subprocess.CalledProcessError：`pip wheel` 构建失败时抛出。
-        OSError：删除源码归档失败时抛出。
+        OSError：删除源码归档或写回缓存失败时抛出。
     """
 
     source_distributions = tuple(
@@ -304,6 +319,9 @@ def _build_source_distribution_wheels(wheelhouse_dir: Path) -> None:
     )
     if not source_distributions:
         return
+    existing_wheel_names = {
+        path.name for path in wheelhouse_dir.iterdir() if path.is_file() and path.suffix == ".whl"
+    }
     _run_command(
         [
             sys.executable,
@@ -318,15 +336,36 @@ def _build_source_distribution_wheels(wheelhouse_dir: Path) -> None:
     )
     for source_distribution in source_distributions:
         source_distribution.unlink()
+    if wheel_cache_dir is None:
+        return
+    wheel_cache_dir.mkdir(parents=True, exist_ok=True)
+    for wheel_file in sorted(wheelhouse_dir.iterdir()):
+        if not wheel_file.is_file() or wheel_file.suffix != ".whl":
+            continue
+        if wheel_file.name in existing_wheel_names:
+            continue
+        cached_wheel_path = wheel_cache_dir / wheel_file.name
+        if cached_wheel_path.exists():
+            continue
+        shutil.copy2(wheel_file, cached_wheel_path)
 
 
-def _download_wheelhouse(bundle_dir: Path, *, wheel_path: Path, constraints_path: Path) -> None:
+def _download_wheelhouse(
+    bundle_dir: Path,
+    *,
+    wheel_path: Path,
+    constraints_path: Path,
+    wheel_cache_dir: Path | None,
+) -> None:
     """下载离线包所需的完整 wheelhouse。
 
     参数：
         bundle_dir：离线包工作目录。
         wheel_path：项目 wheel 路径。
         constraints_path：锁定约束文件路径。
+        wheel_cache_dir：可选的 wheel 缓存目录；若非空，`pip download` 会通过
+            `--find-links` 优先从该目录命中已缓存 wheel，跳过 sdist 下载与
+            二次编译。release 流程不应传入该参数。
 
     返回值：
         无。
@@ -348,21 +387,23 @@ def _download_wheelhouse(bundle_dir: Path, *, wheel_path: Path, constraints_path
             f"dayu-agent[browser] @ {wheel_path.resolve().as_uri()}\n",
             encoding="utf-8",
         )
-        _run_command(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "download",
-                "--dest",
-                str(wheelhouse_dir),
-                "--constraint",
-                str(bundle_dir / "constraints.txt"),
-                "-r",
-                str(requirements_path),
-            ]
-        )
-    _build_source_distribution_wheels(wheelhouse_dir)
+        pip_download_command: list[str] = [
+            sys.executable,
+            "-m",
+            "pip",
+            "download",
+            "--dest",
+            str(wheelhouse_dir),
+            "--constraint",
+            str(bundle_dir / "constraints.txt"),
+            "-r",
+            str(requirements_path),
+        ]
+        if wheel_cache_dir is not None:
+            wheel_cache_dir.mkdir(parents=True, exist_ok=True)
+            pip_download_command.extend(["--find-links", str(wheel_cache_dir)])
+        _run_command(pip_download_command)
+    _build_source_distribution_wheels(wheelhouse_dir, wheel_cache_dir=wheel_cache_dir)
 
 
 def _create_archive(bundle_dir: Path, archive_path: Path) -> None:
@@ -408,6 +449,7 @@ def main() -> None:
     args = _parse_args()
     wheel_path = args.wheel.resolve()
     constraints_path = args.constraints.resolve()
+    wheel_cache_dir = args.wheel_cache_dir.resolve() if args.wheel_cache_dir is not None else None
     package_name, version = _read_wheel_metadata(wheel_path)
     bundle_stem = _bundle_stem(package_name, version, args.platform_id)
     archive_path = _archive_path(args.output_dir.resolve(), bundle_stem, args.platform_id)
@@ -416,7 +458,12 @@ def main() -> None:
         staging_root = Path(temp_dir_name)
         bundle_dir = staging_root / bundle_stem
         bundle_dir.mkdir(parents=True, exist_ok=True)
-        _download_wheelhouse(bundle_dir, wheel_path=wheel_path, constraints_path=constraints_path)
+        _download_wheelhouse(
+            bundle_dir,
+            wheel_path=wheel_path,
+            constraints_path=constraints_path,
+            wheel_cache_dir=wheel_cache_dir,
+        )
         _write_install_script(bundle_dir, version=version, platform_id=args.platform_id)
         _write_bundle_readme(
             bundle_dir,

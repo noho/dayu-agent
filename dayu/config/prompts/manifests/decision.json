@@ -1,18 +1,18 @@
 {
   "scene": "decision",
   "model": {
-    "default_name": "mimo-v2-pro-thinking-plan",
+    "default_name": "mimo-v2.5-pro-thinking-plan",
     "allowed_names": [
-      "mimo-v2-flash-thinking",
-      "mimo-v2-pro-thinking",
-      "mimo-v2-pro-thinking-plan",
-      "mimo-v2-pro-thinking-plan-sg",
-      "deepseek-thinking",
-      "qwen3-thinking",
+      "mimo-v2.5-pro-thinking",
+      "mimo-v2.5-pro-thinking-plan",
+      "mimo-v2.5-pro-thinking-plan-sg",
+      "deepseek-v4-flash-thinking",
+      "deepseek-v4-pro-thinking",
+      "qwen-plus-thinking",
       "qwen3:30b-thinking",
-      "gpt-5.4",
-      "claude-sonnet-4-6",
-      "gemini-2.5-flash"
+      "gpt-5.4-thinking",
+      "claude-sonnet-4-6-thinking",
+      "gemini-2.5-flash-thinking"
     ],
     "temperature_profile": "decision"
   },

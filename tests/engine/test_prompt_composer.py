@@ -21,16 +21,16 @@ from dayu.startup.config_file_resolver import ConfigFileResolver
 from dayu.startup.prompt_assets import FilePromptAssetStore
 
 _EXPECTED_THINKING_ALLOWED_NAMES: tuple[str, ...] = (
-    "mimo-v2-flash-thinking",
-    "mimo-v2-pro-thinking",
-    "mimo-v2-pro-thinking-plan",
-    "mimo-v2-pro-thinking-plan-sg",
-    "deepseek-thinking",
-    "qwen3-thinking",
+    "mimo-v2.5-pro-thinking",
+    "mimo-v2.5-pro-thinking-plan",
+    "mimo-v2.5-pro-thinking-plan-sg",
+    "deepseek-v4-flash-thinking",
+    "deepseek-v4-pro-thinking",
+    "qwen-plus-thinking",
     "qwen3:30b-thinking",
-    "gpt-5.4",
-    "claude-sonnet-4-6",
-    "gemini-2.5-flash",
+    "gpt-5.4-thinking",
+    "claude-sonnet-4-6-thinking",
+    "gemini-2.5-flash-thinking",
 )
 
 
@@ -148,8 +148,8 @@ def test_manifest_duplicate_order_raises(tmp_path: Path) -> None:
         {
           "scene": "dup",
           "model": {
-            "default_name": "mimo-v2-flash",
-            "allowed_names": ["mimo-v2-flash"],
+            "default_name": "mimo-v2.5-pro",
+            "allowed_names": ["mimo-v2.5-pro"],
             "temperature_profile": "dup"
           },
           "version": "v1",
@@ -173,7 +173,7 @@ def test_manifest_tool_selection_is_loaded_from_shared_parser() -> None:
 
     manifest = load_scene_definition(FilePromptAssetStore(ConfigFileResolver()), "audit")
 
-    assert manifest.model.default_name == "mimo-v2-pro-thinking-plan"
+    assert manifest.model.default_name == "mimo-v2.5-pro-thinking-plan"
     assert manifest.model.allowed_names == _EXPECTED_THINKING_ALLOWED_NAMES
     assert manifest.model.temperature_profile == "audit"
     assert manifest.runtime.agent.max_iterations is None
@@ -188,7 +188,7 @@ def test_conversation_compaction_manifest_is_tool_free() -> None:
 
     manifest = load_scene_definition(FilePromptAssetStore(ConfigFileResolver()), "conversation_compaction")
 
-    assert manifest.model.default_name == "mimo-v2-pro-thinking-plan"
+    assert manifest.model.default_name == "mimo-v2.5-pro-thinking-plan"
     assert manifest.model.temperature_profile == "conversation_compaction"
     assert manifest.tool_selection_policy.mode.value == "none"
 
@@ -216,7 +216,7 @@ def test_interactive_manifest_excludes_doc_tools_by_default() -> None:
 
     manifest = load_scene_definition(FilePromptAssetStore(ConfigFileResolver()), "interactive")
 
-    assert manifest.model.default_name == "mimo-v2-pro-thinking-plan"
+    assert manifest.model.default_name == "mimo-v2.5-pro-thinking-plan"
     assert manifest.model.temperature_profile == "interactive"
     assert manifest.conversation.enabled is True
     assert manifest.tool_selection_policy.mode.value == "select"
@@ -326,8 +326,8 @@ def test_tools_fragment_tool_filters_is_rejected(tmp_path: Path) -> None:
         {
           "scene": "invalid_tools",
           "model": {
-            "default_name": "mimo-v2-flash",
-            "allowed_names": ["mimo-v2-flash"],
+            "default_name": "mimo-v2.5-pro",
+            "allowed_names": ["mimo-v2.5-pro"],
             "temperature_profile": "invalid_tools"
           },
           "version": "v1",
@@ -367,8 +367,8 @@ def test_tool_selection_select_requires_non_empty_tags(tmp_path: Path) -> None:
         {
           "scene": "invalid_select",
           "model": {
-            "default_name": "mimo-v2-flash",
-            "allowed_names": ["mimo-v2-flash"],
+            "default_name": "mimo-v2.5-pro",
+            "allowed_names": ["mimo-v2.5-pro"],
             "temperature_profile": "invalid_select"
           },
           "version": "v1",
@@ -429,8 +429,8 @@ def test_scene_manifest_rejects_invalid_conversation_enabled_type(tmp_path: Path
         {
           "scene": "invalid_conversation",
           "model": {
-            "default_name": "mimo-v2-flash",
-            "allowed_names": ["mimo-v2-flash"],
+            "default_name": "mimo-v2.5-pro",
+            "allowed_names": ["mimo-v2.5-pro"],
             "temperature_profile": "invalid_conversation"
           },
           "version": "v1",
@@ -464,8 +464,8 @@ def test_child_scene_inherits_parent_conversation_mode(tmp_path: Path) -> None:
         {
           "scene": "base_scene",
           "model": {
-            "default_name": "mimo-v2-flash",
-            "allowed_names": ["mimo-v2-flash"],
+            "default_name": "mimo-v2.5-pro",
+            "allowed_names": ["mimo-v2.5-pro"],
             "temperature_profile": "base_scene"
           },
           "version": "v1",
@@ -483,8 +483,8 @@ def test_child_scene_inherits_parent_conversation_mode(tmp_path: Path) -> None:
         {
           "scene": "child_scene",
           "model": {
-            "default_name": "mimo-v2-flash",
-            "allowed_names": ["mimo-v2-flash"],
+            "default_name": "mimo-v2.5-pro",
+            "allowed_names": ["mimo-v2.5-pro"],
             "temperature_profile": "child_scene"
           },
           "version": "v1",
@@ -519,8 +519,8 @@ def test_scene_manifest_rejects_cyclic_extends_chain(tmp_path: Path) -> None:
         {
           "scene": "scene_a",
           "model": {
-            "default_name": "mimo-v2-flash",
-            "allowed_names": ["mimo-v2-flash"],
+            "default_name": "mimo-v2.5-pro",
+            "allowed_names": ["mimo-v2.5-pro"],
             "temperature_profile": "scene_a"
           },
           "version": "v1",
@@ -538,8 +538,8 @@ def test_scene_manifest_rejects_cyclic_extends_chain(tmp_path: Path) -> None:
         {
           "scene": "scene_b",
           "model": {
-            "default_name": "mimo-v2-flash",
-            "allowed_names": ["mimo-v2-flash"],
+            "default_name": "mimo-v2.5-pro",
+            "allowed_names": ["mimo-v2.5-pro"],
             "temperature_profile": "scene_b"
           },
           "version": "v1",
@@ -573,7 +573,7 @@ def test_scene_manifest_rejects_blank_default_model_name(tmp_path: Path) -> None
           "scene": "blank_model",
           "model": {
             "default_name": "   ",
-            "allowed_names": ["mimo-v2-flash"],
+            "allowed_names": ["mimo-v2.5-pro"],
             "temperature_profile": "blank_model"
           },
           "version": "v1",
@@ -717,8 +717,8 @@ def test_parse_scene_definition_rejects_invalid_defaults_and_context_slots() -> 
       {
         "scene": "invalid_defaults",
         "model": {
-          "default_name": "mimo-v2-flash",
-          "allowed_names": ["mimo-v2-flash"],
+          "default_name": "mimo-v2.5-pro",
+          "allowed_names": ["mimo-v2.5-pro"],
           "temperature_profile": "invalid_defaults",
         },
                 "defaults": ["bad-defaults"],
@@ -731,8 +731,8 @@ def test_parse_scene_definition_rejects_invalid_defaults_and_context_slots() -> 
       {
         "scene": "invalid_slots",
         "model": {
-          "default_name": "mimo-v2-flash",
-          "allowed_names": ["mimo-v2-flash"],
+          "default_name": "mimo-v2.5-pro",
+          "allowed_names": ["mimo-v2.5-pro"],
           "temperature_profile": "invalid_slots",
         },
         "context_slots": ["slot_a", " ", "slot_a"],
@@ -750,8 +750,8 @@ def test_parse_scene_definition_rejects_invalid_tool_selection_variants() -> Non
       {
         "scene": "invalid_tool_mode",
         "model": {
-          "default_name": "mimo-v2-flash",
-          "allowed_names": ["mimo-v2-flash"],
+          "default_name": "mimo-v2.5-pro",
+          "allowed_names": ["mimo-v2.5-pro"],
           "temperature_profile": "invalid_tool_mode",
         },
         "tool_selection": {"mode": "bad-mode"},
@@ -764,8 +764,8 @@ def test_parse_scene_definition_rejects_invalid_tool_selection_variants() -> Non
       {
         "scene": "invalid_tool_tags",
         "model": {
-          "default_name": "mimo-v2-flash",
-          "allowed_names": ["mimo-v2-flash"],
+          "default_name": "mimo-v2.5-pro",
+          "allowed_names": ["mimo-v2.5-pro"],
           "temperature_profile": "invalid_tool_tags",
         },
         "tool_selection": {"mode": "none", "tool_tags_any": ["fins"]},
@@ -789,8 +789,8 @@ def test_scene_manifest_rejects_non_positive_runtime_agent_max_iterations(tmp_pa
         {
           "scene": "invalid_iterations",
           "model": {
-            "default_name": "mimo-v2-flash",
-            "allowed_names": ["mimo-v2-flash"],
+            "default_name": "mimo-v2.5-pro",
+            "allowed_names": ["mimo-v2.5-pro"],
             "temperature_profile": "invalid_iterations"
           },
           "runtime": {
@@ -827,8 +827,8 @@ def test_scene_manifest_rejects_non_positive_runtime_failed_tool_batch_limit(tmp
         {
           "scene": "invalid_failed_batches",
           "model": {
-            "default_name": "mimo-v2-flash",
-            "allowed_names": ["mimo-v2-flash"],
+            "default_name": "mimo-v2.5-pro",
+            "allowed_names": ["mimo-v2.5-pro"],
             "temperature_profile": "invalid_failed_batches"
           },
           "runtime": {
@@ -865,8 +865,8 @@ def test_scene_manifest_rejects_legacy_model_max_iterations_field(tmp_path: Path
         {
           "scene": "legacy_iterations",
           "model": {
-            "default_name": "mimo-v2-flash",
-            "allowed_names": ["mimo-v2-flash"],
+            "default_name": "mimo-v2.5-pro",
+            "allowed_names": ["mimo-v2.5-pro"],
             "temperature_profile": "legacy_iterations",
             "max_iterations": 24
           },
@@ -899,8 +899,8 @@ def test_scene_manifest_rejects_legacy_failed_tool_batch_limit_field(tmp_path: P
         {
           "scene": "legacy_failed_batches",
           "model": {
-            "default_name": "mimo-v2-flash",
-            "allowed_names": ["mimo-v2-flash"],
+            "default_name": "mimo-v2.5-pro",
+            "allowed_names": ["mimo-v2.5-pro"],
             "temperature_profile": "legacy_failed_batches",
             "max_consecutive_failed_tool_batches": 3
           },
@@ -937,8 +937,8 @@ def test_child_scene_must_still_declare_model_when_extending(tmp_path: Path) -> 
         {
           "scene": "base_scene",
           "model": {
-            "default_name": "mimo-v2-flash",
-            "allowed_names": ["mimo-v2-flash"],
+            "default_name": "mimo-v2.5-pro",
+            "allowed_names": ["mimo-v2.5-pro"],
             "temperature_profile": "base_scene"
           },
           "version": "v1",
@@ -984,8 +984,8 @@ def test_scene_manifest_rejects_blank_temperature_profile(tmp_path: Path) -> Non
         {
           "scene": "invalid_temperature",
           "model": {
-            "default_name": "mimo-v2-flash",
-            "allowed_names": ["mimo-v2-flash"],
+            "default_name": "mimo-v2.5-pro",
+            "allowed_names": ["mimo-v2.5-pro"],
             "temperature_profile": "   "
           },
           "version": "v1",
@@ -1017,8 +1017,8 @@ def test_scene_manifest_rejects_duplicate_allowed_names(tmp_path: Path) -> None:
         {
           "scene": "boolean_temperature",
           "model": {
-            "default_name": "mimo-v2-flash",
-            "allowed_names": ["mimo-v2-flash", "mimo-v2-flash"],
+            "default_name": "mimo-v2.5-pro",
+            "allowed_names": ["mimo-v2.5-pro", "mimo-v2.5-pro"],
             "temperature_profile": "boolean_temperature"
           },
           "version": "v1",
@@ -1050,8 +1050,8 @@ def test_scene_manifest_requires_default_name_to_exist_in_allowed_names(tmp_path
         {
           "scene": "invalid_default_name",
           "model": {
-            "default_name": "deepseek-chat",
-            "allowed_names": ["mimo-v2-flash"],
+            "default_name": "deepseek-v4-flash",
+            "allowed_names": ["mimo-v2.5-pro"],
             "temperature_profile": "invalid_default_name"
           },
           "version": "v1",

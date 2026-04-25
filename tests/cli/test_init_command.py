@@ -16,8 +16,8 @@ from dayu.cli.commands.init import (
     _HF_MIRROR_URL,
     _INIT_ROLE_KEY,
     _PROVIDER_OPTION_CUSTOM_OPENAI,
-    _PROVIDER_OPTION_DEEPSEEK,
-    _PROVIDER_OPTION_MIMO_FLASH,
+    _PROVIDER_OPTION_DEEPSEEK_FLASH,
+    _PROVIDER_OPTION_DEEPSEEK_PRO,
     _PROVIDER_OPTION_MIMO_PRO,
     _ROLE_NON_THINKING,
     _ROLE_THINKING,
@@ -237,11 +237,11 @@ class TestCopyConfig:
         pkg_manifests.mkdir(parents=True)
         pkg_scenes.mkdir(parents=True)
         (pkg_manifests / "prompt.json").write_text(
-            json.dumps({"scene": "prompt", "model": {"default_name": "mimo-v2-pro-thinking-plan"}}),
+            json.dumps({"scene": "prompt", "model": {"default_name": "mimo-v2.5-pro-thinking-plan"}}),
             encoding="utf-8",
         )
         (pkg_manifests / "prompt_mt.json").write_text(
-            json.dumps({"scene": "prompt_mt", "model": {"default_name": "mimo-v2-pro-thinking-plan"}}),
+            json.dumps({"scene": "prompt_mt", "model": {"default_name": "mimo-v2.5-pro-thinking-plan"}}),
             encoding="utf-8",
         )
         (pkg_scenes / "prompt.md").write_text("# prompt old", encoding="utf-8")
@@ -464,35 +464,35 @@ class TestUpdateManifestDefaultModels:
     """Manifest 模型替换测试。"""
 
     def test_replaces_both_models(self, tmp_path: Path) -> None:
-        """应替换 mimo-v2-pro-plan 和 mimo-v2-pro-thinking-plan。"""
+        """应替换 mimo-v2.5-pro-plan 和 mimo-v2.5-pro-thinking-plan。"""
         manifests = tmp_path / "prompts" / "manifests"
         manifests.mkdir(parents=True)
 
-        write_manifest = {"model": {"default_name": "mimo-v2-pro-plan"}}
-        audit_manifest = {"model": {"default_name": "mimo-v2-pro-thinking-plan"}}
+        write_manifest = {"model": {"default_name": "mimo-v2.5-pro-plan"}}
+        audit_manifest = {"model": {"default_name": "mimo-v2.5-pro-thinking-plan"}}
 
         (manifests / "write.json").write_text(json.dumps(write_manifest), encoding="utf-8")
         (manifests / "audit.json").write_text(json.dumps(audit_manifest), encoding="utf-8")
 
-        count = _update_manifest_default_models(tmp_path, "deepseek-chat", "deepseek-thinking")
+        count = _update_manifest_default_models(tmp_path, "deepseek-v4-flash", "deepseek-v4-flash-thinking")
 
         assert count == 2
 
         write_data = json.loads((manifests / "write.json").read_text(encoding="utf-8"))
-        assert write_data["model"]["default_name"] == "deepseek-chat"
+        assert write_data["model"]["default_name"] == "deepseek-v4-flash"
 
         audit_data = json.loads((manifests / "audit.json").read_text(encoding="utf-8"))
-        assert audit_data["model"]["default_name"] == "deepseek-thinking"
+        assert audit_data["model"]["default_name"] == "deepseek-v4-flash-thinking"
 
     def test_skips_when_name_and_role_match(self, tmp_path: Path) -> None:
         """模型名和角色标记均已匹配时不计入更新。"""
         manifests = tmp_path / "prompts" / "manifests"
         manifests.mkdir(parents=True)
 
-        data = {"model": {"default_name": "mimo-v2-pro-plan", _INIT_ROLE_KEY: _ROLE_NON_THINKING}}
+        data = {"model": {"default_name": "mimo-v2.5-pro-plan", _INIT_ROLE_KEY: _ROLE_NON_THINKING}}
         (manifests / "a.json").write_text(json.dumps(data), encoding="utf-8")
 
-        count = _update_manifest_default_models(tmp_path, "mimo-v2-pro-plan", "mimo-v2-pro-thinking-plan")
+        count = _update_manifest_default_models(tmp_path, "mimo-v2.5-pro-plan", "mimo-v2.5-pro-thinking-plan")
         assert count == 0
 
     def test_no_manifests_dir(self, tmp_path: Path) -> None:
@@ -506,11 +506,11 @@ class TestUpdateManifestDefaultModels:
         manifests.mkdir(parents=True)
 
         (manifests / "write.json").write_text(
-            json.dumps({"model": {"default_name": "deepseek-chat", "allowed_names": ["deepseek-chat"]}}),
+            json.dumps({"model": {"default_name": "deepseek-v4-flash", "allowed_names": ["deepseek-v4-flash"]}}),
             encoding="utf-8",
         )
         (manifests / "audit.json").write_text(
-            json.dumps({"model": {"default_name": "deepseek-thinking", "allowed_names": ["deepseek-thinking"]}}),
+            json.dumps({"model": {"default_name": "deepseek-v4-flash-thinking", "allowed_names": ["deepseek-v4-flash-thinking"]}}),
             encoding="utf-8",
         )
 
@@ -523,8 +523,8 @@ class TestUpdateManifestDefaultModels:
         assert count == 2
         write_data = json.loads((manifests / "write.json").read_text(encoding="utf-8"))
         audit_data = json.loads((manifests / "audit.json").read_text(encoding="utf-8"))
-        assert write_data["model"]["allowed_names"] == ["deepseek-chat", _CUSTOM_CATALOG_KEY]
-        assert audit_data["model"]["allowed_names"] == ["deepseek-thinking", _CUSTOM_CATALOG_KEY]
+        assert write_data["model"]["allowed_names"] == ["deepseek-v4-flash", _CUSTOM_CATALOG_KEY]
+        assert audit_data["model"]["allowed_names"] == ["deepseek-v4-flash-thinking", _CUSTOM_CATALOG_KEY]
 
 
 class TestPromptCustomOpenAIConfig:
@@ -581,9 +581,9 @@ class TestWriteCustomOpenAICatalogEntries:
         catalog_path.write_text(
             json.dumps(
                 {
-                    "deepseek-chat": {
+                    "deepseek-v4-flash": {
                         "runner_type": "openai_compatible",
-                        "name": "deepseek-chat",
+                        "name": "deepseek-v4-flash",
                     }
                 }
             ),
@@ -601,7 +601,7 @@ class TestWriteCustomOpenAICatalogEntries:
         )
 
         data = json.loads(catalog_path.read_text(encoding="utf-8"))
-        assert "deepseek-chat" in data
+        assert "deepseek-v4-flash" in data
         assert data[_CUSTOM_CATALOG_KEY]["endpoint_url"] == "https://openrouter.ai/api/v1/chat/completions"
         assert data[_CUSTOM_CATALOG_KEY]["model"] == "openai/gpt-4o"
         assert data[_CUSTOM_CATALOG_KEY]["headers"]["Authorization"] == "Bearer {{CUSTOM_OPENAI_API_KEY}}"
@@ -642,7 +642,7 @@ class TestRunInit:
         manifests = src / "prompts" / "manifests"
         manifests.mkdir(parents=True)
         (manifests / "write.json").write_text(
-            json.dumps({"model": {"default_name": "mimo-v2-pro-plan"}}),
+            json.dumps({"model": {"default_name": "mimo-v2.5-pro-plan"}}),
             encoding="utf-8",
         )
 
@@ -675,7 +675,7 @@ class TestRunInit:
         # Mock 交互输入: 输入 key，跳过可选 key x3，HF 镜像回车(默认Y)，HF_TOKEN 跳过
         inputs = iter(["sk-test-key-123", "", "", "", "", "", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
 
         # Mock 环境变量持久化
         monkeypatch.setattr(
@@ -698,7 +698,7 @@ class TestRunInit:
         result_manifest = json.loads(
             (base / "config" / "prompts" / "manifests" / "write.json").read_text(encoding="utf-8")
         )
-        assert result_manifest["model"]["default_name"] == "deepseek-chat"
+        assert result_manifest["model"]["default_name"] == "deepseek-v4-flash"
 
     def test_skip_api_key_when_already_set(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """环境变量中已有 API Key 时跳过输入，不调用 _persist_env_var。"""
@@ -708,7 +708,7 @@ class TestRunInit:
         manifests = src / "prompts" / "manifests"
         manifests.mkdir(parents=True)
         (manifests / "write.json").write_text(
-            json.dumps({"model": {"default_name": "mimo-v2-pro-plan"}}),
+            json.dumps({"model": {"default_name": "mimo-v2.5-pro-plan"}}),
             encoding="utf-8",
         )
 
@@ -750,7 +750,7 @@ class TestRunInit:
             "dayu.cli.commands.init._run_init_prewarm",
             lambda **_kwargs: (True, ""),
         )
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
 
         base = tmp_path / "workspace"
         base.mkdir()
@@ -758,14 +758,15 @@ class TestRunInit:
 
         exit_code = run_init_command(args)
         assert exit_code == 0
-        # 没有调用 _persist_env_var（key 已存在，搜索 key 也已存在）
-        assert persist_calls == []
+        # 除了 DAYU_INIT_PROVIDER_OPTION（总是 persist 以记住用户选择）之外，
+        # 其余 key 都已存在，不应再触发 _persist_env_var。
+        assert persist_calls == ["DAYU_INIT_PROVIDER_OPTION"]
 
         # manifest 仍然被更新
         result_manifest = json.loads(
             (base / "config" / "prompts" / "manifests" / "write.json").read_text(encoding="utf-8")
         )
-        assert result_manifest["model"]["default_name"] == "deepseek-chat"
+        assert result_manifest["model"]["default_name"] == "deepseek-v4-flash"
 
     def test_custom_openai_flow(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """选择 custom-openai 时应写入 catalog、持久化 key 并更新 manifest。"""
@@ -775,7 +776,7 @@ class TestRunInit:
         manifests = src / "prompts" / "manifests"
         manifests.mkdir(parents=True)
         (manifests / "write.json").write_text(
-            json.dumps({"model": {"default_name": "mimo-v2-pro-plan", "allowed_names": ["mimo-v2-pro-plan"]}}),
+            json.dumps({"model": {"default_name": "mimo-v2.5-pro-plan", "allowed_names": ["mimo-v2.5-pro-plan"]}}),
             encoding="utf-8",
         )
 
@@ -835,12 +836,15 @@ class TestRunInit:
         exit_code = run_init_command(args)
 
         assert exit_code == 0
-        assert persist_calls[0] == ("CUSTOM_OPENAI_API_KEY", "sk-custom-openrouter")
+        # persist_calls[0] 是 DAYU_INIT_PROVIDER_OPTION（记住用户选择），
+        # 接下来才是具体 API Key 的写入。
+        assert persist_calls[0] == ("DAYU_INIT_PROVIDER_OPTION", "custom_openai")
+        assert persist_calls[1] == ("CUSTOM_OPENAI_API_KEY", "sk-custom-openrouter")
         result_manifest = json.loads(
             (base / "config" / "prompts" / "manifests" / "write.json").read_text(encoding="utf-8")
         )
         assert result_manifest["model"]["default_name"] == _CUSTOM_CATALOG_KEY
-        assert result_manifest["model"]["allowed_names"] == ["mimo-v2-pro-plan", _CUSTOM_CATALOG_KEY]
+        assert result_manifest["model"]["allowed_names"] == ["mimo-v2.5-pro-plan", _CUSTOM_CATALOG_KEY]
         llm_models = json.loads((base / "config" / "llm_models.json").read_text(encoding="utf-8"))
         assert llm_models[_CUSTOM_CATALOG_KEY]["model"] == "openai/gpt-4o"
         assert llm_models[_CUSTOM_CATALOG_KEY]["endpoint_url"] == "https://openrouter.ai/api/v1/chat/completions"
@@ -850,51 +854,51 @@ class TestUpdateManifestSecondInit:
     """二次 init 换供应商时 manifest 应被正确替换。"""
 
     def test_switch_from_deepseek_to_qwen(self, tmp_path: Path) -> None:
-        """已经是 deepseek-chat 的 manifest，换成 qwen3 应成功。"""
+        """已经是 deepseek-v4-flash 的 manifest，换成 qwen-plus 应成功。"""
         manifests = tmp_path / "prompts" / "manifests"
         manifests.mkdir(parents=True)
 
         (manifests / "write.json").write_text(
-            json.dumps({"model": {"default_name": "deepseek-chat", _INIT_ROLE_KEY: _ROLE_NON_THINKING}}),
+            json.dumps({"model": {"default_name": "deepseek-v4-flash", _INIT_ROLE_KEY: _ROLE_NON_THINKING}}),
             encoding="utf-8",
         )
         (manifests / "audit.json").write_text(
-            json.dumps({"model": {"default_name": "deepseek-thinking", _INIT_ROLE_KEY: _ROLE_THINKING}}),
+            json.dumps({"model": {"default_name": "deepseek-v4-flash-thinking", _INIT_ROLE_KEY: _ROLE_THINKING}}),
             encoding="utf-8",
         )
 
-        count = _update_manifest_default_models(tmp_path, "qwen3", "qwen3-thinking")
+        count = _update_manifest_default_models(tmp_path, "qwen-plus", "qwen-plus-thinking")
         assert count == 2
 
         write_data = json.loads((manifests / "write.json").read_text(encoding="utf-8"))
-        assert write_data["model"]["default_name"] == "qwen3"
+        assert write_data["model"]["default_name"] == "qwen-plus"
 
         audit_data = json.loads((manifests / "audit.json").read_text(encoding="utf-8"))
-        assert audit_data["model"]["default_name"] == "qwen3-thinking"
+        assert audit_data["model"]["default_name"] == "qwen-plus-thinking"
 
     def test_ambiguous_model_uses_role_marker(self, tmp_path: Path) -> None:
-        """thinking/non-thinking 同名模型（如 gpt-5.4）通过角色标记正确分类。"""
+        """thinking/non-thinking 同名模型（如 custom-openai）通过角色标记正确分类。"""
         manifests = tmp_path / "prompts" / "manifests"
         manifests.mkdir(parents=True)
 
-        # gpt-5.4 同时在 non-thinking 和 thinking 集合中
+        # custom-openai 同时在 non-thinking 和 thinking 集合中
         (manifests / "write.json").write_text(
-            json.dumps({"model": {"default_name": "gpt-5.4", _INIT_ROLE_KEY: _ROLE_NON_THINKING}}),
+            json.dumps({"model": {"default_name": "custom-openai", _INIT_ROLE_KEY: _ROLE_NON_THINKING}}),
             encoding="utf-8",
         )
         (manifests / "audit.json").write_text(
-            json.dumps({"model": {"default_name": "gpt-5.4", _INIT_ROLE_KEY: _ROLE_THINKING}}),
+            json.dumps({"model": {"default_name": "custom-openai", _INIT_ROLE_KEY: _ROLE_THINKING}}),
             encoding="utf-8",
         )
 
-        count = _update_manifest_default_models(tmp_path, "deepseek-chat", "deepseek-thinking")
+        count = _update_manifest_default_models(tmp_path, "deepseek-v4-flash", "deepseek-v4-flash-thinking")
         assert count == 2
 
         write_data = json.loads((manifests / "write.json").read_text(encoding="utf-8"))
-        assert write_data["model"]["default_name"] == "deepseek-chat"
+        assert write_data["model"]["default_name"] == "deepseek-v4-flash"
 
         audit_data = json.loads((manifests / "audit.json").read_text(encoding="utf-8"))
-        assert audit_data["model"]["default_name"] == "deepseek-thinking"
+        assert audit_data["model"]["default_name"] == "deepseek-v4-flash-thinking"
 
     def test_ambiguous_model_without_marker_uses_package_fallback(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -903,9 +907,9 @@ class TestUpdateManifestSecondInit:
         manifests = tmp_path / "prompts" / "manifests"
         manifests.mkdir(parents=True)
 
-        # 工作区 manifest：gpt-5.4 无标记，无法直接判断角色
+        # 工作区 manifest：custom-openai 无标记，无法直接判断角色
         (manifests / "write.json").write_text(
-            json.dumps({"model": {"default_name": "gpt-5.4"}}),
+            json.dumps({"model": {"default_name": "custom-openai"}}),
             encoding="utf-8",
         )
 
@@ -913,7 +917,7 @@ class TestUpdateManifestSecondInit:
         pkg_manifests = tmp_path / "pkg_config" / "prompts" / "manifests"
         pkg_manifests.mkdir(parents=True)
         (pkg_manifests / "write.json").write_text(
-            json.dumps({"model": {"default_name": "mimo-v2-pro-plan"}}),
+            json.dumps({"model": {"default_name": "mimo-v2.5-pro-plan"}}),
             encoding="utf-8",
         )
         monkeypatch.setattr(
@@ -921,11 +925,11 @@ class TestUpdateManifestSecondInit:
             lambda: tmp_path / "pkg_config",
         )
 
-        count = _update_manifest_default_models(tmp_path, "deepseek-chat", "deepseek-thinking")
+        count = _update_manifest_default_models(tmp_path, "deepseek-v4-flash", "deepseek-v4-flash-thinking")
         assert count == 1
 
         data = json.loads((manifests / "write.json").read_text(encoding="utf-8"))
-        assert data["model"]["default_name"] == "deepseek-chat"
+        assert data["model"]["default_name"] == "deepseek-v4-flash"
         assert data["model"][_INIT_ROLE_KEY] == _ROLE_NON_THINKING
 
     def test_ambiguous_model_without_marker_no_package_fallback(
@@ -936,7 +940,7 @@ class TestUpdateManifestSecondInit:
         manifests.mkdir(parents=True)
 
         (manifests / "write.json").write_text(
-            json.dumps({"model": {"default_name": "gpt-5.4"}}),
+            json.dumps({"model": {"default_name": "custom-openai"}}),
             encoding="utf-8",
         )
 
@@ -948,11 +952,11 @@ class TestUpdateManifestSecondInit:
             lambda: pkg_config,
         )
 
-        count = _update_manifest_default_models(tmp_path, "deepseek-chat", "deepseek-thinking")
+        count = _update_manifest_default_models(tmp_path, "deepseek-v4-flash", "deepseek-v4-flash-thinking")
         assert count == 0
 
         data = json.loads((manifests / "write.json").read_text(encoding="utf-8"))
-        assert data["model"]["default_name"] == "gpt-5.4"
+        assert data["model"]["default_name"] == "custom-openai"
 
     def test_unknown_model_name_not_touched(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """不在已知供应商模型列表中的 default_name 不应被替换。"""
@@ -972,7 +976,7 @@ class TestUpdateManifestSecondInit:
             lambda: pkg_config,
         )
 
-        count = _update_manifest_default_models(tmp_path, "qwen3", "qwen3-thinking")
+        count = _update_manifest_default_models(tmp_path, "qwen-plus", "qwen-plus-thinking")
         assert count == 0
 
         data = json.loads((manifests / "custom.json").read_text(encoding="utf-8"))
@@ -989,15 +993,15 @@ class TestClassifyModelRole:
 
     def test_unambiguous_non_thinking(self) -> None:
         """仅在 non-thinking 集合中的模型名正确分类。"""
-        assert _classify_model_role("deepseek-chat", "") == _ROLE_NON_THINKING
+        assert _classify_model_role("deepseek-v4-flash", "") == _ROLE_NON_THINKING
 
     def test_unambiguous_thinking(self) -> None:
         """仅在 thinking 集合中的模型名正确分类。"""
-        assert _classify_model_role("deepseek-thinking", "") == _ROLE_THINKING
+        assert _classify_model_role("deepseek-v4-flash-thinking", "") == _ROLE_THINKING
 
     def test_ambiguous_without_marker_returns_none(self) -> None:
         """歧义模型名无标记时返回 None。"""
-        assert _classify_model_role("gpt-5.4", "") is None
+        assert _classify_model_role("custom-openai", "") is None
 
     def test_unknown_model_returns_none(self) -> None:
         """完全未知的模型名返回 None。"""
@@ -1223,7 +1227,7 @@ class TestUpdateManifestExtraBranches:
         manifests = tmp_path / "prompts" / "manifests"
         manifests.mkdir(parents=True)
         (manifests / "bad.json").write_text(json.dumps({"model": "not_a_dict"}), encoding="utf-8")
-        count = _update_manifest_default_models(tmp_path, "deepseek-chat", "deepseek-thinking")
+        count = _update_manifest_default_models(tmp_path, "deepseek-v4-flash", "deepseek-v4-flash-thinking")
         assert count == 0
 
     def test_stored_role_not_string_reset(self, tmp_path: Path) -> None:
@@ -1231,13 +1235,13 @@ class TestUpdateManifestExtraBranches:
         manifests = tmp_path / "prompts" / "manifests"
         manifests.mkdir(parents=True)
         (manifests / "a.json").write_text(
-            json.dumps({"model": {"default_name": "mimo-v2-pro-plan", _INIT_ROLE_KEY: 42}}),
+            json.dumps({"model": {"default_name": "mimo-v2.5-pro-plan", _INIT_ROLE_KEY: 42}}),
             encoding="utf-8",
         )
-        count = _update_manifest_default_models(tmp_path, "deepseek-chat", "deepseek-thinking")
+        count = _update_manifest_default_models(tmp_path, "deepseek-v4-flash", "deepseek-v4-flash-thinking")
         assert count == 1
         data = json.loads((manifests / "a.json").read_text(encoding="utf-8"))
-        assert data["model"]["default_name"] == "deepseek-chat"
+        assert data["model"]["default_name"] == "deepseek-v4-flash"
 
 
 # --------------------------------------------------------------------------- #
@@ -1283,12 +1287,12 @@ class TestPromptProviderSelection:
         result = _prompt_provider_selection()
         assert result == _PROVIDER_OPTION_MIMO_PRO
 
-    def test_select_mimo_flash_option(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """显式选择 Flash 方案时返回独立方案 key。"""
+    def test_select_deepseek_flash_option(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """显式选择 DeepSeek Flash 方案（菜单第 5 项）时返回对应方案 key。"""
         _clear_provider_env_vars(monkeypatch)
-        monkeypatch.setattr("builtins.input", lambda *_args: "4")
+        monkeypatch.setattr("builtins.input", lambda *_args: "5")
         result = _prompt_provider_selection()
-        assert result == _PROVIDER_OPTION_MIMO_FLASH
+        assert result == _PROVIDER_OPTION_DEEPSEEK_FLASH
 
     def test_invalid_non_integer(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """非整数输入时调用 sys.exit(1)。"""
@@ -1312,7 +1316,31 @@ class TestPromptProviderSelection:
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-already")
         monkeypatch.setattr("builtins.input", lambda *_args: "")
         result = _prompt_provider_selection()
-        assert result == _PROVIDER_OPTION_DEEPSEEK
+        # DeepSeek Pro 在 Flash 之前声明，共享同一 DEEPSEEK_API_KEY 时 Pro 先命中。
+        assert result == _PROVIDER_OPTION_DEEPSEEK_PRO
+
+    def test_saved_option_overrides_first_configured(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """DAYU_INIT_PROVIDER_OPTION 环境变量优先于「第一个已配置」作为默认推荐。
+
+        场景：用户上次显式选了 DeepSeek Flash（值被记在 DAYU_INIT_PROVIDER_OPTION），
+        同时环境变量里已有 DEEPSEEK_API_KEY；按 Enter 不应被 DeepSeek Pro（声明顺序
+        靠前）静默抢走，而应保留 Flash。
+        """
+        _clear_provider_env_vars(monkeypatch)
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-already")
+        monkeypatch.setenv("DAYU_INIT_PROVIDER_OPTION", _PROVIDER_OPTION_DEEPSEEK_FLASH)
+        monkeypatch.setattr("builtins.input", lambda *_args: "")
+        result = _prompt_provider_selection()
+        assert result == _PROVIDER_OPTION_DEEPSEEK_FLASH
+
+    def test_stale_saved_option_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """DAYU_INIT_PROVIDER_OPTION 为失效 option_key 时回退到第一个已配置方案。"""
+        _clear_provider_env_vars(monkeypatch)
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-already")
+        monkeypatch.setenv("DAYU_INIT_PROVIDER_OPTION", "mimo_flash_removed")
+        monkeypatch.setattr("builtins.input", lambda *_args: "")
+        result = _prompt_provider_selection()
+        assert result == _PROVIDER_OPTION_DEEPSEEK_PRO
 
 
 # --------------------------------------------------------------------------- #
@@ -1461,7 +1489,7 @@ class TestRunInitFailurePaths:
         manifests = src / "prompts" / "manifests"
         manifests.mkdir(parents=True)
         (manifests / "write.json").write_text(
-            json.dumps({"model": {"default_name": "mimo-v2-pro-plan"}}),
+            json.dumps({"model": {"default_name": "mimo-v2.5-pro-plan"}}),
             encoding="utf-8",
         )
         monkeypatch.setattr(
@@ -1495,7 +1523,7 @@ class TestRunInitFailurePaths:
 
         inputs = iter(["sk-test", "", "", "", "n", "", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
         monkeypatch.setattr(
             "dayu.cli.commands.init._persist_env_var",
             lambda _k, _v: ("setx", False),
@@ -1518,14 +1546,16 @@ class TestRunInitFailurePaths:
 
         inputs = iter(["sk-test", "tvly-test", "", "", "n", "", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
 
         call_count = 0
 
         def _mock_persist(k: str, v: str) -> tuple[str, bool]:
             nonlocal call_count
             call_count += 1
-            if call_count >= 2:
+            # 第 1 次 persist 是 DAYU_INIT_PROVIDER_OPTION（记住选择），第 2 次是 DEEPSEEK_API_KEY，
+            # 从第 3 次起（搜索 key）开始模拟失败。
+            if call_count >= 3:
                 return "setx", False
             return "~/.zshrc", True
 
@@ -1573,7 +1603,7 @@ class TestInitPrewarm:
         manifests = src / "prompts" / "manifests"
         manifests.mkdir(parents=True)
         (manifests / "write.json").write_text(
-            json.dumps({"model": {"default_name": "mimo-v2-pro-plan"}}),
+            json.dumps({"model": {"default_name": "mimo-v2.5-pro-plan"}}),
             encoding="utf-8",
         )
         monkeypatch.setattr(
@@ -1596,7 +1626,7 @@ class TestInitPrewarm:
         monkeypatch.setattr("dayu.cli.commands.init._is_hf_hub_reachable", lambda: True)
         init_inputs = iter(["sk-test", "", "", "", "n", "", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(init_inputs))
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
         monkeypatch.setattr(
             "dayu.cli.commands.init._persist_env_var",
             lambda _k, _v: ("~/.zshrc", True),
@@ -1705,7 +1735,7 @@ class TestInitPrewarm:
         monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com")
         monkeypatch.setenv("HF_TOKEN", "hf-test-xxx")
         monkeypatch.setenv(SEC_USER_AGENT_ENV, "Demo demo@example.com")
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
         assert run_init_command(Namespace(base=str(base), overwrite=False)) == 0
         assert prewarm_calls == [(base.resolve(), (base / "config").resolve())]
 
@@ -1736,7 +1766,7 @@ class TestInitPrewarm:
         monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com")
         monkeypatch.setenv("HF_TOKEN", "hf-test-xxx")
         monkeypatch.setenv(SEC_USER_AGENT_ENV, "Demo demo@example.com")
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
         assert run_init_command(Namespace(base=str(base), overwrite=True)) == 0
         assert len(prewarm_calls) == 1
 
@@ -1773,7 +1803,7 @@ class TestInitPrewarm:
         monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com")
         monkeypatch.setenv("HF_TOKEN", "hf-test-xxx")
         monkeypatch.setenv(SEC_USER_AGENT_ENV, "Demo demo@example.com")
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
 
         assert run_init_command(Namespace(base=str(base), overwrite=False, reset=True)) == 0
         assert prewarm_calls == [(base.resolve(), (base / "config").resolve())]
@@ -1825,7 +1855,7 @@ class TestInitPrewarm:
         monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com")
         monkeypatch.setenv("HF_TOKEN", "hf-test-xxx")
         monkeypatch.setenv(SEC_USER_AGENT_ENV, "Demo demo@example.com")
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
         monkeypatch.setattr(
             "dayu.cli.commands.init._run_init_prewarm",
             lambda **_kwargs: (True, ""),
@@ -1865,7 +1895,7 @@ class TestInitPrewarm:
         """主 API Key 持久化失败时不执行 prewarm。"""
 
         base = self._prepare_run_init_environment(tmp_path, monkeypatch)
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
         monkeypatch.setattr("dayu.cli.commands.init._prompt_api_key", lambda _key: "sk-test")
         monkeypatch.setattr("dayu.cli.commands.init._persist_env_var", lambda _k, _v: ("~/.zshrc", False))
         monkeypatch.setattr("dayu.cli.commands.init._prompt_optional_search_keys", lambda: [])
@@ -1893,7 +1923,7 @@ class TestInitPrewarm:
 
         inputs = iter(["sk-test", "", "", "", "n", "", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
         monkeypatch.setattr(
             "dayu.cli.commands.init._persist_env_var",
             lambda _k, _v: ("setx（重开终端生效）", True),
@@ -1913,14 +1943,16 @@ class TestInitPrewarm:
 
         inputs = iter(["sk-test", "", "", "", "y", "hf-token-val", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
 
         call_count = 0
 
         def _mock_persist(k: str, v: str) -> tuple[str, bool]:
             nonlocal call_count
             call_count += 1
-            if call_count >= 2:
+            # 第 1 次是 DAYU_INIT_PROVIDER_OPTION、第 2 次是 DEEPSEEK_API_KEY，
+            # 从第 3 次起（HF 相关 key）开始模拟失败。
+            if call_count >= 3:
                 return "setx", False
             return "~/.zshrc", True
 

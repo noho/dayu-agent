@@ -2,14 +2,19 @@
   "_comment": "LLM 模型配置文件 - 包含各个模型服务商的配置参数",
   "_usage": "使用时选择对应的配置名称，替换 YOUR_API_KEY 为实际的 API 密钥",
   "_capabilities_note": "max_context_tokens 为模型静态能力声明（来自各供应商官方文档），用于 Agent 预算治理；supports_usage / supports_stream_usage 控制 Runner 是否采集 token 用量",
-  "deepseek-chat": {
+  "deepseek-v4-flash": {
     "runner_type": "openai_compatible",
-    "name": "deepseek-chat",
-    "endpoint_url": "https://api.deepseek.com/v1/chat/completions",
-    "model": "deepseek-chat",
+    "name": "deepseek-v4-flash",
+    "endpoint_url": "https://api.deepseek.com/chat/completions",
+    "model": "deepseek-v4-flash",
     "headers": {
       "Authorization": "Bearer {{DEEPSEEK_API_KEY}}",
       "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "thinking": {
+        "type": "disabled"
+      }
     },
     "timeout": 3600,
     "stream_idle_timeout": 120.0,
@@ -18,9 +23,8 @@
     "supports_tool_calling": true,
     "supports_usage": true,
     "supports_stream_usage": true,
-    "max_context_tokens": 131072,
-    "extra_payloads": {},
-    "description": "DeepSeek Chat 模型 - 用于对话和内容生成",
+    "max_context_tokens": 1048576,
+    "description": "deepseek-v4-flash 模型 - 用于内容生成（1M context）",
     "runtime_hints": {
       "temperature_profiles": {
         "write": {
@@ -28,34 +32,7 @@
         },
         "overview": {
           "temperature": 1.0
-        }
-      },
-      "conversation_memory": {
-        "episodic_memory_token_budget_floor": 4000,
-        "episodic_memory_token_budget_cap": 4000
-      }
-    }
-  },
-  "deepseek-thinking": {
-    "runner_type": "openai_compatible",
-    "name": "deepseek-thinking",
-    "endpoint_url": "https://api.deepseek.com/v1/chat/completions",
-    "model": "deepseek-reasoner",
-    "headers": {
-      "Authorization": "Bearer {{DEEPSEEK_API_KEY}}",
-      "Content-Type": "application/json"
-    },
-    "timeout": 3600,
-    "stream_idle_timeout": 120.0,
-    "stream_idle_heartbeat_sec": 10.0,
-    "supports_stream": true,
-    "supports_tool_calling": true,
-    "supports_usage": true,
-    "supports_stream_usage": true,
-    "max_context_tokens": 131072,
-    "description": "DeepSeek Thinking 模型 - 用于深度推理和复杂任务（128K context, 64K output 含 COT）",
-    "runtime_hints": {
-      "temperature_profiles": {
+        },
         "audit": {
           "temperature": 0.8
         },
@@ -76,8 +53,172 @@
         }
       },
       "conversation_memory": {
-        "episodic_memory_token_budget_floor": 4000,
-        "episodic_memory_token_budget_cap": 4000
+        "working_memory_token_budget_cap": 80000
+      }
+    }
+  },
+  "deepseek-v4-flash-thinking": {
+    "runner_type": "openai_compatible",
+    "name": "deepseek-v4-flash-thinking",
+    "endpoint_url": "https://api.deepseek.com/chat/completions",
+    "model": "deepseek-v4-flash",
+    "headers": {
+      "Authorization": "Bearer {{DEEPSEEK_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "thinking": {
+        "type": "enabled"
+      }
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": true,
+    "max_context_tokens": 1048576,
+    "description": "deepseek-v4-flash thinking 模型 - 用于深度推理和复杂任务（1M context）",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "write": {
+          "temperature": 1.3
+        },
+        "overview": {
+          "temperature": 1.0
+        },
+        "audit": {
+          "temperature": 0.8
+        },
+        "decision": {
+          "temperature": 1.0
+        },
+        "interactive": {
+          "temperature": 1.3
+        },
+        "prompt": {
+          "temperature": 1.3
+        },
+        "infer": {
+          "temperature": 0.5
+        },
+        "conversation_compaction": {
+          "temperature": 0.4
+        }
+      },
+      "conversation_memory": {
+        "working_memory_token_budget_cap": 80000
+      }
+    }
+  },
+  "deepseek-v4-pro": {
+    "runner_type": "openai_compatible",
+    "name": "deepseek-v4-pro",
+    "endpoint_url": "https://api.deepseek.com/chat/completions",
+    "model": "deepseek-v4-pro",
+    "headers": {
+      "Authorization": "Bearer {{DEEPSEEK_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "thinking": {
+        "type": "disabled"
+      }
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": true,
+    "max_context_tokens": 1048576,
+    "description": "deepseek-v4-pro 模型 - 用于内容生成（1M context）",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "write": {
+          "temperature": 1.3
+        },
+        "overview": {
+          "temperature": 1.0
+        },
+        "audit": {
+          "temperature": 0.8
+        },
+        "decision": {
+          "temperature": 1.0
+        },
+        "interactive": {
+          "temperature": 1.3
+        },
+        "prompt": {
+          "temperature": 1.3
+        },
+        "infer": {
+          "temperature": 0.5
+        },
+        "conversation_compaction": {
+          "temperature": 0.4
+        }
+      },
+      "conversation_memory": {
+        "working_memory_token_budget_cap": 80000
+      }
+    }
+  },
+  "deepseek-v4-pro-thinking": {
+    "runner_type": "openai_compatible",
+    "name": "deepseek-v4-pro-thinking",
+    "endpoint_url": "https://api.deepseek.com/chat/completions",
+    "model": "deepseek-v4-pro",
+    "headers": {
+      "Authorization": "Bearer {{DEEPSEEK_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "thinking": {
+        "type": "enabled"
+      }
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": true,
+    "max_context_tokens": 1048576,
+    "description": "deepseek-v4-pro thinking 模型 - 用于深度推理和复杂任务（1M context）",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "write": {
+          "temperature": 1.3
+        },
+        "overview": {
+          "temperature": 1.0
+        },
+        "audit": {
+          "temperature": 0.8
+        },
+        "decision": {
+          "temperature": 1.0
+        },
+        "interactive": {
+          "temperature": 1.3
+        },
+        "prompt": {
+          "temperature": 1.3
+        },
+        "infer": {
+          "temperature": 0.5
+        },
+        "conversation_compaction": {
+          "temperature": 0.4
+        }
+      },
+      "conversation_memory": {
+        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -90,6 +231,9 @@
       "Authorization": "Bearer {{OPENAI_API_KEY}}",
       "Content-Type": "application/json"
     },
+    "extra_payloads": {
+      "reasoning_effort": "none"
+    },
     "timeout": 3600,
     "stream_idle_timeout": 120.0,
     "stream_idle_heartbeat_sec": 10.0,
@@ -98,7 +242,60 @@
     "supports_usage": true,
     "supports_stream_usage": true,
     "max_context_tokens": 1050000,
-    "description": "OpenAI GPT-5.4 - 官方 1.05M context / 128K output，适合复杂专业任务与 agentic workflow",
+    "description": "OpenAI GPT-5.4 - 官方 1.05M context / 128K output，reasoning_effort=none 关闭推理",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "write": {
+          "temperature": 0.8
+        },
+        "overview": {
+          "temperature": 0.2
+        },
+        "audit": {
+          "temperature": 0.2
+        },
+        "decision": {
+          "temperature": 0.6
+        },
+        "interactive": {
+          "temperature": 0.6
+        },
+        "prompt": {
+          "temperature": 0.6
+        },
+        "infer": {
+          "temperature": 0.2
+        },
+        "conversation_compaction": {
+          "temperature": 0.2
+        }
+      },
+      "conversation_memory": {
+        "working_memory_token_budget_cap": 80000
+      }
+    }
+  },
+  "gpt-5.4-thinking": {
+    "runner_type": "openai_compatible",
+    "name": "gpt-5.4-thinking",
+    "endpoint_url": "https://api.openai.com/v1/chat/completions",
+    "model": "gpt-5.4",
+    "headers": {
+      "Authorization": "Bearer {{OPENAI_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "reasoning_effort": "high"
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": true,
+    "max_context_tokens": 1050000,
+    "description": "OpenAI GPT-5.4 thinking - reasoning_effort=high，开启深度推理，适合复杂任务与 agentic workflow",
     "runtime_hints": {
       "temperature_profiles": {
         "write": {
@@ -140,6 +337,11 @@
       "Authorization": "Bearer {{ANTHROPIC_API_KEY}}",
       "Content-Type": "application/json"
     },
+    "extra_payloads": {
+      "thinking": {
+        "type": "disabled"
+      }
+    },
     "timeout": 3600,
     "stream_idle_timeout": 120.0,
     "stream_idle_heartbeat_sec": 10.0,
@@ -148,7 +350,64 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 1000000,
-    "description": "Anthropic Claude Sonnet 4.6 - 官方 Sonnet 4.6 API 模型，1M context 为 beta；当前通过 Anthropic OpenAI 兼容层接入",
+    "description": "Anthropic Claude Sonnet 4.6 - 官方 Sonnet 4.6，1M context beta；thinking=disabled 关闭扩展思考；通过 Anthropic OpenAI 兼容层接入",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "write": {
+          "temperature": 0.9
+        },
+        "overview": {
+          "temperature": 0.2
+        },
+        "audit": {
+          "temperature": 0.2
+        },
+        "decision": {
+          "temperature": 0.6
+        },
+        "interactive": {
+          "temperature": 0.6
+        },
+        "prompt": {
+          "temperature": 0.6
+        },
+        "infer": {
+          "temperature": 0.2
+        },
+        "conversation_compaction": {
+          "temperature": 0.2
+        }
+      },
+      "conversation_memory": {
+        "working_memory_token_budget_cap": 80000
+      }
+    }
+  },
+  "claude-sonnet-4-6-thinking": {
+    "runner_type": "openai_compatible",
+    "name": "claude-sonnet-4-6-thinking",
+    "endpoint_url": "https://api.anthropic.com/v1/chat/completions",
+    "model": "claude-sonnet-4-6",
+    "headers": {
+      "Authorization": "Bearer {{ANTHROPIC_API_KEY}}",
+      "Content-Type": "application/json",
+      "anthropic-beta": "interleaved-thinking-2025-05-14"
+    },
+    "extra_payloads": {
+      "thinking": {
+        "type": "enabled",
+        "budget_tokens": 8000
+      }
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": false,
+    "max_context_tokens": 1000000,
+    "description": "Anthropic Claude Sonnet 4.6 thinking - thinking.type=enabled / budget_tokens=8000；依赖 Anthropic OpenAI 兼容层对 thinking 字段的透传；用于深度推理",
     "runtime_hints": {
       "temperature_profiles": {
         "write": {
@@ -190,6 +449,15 @@
       "Authorization": "Bearer {{GEMINI_API_KEY}}",
       "Content-Type": "application/json"
     },
+    "extra_payloads": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "thinking_budget": 0
+          }
+        }
+      }
+    },
     "timeout": 3600,
     "stream_idle_timeout": 120.0,
     "stream_idle_heartbeat_sec": 10.0,
@@ -198,7 +466,7 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 1048576,
-    "description": "Google Gemini 2.5 Flash - 官方 1,048,576 context / 65,536 output，支持函数调用与 OpenAI 兼容入口",
+    "description": "Google Gemini 2.5 Flash - 官方 1,048,576 context / 65,536 output；thinking_budget=0 关闭 thinking；支持函数调用",
     "runtime_hints": {
       "temperature_profiles": {
         "write": {
@@ -231,108 +499,22 @@
       }
     }
   },
-  "mimo-v2-flash": {
+  "gemini-2.5-flash-thinking": {
     "runner_type": "openai_compatible",
-    "name": "mimo-v2-flash",
-    "endpoint_url": "https://api.xiaomimimo.com/v1/chat/completions",
-    "model": "mimo-v2-flash",
+    "name": "gemini-2.5-flash-thinking",
+    "endpoint_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    "model": "gemini-2.5-flash",
     "headers": {
-      "Authorization": "Bearer {{MIMO_API_KEY}}",
+      "Authorization": "Bearer {{GEMINI_API_KEY}}",
       "Content-Type": "application/json"
     },
     "extra_payloads": {
-      "thinking": {
-        "type": "disabled"
-      }
-    },
-    "timeout": 3600,
-    "stream_idle_timeout": 120.0,
-    "stream_idle_heartbeat_sec": 10.0,
-    "supports_stream": true,
-    "supports_tool_calling": true,
-    "supports_usage": true,
-    "supports_stream_usage": false,
-    "max_context_tokens": 262144,
-    "description": "Mimo V2 Flash 模型 - 用于对话和内容生成（256K context, 65.5K output）",
-    "runtime_hints": {
-      "temperature_profiles": {
-        "write": {
-          "temperature": 0.8
-        },
-        "overview": {
-          "temperature": 0.3
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "thinking_budget": 0
+          }
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 32000,
-        "episodic_memory_token_budget_floor": 6000,
-        "episodic_memory_token_budget_cap": 6000
-      }
-    }
-  },
-  "mimo-v2-flash-thinking": {
-    "runner_type": "openai_compatible",
-    "name": "mimo-v2-flash-thinking",
-    "endpoint_url": "https://api.xiaomimimo.com/v1/chat/completions",
-    "model": "mimo-v2-flash",
-    "headers": {
-      "Authorization": "Bearer {{MIMO_API_KEY}}",
-      "Content-Type": "application/json"
-    },
-    "extra_payloads": {
-      "thinking": {
-        "type": "enabled"
-      }
-    },
-    "timeout": 3600,
-    "stream_idle_timeout": 120.0,
-    "stream_idle_heartbeat_sec": 10.0,
-    "supports_stream": true,
-    "supports_tool_calling": true,
-    "supports_usage": true,
-    "supports_stream_usage": false,
-    "max_context_tokens": 262144,
-    "description": "Mimo V2 Flash Thinking 模型 - 用于深度推理和复杂任务（256K context, 65.5K output）",
-    "runtime_hints": {
-      "temperature_profiles": {
-        "audit": {
-          "temperature": 0.4
-        },
-        "decision": {
-          "temperature": 0.6
-        },
-        "interactive": {
-          "temperature": 0.8
-        },
-        "prompt": {
-          "temperature": 0.8
-        },
-        "infer": {
-          "temperature": 0.3
-        },
-        "conversation_compaction": {
-          "temperature": 0.3
-        }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 32000,
-        "episodic_memory_token_budget_floor": 6000,
-        "episodic_memory_token_budget_cap": 6000
-      }
-    }
-  },
-  "mimo-v2-pro": {
-    "runner_type": "openai_compatible",
-    "name": "mimo-v2-pro",
-    "endpoint_url": "https://api.xiaomimimo.com/v1/chat/completions",
-    "model": "mimo-v2-pro",
-    "headers": {
-      "Authorization": "Bearer {{MIMO_API_KEY}}",
-      "Content-Type": "application/json"
-    },
-    "extra_payloads": {
-      "thinking": {
-        "type": "disabled"
       }
     },
     "timeout": 3600,
@@ -343,14 +525,32 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 1048576,
-    "description": "Mimo V2 Pro 模型 - 用于对话和内容生成（1M context, 131.1K output）",
+    "description": "Google Gemini 2.5 Flash thinking - 当前与非 thinking 档同配（thinking_budget=0）。真正的 thinking 模式在 runner 未实现 thought_signature 透传前暂不启用，见 GitHub issue。",
     "runtime_hints": {
       "temperature_profiles": {
         "write": {
           "temperature": 0.8
         },
         "overview": {
-          "temperature": 0.3
+          "temperature": 0.2
+        },
+        "audit": {
+          "temperature": 0.2
+        },
+        "decision": {
+          "temperature": 0.6
+        },
+        "interactive": {
+          "temperature": 0.6
+        },
+        "prompt": {
+          "temperature": 0.6
+        },
+        "infer": {
+          "temperature": 0.2
+        },
+        "conversation_compaction": {
+          "temperature": 0.2
         }
       },
       "conversation_memory": {
@@ -358,18 +558,18 @@
       }
     }
   },
-  "mimo-v2-pro-thinking": {
+  "mimo-v2.5-pro": {
     "runner_type": "openai_compatible",
-    "name": "mimo-v2-pro-thinking",
+    "name": "mimo-v2.5-pro",
     "endpoint_url": "https://api.xiaomimimo.com/v1/chat/completions",
-    "model": "mimo-v2-pro",
+    "model": "mimo-v2.5-pro",
     "headers": {
       "Authorization": "Bearer {{MIMO_API_KEY}}",
       "Content-Type": "application/json"
     },
     "extra_payloads": {
       "thinking": {
-        "type": "enabled"
+        "type": "disabled"
       }
     },
     "timeout": 3600,
@@ -380,9 +580,15 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 1048576,
-    "description": "Mimo V2 Pro Thinking 模型 - 用于深度推理和复杂任务（1M context, 131.1K output）",
+    "description": "Mimo V2.5 Pro 模型 - 用于内容生成（1M context）",
     "runtime_hints": {
       "temperature_profiles": {
+        "write": {
+          "temperature": 0.8
+        },
+        "overview": {
+          "temperature": 0.3
+        },
         "audit": {
           "temperature": 0.4
         },
@@ -407,11 +613,66 @@
       }
     }
   },
-  "mimo-v2-pro-plan": {
+  "mimo-v2.5-pro-thinking": {
     "runner_type": "openai_compatible",
-    "name": "mimo-v2-pro-plan",
+    "name": "mimo-v2.5-pro-thinking",
+    "endpoint_url": "https://api.xiaomimimo.com/v1/chat/completions",
+    "model": "mimo-v2.5-pro",
+    "headers": {
+      "Authorization": "Bearer {{MIMO_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "thinking": {
+        "type": "enabled"
+      }
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": false,
+    "max_context_tokens": 1048576,
+    "description": "Mimo V2.5 Pro Thinking 模型 - 用于深度推理和复杂任务（1M context）",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "write": {
+          "temperature": 0.8
+        },
+        "overview": {
+          "temperature": 0.3
+        },
+        "audit": {
+          "temperature": 0.4
+        },
+        "decision": {
+          "temperature": 0.6
+        },
+        "interactive": {
+          "temperature": 0.8
+        },
+        "prompt": {
+          "temperature": 0.8
+        },
+        "infer": {
+          "temperature": 0.3
+        },
+        "conversation_compaction": {
+          "temperature": 0.3
+        }
+      },
+      "conversation_memory": {
+        "working_memory_token_budget_cap": 80000
+      }
+    }
+  },
+  "mimo-v2.5-pro-plan": {
+    "runner_type": "openai_compatible",
+    "name": "mimo-v2.5-pro-plan",
     "endpoint_url": "https://token-plan-cn.xiaomimimo.com/v1/chat/completions",
-    "model": "mimo-v2-pro",
+    "model": "mimo-v2.5-pro",
     "headers": {
       "Authorization": "Bearer {{MIMO_PLAN_API_KEY}}",
       "Content-Type": "application/json"
@@ -429,13 +690,31 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 1048576,
-    "description": "Mimo V2 Pro 模型 - 用于对话和内容生成（1M context, 131.1K output）",
+    "description": "Mimo V2.5 Pro 模型 - 用于内容生成（1M context）",
     "runtime_hints": {
       "temperature_profiles": {
         "write": {
           "temperature": 0.8
         },
         "overview": {
+          "temperature": 0.3
+        },
+        "audit": {
+          "temperature": 0.4
+        },
+        "decision": {
+          "temperature": 0.6
+        },
+        "interactive": {
+          "temperature": 0.8
+        },
+        "prompt": {
+          "temperature": 0.8
+        },
+        "infer": {
+          "temperature": 0.3
+        },
+        "conversation_compaction": {
           "temperature": 0.3
         }
       },
@@ -444,11 +723,11 @@
       }
     }
   },
-  "mimo-v2-pro-thinking-plan": {
+  "mimo-v2.5-pro-thinking-plan": {
     "runner_type": "openai_compatible",
-    "name": "mimo-v2-pro-thinking-plan",
+    "name": "mimo-v2.5-pro-thinking-plan",
     "endpoint_url": "https://token-plan-cn.xiaomimimo.com/v1/chat/completions",
-    "model": "mimo-v2-pro",
+    "model": "mimo-v2.5-pro",
     "headers": {
       "Authorization": "Bearer {{MIMO_PLAN_API_KEY}}",
       "Content-Type": "application/json"
@@ -466,9 +745,15 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 1048576,
-    "description": "Mimo V2 Pro Thinking 模型 - 用于深度推理和复杂任务（1M context, 131.1K output）",
+    "description": "Mimo V2.5 Pro Thinking 模型 - 用于深度推理和复杂任务（1M context）",
     "runtime_hints": {
       "temperature_profiles": {
+        "write": {
+          "temperature": 0.8
+        },
+        "overview": {
+          "temperature": 0.3
+        },
         "audit": {
           "temperature": 0.4
         },
@@ -493,11 +778,11 @@
       }
     }
   },
-  "mimo-v2-pro-plan-sg": {
+  "mimo-v2.5-pro-plan-sg": {
     "runner_type": "openai_compatible",
-    "name": "mimo-v2-pro-plan-sg",
+    "name": "mimo-v2.5-pro-plan-sg",
     "endpoint_url": "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions",
-    "model": "mimo-v2-pro",
+    "model": "mimo-v2.5-pro",
     "headers": {
       "Authorization": "Bearer {{MIMO_PLAN_SG_API_KEY}}",
       "Content-Type": "application/json"
@@ -515,7 +800,7 @@
     "supports_usage": true,
     "supports_stream_usage": false,
     "max_context_tokens": 1048576,
-    "description": "Mimo V2 Pro 模型 - 用于对话和内容生成（1M context, 131.1K output）",
+    "description": "Mimo V2.5 Pro 模型 - 用于内容生成（1M context）",
     "runtime_hints": {
       "temperature_profiles": {
         "write": {
@@ -523,38 +808,7 @@
         },
         "overview": {
           "temperature": 0.3
-        }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
-      }
-    }
-  },
-  "mimo-v2-pro-thinking-plan-sg": {
-    "runner_type": "openai_compatible",
-    "name": "mimo-v2-pro-thinking-plan-sg",
-    "endpoint_url": "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions",
-    "model": "mimo-v2-pro",
-    "headers": {
-      "Authorization": "Bearer {{MIMO_PLAN_SG_API_KEY}}",
-      "Content-Type": "application/json"
-    },
-    "extra_payloads": {
-      "thinking": {
-        "type": "enabled"
-      }
-    },
-    "timeout": 3600,
-    "stream_idle_timeout": 120.0,
-    "stream_idle_heartbeat_sec": 10.0,
-    "supports_stream": true,
-    "supports_tool_calling": true,
-    "supports_usage": true,
-    "supports_stream_usage": false,
-    "max_context_tokens": 1048576,
-    "description": "Mimo V2 Pro Thinking 模型 - 用于深度推理和复杂任务（1M context, 131.1K output）",
-    "runtime_hints": {
-      "temperature_profiles": {
+        },
         "audit": {
           "temperature": 0.4
         },
@@ -579,14 +833,72 @@
       }
     }
   },
-  "qwen3": {
+  "mimo-v2.5-pro-thinking-plan-sg": {
     "runner_type": "openai_compatible",
-    "name": "qwen3",
+    "name": "mimo-v2.5-pro-thinking-plan-sg",
+    "endpoint_url": "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions",
+    "model": "mimo-v2.5-pro",
+    "headers": {
+      "Authorization": "Bearer {{MIMO_PLAN_SG_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "thinking": {
+        "type": "enabled"
+      }
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": false,
+    "max_context_tokens": 1048576,
+    "description": "Mimo V2.5 Pro Thinking 模型 - 用于深度推理和复杂任务（1M context）",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "write": {
+          "temperature": 0.8
+        },
+        "overview": {
+          "temperature": 0.3
+        },
+        "audit": {
+          "temperature": 0.4
+        },
+        "decision": {
+          "temperature": 0.6
+        },
+        "interactive": {
+          "temperature": 0.8
+        },
+        "prompt": {
+          "temperature": 0.8
+        },
+        "infer": {
+          "temperature": 0.3
+        },
+        "conversation_compaction": {
+          "temperature": 0.3
+        }
+      },
+      "conversation_memory": {
+        "working_memory_token_budget_cap": 80000
+      }
+    }
+  },
+  "qwen-plus": {
+    "runner_type": "openai_compatible",
+    "name": "qwen-plus",
     "endpoint_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-    "model": "qwen-plus",
+    "model": "qwen3.6-plus",
     "headers": {
       "Authorization": "Bearer {{QWEN_API_KEY}}",
       "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "enable_thinking": false
     },
     "timeout": 3600,
     "stream_idle_timeout": 120.0,
@@ -596,13 +908,31 @@
     "supports_usage": true,
     "supports_stream_usage": true,
     "max_context_tokens": 1000000,
-    "description": "Qwen3 模型 (qwen-plus 稳定版) - 用于对话和内容生成（1M context, 32K output）",
+    "description": "Qwen Plus 模型 - 用于内容生成（1M context）",
     "runtime_hints": {
       "temperature_profiles": {
         "write": {
           "temperature": 0.6
         },
         "overview": {
+          "temperature": 0.1
+        },
+        "audit": {
+          "temperature": 0.2
+        },
+        "decision": {
+          "temperature": 0.3
+        },
+        "interactive": {
+          "temperature": 0.6
+        },
+        "prompt": {
+          "temperature": 0.6
+        },
+        "infer": {
+          "temperature": 0.1
+        },
+        "conversation_compaction": {
           "temperature": 0.1
         }
       },
@@ -611,11 +941,11 @@
       }
     }
   },
-  "qwen3-thinking": {
+  "qwen-plus-thinking": {
     "runner_type": "openai_compatible",
-    "name": "qwen3-thinking",
+    "name": "qwen-plus-thinking",
     "endpoint_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-    "model": "qwen-plus",
+    "model": "qwen3.6-plus",
     "headers": {
       "Authorization": "Bearer {{QWEN_API_KEY}}",
       "Content-Type": "application/json"
@@ -631,9 +961,15 @@
     "supports_usage": true,
     "supports_stream_usage": true,
     "max_context_tokens": 1000000,
-    "description": "Qwen3 Thinking 模型 (qwen-plus 稳定版) - 开启深度思考模式（1M context, 32K output）",
+    "description": "Qwen Plus Thinking 模型 - 开启深度思考模式（1M context）",
     "runtime_hints": {
       "temperature_profiles": {
+        "write": {
+          "temperature": 0.6
+        },
+        "overview": {
+          "temperature": 0.1
+        },
         "audit": {
           "temperature": 0.2
         },
@@ -703,8 +1039,9 @@
         }
       },
       "conversation_memory": {
-        "episodic_memory_token_budget_floor": 2000,
-        "episodic_memory_token_budget_cap": 2000
+        "working_memory_token_budget_cap": 32000,
+        "episodic_memory_token_budget_floor": 6000,
+        "episodic_memory_token_budget_cap": 6000
       }
     }
   }

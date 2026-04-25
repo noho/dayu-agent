@@ -4,7 +4,30 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+-- 
+
 ## [Unreleased]
+
+### 注意
+
+- 本次更新后需运行一次 `dayu-cli init --reset` ，删除workspace/ 目录下的 .dayu/ config/ assets/ 目录，已下载/上传的财报不会丢失，已生成的报告不会丢失。
+
+### 新增
+
+- 提供离线安装包，覆盖 `macOS ARM64`、`Linux x64`、`Windows x64` 三个平台。
+- 支持自定义OpenAI 兼容模型。
+- interactive支持历史对话发现和恢复。
+
+### 变更
+
+- 小米 `mimo` 模型更新到2.5 Pro。
+- `DeepSeek` 模型更新到V4。
+
+### 修复
+
+- 若干缺陷修复。
+
+-- 
 
 ## [0.1.2] - 2026-04-20
 
@@ -20,11 +43,15 @@
 
 - 若干缺陷修复。
 
+-- 
+
 ## [0.1.1] - 2026-04-18
 
 ### 新增
 
 - 新增安装后初始化命令 `dayu-cli init`，用于生成项目运行所需的初始配置。
+
+-- 
 
 ## [0.1.0] - 2026-04-17
 

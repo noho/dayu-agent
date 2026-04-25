@@ -173,15 +173,15 @@ def _build_toolset_configs(
     )
 
 _DEFAULT_SCENE_MODELS = {
-    "write": SceneModelConfig(name="deepseek-chat", temperature=0.7),
-    "infer": SceneModelConfig(name="deepseek-thinking", temperature=0.7),
-    "overview": SceneModelConfig(name="deepseek-chat", temperature=0.7),
-    "decision": SceneModelConfig(name="deepseek-thinking", temperature=0.7),
-    "regenerate": SceneModelConfig(name="deepseek-chat", temperature=0.7),
-    "fix": SceneModelConfig(name="deepseek-chat", temperature=0.7),
-    "repair": SceneModelConfig(name="deepseek-chat", temperature=0.7),
-    "audit": SceneModelConfig(name="deepseek-thinking", temperature=0.7),
-    "confirm": SceneModelConfig(name="deepseek-thinking", temperature=0.7),
+    "write": SceneModelConfig(name="deepseek-v4-flash", temperature=0.7),
+    "infer": SceneModelConfig(name="deepseek-v4-flash-thinking", temperature=0.7),
+    "overview": SceneModelConfig(name="deepseek-v4-flash", temperature=0.7),
+    "decision": SceneModelConfig(name="deepseek-v4-flash-thinking", temperature=0.7),
+    "regenerate": SceneModelConfig(name="deepseek-v4-flash", temperature=0.7),
+    "fix": SceneModelConfig(name="deepseek-v4-flash", temperature=0.7),
+    "repair": SceneModelConfig(name="deepseek-v4-flash", temperature=0.7),
+    "audit": SceneModelConfig(name="deepseek-v4-flash-thinking", temperature=0.7),
+    "confirm": SceneModelConfig(name="deepseek-v4-flash-thinking", temperature=0.7),
 }
 
 
@@ -312,7 +312,7 @@ def _build_test_resolved_options(
     """构造测试用 resolved execution options。"""
 
     return ResolvedExecutionOptions(
-        model_name="deepseek-chat",
+        model_name="deepseek-v4-flash",
         runner_running_config=OpenAIRunnerRuntimeConfig(),
         agent_running_config=AgentRuntimeConfig(max_iterations=max_iterations),
         toolset_configs=_build_toolset_configs(
@@ -771,7 +771,7 @@ def test_log_write_pipeline_config_uses_resolved_agent_iterations(
         force=True,
     )
     resolved_options = ResolvedExecutionOptions(
-        model_name="deepseek-chat",
+        model_name="deepseek-v4-flash",
         runner_running_config=OpenAIRunnerRuntimeConfig(tool_timeout_seconds=90.0),
         agent_running_config=AgentRuntimeConfig(max_iterations=16),
         toolset_configs=_build_toolset_configs(
@@ -808,8 +808,8 @@ class _FakePromptAssetStore:
             "write": {
                 "scene": "write",
                 "model": {
-                    "default_name": "deepseek-chat",
-                    "allowed_names": ["deepseek-chat"],
+                    "default_name": "deepseek-v4-flash",
+                    "allowed_names": ["deepseek-v4-flash"],
                     "temperature_profile": "write",
                 },
                 "version": "v1",
@@ -829,8 +829,8 @@ class _FakePromptAssetStore:
             "infer": {
                 "scene": "infer",
                 "model": {
-                    "default_name": "deepseek-thinking",
-                    "allowed_names": ["deepseek-thinking"],
+                    "default_name": "deepseek-v4-flash-thinking",
+                    "allowed_names": ["deepseek-v4-flash-thinking"],
                     "temperature_profile": "infer",
                 },
                 "version": "v1",
@@ -851,8 +851,8 @@ class _FakePromptAssetStore:
             "regenerate": {
                 "scene": "regenerate",
                 "model": {
-                    "default_name": "deepseek-chat",
-                    "allowed_names": ["deepseek-chat"],
+                    "default_name": "deepseek-v4-flash",
+                    "allowed_names": ["deepseek-v4-flash"],
                     "temperature_profile": "write",
                 },
                 "version": "v1",
@@ -872,8 +872,8 @@ class _FakePromptAssetStore:
             "decision": {
                 "scene": "decision",
                 "model": {
-                    "default_name": "deepseek-thinking",
-                    "allowed_names": ["deepseek-thinking"],
+                    "default_name": "deepseek-v4-flash-thinking",
+                    "allowed_names": ["deepseek-v4-flash-thinking"],
                     "temperature_profile": "decision",
                 },
                 "version": "v1",
@@ -893,8 +893,8 @@ class _FakePromptAssetStore:
             "overview": {
                 "scene": "overview",
                 "model": {
-                    "default_name": "deepseek-chat",
-                    "allowed_names": ["deepseek-chat"],
+                    "default_name": "deepseek-v4-flash",
+                    "allowed_names": ["deepseek-v4-flash"],
                     "temperature_profile": "overview",
                 },
                 "version": "v1",
@@ -913,8 +913,8 @@ class _FakePromptAssetStore:
             "fix": {
                 "scene": "fix",
                 "model": {
-                    "default_name": "deepseek-chat",
-                    "allowed_names": ["deepseek-chat"],
+                    "default_name": "deepseek-v4-flash",
+                    "allowed_names": ["deepseek-v4-flash"],
                     "temperature_profile": "write",
                 },
                 "version": "v1",
@@ -934,8 +934,8 @@ class _FakePromptAssetStore:
             "repair": {
                 "scene": "repair",
                 "model": {
-                    "default_name": "deepseek-chat",
-                    "allowed_names": ["deepseek-chat"],
+                    "default_name": "deepseek-v4-flash",
+                    "allowed_names": ["deepseek-v4-flash"],
                     "temperature_profile": "write",
                 },
                 "version": "v1",
@@ -954,8 +954,8 @@ class _FakePromptAssetStore:
             "audit": {
                 "scene": "audit",
                 "model": {
-                    "default_name": "deepseek-thinking",
-                    "allowed_names": ["deepseek-thinking"],
+                    "default_name": "deepseek-v4-flash-thinking",
+                    "allowed_names": ["deepseek-v4-flash-thinking"],
                     "temperature_profile": "audit",
                 },
                 "version": "v1",
@@ -972,8 +972,8 @@ class _FakePromptAssetStore:
             "confirm": {
                 "scene": "confirm",
                 "model": {
-                    "default_name": "deepseek-thinking",
-                    "allowed_names": ["deepseek-thinking"],
+                    "default_name": "deepseek-v4-flash-thinking",
+                    "allowed_names": ["deepseek-v4-flash-thinking"],
                     "temperature_profile": "audit",
                 },
                 "version": "v1",
@@ -1227,7 +1227,7 @@ class _FakeConfigLoader:
     def load_llm_models(self) -> dict[str, ModelConfig]:
         """返回全部测试模型配置。"""
 
-        return {"deepseek-chat": _build_test_model_config("deepseek-chat")}
+        return {"deepseek-v4-flash": _build_test_model_config("deepseek-v4-flash")}
 
     def load_llm_model(self, model_name: str) -> ModelConfig:
         """返回最小模型配置。
@@ -3631,8 +3631,8 @@ def test_run_manifest_from_dict_rejects_legacy_model_fields() -> None:
                     "company": "META",
                     "template_path": "/tmp/template.md",
                     "output_dir": "/tmp/out",
-                    "write_model_name": "deepseek-chat",
-                    "audit_model_name": "deepseek-thinking",
+                    "write_model_name": "deepseek-v4-flash",
+                    "audit_model_name": "deepseek-v4-flash-thinking",
                     "write_max_retries": 2,
                     "web_provider": "duckduckgo",
                     "resume": True,

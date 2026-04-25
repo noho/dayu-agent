@@ -13,7 +13,7 @@
   - Engine、prompt 资产、写作流水线、多轮记忆测试
   - 重点覆盖 `AsyncAgent`、Runner、ToolRegistry、PromptComposer、write pipeline
   - `tests/engine/test_log.py` 负责守住全局日志双流路由边界：`ERROR` 以下只写 stdout，`ERROR` 及以上只写 stderr，不能再把同一条失败日志同时打到两个流里造成 CLI 重复显示
-  - `tests/engine/test_prompt_assets.py` 与 `tests/engine/test_prompt_composer.py` 共同守住 scene manifest 的当前默认模型边界：推理/交互类 scene 默认应对齐 `mimo-v2-pro-thinking-plan`，写作类 scene 默认应对齐 `mimo-v2-pro-plan`；若测试仍断言旧 `pro` 默认，会把真实 prompt 配置漂移误报成回归
+  - `tests/engine/test_prompt_assets.py` 与 `tests/engine/test_prompt_composer.py` 共同守住 scene manifest 的当前默认模型边界：推理/交互类 scene 默认应对齐 `mimo-v2.5-pro-thinking-plan`，写作类 scene 默认应对齐 `mimo-v2.5-pro-plan`；若测试仍断言旧 `pro` 默认，会把真实 prompt 配置漂移误报成回归
   - `tests/engine/test_write_pipeline.py` 还要守住 `scene_executor.py` 的共享重试边界：write/overview/infer/decision/fix/regenerate/raw prompt、confirm 和 repair 都必须复用同一套 LLM 执行失败重试语义；取消不得重试，解析失败只在 confirm/repair 这类声明了解析契约的路径重试，且最终错误消息必须保留各 scene 自身语义
   - `tests/engine/test_context_budget.py` 负责守住 `dayu.engine.context_budget` 的真源边界，包括 `ContextBudgetState`、工具结果预测性预算裁剪和相关 warning 语义
   - `tests/engine/test_web_tools.py` 负责守住 web search provider 回退、web tools 的请求头、内容编码、自刷新壳页跟随、challenge 检测、storage state 解析与浏览器回退边界

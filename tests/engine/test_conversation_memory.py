@@ -367,10 +367,10 @@ def test_merge_execution_options_keeps_default_conversation_memory_settings(
     resolved = merge_execution_options(
         base_options=base_options,
         workspace_dir=tmp_path,
-        execution_options=ExecutionOptions(model_name="deepseek-thinking"),
+        execution_options=ExecutionOptions(model_name="deepseek-v4-flash-thinking"),
     )
 
-    assert resolved.model_name == "deepseek-thinking"
+    assert resolved.model_name == "deepseek-v4-flash-thinking"
     assert resolved.conversation_memory_settings.working_memory_token_budget_cap == 6500
     assert resolved.conversation_memory_settings.episodic_memory_token_budget_floor == 2600
     assert resolved.conversation_memory_settings.episodic_memory_token_budget_cap == 2600
@@ -396,10 +396,10 @@ def test_build_base_execution_options_uses_default_when_model_has_no_runtime_hin
     resolved = merge_execution_options(
         base_options=base_options,
         workspace_dir=tmp_path,
-        execution_options=ExecutionOptions(model_name="qwen3-thinking"),
+        execution_options=ExecutionOptions(model_name="qwen-plus-thinking"),
     )
 
-    assert resolved.model_name == "qwen3-thinking"
+    assert resolved.model_name == "qwen-plus-thinking"
     assert resolved.conversation_memory_settings.working_memory_token_budget_cap == 9000
     assert resolved.conversation_memory_settings.episodic_memory_token_budget_floor == 2600
     assert resolved.conversation_memory_settings.episodic_memory_token_budget_cap == 2600

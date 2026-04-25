@@ -72,7 +72,7 @@ def _build_recorder(
             "agent_name": "interactive_agent",
             "agent_kind": "scene_agent",
             "scene_name": "interactive",
-            "model_name": "mimo-v2-flash-thinking",
+            "model_name": "mimo-v2.5-pro-thinking",
             "enabled_capabilities": ["fins"],
         },
     )
