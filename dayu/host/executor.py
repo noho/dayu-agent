@@ -9,9 +9,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import threading
+import uuid
 from contextlib import suppress
 from typing import Any, AsyncIterator, Callable, TypeVar
 
@@ -36,7 +37,12 @@ from dayu.host.protocols import (
     RunRegistryProtocol,
     SessionClosedError,
 )
-from dayu.contracts.agent_execution import AgentInput, ExecutionContract
+from dayu.contracts.agent_execution import (
+    AgentInput,
+    ExecutionContract,
+    ReplayHandle,
+)
+from dayu.contracts.agent_types import AgentMessage, build_user_chat_message
 from dayu.contracts.cancellation import CancelledError, CancellationToken
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
 from dayu.contracts.events import AppEvent, AppEventType, AppResult, PublishedRunEventProtocol
@@ -290,6 +296,59 @@ class RunDeadlineWatcher:
 
 
 @dataclass
+class _ReplayCapture:
+    """`_run_prepared_agent_stream` 把执行结束时的 messages 与原始 ``AgentInput``
+    填回该容器，供 ``run_agent_and_wait_replayable`` 在 stream 收敛后登记到
+    replay stash。
+
+    replay 路径**不会**复用上一次的 ``AsyncAgent`` 实例：上一次构造的 runner
+    与 agent 都绑死在第一次 run 的 ``CancellationToken`` 上，复用后新一次
+    ``_start_run`` 创建的取消桥 / deadline watcher 无法穿透到 runner 与
+    工具调用层。replay 时会用同一份 ``AgentInput`` 透过 ``build_async_agent``
+    重新构造 ``AsyncAgent`` 并绑定新 token。
+
+    Args:
+        messages: 执行结束时的完整对话历史（含 assistant + tool 消息）。
+        agent_input: 上一次执行使用的 ``AgentInput``，replay 时仅复用其
+            ``agent_create_args`` / ``tools`` / ``tool_trace_recorder_factory``
+            / ``trace_identity``，``cancellation_handle`` 在 replay 时被替换。
+
+    Returns:
+        无。
+
+    Raises:
+        无。
+    """
+
+    messages: list[AgentMessage] = field(default_factory=list)
+    agent_input: AgentInput | None = None
+
+
+@dataclass
+class _ReplayState:
+    """单次执行结束后登记到 Host 的 replay 状态。
+
+    Args:
+        messages: 上一次执行结束时的完整对话历史。
+        agent_input: 上一次执行的 ``AgentInput``，replay 路径基于其字段重新
+            ``build_async_agent`` 出绑定新 token 的 ``AsyncAgent``。
+        session_id: 关联的 session_id，跨 session 使用 handle 时直接拒绝。
+        run_id: 颁发该 handle 时的 Host run_id，仅作日志辅助。
+
+    Returns:
+        无。
+
+    Raises:
+        无。
+    """
+
+    messages: list[AgentMessage]
+    agent_input: AgentInput
+    session_id: str | None
+    run_id: str
+
+
+@dataclass
 class DefaultHostExecutor(HostExecutorProtocol):
     """默认宿主执行器。"""
 
@@ -298,6 +357,8 @@ class DefaultHostExecutor(HostExecutorProtocol):
     concurrency_governor: ConcurrencyGovernorProtocol | None = None
     event_bus: RunEventBusProtocol | None = None
     scene_preparation: ScenePreparationProtocol | None = None
+    _replay_stash: dict[str, _ReplayState] = field(default_factory=dict, init=False, repr=False)
+    _replay_stash_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     async def run_operation_stream(
         self,
@@ -406,6 +467,37 @@ class DefaultHostExecutor(HostExecutorProtocol):
             RuntimeError: 未配置 scene preparation 时抛出。
         """
 
+        async for event in self._run_agent_stream_internal(
+            execution_contract,
+            resumed_pending_turn_id=resumed_pending_turn_id,
+            replay_capture=None,
+        ):
+            yield event
+
+    async def _run_agent_stream_internal(
+        self,
+        execution_contract: ExecutionContract,
+        *,
+        resumed_pending_turn_id: str | None = None,
+        replay_capture: _ReplayCapture | None = None,
+    ) -> AsyncIterator[Any]:
+        """``run_agent_stream`` 的内部实现，附带 replay 捕获能力。
+
+        Args:
+            execution_contract: Service 输出的执行契约。
+            resumed_pending_turn_id: 见 ``run_agent_stream``。
+            replay_capture: 可选的 replay 捕获容器；非 ``None`` 时 stream 结束
+                后底层会把最终 messages / AsyncAgent 实例填入容器，供
+                ``run_agent_and_wait_replayable`` 登记到 stash。该参数仅供 Host
+                内部的 replay 实现使用，不在 ``HostExecutorProtocol`` 上暴露。
+
+        Returns:
+            应用层事件流。
+
+        Raises:
+            RuntimeError: 未配置 scene preparation 时抛出。
+        """
+
         if self.scene_preparation is None:
             raise RuntimeError("当前 HostExecutor 未配置 scene preparation")
 
@@ -476,6 +568,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 session_id=spec.session_id,
                 pending_turn_id=pending_turn_id,
                 agent_input=prepared_execution.agent_input,
+                replay_capture=replay_capture,
             ):
                 yield event
             terminal_event = self._settle_agent_stream_completion(
@@ -720,12 +813,257 @@ class DefaultHostExecutor(HostExecutorProtocol):
             RuntimeError: 未配置 scene preparation 时抛出。
         """
 
+        result, _ = await self._run_agent_and_collect(execution_contract, capture=None)
+        return result
+
+    async def run_agent_and_wait_replayable(
+        self,
+        execution_contract: ExecutionContract,
+    ) -> tuple[AppResult, ReplayHandle]:
+        """托管一次 Agent 子执行并颁发用于带历史回放的句柄。
+
+        相比 ``run_agent_and_wait``，本方法会在执行结束时把完整对话历史登记
+        到 Host 内部 stash，返回一个对上层不透明的 ``ReplayHandle``。Service
+        若发现本次输出脏数据（解析失败、空输出等），可把句柄塞回新的执行
+        契约调用 ``replay_agent_and_wait`` 兜底。
+
+        Args:
+            execution_contract: Service 输出的执行契约。
+
+        Returns:
+            ``(AppResult, ReplayHandle)`` 二元组。``ReplayHandle`` 仅在颁发
+            它的 Host 实例生命周期内有效；session 关闭或 Host 重启后即失效。
+
+        Raises:
+            CancelledError: 执行被取消时抛出。
+            RuntimeError: 未配置 scene preparation 时抛出；或 stream 结束后
+                未捕获到完整 messages（理论上不可达）。
+        """
+
+        capture = _ReplayCapture()
+        result, captured = await self._run_agent_and_collect(execution_contract, capture=capture)
+        if captured.agent_input is None:
+            raise RuntimeError("Host run 未捕获到 AgentInput，无法颁发 replay handle")
+        handle = self._register_replay_state(
+            messages=captured.messages,
+            agent_input=captured.agent_input,
+            session_id=execution_contract.host_policy.session_key,
+        )
+        return result, handle
+
+    async def replay_agent_and_wait(
+        self,
+        handle: ReplayHandle,
+        execution_contract: ExecutionContract,
+    ) -> tuple[AppResult, ReplayHandle]:
+        """基于已颁发的 ``ReplayHandle`` 带历史回放一次 Agent 执行。
+
+        Host 取出 handle 关联的对话历史，把
+        ``execution_contract.message_inputs.user_message`` 追加在历史末尾，
+        然后复用同一个 ``AsyncAgent`` 实例调用 ``run_messages``；当
+        ``message_inputs.replay_disable_tools=True`` 时透传到 engine，强制
+        本次执行禁用工具调用，逼迫模型输出文本。
+
+        Args:
+            handle: 上一次 ``run_agent_and_wait_replayable`` 颁发的句柄。
+            execution_contract: 用于本次回放的执行契约；只有
+                ``message_inputs.user_message`` / ``replay_disable_tools`` /
+                ``host_policy.session_key`` 被使用，其余字段保留供 trace。
+
+        Returns:
+            ``(AppResult, ReplayHandle)`` 二元组。返回的句柄是新颁发的，
+            可用于继续追加 replay 的下一轮（service 当前不会触发二次 replay）。
+
+        Raises:
+            RuntimeError: handle 已失效；或 session 不匹配。
+            CancelledError: 执行被取消时抛出。
+        """
+
+        state = self._consume_replay_state(handle)
+        target_session = execution_contract.host_policy.session_key
+        if state.session_id != target_session:
+            raise RuntimeError(
+                f"replay handle 与当前 session 不匹配: handle_session={state.session_id}, "
+                f"target_session={target_session}"
+            )
+        retry_text = execution_contract.message_inputs.user_message or ""
+        if not retry_text.strip():
+            raise RuntimeError("replay 调用必须在 message_inputs.user_message 提供追加文本")
+        # replay 路径与普通 agent run 共用同一套 Host run 生命周期：先注册 run、
+        # 再 ``_start_run`` 挂取消桥 / deadline watcher / 并发 lane（含 ``llm_api``
+        # 自治 lane），最后通过 ``_finish_run`` 释放。绕过这一步会让 SQLite
+        # run_registry 在 ``complete_run`` 时报 CREATED -> SUCCEEDED 非法转换，
+        # 同时也无法响应取消与 timeout。
+        spec = HostedRunSpec(
+            operation_name=execution_contract.service_name,
+            session_id=target_session,
+            scene_name=execution_contract.scene_name,
+            metadata=execution_contract.metadata,
+            business_concurrency_lane=execution_contract.host_policy.business_concurrency_lane,
+            timeout_ms=execution_contract.host_policy.timeout_ms,
+        )
+        run = self.run_registry.register_run(
+            session_id=spec.session_id,
+            service_type=spec.operation_name,
+            scene_name=spec.scene_name,
+            metadata=spec.metadata,
+        )
+        context, bridge, deadline_watcher, permits = self._start_run(
+            spec=spec, run_id=run.run_id, include_agent_lane=True,
+        )
+        Log.verbose(
+            f"[{run.run_id}] replay agent run 启动: parent_run_id={state.run_id}, "
+            f"session_id={target_session or ''}, scene_name={execution_contract.scene_name}, "
+            f"disable_tools={execution_contract.message_inputs.replay_disable_tools}",
+            module=MODULE,
+        )
+        replay_messages = list(state.messages)
+        replay_messages.append(build_user_chat_message(retry_text))
+        # 复用第一次 run 捕获的 AsyncAgent 会让本次 replay 期间无法响应取消：
+        # 该 agent 的 runner / cancellation_token 都绑死在第一次 run。这里基于
+        # 上一次的 ``AgentInput`` 重新 ``build_async_agent``，把 runner 绑到
+        # 本次 ``_start_run`` 颁发的新 token 上。
+        previous_input = state.agent_input
+        agent = build_async_agent(
+            agent_create_args=previous_input.agent_create_args,
+            tool_executor=previous_input.tools,
+            tool_trace_recorder_factory=previous_input.tool_trace_recorder_factory,
+            trace_identity=previous_input.trace_identity,
+            cancellation_token=context.cancellation_token,
+        )
+        replay_agent_input = AgentInput(
+            system_prompt=previous_input.system_prompt,
+            messages=replay_messages,
+            tools=previous_input.tools,
+            agent_create_args=previous_input.agent_create_args,
+            session_state=previous_input.session_state,
+            runtime_limits=previous_input.runtime_limits,
+            cancellation_handle=context.cancellation_token,
+            tool_trace_recorder_factory=previous_input.tool_trace_recorder_factory,
+            trace_identity=previous_input.trace_identity,
+        )
+        normalized_session_id = str(target_session or "").strip() or None
         content = ""
         warnings: list[str] = []
         errors: list[str] = []
         degraded = False
         filtered = False
-        async for event in self.run_agent_stream(execution_contract):
+        cancelled_payload: dict[str, str] | None = None
+        try:
+            try:
+                async for stream_event in agent.run_messages(
+                    replay_messages,
+                    session_id=normalized_session_id,
+                    run_id=run.run_id,
+                    stream=True,
+                    disable_tools=execution_contract.message_inputs.replay_disable_tools,
+                ):
+                    mapped = build_app_event_from_stream_event(stream_event)
+                    if mapped is not None:
+                        self._publish_event(run.run_id, mapped)
+                    if stream_event.type == EventType.WARNING:
+                        warnings.append(_extract_event_message(stream_event.data))
+                    elif stream_event.type == EventType.ERROR:
+                        errors.append(_extract_event_message(stream_event.data))
+                    elif (
+                        stream_event.type == EventType.FINAL_ANSWER
+                        and isinstance(stream_event.data, dict)
+                    ):
+                        content = str(stream_event.data.get("content") or "")
+                        degraded = bool(stream_event.data.get("degraded", False))
+                        filtered = bool(stream_event.data.get("filtered", False))
+                if self._is_cancelled(run_id=run.run_id, token=context.cancellation_token):
+                    # stream 自然结束但期间已被请求取消 / timeout：必须像
+                    # ``run_agent_and_wait`` 在收到 CANCELLED 事件那样抛
+                    # ``CancelledError``，否则上层会拿到误导性的“成功 AppResult”。
+                    cancelled_run = self._finalize_cancelled(run.run_id)
+                    cancel_event = self._publish_cancelled_app_event(
+                        run_id=run.run_id, run=cancelled_run,
+                    )
+                    payload = cancel_event.payload
+                    cancelled_payload = (
+                        dict(payload) if isinstance(payload, dict) else None
+                    )
+                else:
+                    self._complete_run_preserving_terminal_state(run_id=run.run_id)
+            except CancelledError:
+                # 与上方"自然结束但被取消"分支保持一致：把 run 收敛到取消终态
+                # 后立刻发布 CANCELLED AppEvent，避免订阅 replay run 的
+                # UI / Service 缺少终态事件、与 run registry 状态漂移。
+                cancelled_run = self._finalize_cancelled(run.run_id)
+                self._publish_cancelled_app_event(run_id=run.run_id, run=cancelled_run)
+                raise
+            except Exception as exc:
+                if self._is_cancelled(run_id=run.run_id, token=context.cancellation_token):
+                    # 取消请求已落库，runner / tool 抛的业务异常本质属于取消余波；
+                    # 必须把它收敛成与 run / event 终态一致的 CancelledError，避免
+                    # 上层把"取消"误读成"业务失败"。
+                    cancelled_run = self._finalize_cancelled(run.run_id)
+                    cancel_event = self._publish_cancelled_app_event(
+                        run_id=run.run_id, run=cancelled_run,
+                    )
+                    raise _build_cancelled_error(cancel_event.payload) from exc
+                self._fail_run_preserving_original_exception(
+                    run_id=run.run_id,
+                    error_summary=self._summarize_error(exc, 200),
+                )
+                raise
+        finally:
+            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits)
+        if cancelled_payload is not None:
+            raise _build_cancelled_error(cancelled_payload)
+        result = AppResult(
+            content=content,
+            warnings=warnings,
+            errors=errors,
+            degraded=degraded,
+            filtered=filtered,
+        )
+        new_handle = self._register_replay_state(
+            messages=replay_messages,
+            agent_input=replay_agent_input,
+            session_id=target_session,
+            parent_run_id=run.run_id,
+        )
+        return result, new_handle
+
+    async def _run_agent_and_collect(
+        self,
+        execution_contract: ExecutionContract,
+        *,
+        capture: _ReplayCapture | None,
+    ) -> tuple[AppResult, _ReplayCapture]:
+        """统一收敛 ``run_agent_stream`` 的事件流为 AppResult。
+
+        Args:
+            execution_contract: 执行契约。
+            capture: 可选 replay 捕获容器；为 ``None`` 时本方法仍会构造一个
+                空容器返回，调用方据此判断是否采纳。
+
+        Returns:
+            ``(AppResult, _ReplayCapture)`` 二元组。
+
+        Raises:
+            CancelledError: 执行被取消时抛出。
+            RuntimeError: 未配置 scene preparation 时抛出。
+        """
+
+        effective_capture = capture if capture is not None else _ReplayCapture()
+        content = ""
+        warnings: list[str] = []
+        errors: list[str] = []
+        degraded = False
+        filtered = False
+        # 无 replay 需求时仍走公开的 ``run_agent_stream``，以兼容测试对该方法的
+        # monkeypatch；带 replay 捕获时才下沉到 ``_run_agent_stream_internal``。
+        if capture is None:
+            stream = self.run_agent_stream(execution_contract)
+        else:
+            stream = self._run_agent_stream_internal(
+                execution_contract,
+                replay_capture=effective_capture,
+            )
+        async for event in stream:
             if event.type == AppEventType.FINAL_ANSWER:
                 payload = event.payload if isinstance(event.payload, dict) else {}
                 content = str(payload.get("content") or "")
@@ -737,13 +1075,90 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 warnings.append(_extract_event_message(event.payload))
             elif event.type == AppEventType.ERROR:
                 errors.append(_extract_event_message(event.payload))
-        return AppResult(
+        result = AppResult(
             content=content,
             warnings=warnings,
             errors=errors,
             degraded=degraded,
             filtered=filtered,
         )
+        return result, effective_capture
+
+    def _register_replay_state(
+        self,
+        *,
+        messages: list[AgentMessage],
+        agent_input: AgentInput,
+        session_id: str | None,
+        parent_run_id: str | None = None,
+    ) -> ReplayHandle:
+        """登记一次执行结束时的 replay 状态并颁发不透明句柄。
+
+        Args:
+            messages: 执行结束时的完整对话历史。
+            agent_input: 上一次执行使用的 ``AgentInput``，replay 时基于其
+                重新构造绑定新 ``CancellationToken`` 的 ``AsyncAgent``。
+            session_id: 关联的 session_id；可选。
+            parent_run_id: 颁发该 handle 时的来源 run_id，仅作日志辅助。
+
+        Returns:
+            可被 ``replay_agent_and_wait`` 消费的句柄。
+
+        Raises:
+            无。
+        """
+
+        handle_id = f"replay_{uuid.uuid4().hex[:16]}"
+        state = _ReplayState(
+            messages=list(messages),
+            agent_input=agent_input,
+            session_id=session_id,
+            run_id=parent_run_id or "",
+        )
+        with self._replay_stash_lock:
+            self._replay_stash[handle_id] = state
+        return ReplayHandle(handle_id=handle_id)
+
+    def _consume_replay_state(self, handle: ReplayHandle) -> _ReplayState:
+        """取出并删除 handle 对应的 replay 状态（一次性消费）。
+
+        Args:
+            handle: 上层持有的不透明句柄。
+
+        Returns:
+            对应的 replay 状态。
+
+        Raises:
+            RuntimeError: handle 在本 Host 实例上不存在。
+        """
+
+        with self._replay_stash_lock:
+            state = self._replay_stash.pop(handle.handle_id, None)
+        if state is None:
+            raise RuntimeError(f"无效的 replay handle: {handle.handle_id}")
+        return state
+
+    def discard_replay_state_for_session(self, session_id: str) -> None:
+        """清理 session 关联的所有 replay 状态。
+
+        Args:
+            session_id: 需要清理的 session_id。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        with self._replay_stash_lock:
+            stale = [
+                handle_id
+                for handle_id, state in self._replay_stash.items()
+                if state.session_id == session_id
+            ]
+            for handle_id in stale:
+                self._replay_stash.pop(handle_id, None)
 
     async def _run_prepared_agent_stream(
         self,
@@ -752,6 +1167,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
         session_id: str | None,
         pending_turn_id: str | None,
         agent_input: AgentInput,
+        replay_capture: _ReplayCapture | None = None,
     ) -> AsyncIterator[Any]:
         """执行已经准备好的 Agent 输入。
 
@@ -760,6 +1176,9 @@ class DefaultHostExecutor(HostExecutorProtocol):
             session_id: 当前执行归属的 Host session_id。
             pending_turn_id: 已登记的 pending turn ID。
             agent_input: 立即可执行的 Agent 输入。
+            replay_capture: 可选的 replay 捕获容器；非 ``None`` 时本方法在
+                stream 结束时把最终 messages 与所用 ``AsyncAgent`` 实例填入
+                容器，供 replay 路径登记到 stash。
         """
 
         final_content = ""
@@ -776,8 +1195,11 @@ class DefaultHostExecutor(HostExecutorProtocol):
             trace_identity=agent_input.trace_identity,
             cancellation_token=agent_input.cancellation_handle,
         )
+        # ``run_messages`` 会原地追加消息；保留同一份引用以便 replay capture 在
+        # stream 结束后取到完整历史。
+        running_messages: list[AgentMessage] = list(agent_input.messages)
         async for stream_event in agent.run_messages(
-            list(agent_input.messages),
+            running_messages,
             session_id=normalized_session_id,
             run_id=run_id,
             stream=True,
@@ -796,6 +1218,10 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 final_content = str(stream_event.data.get("content") or "")
                 degraded = bool(stream_event.data.get("degraded", False))
                 filtered = bool(stream_event.data.get("filtered", False))
+        if replay_capture is not None:
+            # 即使被取消或失败也把当前历史快照交给 caller，由调用方决定是否登记。
+            replay_capture.messages = list(running_messages)
+            replay_capture.agent_input = agent_input
         token = agent_input.cancellation_handle
         if token is not None and self._is_cancelled(run_id=run_id, token=token):
             Log.verbose(f"[{run_id}] 检测到取消，跳过 transcript persist", module=MODULE)

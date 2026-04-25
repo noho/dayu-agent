@@ -1272,6 +1272,7 @@ class TestPromptProviderSelection:
 
     def test_empty_input_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """空输入时选择默认供应商（第一个已配置的）。"""
+        monkeypatch.delenv("DAYU_INIT_PROVIDER_OPTION", raising=False)
         monkeypatch.setenv("MIMO_API_KEY", "existing")
         for k in (
             "MIMO_PLAN_API_KEY",
@@ -1313,6 +1314,7 @@ class TestPromptProviderSelection:
     def test_first_configured_provider_branch(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """首个已配置供应商触发 first_configured_idx 分支。"""
         _clear_provider_env_vars(monkeypatch)
+        monkeypatch.delenv("DAYU_INIT_PROVIDER_OPTION", raising=False)
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-already")
         monkeypatch.setattr("builtins.input", lambda *_args: "")
         result = _prompt_provider_selection()

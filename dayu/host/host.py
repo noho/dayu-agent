@@ -8,7 +8,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, TypeVar, cast
 
-from dayu.contracts.agent_execution import ExecutionContract
+from dayu.contracts.agent_execution import ExecutionContract, ReplayHandle
 from dayu.contracts.agent_execution_serialization import deserialize_execution_contract_snapshot
 from dayu.contracts.events import AppEvent, AppResult
 from dayu.contracts.events import PublishedRunEventProtocol
@@ -621,6 +621,78 @@ class Host:
         )
         return await self._executor.run_agent_and_wait(execution_contract)
 
+    async def run_agent_and_wait_replayable(
+        self,
+        execution_contract: ExecutionContract,
+    ) -> tuple[AppResult, ReplayHandle]:
+        """托管一次 Agent 子执行，并颁发可用于带历史回放的不透明句柄。
+
+        Args:
+            execution_contract: 已准备好的执行契约。
+
+        Returns:
+            ``(AppResult, ReplayHandle)`` 二元组；``ReplayHandle`` 仅在颁发
+            它的 Host 实例进程内有效，session 关闭或 Host 重启即失效。
+
+        Raises:
+            CancelledError: 执行被取消时抛出。
+        """
+
+        Log.debug(
+            f"Host 启动 agent replayable wait: service_name={execution_contract.service_name}, "
+            f"session_id={execution_contract.host_policy.session_key or ''}, "
+            f"scene_name={execution_contract.scene_name}",
+            module=MODULE,
+        )
+        return await self._executor.run_agent_and_wait_replayable(execution_contract)
+
+    async def replay_agent_and_wait(
+        self,
+        handle: ReplayHandle,
+        execution_contract: ExecutionContract,
+    ) -> tuple[AppResult, ReplayHandle]:
+        """基于上一次颁发的 ``ReplayHandle`` 带历史回放一次 Agent 执行。
+
+        Host 取出 handle 关联的对话历史，把
+        ``execution_contract.message_inputs.user_message`` 追加到末尾，再用
+        本次新颁发的 ``CancellationToken`` 重建 ``AsyncAgent`` 跑一次。
+
+        Args:
+            handle: 上一次 ``run_agent_and_wait_replayable`` 颁发的句柄。
+            execution_contract: 用于本次回放的执行契约。
+
+        Returns:
+            ``(AppResult, ReplayHandle)`` 二元组；新句柄可继续追加 replay。
+
+        Raises:
+            RuntimeError: handle 已失效或与目标 session 不匹配。
+            CancelledError: 执行被取消时抛出。
+        """
+
+        Log.debug(
+            f"Host 启动 agent replay: handle_id={handle.handle_id}, "
+            f"service_name={execution_contract.service_name}, "
+            f"session_id={execution_contract.host_policy.session_key or ''}, "
+            f"scene_name={execution_contract.scene_name}",
+            module=MODULE,
+        )
+        return await self._executor.replay_agent_and_wait(handle, execution_contract)
+
+    def discard_replay_state_for_session(self, session_id: str) -> None:
+        """清理指定 session 关联的所有 replay 句柄状态。
+
+        Args:
+            session_id: 目标 session_id。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        self._executor.discard_replay_state_for_session(session_id)
+
     def cancel_run(self, run_id: str) -> RunRecord:
         """请求取消指定 run。
 
@@ -665,6 +737,10 @@ class Host:
         # 再做一次幂等 delete sweep，兜底回收 close_session 之前已成功写入的记录。
         self._reply_outbox_store.delete_by_session_id(session_id)
         self._pending_turn_store.delete_by_session_id(session_id)
+        # session 关闭后清理 replay stash 内还挂着的句柄状态，避免 AgentInput /
+        # 历史 messages 在 Host 内泄漏。该入口已上 ``HostExecutorProtocol``，
+        # 直接走协议方法即可，禁止再做 ``isinstance`` 具体实现判定。
+        self._executor.discard_replay_state_for_session(session_id)
         updated = self.get_session(session_id)
         if updated is None:
             raise KeyError(f"session 不存在: {session_id}")

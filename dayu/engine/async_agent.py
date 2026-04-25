@@ -27,6 +27,7 @@
 import copy
 import json
 import uuid
+from contextlib import asynccontextmanager
 from threading import Lock
 from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Tuple, cast
 
@@ -502,6 +503,7 @@ class AsyncAgent:
         session_id: str | None = None,
         stream: bool = True,
         run_id: str | None = None,
+        disable_tools: bool = False,
         **extra_payloads,
     ) -> AsyncIterator[StreamEvent]:
         """执行 Agent（调用方直接传入 messages，用于多轮会话）。
@@ -510,6 +512,11 @@ class AsyncAgent:
             messages: 调用方维护的消息列表。该列表会在运行中被原地追加消息。
             session_id: 会话标识；为空时默认使用本次运行的 `run_id`。
             stream: 是否启用 streaming（默认 True）。
+            run_id: 本次运行的 run_id；为空时自动生成。
+            disable_tools: 是否在本次执行期间禁用工具调用。``True`` 表示通过
+                ``_tools_disabled`` 上下文管理器临时移除 runner 的 tool 能力，
+                供 service 层 replay 这类"必须输出文本"的兜底场景使用；执行
+                结束后工具能力会自动恢复，不影响后续调用。
             **extra_payloads: 透传给底层 Runner 的额外参数。
 
         Yields:
@@ -538,15 +545,28 @@ class AsyncAgent:
             self.tool_executor.clear_cursors()
         Log.verbose(f"[{effective_run_id}] 开始运行 Agent，消息数={len(messages)}", module=MODULE)
         try:
-            async for event in self._run_loop(
-                messages,
-                stream=stream,
-                run_id=effective_run_id,
-                session_id=effective_session_id,
-                trace_recorder=trace_recorder,
-                **call_payloads,
-            ):
-                yield event
+            if disable_tools:
+                async with self._tools_disabled():
+                    async for event in self._run_loop(
+                        messages,
+                        stream=stream,
+                        run_id=effective_run_id,
+                        session_id=effective_session_id,
+                        trace_recorder=trace_recorder,
+                        tools_disabled=True,
+                        **call_payloads,
+                    ):
+                        yield event
+            else:
+                async for event in self._run_loop(
+                    messages,
+                    stream=stream,
+                    run_id=effective_run_id,
+                    session_id=effective_session_id,
+                    trace_recorder=trace_recorder,
+                    **call_payloads,
+                ):
+                    yield event
         finally:
             await self.runner.close()
             if trace_recorder is not None:
@@ -561,6 +581,7 @@ class AsyncAgent:
         run_id: Optional[str] = None,
         session_id: Optional[str] = None,
         trace_recorder: Optional[ToolTraceRecorder] = None,
+        tools_disabled: bool = False,
         **extra_payloads,
     ) -> AsyncIterator[StreamEvent]:
         """统一推理循环（供 streaming / non-streaming 复用）。
@@ -586,8 +607,10 @@ class AsyncAgent:
             hard_limit_ratio=self.running_config.budget_hard_limit_ratio,
         )
 
-        # 无状态设计：每次 run 时设置工具
-        if self.tool_executor:
+        # 无状态设计：每次 run 时设置工具；但 ``tools_disabled`` 模式下必须保持
+        # runner 的工具列表为 None（与 ``_tools_disabled`` 上下文管理器协同），否则
+        # 会在每轮 iteration 入口把工具又重新装回去，破坏"必须输出文本"的兜底语义。
+        if self.tool_executor and not tools_disabled:
             self.runner.set_tools(self.tool_executor)
         
         iteration = 0
@@ -1194,6 +1217,34 @@ class AsyncAgent:
         if self.cancellation_token is not None:
             self.cancellation_token.raise_if_cancelled()
 
+    @asynccontextmanager
+    async def _tools_disabled(self) -> AsyncIterator[None]:
+        """临时禁用 runner 上的工具调用，退出时恢复原工具执行器。
+
+        该上下文管理器是 ``_run_force_answer``（迭代上限触发的强制收尾）与
+        replay 路径（service 层在脏数据时带历史回放并要求纯文本输出）共享的
+        原语：两个场景都需要在一次模型调用期间禁止 runner 发起 tool_call，并
+        在结束后无条件恢复工具能力。
+
+        Args:
+            无。
+
+        Yields:
+            无。整段 with 体在 runner.tools 被置空的状态下执行。
+
+        Raises:
+            无。底层 runner.set_tools 异常会原样透传。
+        """
+
+        if self.tool_executor is None:
+            yield
+            return
+        self.runner.set_tools(None)
+        try:
+            yield
+        finally:
+            self.runner.set_tools(self.tool_executor)
+
     async def _run_force_answer(
         self,
         messages: List[AgentMessage],
@@ -1213,10 +1264,7 @@ class AsyncAgent:
         messages.append(build_user_chat_message(self.fallback_prompt))
         Log.debug(f"[{iteration_id}] 进入降级模式，追加 fallback prompt 并生成最终答案", module=MODULE)
 
-        if self.tool_executor:
-            self.runner.set_tools(None)
-
-        try:
+        async with self._tools_disabled():
             content_buffer = []
             content_complete_seen = False
             content_complete_text = None
@@ -1277,10 +1325,6 @@ class AsyncAgent:
                     run_id=run_id,
                     iteration_id=iteration_id,
                 )
-        finally:
-            # 恢复工具状态，避免后续（如 run_and_wait 的 warnings 收集等）丢失工具能力
-            if self.tool_executor:
-                self.runner.set_tools(self.tool_executor)
     
 
     async def run_and_wait(

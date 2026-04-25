@@ -176,9 +176,9 @@ def test_manifest_tool_selection_is_loaded_from_shared_parser() -> None:
     assert manifest.model.default_name == "mimo-v2.5-pro-thinking-plan"
     assert manifest.model.allowed_names == _EXPECTED_THINKING_ALLOWED_NAMES
     assert manifest.model.temperature_profile == "audit"
-    assert manifest.runtime.agent.max_iterations is None
+    assert manifest.runtime.agent.max_iterations == 16
     assert manifest.runtime.agent.max_consecutive_failed_tool_batches is None
-    assert manifest.runtime.runner.tool_timeout_seconds is None
+    assert manifest.runtime.runner.tool_timeout_seconds == 90.0
     assert manifest.tool_selection_policy.mode.value == "none"
 
 

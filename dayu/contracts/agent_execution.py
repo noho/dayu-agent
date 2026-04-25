@@ -353,11 +353,45 @@ class ExecutionHostPolicy:
 
 
 @dataclass(frozen=True)
+class ReplayHandle:
+    """Host 颁发给上层的不透明回放句柄。
+
+    Service 在收到一次 ``run_agent_and_wait_replayable`` 的结果后会持有该
+    句柄；当本轮输出脏数据（解析失败、空输出等）需要带历史回放时，把句柄
+    塞回新的 ``ExecutionContract.message_inputs.replay_from`` 即可。
+
+    句柄本身**不**承载 message 历史：完整对话历史由 Host 在内部 stash 中
+    维护，跨层只暴露 ``handle_id``。这样 contracts 层不会泄漏 engine 内部
+    的 ``AgentMessage`` 数据结构，也避免上层误以为可以离线重放。
+
+    Args:
+        handle_id: Host 内唯一的句柄 ID，仅在颁发它的 Host 实例生命周期内
+            有效；Host 重启 / Session 关闭后即失效。
+
+    Returns:
+        无。
+
+    Raises:
+        无。
+    """
+
+    handle_id: str
+
+
+@dataclass(frozen=True)
 class ExecutionMessageInputs:
     """Service 交给 scene preparation 的当前轮消息输入。
 
     Args:
         user_message: 当前轮用户输入。
+        replay_from: 上一次 ``run_agent_and_wait_replayable`` 颁发的回放
+            句柄。仅在 Host.replay_agent_and_wait 路径上使用：Host 会按句柄
+            取出原历史，然后把 ``user_message`` 追加在历史末尾再跑一次。
+            非 replay 路径必须保持为 ``None``。
+        replay_disable_tools: 仅在 replay 路径生效。``True`` 时 Host 透传到
+            ``AsyncAgent.run_messages(disable_tools=True)``，强制本次执行
+            期间禁用工具调用。该字段是 Service 表达"必须输出文本"意图的
+            显式标记，不依赖 toolset 配置达到同效果。
 
     Returns:
         无。
@@ -367,6 +401,8 @@ class ExecutionMessageInputs:
     """
 
     user_message: str | None = None
+    replay_from: ReplayHandle | None = None
+    replay_disable_tools: bool = False
 
 
 @dataclass(frozen=True)
@@ -487,5 +523,6 @@ __all__ = [
     "ExecutionMessageInputs",
     "ExecutionPermissions",
     "ExecutionWebPermissions",
+    "ReplayHandle",
     "ScenePreparationSpec",
 ]
