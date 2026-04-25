@@ -31,7 +31,7 @@ httpxthrottlecache==0.3.5
 transformers==5.5.4
 tokenizers==0.22.2
 huggingface_hub==1.11.0
-streamlit==1.40.0
+streamlit==1.46.0
 
 # 已验证的测试/静态检查工具版本。
 mypy==1.20.1

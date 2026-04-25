@@ -70,7 +70,7 @@ browser = [
 # Web UI（streamlit）能力，仅在启用 `dayu-web` 入口时安装。
 # 上界锁在当前 1.x 生态窗口，避免把未来 2.x 误声明为支持范围。
 web = [
-    "streamlit>=1.40.0,<2.0.0",
+    "streamlit>=1.46.0,<2.0.0",
 ]
 # 测试与静态检查工具链。
 test = [
