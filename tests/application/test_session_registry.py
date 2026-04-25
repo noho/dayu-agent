@@ -211,8 +211,10 @@ class TestCloseIdleSessions:
         time.sleep(0.01)
         registry.touch_session("active")
 
-        # 用一个非常小的阈值（0 秒），两个都应该被关闭
-        closed_ids = registry.close_idle_sessions(timedelta(seconds=0))
+        # 用一个负向阈值（cutoff 取到未来），保证两个 session 的 last_activity_at
+        # 都 < cutoff，从而都被关闭。避免 timedelta(0) 在 Windows 微秒级时钟粒度下
+        # 与 touch_session 取到同一时刻而产生的边界 flakiness。
+        closed_ids = registry.close_idle_sessions(timedelta(microseconds=-1))
         assert set(closed_ids) == {"idle", "active"}
 
     @pytest.mark.unit
