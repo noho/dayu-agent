@@ -645,8 +645,11 @@ def test_windows_script_helpers(tmp_path: Path) -> None:
     text = script_path.read_text(encoding="utf-8")
 
     assert text.startswith("@echo off")
+    assert "chcp 65001 > nul" in text
     assert "REM python -m dayu.cli upload_filings_from --ticker AAPL" in text
     assert "python -m dayu.cli upload_filing --ticker AAPL %*" in text
+    # Windows 批处理必须使用 CRLF 行尾，避免中文 UTF-8 多字节字符被解析器错位
+    assert script_path.read_bytes().count(b"\r\n") >= 5
 
 
 @pytest.mark.unit

@@ -2080,6 +2080,7 @@ def _build_upload_script_header(
     if script_platform == "windows":
         return [
             "@echo off",
+            "chcp 65001 > nul",
             "setlocal",
             "",
             "REM 重新生成脚本：",
@@ -2137,8 +2138,13 @@ def _write_upload_script(
         else:
             lines.append("echo '没有识别到可上传的文件'")
     output_script.parent.mkdir(parents=True, exist_ok=True)
-    output_script.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    if script_platform != "windows":
+    if script_platform == "windows":
+        # cmd.exe 按当前代码页解释批处理；中文路径需脚本头先执行 `chcp 65001`，
+        # 文件本身用 UTF-8（不带 BOM，避免老版 cmd.exe 把 BOM 当作首行命令字符），
+        # 行尾用 CRLF，避免多字节字符尾字节被解析器并入下一行 token。
+        output_script.write_bytes(("\r\n".join(lines) + "\r\n").encode("utf-8"))
+    else:
+        output_script.write_text("\n".join(lines) + "\n", encoding="utf-8")
         output_script.chmod(0o755)
 
 

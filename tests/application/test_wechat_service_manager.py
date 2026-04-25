@@ -439,7 +439,7 @@ def test_restart_launchd_service_uses_kickstart_k(monkeypatch: pytest.MonkeyPatc
     )
 
     assert command_calls == [
-        (("kickstart", "-k", f"gui/{service_manager.os.getuid()}/com.dayu.wechat.test"), True),
+        (("kickstart", "-k", service_manager._build_launchctl_service_target("com.dayu.wechat.test")), True),
     ]
 
 
@@ -545,8 +545,8 @@ def test_stop_launchd_service_sends_sigterm_before_bootout(monkeypatch: pytest.M
 
     assert stopped is True
     assert command_calls == [
-        (("kill", "SIGTERM", f"gui/{service_manager.os.getuid()}/com.dayu.wechat.test"), True),
-        (("bootout", f"gui/{service_manager.os.getuid()}", str(plist_path.resolve())), True),
+        (("kill", "SIGTERM", service_manager._build_launchctl_service_target("com.dayu.wechat.test")), True),
+        (("bootout", service_manager._build_launchctl_domain_target(), str(plist_path.resolve())), True),
     ]
 
 
@@ -1421,7 +1421,7 @@ def test_launchd_start_service_kickstart_when_loaded_without_pid(monkeypatch: py
     service_manager.start_launchd_service(label="com.dayu.wechat.test", plist_path=plist_path)
 
     assert command_calls == [
-        (("kickstart", f"gui/{service_manager.os.getuid()}/com.dayu.wechat.test"), True),
+        (("kickstart", service_manager._build_launchctl_service_target("com.dayu.wechat.test")), True),
     ]
 
 
@@ -1478,7 +1478,7 @@ def test_stop_launchd_service_skips_sigterm_when_no_pid(monkeypatch: pytest.Monk
 
     assert stopped is True
     assert command_calls == [
-        (("bootout", f"gui/{service_manager.os.getuid()}", str(plist_path.resolve())), True),
+        (("bootout", service_manager._build_launchctl_domain_target(), str(plist_path.resolve())), True),
     ]
 
 
