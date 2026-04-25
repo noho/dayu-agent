@@ -2078,13 +2078,16 @@ def _build_upload_script_header(
     """
 
     if script_platform == "windows":
+        # 注意：Windows 分支故意不在头部放置含中文的 `REM 重新生成脚本：` 注释。
+        # cmd.exe 在 `chcp 65001` 下解析批处理时，若某行末尾为多字节字符，
+        # 会吃掉紧随其后命令的若干字节（典型表现是下一行 `python -m dayu.cli`
+        # 被截断为 `yu.cli`，触发 "is not recognized" 报错）。
+        # 重生成命令注释由 `_build_upload_script_footer` 放在脚本末尾，
+        # 那里之后没有任何要执行的命令，从结构上规避该缺陷。
         return [
             "@echo off",
             "chcp 65001 > nul",
             "setlocal",
-            "",
-            "REM 重新生成脚本：",
-            f"REM {regenerate_command}",
             "",
         ]
     shebang = "#!/bin/zsh" if script_platform == "mac" else "#!/usr/bin/env bash"
@@ -2095,6 +2098,33 @@ def _build_upload_script_header(
         "# 重新生成脚本：",
         f"# {regenerate_command}",
         "",
+    ]
+
+
+def _build_upload_script_footer(
+    *,
+    script_platform: str,
+    regenerate_command: str,
+) -> list[str]:
+    """构建批量上传脚本尾部。
+
+    Args:
+        script_platform: 脚本平台标识。
+        regenerate_command: 重生成命令。
+
+    Returns:
+        脚本尾部行列表；非 Windows 平台返回空列表（重生成注释已写在头部）。
+
+    Raises:
+        无。
+    """
+
+    if script_platform != "windows":
+        return []
+    return [
+        "",
+        "REM 重新生成脚本：",
+        f"REM {regenerate_command}",
     ]
 
 
@@ -2137,6 +2167,12 @@ def _write_upload_script(
             lines.append("echo 没有识别到可上传的文件")
         else:
             lines.append("echo '没有识别到可上传的文件'")
+    lines.extend(
+        _build_upload_script_footer(
+            script_platform=script_platform,
+            regenerate_command=regenerate_command,
+        )
+    )
     output_script.parent.mkdir(parents=True, exist_ok=True)
     if script_platform == "windows":
         # cmd.exe 按当前代码页解释批处理；中文路径需脚本头先执行 `chcp 65001`，
