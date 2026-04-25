@@ -16,6 +16,7 @@ import pytest
 
 import dayu.fins.storage._fs_storage_infra as fs_storage_infra_module
 from dayu.fins.storage.fs_company_meta_repository import FsCompanyMetaRepository
+from tests.conftest import requires_symlink
 from tests.fins.storage_testkit import build_fs_storage_test_context
 
 _LOCK_HOLDER_POLL_INTERVAL_SEC = 0.05
@@ -881,6 +882,7 @@ def test_resolve_handle_child_path_rejects_dotdot(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+@requires_symlink
 def test_resolve_handle_child_path_boundary_check_via_symlink(tmp_path: Path) -> None:
     """验证 _resolve_handle_child_path 通过 symlink 越界时抛出 ValueError。"""
 
@@ -1019,6 +1021,7 @@ def test_rejected_filing_file_path_for_read_rejects_dotdot(tmp_path: Path) -> No
 
 
 @pytest.mark.unit
+@requires_symlink
 def test_rejected_filing_file_path_for_read_boundary_check_via_symlink(tmp_path: Path) -> None:
     """验证 _rejected_filing_file_path_for_read 通过 symlink 越界时抛出 ValueError。"""
 

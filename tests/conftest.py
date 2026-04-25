@@ -5,12 +5,51 @@
 """
 import importlib.util
 import json
+import os
 import sys
+import tempfile
 from typing import Any, cast
 from pathlib import Path
 from unittest.mock import Mock, MagicMock
 
 import pytest
+
+
+def _detect_symlink_capability() -> tuple[bool, str]:
+    """探测当前进程是否具备创建文件 symlink 的能力。
+
+    Args:
+        无。
+
+    Returns:
+        二元组 ``(能否创建 symlink, 说明)``。说明在不可创建时给出原因，便于
+        skip 输出可读；可创建时为空串。
+
+    Raises:
+        无。
+    """
+
+    with tempfile.TemporaryDirectory(prefix="dayu_symlink_probe_") as probe_dir:
+        probe_root = Path(probe_dir)
+        target = probe_root / "target"
+        target.write_text("probe", encoding="utf-8")
+        link = probe_root / "link"
+        try:
+            os.symlink(target, link)
+        except OSError as exc:
+            return False, f"无 symlink 能力: {type(exc).__name__}: {exc}"
+        return True, ""
+
+
+_SYMLINK_AVAILABLE, _SYMLINK_UNAVAILABLE_REASON = _detect_symlink_capability()
+
+requires_symlink = pytest.mark.skipif(
+    not _SYMLINK_AVAILABLE,
+    reason=(
+        _SYMLINK_UNAVAILABLE_REASON
+        or "当前环境无法创建 symlink（如 Windows 普通用户未启用开发者模式或缺少 SeCreateSymbolicLinkPrivilege）"
+    ),
+)
 
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))

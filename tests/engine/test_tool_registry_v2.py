@@ -11,6 +11,7 @@ from dayu.engine import ToolRegistry, ConfigError
 from dayu.engine.tool_contracts import ToolTruncateSpec
 from dayu.engine.tool_errors import ToolBusinessError
 from dayu.engine.tool_result import is_tool_success, validate_tool_result_contract
+from tests.conftest import requires_symlink
 
 
 def _simple_schema(name: str):
@@ -594,6 +595,7 @@ class TestToolRegistryBoundary:
         with pytest.raises(FileNotFoundError):
             registry._validate_path(str(allowed / "nonexistent.txt"))
 
+    @requires_symlink
     def test_validate_path_with_symlink_traversal(self, tmp_path: Path):
         registry = ToolRegistry()
         allowed = tmp_path / "allowed"
