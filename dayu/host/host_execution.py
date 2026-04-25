@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import AsyncIterator, Callable, Protocol, TypeVar, runtime_checkable
 
-from dayu.contracts.agent_execution import ExecutionContract
+from dayu.contracts.agent_execution import ExecutionContract, ReplayHandle
 from dayu.contracts.events import AppEvent, AppResult, PublishedRunEventProtocol
 from dayu.contracts.host_execution import HostedRunContext, HostedRunSpec
 from dayu.host.prepared_turn import PreparedAgentTurnSnapshot
@@ -70,6 +70,42 @@ class HostExecutorProtocol(Protocol):
 
         Raises:
             CancelledError: 执行被取消时抛出。
+        """
+        ...
+
+    async def run_agent_and_wait_replayable(
+        self,
+        execution_contract: ExecutionContract,
+    ) -> tuple[AppResult, ReplayHandle]:
+        """托管一次 Agent 子执行并颁发用于带历史回放的句柄。
+
+        Raises:
+            CancelledError: 执行被取消时抛出。
+        """
+        ...
+
+    async def replay_agent_and_wait(
+        self,
+        handle: ReplayHandle,
+        execution_contract: ExecutionContract,
+    ) -> tuple[AppResult, ReplayHandle]:
+        """基于上一次颁发的 ``ReplayHandle`` 带历史回放一次 Agent 执行。
+
+        Raises:
+            RuntimeError: handle 已失效或与目标 session 不匹配。
+            CancelledError: 执行被取消时抛出。
+        """
+        ...
+
+    def discard_replay_state_for_session(self, session_id: str) -> None:
+        """清理 session 关联的所有 replay 状态。"""
+        ...
+
+    def discard_replay_state(self, handle: ReplayHandle) -> None:
+        """释放单个未消费的 replay 句柄对应的内存状态。
+
+        Args:
+            handle: 待释放的句柄；若 stash 中已不存在则静默跳过。
         """
         ...
 

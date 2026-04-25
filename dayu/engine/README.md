@@ -251,6 +251,8 @@ PrepareIteration
 - 压缩：上下文超限或接近软上限时，对消息做压缩后重试
 - 降级：达到最大工具轮次后移除工具能力并要求直接回答
 
+工具能力的"临时禁用"由模块私有的 `AsyncAgent._tools_disabled` 异步上下文管理器统一表达：进入时调用 `runner.set_tools(None)` 清空当前工具，退出时通过 `try/finally` 恢复原 `tool_executor`。`force_answer` 降级路径与 `run_messages(disable_tools=True)` 共用这条原语，避免 runner 状态被裸操作出现遗漏恢复。其中 `disable_tools=True` 是 service 层 replay 兜底（强制模型出文本）的稳定入口，仅在外层 ``AsyncAgent`` 调用时显式启用。
+
 ## 6. 上下文预算治理
 
 预算治理当前由 `AsyncAgent` 编排，并由 `dayu.engine.context_budget` 承载其中的预算原语，主要包括：

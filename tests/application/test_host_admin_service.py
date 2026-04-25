@@ -236,7 +236,7 @@ def _build_service() -> tuple[HostAdminService, AsyncQueueEventBus]:
     run_registry = _FakeRunRegistry()
     event_bus = AsyncQueueEventBus(run_registry=run_registry)  # type: ignore[arg-type]
     host = Host(
-        executor=SimpleNamespace(),  # type: ignore[arg-type]
+        executor=SimpleNamespace(discard_replay_state_for_session=lambda _sid: None),  # type: ignore[arg-type]
         session_registry=session_registry,  # type: ignore[arg-type]
         run_registry=run_registry,  # type: ignore[arg-type]
         concurrency_governor=_FakeGovernor(),  # type: ignore[arg-type]
@@ -834,7 +834,7 @@ def test_close_session_cleans_outbox_and_pending_turns() -> None:
     run_registry = _FakeRunRegistry()
     event_bus = AsyncQueueEventBus(run_registry=run_registry)  # type: ignore[arg-type]
     host = Host(
-        executor=SimpleNamespace(),  # type: ignore[arg-type]
+        executor=SimpleNamespace(discard_replay_state_for_session=lambda _sid: None),  # type: ignore[arg-type]
         session_registry=session_registry,  # type: ignore[arg-type]
         run_registry=run_registry,  # type: ignore[arg-type]
         concurrency_governor=_FakeGovernor(),  # type: ignore[arg-type]
@@ -1017,7 +1017,7 @@ def test_cleanup_stale_pending_turns_removes_turns_with_terminal_runs() -> None:
     )
 
     host = Host(
-        executor=SimpleNamespace(),  # type: ignore[arg-type]
+        executor=SimpleNamespace(discard_replay_state_for_session=lambda _sid: None),  # type: ignore[arg-type]
         session_registry=session_registry,  # type: ignore[arg-type]
         run_registry=run_registry,  # type: ignore[arg-type]
         concurrency_governor=_FakeGovernor(),  # type: ignore[arg-type]
@@ -1076,7 +1076,7 @@ def test_cleanup_stale_pending_turns_retention_keeps_active_source_run() -> None
     )
 
     host = Host(
-        executor=SimpleNamespace(),  # type: ignore[arg-type]
+        executor=SimpleNamespace(discard_replay_state_for_session=lambda _sid: None),  # type: ignore[arg-type]
         session_registry=session_registry,  # type: ignore[arg-type]
         run_registry=run_registry,  # type: ignore[arg-type]
         concurrency_governor=_FakeGovernor(),  # type: ignore[arg-type]
@@ -1185,7 +1185,7 @@ def test_cleanup_stale_pending_turns_expires_after_retention() -> None:
             )
 
     host = Host(
-        executor=SimpleNamespace(),  # type: ignore[arg-type]
+        executor=SimpleNamespace(discard_replay_state_for_session=lambda _sid: None),  # type: ignore[arg-type]
         session_registry=session_registry,  # type: ignore[arg-type]
         run_registry=run_registry,  # type: ignore[arg-type]
         concurrency_governor=_FakeGovernor(),  # type: ignore[arg-type]
@@ -1245,7 +1245,7 @@ def test_cleanup_stale_pending_turns_retention_respects_resuming_first() -> None
     )
 
     host = Host(
-        executor=SimpleNamespace(),  # type: ignore[arg-type]
+        executor=SimpleNamespace(discard_replay_state_for_session=lambda _sid: None),  # type: ignore[arg-type]
         session_registry=session_registry,  # type: ignore[arg-type]
         run_registry=run_registry,  # type: ignore[arg-type]
         concurrency_governor=_FakeGovernor(),  # type: ignore[arg-type]
@@ -1310,7 +1310,7 @@ def test_cleanup_stale_pending_turns_retention_keeps_recent() -> None:
     )
 
     host = Host(
-        executor=SimpleNamespace(),  # type: ignore[arg-type]
+        executor=SimpleNamespace(discard_replay_state_for_session=lambda _sid: None),  # type: ignore[arg-type]
         session_registry=session_registry,  # type: ignore[arg-type]
         run_registry=run_registry,  # type: ignore[arg-type]
         concurrency_governor=_FakeGovernor(),  # type: ignore[arg-type]

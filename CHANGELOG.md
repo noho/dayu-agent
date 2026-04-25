@@ -15,13 +15,20 @@
 ### 新增
 
 - 提供离线安装包，覆盖 `macOS ARM64`、`Linux x64`、`Windows x64` 三个平台。
-- 支持自定义OpenAI 兼容模型。
-- interactive支持历史对话发现和恢复。
+- `dayu-cli init`支持自定义OpenAI 兼容模型。
+- prompt / interactive 的 --label 恢复语义
+  - prompt 无 --label：保留 one-shot 语义，不支持恢复上下文。
+  - prompt --label <label>：每次相同`label`的prompt都共用相同聊天记录。
+  - interactive 无 --label：恢复上次相同聊天记录的交互式对话。
+  - interactive --label <label>：每次相同`label`的interactive都是相同聊天记录的交互式对话。
+- dayu-cli init 添加--reset，删除workspace/下 .dayu、config、assets目录。
+- 优化写作提高成功率。
 
 ### 变更
 
 - 小米 `mimo` 模型更新到2.5 Pro。
 - `DeepSeek` 模型更新到V4。
+- `qwen` 模型更新到qwen3.6-plus。
 
 ### 修复
 

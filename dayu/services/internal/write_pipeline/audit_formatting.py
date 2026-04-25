@@ -77,6 +77,9 @@ _PLACEHOLDER_PATTERNS = [
 ]
 
 
+_MARKDOWN_MIN_LENGTH = 2
+
+
 def _extract_markdown_content(raw_text: str) -> str:
     """从模型返回中提取 Markdown 代码块正文。
 
@@ -94,6 +97,48 @@ def _extract_markdown_content(raw_text: str) -> str:
     if match is None:
         return raw_text.strip()
     return match.group(1).strip()
+
+
+def parse_markdown_scene_output(raw_text: str, *, min_length: int = _MARKDOWN_MIN_LENGTH) -> str:
+    """解析 markdown 类 scene 的原始输出，并对脏数据抛出 ``ValueError``。
+
+    与 ``_extract_markdown_content`` 相比，本函数增加了脏数据判定，专供 write
+    pipeline 中 write/overview/decision/regenerate/fix 五类 scene 使用：
+
+    - 若 ``raw_text.strip()`` 为空 -> 抛 ``ValueError``（视为彻底空输出）。
+    - 若匹配到 ```markdown ... ``` 代码块 -> 返回代码块内部正文。
+    - 若匹配不到代码块且 strip 后长度 ``< min_length`` -> 抛 ``ValueError``
+      （视为模型只返回闲聊 / 工具调用 reasoning 而无有效正文）。
+    - 否则保留旧的宽松行为，原样返回 ``raw_text.strip()``，避免现网误伤已经
+      工作的写作输出格式。
+
+    Args:
+        raw_text: 模型原始输出。
+        min_length: 抽不到代码块时允许的最低 strip 后长度阈值，
+            ``>=`` 该阈值则按宽松行为返回原文，否则抛 ``ValueError``。
+
+    Returns:
+        清理后的 markdown 文本。
+
+    Raises:
+        ValueError: 当输出为空或抽不到代码块且长度过短时抛出，由 helper
+            统一包装为 ``EmptyOutputError`` 触发 replay 兜底。
+    """
+
+    stripped = raw_text.strip()
+    if not stripped:
+        raise ValueError("场景输出为空，未取到任何文本")
+    match = _MARKDOWN_CODE_BLOCK_PATTERN.search(raw_text)
+    if match is not None:
+        body = match.group(1).strip()
+        if not body:
+            raise ValueError("场景输出 markdown 代码块为空")
+        return body
+    if len(stripped) < min_length:
+        raise ValueError(
+            f"场景输出未提供 ```markdown 代码块且 strip 后长度 {len(stripped)} 小于阈值 {min_length}"
+        )
+    return stripped
 
 
 def _extract_json_text(text: str) -> str:

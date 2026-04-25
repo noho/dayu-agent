@@ -10,6 +10,7 @@ from dayu.contracts.agent_execution import (
     ExecutionMessageInputs,
     ExecutionPermissions,
     ExecutionWebPermissions,
+    ReplayHandle,
     ScenePreparationSpec,
 )
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
@@ -83,13 +84,35 @@ def prepare_host_policy(
 def prepare_message_inputs(
     *,
     user_message: str,
+    replay_from: ReplayHandle | None = None,
+    replay_disable_tools: bool = False,
 ) -> ExecutionMessageInputs:
-    """准备当前轮消息输入。"""
+    """准备当前轮消息输入。
+
+    Args:
+        user_message: 当前轮用户输入；空串视为非法。
+        replay_from: 由上一次 ``Host.run_agent_and_wait_replayable`` 颁发的
+            回放句柄；非 ``None`` 表示走 ``Host.replay_agent_and_wait`` 路径，
+            Host 会按句柄取出原始历史，将 ``user_message`` 追加在末尾再跑一次。
+        replay_disable_tools: 仅在 replay 路径生效。``True`` 时 Host 透传到
+            ``AsyncAgent.run_messages(disable_tools=True)``，强制本次执行
+            禁用工具调用。
+
+    Returns:
+        类型安全的 ``ExecutionMessageInputs``。
+
+    Raises:
+        ValueError: 当 ``user_message`` 为空时抛出。
+    """
 
     normalized_user_message = str(user_message or "").strip()
     if not normalized_user_message:
         raise ValueError("当前轮 user_message 不能为空")
-    return ExecutionMessageInputs(user_message=normalized_user_message)
+    return ExecutionMessageInputs(
+        user_message=normalized_user_message,
+        replay_from=replay_from,
+        replay_disable_tools=bool(replay_disable_tools),
+    )
 
 
 def prepare_execution_contract(
@@ -108,8 +131,17 @@ def prepare_execution_contract(
     execution_options: ExecutionOptions | None = None,
     timeout_ms: int | None = None,
     resumable: bool = False,
+    replay_from: ReplayHandle | None = None,
+    replay_disable_tools: bool = False,
 ) -> ExecutionContract:
-    """准备完整 ExecutionContract。"""
+    """准备完整 ExecutionContract。
+
+    Args:
+        replay_from: 透传至 ``message_inputs.replay_from``，标记本次契约
+            是否走 ``Host.replay_agent_and_wait`` 回放路径。
+        replay_disable_tools: 透传至 ``message_inputs.replay_disable_tools``。
+        其他参数：见 ``prepare_*`` 子函数说明。
+    """
 
     return ExecutionContract(
         service_name=service_name,
@@ -127,7 +159,11 @@ def prepare_execution_contract(
             selected_toolsets=selected_toolsets,
             execution_permissions=execution_permissions,
         ),
-        message_inputs=prepare_message_inputs(user_message=user_message),
+        message_inputs=prepare_message_inputs(
+            user_message=user_message,
+            replay_from=replay_from,
+            replay_disable_tools=replay_disable_tools,
+        ),
         accepted_execution_spec=accepted_execution_spec,
         execution_options=execution_options,
         metadata=normalize_execution_delivery_context(metadata),

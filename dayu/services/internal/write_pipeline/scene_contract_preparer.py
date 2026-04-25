@@ -14,7 +14,7 @@ import os
 import threading
 from typing import Callable
 
-from dayu.contracts.agent_execution import ExecutionContract
+from dayu.contracts.agent_execution import ExecutionContract, ReplayHandle
 from dayu.contracts.infrastructure import ConfigLoaderProtocol
 from dayu.execution.options import ExecutionOptions
 from dayu.execution.runtime_config import OpenAIRunnerRuntimeConfig
@@ -464,12 +464,19 @@ class SceneContractPreparer:
         *,
         prepared_scene: AcceptedSceneExecution,
         prompt_text: str,
+        replay_from: ReplayHandle | None = None,
+        replay_disable_tools: bool = False,
     ) -> ExecutionContract:
         """为写作流水线中的单个 scene 调用构造 ExecutionContract。
 
         Args:
             prepared_scene: 已解析的 scene 执行信息。
             prompt_text: 当前轮用户输入。
+            replay_from: 上一次 ``Host.run_agent_and_wait_replayable`` 颁发
+                的回放句柄；非 ``None`` 时本契约会走 ``Host.replay_agent_and_wait``
+                带历史回放路径，``prompt_text`` 将被追加到原历史末尾再跑一次。
+            replay_disable_tools: 仅在 replay 路径生效；为 ``True`` 时强制
+                禁用工具调用（依赖 Host 透传至 ``AsyncAgent``）。
 
         Returns:
             单个 Agent 子执行契约。
@@ -495,6 +502,8 @@ class SceneContractPreparer:
             execution_options=self._build_execution_options_for_scene(prepared_scene.scene_name),
             timeout_ms=None,
             resumable=prepared_scene.default_resumable,
+            replay_from=replay_from,
+            replay_disable_tools=replay_disable_tools,
         )
         Log.debug(
             _build_execution_contract_debug_message(contract=contract),

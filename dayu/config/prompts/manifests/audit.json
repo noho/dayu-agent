@@ -16,6 +16,14 @@
     ],
     "temperature_profile": "audit"
   },
+  "runtime": {
+    "agent": {
+      "max_iterations": 16
+    },
+    "runner": {
+      "tool_timeout_seconds": 90.0
+    }
+  },
   "version": "v1",
   "description": "审计场景",
   "extends": [],

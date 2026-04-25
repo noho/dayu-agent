@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Callable, TypeVar
 
-from dayu.contracts.agent_execution import ExecutionContract
+from dayu.contracts.agent_execution import ExecutionContract, ReplayHandle
 from dayu.contracts.execution_metadata import (
     ExecutionDeliveryContext,
     empty_execution_delivery_context,
@@ -471,3 +471,33 @@ class StubHostExecutor:
 
         self.last_execution_contract = execution_contract
         return AppResult(content="done", errors=[], warnings=[], degraded=False)
+
+    async def run_agent_and_wait_replayable(
+        self,
+        execution_contract: ExecutionContract,
+    ) -> tuple[AppResult, ReplayHandle]:
+        """Stub：测试不验证 replay 路径，颁发空 handle 满足协议即可。"""
+
+        result = await self.run_agent_and_wait(execution_contract)
+        return result, ReplayHandle(handle_id="stub_replay")
+
+    async def replay_agent_and_wait(
+        self,
+        handle: ReplayHandle,
+        execution_contract: ExecutionContract,
+    ) -> tuple[AppResult, ReplayHandle]:
+        """Stub：测试不验证 replay 路径，原样返回新 handle。"""
+
+        del handle
+        result = await self.run_agent_and_wait(execution_contract)
+        return result, ReplayHandle(handle_id="stub_replay")
+
+    def discard_replay_state_for_session(self, session_id: str) -> None:
+        """Stub：测试不验证 replay stash 清理路径，无操作满足协议即可。"""
+
+        del session_id
+
+    def discard_replay_state(self, handle: ReplayHandle) -> None:
+        """Stub：测试不验证 replay stash 清理路径，无操作满足协议即可。"""
+
+        del handle
