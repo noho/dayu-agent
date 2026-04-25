@@ -650,6 +650,49 @@ def test_windows_script_helpers(tmp_path: Path) -> None:
     assert "python -m dayu.cli upload_filing --ticker AAPL %*" in text
     # Windows 批处理必须使用 CRLF 行尾，避免中文 UTF-8 多字节字符被解析器错位
     assert script_path.read_bytes().count(b"\r\n") >= 5
+    # 回归保护：cmd.exe 在 chcp 65001 下，若行末是 UTF-8 多字节字符，会吞掉
+    # 紧随其后命令的若干字节（典型表现是 `python -m dayu.cli` 被截断为 `yu.cli`）。
+    # 因此 regenerate 注释必须放在最后一条可执行命令之后，禁止出现在头部。
+    lines = text.splitlines()
+    regenerate_line_index = next(
+        index for index, line in enumerate(lines) if line.startswith("REM python -m dayu.cli upload_filings_from")
+    )
+    last_command_index = max(
+        index for index, line in enumerate(lines) if line.startswith("python -m dayu.cli")
+    )
+    assert regenerate_line_index > last_command_index
+
+
+@pytest.mark.unit
+def test_windows_script_regenerate_with_chinese_path_does_not_precede_command(tmp_path: Path) -> None:
+    """回归测试：含中文路径的 regenerate 注释不得出现在任何可执行命令之前。
+
+    根因：cmd.exe 在 ``chcp 65001`` 代码页下解析 .cmd 时，若某行末尾为 UTF-8
+    多字节字符（如中文），会吞掉紧随其后命令开头的若干字节。本测试通过断言
+    "regenerate 注释行的字节偏移大于所有 ``python -m dayu.cli`` 命令行的字节偏移"
+    来保证脚本结构不会再次踩到该缺陷。
+    """
+
+    script_path = tmp_path / "upload_filings_603699.cmd"
+    module._write_upload_script(
+        output_script=script_path,
+        commands=[
+            'python -m dayu.cli upload_filing --ticker 603699 --files "C:\\tmp\\纽威股份 2024年度报告.pdf"',
+        ],
+        regenerate_command=(
+            "python -m dayu.cli upload_filings_from --ticker 603699 "
+            "--from C:\\tmp\\_603699纽威股份 --company-name 纽威股份"
+        ),
+        script_platform="windows",
+    )
+    raw = script_path.read_bytes()
+    regenerate_marker = b"REM python -m dayu.cli upload_filings_from"
+    command_marker = b"python -m dayu.cli upload_filing "
+    regenerate_offset = raw.find(regenerate_marker)
+    last_command_offset = raw.rfind(command_marker)
+    assert regenerate_offset != -1
+    assert last_command_offset != -1
+    assert regenerate_offset > last_command_offset
 
 
 @pytest.mark.unit
