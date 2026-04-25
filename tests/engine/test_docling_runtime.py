@@ -200,6 +200,8 @@ def _install_recording_builder(
         return _FakeConverter(backend_name=backend_name, device_name=device_name)
 
     monkeypatch.setattr("dayu.docling_runtime.build_docling_pdf_converter", _build_converter)
+    # 默认按非 Windows 平台展开尝试链；Windows 行为由专项用例显式覆盖。
+    monkeypatch.setattr("dayu.docling_runtime._is_windows_platform", lambda: False)
 
 
 def test_run_docling_pdf_conversion_recovers_via_pypdfium2_after_parse_failure(
@@ -443,6 +445,7 @@ def test_run_docling_pdf_conversion_wraps_initialization_failure(
     """
 
     monkeypatch.setattr("dayu.docling_runtime.resolve_docling_device_name", lambda: "auto")
+    monkeypatch.setattr("dayu.docling_runtime._is_windows_platform", lambda: False)
 
     def _raise_unexpected_init_error(**_: str | bool) -> object:
         """模拟初始化阶段的未知异常。
@@ -506,6 +509,7 @@ def test_run_docling_pdf_conversion_wraps_followup_initialization_failure(
     """
 
     monkeypatch.setattr("dayu.docling_runtime.resolve_docling_device_name", lambda: "auto")
+    monkeypatch.setattr("dayu.docling_runtime._is_windows_platform", lambda: False)
 
     def _build_converter(**kwargs: str | bool) -> _FakeConverter:
         """模拟首档成功、第二档（pypdfium2/auto）初始化失败。
@@ -637,3 +641,99 @@ def test_convert_pdf_bytes_with_docling_uses_document_stream(
     assert isinstance(captured_source.stream, BytesIO)
     assert captured_source.stream.getvalue() == b"hello-bytes"
     assert captured["pipeline"] == (True, True, "accurate", True)
+
+
+def test_run_docling_pdf_conversion_on_windows_prefers_pypdfium2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证 Windows 平台尝试链把 pypdfium2 提到首位。
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    build_log: list[tuple[str, str]] = []
+    monkeypatch.setattr("dayu.docling_runtime.resolve_docling_device_name", lambda: "auto")
+    _install_recording_builder(monkeypatch, build_log)
+    # 覆盖 _install_recording_builder 内部默认的非 Windows stub，模拟 Windows。
+    monkeypatch.setattr("dayu.docling_runtime._is_windows_platform", lambda: True)
+
+    def _convert(converter: object) -> str:
+        """首档（pypdfium2）即成功。
+
+        Args:
+            converter: Docling 转换器对象。
+
+        Returns:
+            成功标记字符串。
+
+        Raises:
+            无。
+        """
+
+        del converter
+        return "ok"
+
+    result = run_docling_pdf_conversion(_convert)
+
+    assert result == "ok"
+    # Windows 链：pypdfium2 优先，docling-parse 兜底，auto 时再追加 (parse, cpu)
+    # 首档命中即返回，build_log 仅有一条 pypdfium2 记录。
+    assert build_log == [("pypdfium2", "auto")]
+
+
+def test_run_docling_pdf_conversion_on_windows_full_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证 Windows 平台 auto 设备时全链按 (pypdfium2,auto)->(parse,auto)->(parse,cpu) 展开。
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    build_log: list[tuple[str, str]] = []
+    monkeypatch.setattr("dayu.docling_runtime.resolve_docling_device_name", lambda: "auto")
+    _install_recording_builder(monkeypatch, build_log)
+    monkeypatch.setattr("dayu.docling_runtime._is_windows_platform", lambda: True)
+
+    def _convert(converter: object) -> str:
+        """前两档失败、第三档（parse, cpu）成功。
+
+        Args:
+            converter: Docling 转换器对象。
+
+        Returns:
+            成功标记字符串。
+
+        Raises:
+            RuntimeError: 在 cpu 之前固定抛出。
+        """
+
+        fake_converter = cast(_FakeConverter, converter)
+        if fake_converter.device_name == "cpu":
+            return "ok"
+        raise RuntimeError(
+            f"failure@{fake_converter.backend_name}/{fake_converter.device_name}"
+        )
+
+    result = run_docling_pdf_conversion(_convert)
+
+    assert result == "ok"
+    assert build_log == [
+        ("pypdfium2", "auto"),
+        ("docling-parse", "auto"),
+        ("docling-parse", "cpu"),
+    ]
+

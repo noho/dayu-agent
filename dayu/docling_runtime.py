@@ -12,12 +12,17 @@
 
 - 若显式设置环境变量 ``DAYU_DOCLING_DEVICE``，则以该值为准。
 - 若未显式设置，则默认使用 ``auto``。
-- 转换尝试链按下列顺序展开：
-  1. ``backend=docling-parse, device=resolved``：默认行为，保留现状。
-  2. ``backend=pypdfium2, device=resolved``：专治 docling-parse 解析
-     阶段把合法 PDF 判 invalid 的故障。
-  3. ``backend=docling-parse, device=cpu``：仅当 ``resolved == auto``
-     时追加，专治加速器栈在 ``auto`` 阶段崩溃的故障。
+- 转换尝试链按平台展开：
+  - 非 Windows（macOS / Linux）：
+    1. ``backend=docling-parse, device=resolved``：保留现状，覆盖正常路径。
+    2. ``backend=pypdfium2, device=resolved``：救 docling-parse 解析失败。
+    3. ``backend=docling-parse, device=cpu``：仅当 ``resolved == auto`` 追加，
+       救加速器栈在 ``auto`` 阶段崩溃的故障。
+  - Windows：
+    1. ``backend=pypdfium2, device=resolved``：优先，规避 docling-parse 在
+       Windows 上的 ``std::bad_alloc`` 与 mbcs 路径编码两类已知崩溃。
+    2. ``backend=docling-parse, device=resolved``：兜底，给特殊文档保留机会。
+    3. ``backend=docling-parse, device=cpu``：仅当 ``resolved == auto`` 追加。
 - 任意一档成功即返回；全部失败时抛出最后一次异常，并以**首次**失败
   作为 ``__cause__``，便于排查首因。
 """
@@ -25,6 +30,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, TypeVar, cast
@@ -49,6 +55,7 @@ _SUPPORTED_DOCLING_BACKENDS = frozenset({_DOCLING_PARSE_BACKEND_NAME, _PYPDFIUM2
 _TABLE_MODE_ACCURATE = "accurate"
 _TABLE_MODE_FAST = "fast"
 _MODULE = __name__
+_WINDOWS_PLATFORM_NAME = "win32"
 _TResult = TypeVar("_TResult")
 # Protocol 返回值需要协变，才能让更具体的转换结果回调安全替换更宽的调用点。
 _TResultCovariant = TypeVar("_TResultCovariant", covariant=True)
@@ -194,15 +201,29 @@ def resolve_docling_device_name() -> str:
     return _AUTO_DEVICE_NAME
 
 
+def _is_windows_platform() -> bool:
+    """判断当前进程是否运行在 Windows 平台。
+
+    Args:
+        无。
+
+    Returns:
+        True 表示当前为 Windows，False 表示 macOS / Linux 等其它平台。
+
+    Raises:
+        无。
+    """
+
+    return sys.platform == _WINDOWS_PLATFORM_NAME
+
+
 def _plan_conversion_attempts(resolved_device_name: str) -> list[_DoclingConversionAttempt]:
     """按二维回退策略生成 Docling 转换尝试链。
 
-    顺序设计：
-
-    1. ``(docling-parse, resolved)``：保留现状，覆盖正常路径。
-    2. ``(pypdfium2, resolved)``：救 docling-parse 解析失败（已实证）。
-    3. ``(docling-parse, cpu)``：仅当 ``resolved == auto`` 时追加，
-       救加速器栈在 ``auto`` 阶段崩溃的故障。
+    Windows 上 docling-parse 后端在某些 PDF 上会在 C++ 层抛 ``std::bad_alloc``，
+    且对 mbcs 路径编码也存在已知 bug；为减少首次失败概率与日志刷屏，
+    Windows 平台把 ``pypdfium2`` 提到首位，``docling-parse`` 作为兜底。
+    其它平台保持 ``docling-parse`` 优先以维持既有解析质量。
 
     Args:
         resolved_device_name: 已规范化的 Docling 设备名。
@@ -214,16 +235,28 @@ def _plan_conversion_attempts(resolved_device_name: str) -> list[_DoclingConvers
         无。
     """
 
-    attempts: list[_DoclingConversionAttempt] = [
-        _DoclingConversionAttempt(
-            backend_name=_DOCLING_PARSE_BACKEND_NAME,
-            device_name=resolved_device_name,
-        ),
-        _DoclingConversionAttempt(
-            backend_name=_PYPDFIUM2_BACKEND_NAME,
-            device_name=resolved_device_name,
-        ),
-    ]
+    if _is_windows_platform():
+        attempts: list[_DoclingConversionAttempt] = [
+            _DoclingConversionAttempt(
+                backend_name=_PYPDFIUM2_BACKEND_NAME,
+                device_name=resolved_device_name,
+            ),
+            _DoclingConversionAttempt(
+                backend_name=_DOCLING_PARSE_BACKEND_NAME,
+                device_name=resolved_device_name,
+            ),
+        ]
+    else:
+        attempts = [
+            _DoclingConversionAttempt(
+                backend_name=_DOCLING_PARSE_BACKEND_NAME,
+                device_name=resolved_device_name,
+            ),
+            _DoclingConversionAttempt(
+                backend_name=_PYPDFIUM2_BACKEND_NAME,
+                device_name=resolved_device_name,
+            ),
+        ]
     if resolved_device_name == _AUTO_DEVICE_NAME:
         attempts.append(
             _DoclingConversionAttempt(
@@ -433,9 +466,27 @@ def run_docling_pdf_conversion(
     resolved_device_name = resolve_docling_device_name()
     attempts = _plan_conversion_attempts(resolved_device_name)
     total_attempts = len(attempts)
+    Log.debug(
+        (
+            "Docling 转换尝试链装配完成: "
+            f"platform={'windows' if _is_windows_platform() else 'unix'} "
+            f"resolved_device={resolved_device_name} "
+            f"total_attempts={total_attempts} "
+            f"chain={[(a.backend_name, a.device_name) for a in attempts]}"
+        ),
+        module=_MODULE,
+    )
     first_failure: Exception | None = None
     last_failure: Exception | None = None
     for attempt_index, attempt in enumerate(attempts):
+        Log.debug(
+            (
+                "Docling 转换尝试启动: "
+                f"attempt={attempt_index + 1}/{total_attempts} "
+                f"backend={attempt.backend_name} device={attempt.device_name}"
+            ),
+            module=_MODULE,
+        )
         converter = _build_attempt_converter(
             attempt,
             do_ocr=do_ocr,
@@ -446,7 +497,7 @@ def run_docling_pdf_conversion(
             total_attempts=total_attempts,
         )
         try:
-            return convert_operation(converter)
+            result = convert_operation(converter)
         except Exception as exc:
             last_failure = exc
             if first_failure is None:
@@ -466,6 +517,16 @@ def run_docling_pdf_conversion(
                     module=_MODULE,
                 )
                 continue
+        else:
+            Log.debug(
+                (
+                    "Docling 转换尝试成功: "
+                    f"attempt={attempt_index + 1}/{total_attempts} "
+                    f"backend={attempt.backend_name} device={attempt.device_name}"
+                ),
+                module=_MODULE,
+            )
+            return result
     # 全链失败：保留首次失败为 __cause__，便于排查首因。
     assert last_failure is not None
     if first_failure is not None and first_failure is not last_failure:
