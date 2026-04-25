@@ -461,21 +461,43 @@ async def test_handle_tool_call_delta_covers_missing_index_and_debug_logs(monkey
         running_config=_RunningConfigStub(debug_tool_delta=True),
     )
 
-    missing_index_events = await _collect_events(parser._handle_tool_call_delta({"id": "tc_1"}))
+    # 1. 验证 Gemini 兼容模式下的 index 推断行为
+    # 1.1 携带新 id 但无 index -> 推断为 index 0
+    events_infer_1 = await _collect_events(parser._handle_tool_call_delta({
+        "id": "tc_infer_1",
+        "function": {"name": "tool_1", "arguments": ""}
+    }))
+    assert len(events_infer_1) == 1
+    assert events_infer_1[0].type == EventType.TOOL_CALL_START
+    
+    # 1.2 无 id 无 index -> 归入最后一个活跃条目 (index 0)
+    events_infer_2 = await _collect_events(parser._handle_tool_call_delta({
+        "function": {"arguments": "{"}
+    }))
+    assert len(events_infer_2) == 1
+    assert events_infer_2[0].type == EventType.TOOL_CALL_DELTA
+    assert events_infer_2[0].data["arguments_delta"] == "{"
+    
+    # 1.3 携带另一个新 id 无 index -> 推断为 index 1
+    events_infer_3 = await _collect_events(parser._handle_tool_call_delta({
+        "id": "tc_infer_2",
+        "function": {"name": "tool_2", "arguments": ""}
+    }))
+    assert len(events_infer_3) == 1
+    assert events_infer_3[0].type == EventType.TOOL_CALL_START
+    
+    assert any("工具调用增量 index 缺失" in message for message in debug_collector.messages)
 
+    # 2. 验证常规带有 index 时的日志行为
     full_events = await _collect_events(
         parser._handle_tool_call_delta(
             {
-                "index": 0,
-                "id": "tc_2",
+                "index": 2,
+                "id": "tc_normal",
                 "function": {"name": "read_file", "arguments": "{}"},
             }
         )
     )
-
-    assert missing_index_events == []
-    assert any("index" in message and ("缺失" in message or "异常" in message) for message in warn_collector.messages)
-
     assert [event.type for event in full_events] == [EventType.TOOL_CALL_START, EventType.TOOL_CALL_DELTA]
     assert any("记录 tool_call_id" in message for message in debug_collector.messages)
     assert any("记录工具名" in message for message in debug_collector.messages)
