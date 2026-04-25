@@ -96,7 +96,7 @@ cd .\dayu-agent-0.1.3-windows-x64-offline
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[test,dev,browser]" -c constraints/lock-macos-arm64-py311.txt
+pip install -e ".[test,dev,browser,web]" -c constraints/lock-macos-arm64-py311.txt
 ```
 
 说明：
@@ -104,6 +104,7 @@ pip install -e ".[test,dev,browser]" -c constraints/lock-macos-arm64-py311.txt
 - macOS Intel 开发环境改用 `constraints/lock-macos-x64-py311.txt`
 - Linux 开发环境改用 `constraints/lock-linux-x64-py311.txt`
 - Windows 开发环境改用 `constraints/lock-windows-x64-py311.txt`
+- `web` extras 启用 `dayu-web`（streamlit）入口；不需要 Web UI 时可从 extras 列表中省略
 
 #### 1.1.4 安装额外依赖
 
@@ -125,9 +126,14 @@ playwright install chromium
 
 ```bash
 dayu-cli --help
-dayu-web --help
 dayu-wechat --help
 dayu-render --help
+```
+
+`dayu-web` 入口需要先安装 `[web]` extras（参考 1.1.3 节示例命令），再执行：
+
+```bash
+dayu-web --help
 ```
 
 ### 1.3 初始化工作区与配置

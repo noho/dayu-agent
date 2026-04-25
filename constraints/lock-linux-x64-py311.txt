@@ -7,3 +7,5 @@ transformers==5.5.4
 huggingface_hub==1.11.0
 numpy==2.4.4
 opencv-python==4.13.0.92
+# streamlit 仅在非 Darwin 平台需要 watchdog 监听文件变更。
+watchdog==6.0.0

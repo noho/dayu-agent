@@ -8,6 +8,10 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+# streamlit 是 ``[project.optional-dependencies].web`` 下的可选依赖；未安装时
+# 跳过本模块全部用例，避免在收集阶段就因 ``ImportError`` 阻断其他测试。
+pytest.importorskip("streamlit")
+
 watchlist_module = importlib.import_module("dayu.web.streamlit.components.watchlist")
 
 
