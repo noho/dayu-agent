@@ -210,7 +210,7 @@ def _build_final_dataframe(
         # 从大到小排序，确保删除时索引不偏移
         for idx in sorted(deleted_indices, reverse=True):
             if idx < len(df):
-                df = df.drop(df.index[idx])
+                df = df.drop(df.index[idx], axis=0)
         df = df.reset_index(drop=True)
 
     # 处理编辑：更新指定行的数据
