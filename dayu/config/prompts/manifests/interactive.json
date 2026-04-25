@@ -18,7 +18,7 @@
   },
   "runtime": {
     "agent": {
-      "max_iterations": 24
+      "max_iterations": 20
     },
     "runner": {
       "tool_timeout_seconds": 90.0
