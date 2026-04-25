@@ -124,10 +124,86 @@ def test_build_docling_pdf_pipeline_options_uses_resolved_device(
     assert pipeline_options.table_structure_options.do_cell_matching is True
 
 
-def test_run_docling_pdf_conversion_retries_on_cpu_after_auto_failure(
+class _FakeConverter:
+    """携带 backend 与 device 名的假转换器。
+
+    Attributes:
+        backend_name: 当前转换器绑定的 backend 名。
+        device_name: 当前转换器绑定的设备名。
+    """
+
+    def __init__(self, *, backend_name: str, device_name: str) -> None:
+        """初始化假转换器。
+
+        Args:
+            backend_name: 当前转换器绑定的 backend 名。
+            device_name: 当前转换器绑定的设备名。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        self.backend_name = backend_name
+        self.device_name = device_name
+
+
+def _install_recording_builder(
+    monkeypatch: pytest.MonkeyPatch,
+    build_log: list[tuple[str, str]],
+) -> None:
+    """安装一个把每次构造调用记录到日志列表的假 builder。
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture。
+        build_log: 接收 (backend_name, device_name) 元组的列表。
+
+    Returns:
+        无。
+
+    Raises:
+        无。
+    """
+
+    def _build_converter(
+        *,
+        do_ocr: bool,
+        do_table_structure: bool,
+        table_mode: str,
+        do_cell_matching: bool,
+        device_name: str,
+        backend_name: str,
+    ) -> _FakeConverter:
+        """记录构造参数并返回假转换器。
+
+        Args:
+            do_ocr: OCR 开关。
+            do_table_structure: 表格结构开关。
+            table_mode: 表格模式。
+            do_cell_matching: 单元格匹配开关。
+            device_name: 指定设备名。
+            backend_name: 指定 backend 名。
+
+        Returns:
+            假转换器。
+
+        Raises:
+            无。
+        """
+
+        _ = (do_ocr, do_table_structure, table_mode, do_cell_matching)
+        build_log.append((backend_name, device_name))
+        return _FakeConverter(backend_name=backend_name, device_name=device_name)
+
+    monkeypatch.setattr("dayu.docling_runtime.build_docling_pdf_converter", _build_converter)
+
+
+def test_run_docling_pdf_conversion_recovers_via_pypdfium2_after_parse_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """验证 auto 设备转换失败后会回退到 CPU 重试一次。
+    """验证 docling-parse 解析失败时会立即切到 pypdfium2 救回。
 
     Args:
         monkeypatch: pytest monkeypatch fixture。
@@ -139,60 +215,12 @@ def test_run_docling_pdf_conversion_retries_on_cpu_after_auto_failure(
         AssertionError: 断言失败时抛出。
     """
 
-    build_devices: list[str] = []
-
-    class _FakeConverter:
-        """携带设备名的假转换器。"""
-
-        def __init__(self, device_name: str) -> None:
-            """初始化假转换器。
-
-            Args:
-                device_name: 当前转换器绑定的设备名。
-
-            Returns:
-                无。
-
-            Raises:
-                无。
-            """
-
-            self.device_name = device_name
-
+    build_log: list[tuple[str, str]] = []
     monkeypatch.setattr("dayu.docling_runtime.resolve_docling_device_name", lambda: "auto")
-
-    def _build_converter(
-        *,
-        do_ocr: bool,
-        do_table_structure: bool,
-        table_mode: str,
-        do_cell_matching: bool,
-        device_name: str,
-    ) -> _FakeConverter:
-        """记录设备名并返回假转换器。
-
-        Args:
-            do_ocr: OCR 开关。
-            do_table_structure: 表格结构开关。
-            table_mode: 表格模式。
-            do_cell_matching: 单元格匹配开关。
-            device_name: 指定设备名。
-
-        Returns:
-            假转换器。
-
-        Raises:
-            无。
-        """
-
-        _ = (do_ocr, do_table_structure, table_mode, do_cell_matching)
-        build_devices.append(device_name)
-        return _FakeConverter(device_name)
-
-    monkeypatch.setattr("dayu.docling_runtime.build_docling_pdf_converter", _build_converter)
+    _install_recording_builder(monkeypatch, build_log)
 
     def _convert(converter: object) -> str:
-        """按设备名模拟转换行为。
+        """模拟 docling-parse 解析失败、pypdfium2 成功。
 
         Args:
             converter: Docling 转换器对象。
@@ -201,24 +229,24 @@ def test_run_docling_pdf_conversion_retries_on_cpu_after_auto_failure(
             成功时返回固定字符串。
 
         Raises:
-            RuntimeError: `auto` 阶段固定抛错。
+            RuntimeError: 当 backend 为 docling-parse 时固定抛出。
         """
 
         fake_converter = cast(_FakeConverter, converter)
-        if fake_converter.device_name == "auto":
-            raise RuntimeError("auto failed")
+        if fake_converter.backend_name == "docling-parse":
+            raise RuntimeError("Inconsistent number of pages: 238!=-1")
         return "ok"
 
     result = run_docling_pdf_conversion(_convert)
 
     assert result == "ok"
-    assert build_devices == ["auto", "cpu"]
+    assert build_log == [("docling-parse", "auto"), ("pypdfium2", "auto")]
 
 
-def test_run_docling_pdf_conversion_does_not_retry_non_auto_device(
+def test_run_docling_pdf_conversion_walks_full_attempt_chain_when_auto(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """验证显式非 auto 设备失败时不会偷偷回退 CPU。
+    """验证 auto 设备时尝试链按 (parse,auto)->(pypdfium2,auto)->(parse,cpu) 展开。
 
     Args:
         monkeypatch: pytest monkeypatch fixture。
@@ -230,60 +258,104 @@ def test_run_docling_pdf_conversion_does_not_retry_non_auto_device(
         AssertionError: 断言失败时抛出。
     """
 
-    build_devices: list[str] = []
-
-    class _FakeConverter:
-        """携带设备名的假转换器。"""
-
-        def __init__(self, device_name: str) -> None:
-            """初始化假转换器。
-
-            Args:
-                device_name: 当前转换器绑定的设备名。
-
-            Returns:
-                无。
-
-            Raises:
-                无。
-            """
-
-            self.device_name = device_name
-
-    monkeypatch.setattr("dayu.docling_runtime.resolve_docling_device_name", lambda: "mps")
-
-    def _build_converter(
-        *,
-        do_ocr: bool,
-        do_table_structure: bool,
-        table_mode: str,
-        do_cell_matching: bool,
-        device_name: str,
-    ) -> _FakeConverter:
-        """记录设备名并返回假转换器。
-
-        Args:
-            do_ocr: OCR 开关。
-            do_table_structure: 表格结构开关。
-            table_mode: 表格模式。
-            do_cell_matching: 单元格匹配开关。
-            device_name: 指定设备名。
-
-        Returns:
-            假转换器。
-
-        Raises:
-            无。
-        """
-
-        _ = (do_ocr, do_table_structure, table_mode, do_cell_matching)
-        build_devices.append(device_name)
-        return _FakeConverter(device_name)
-
-    monkeypatch.setattr("dayu.docling_runtime.build_docling_pdf_converter", _build_converter)
+    build_log: list[tuple[str, str]] = []
+    monkeypatch.setattr("dayu.docling_runtime.resolve_docling_device_name", lambda: "auto")
+    _install_recording_builder(monkeypatch, build_log)
 
     def _convert(converter: object) -> str:
-        """固定抛出转换失败。
+        """前两档失败，第三档 (parse, cpu) 成功。
+
+        Args:
+            converter: Docling 转换器对象。
+
+        Returns:
+            成功时返回固定字符串。
+
+        Raises:
+            RuntimeError: 在 cpu 之前固定抛出。
+        """
+
+        fake_converter = cast(_FakeConverter, converter)
+        if fake_converter.device_name == "cpu":
+            return "ok"
+        if fake_converter.backend_name == "docling-parse":
+            raise RuntimeError("auto failed")
+        raise RuntimeError("pypdfium2 also failed")
+
+    result = run_docling_pdf_conversion(_convert)
+
+    assert result == "ok"
+    assert build_log == [
+        ("docling-parse", "auto"),
+        ("pypdfium2", "auto"),
+        ("docling-parse", "cpu"),
+    ]
+
+
+def test_run_docling_pdf_conversion_skips_cpu_when_device_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证显式非 auto 设备时尝试链不追加 (parse, cpu)。
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    build_log: list[tuple[str, str]] = []
+    monkeypatch.setattr("dayu.docling_runtime.resolve_docling_device_name", lambda: "mps")
+    _install_recording_builder(monkeypatch, build_log)
+
+    def _convert(converter: object) -> str:
+        """两档全失败。
+
+        Args:
+            converter: Docling 转换器对象。
+
+        Returns:
+            无。
+
+        Raises:
+            RuntimeError: 固定抛出，区分 backend。
+        """
+
+        fake_converter = cast(_FakeConverter, converter)
+        if fake_converter.backend_name == "docling-parse":
+            raise RuntimeError("mps parse failed")
+        raise RuntimeError("mps pypdfium2 failed")
+
+    with pytest.raises(RuntimeError, match="mps pypdfium2 failed"):
+        run_docling_pdf_conversion(_convert)
+
+    assert build_log == [("docling-parse", "mps"), ("pypdfium2", "mps")]
+
+
+def test_run_docling_pdf_conversion_keeps_first_failure_as_cause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证全链失败时，最后一次异常的 ``__cause__`` 指向首次失败。
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    build_log: list[tuple[str, str]] = []
+    monkeypatch.setattr("dayu.docling_runtime.resolve_docling_device_name", lambda: "auto")
+    _install_recording_builder(monkeypatch, build_log)
+
+    def _convert(converter: object) -> str:
+        """按尝试链顺序抛出区分文案的异常。
 
         Args:
             converter: Docling 转换器对象。
@@ -295,19 +367,27 @@ def test_run_docling_pdf_conversion_does_not_retry_non_auto_device(
             RuntimeError: 固定抛出。
         """
 
-        _ = cast(_FakeConverter, converter)
-        raise RuntimeError("mps failed")
+        fake_converter = cast(_FakeConverter, converter)
+        marker = f"{fake_converter.backend_name}/{fake_converter.device_name}"
+        raise RuntimeError(f"failure@{marker}")
 
-    with pytest.raises(RuntimeError, match="mps failed"):
+    with pytest.raises(RuntimeError, match=r"failure@docling-parse/cpu") as exc_info:
         run_docling_pdf_conversion(_convert)
 
-    assert build_devices == ["mps"]
+    cause = exc_info.value.__cause__
+    assert isinstance(cause, RuntimeError)
+    assert str(cause) == "failure@docling-parse/auto"
+    assert build_log == [
+        ("docling-parse", "auto"),
+        ("pypdfium2", "auto"),
+        ("docling-parse", "cpu"),
+    ]
 
 
-def test_run_docling_pdf_conversion_keeps_auto_failure_as_retry_cause(
+def test_run_docling_pdf_conversion_first_attempt_success_returns_immediately(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """验证 CPU 重试仍失败时，会保留首次 auto 失败作为异常因果链。
+    """验证首档成功时不会进入后续尝试。
 
     Args:
         monkeypatch: pytest monkeypatch fixture。
@@ -319,59 +399,36 @@ def test_run_docling_pdf_conversion_keeps_auto_failure_as_retry_cause(
         AssertionError: 断言失败时抛出。
     """
 
-    class _FakeConverter:
-        """携带设备名的假转换器。"""
-
-        def __init__(self, device_name: str) -> None:
-            """初始化假转换器。
-
-            Args:
-                device_name: 当前转换器绑定的设备名。
-
-            Returns:
-                无。
-
-            Raises:
-                无。
-            """
-
-            self.device_name = device_name
-
+    build_log: list[tuple[str, str]] = []
     monkeypatch.setattr("dayu.docling_runtime.resolve_docling_device_name", lambda: "auto")
-    monkeypatch.setattr(
-        "dayu.docling_runtime.build_docling_pdf_converter",
-        lambda **kwargs: _FakeConverter(str(kwargs["device_name"])),
-    )
+    _install_recording_builder(monkeypatch, build_log)
 
     def _convert(converter: object) -> str:
-        """按设备名模拟 auto 与 CPU 都失败。
+        """首档直接返回。
 
         Args:
             converter: Docling 转换器对象。
 
         Returns:
-            无。
+            固定字符串。
 
         Raises:
-            RuntimeError: 固定抛出，且区分 auto 与 CPU。
+            无。
         """
 
-        fake_converter = cast(_FakeConverter, converter)
-        if fake_converter.device_name == "auto":
-            raise RuntimeError("auto failed")
-        raise RuntimeError("cpu failed")
+        _ = converter
+        return "ok"
 
-    with pytest.raises(RuntimeError, match="cpu failed") as exc_info:
-        run_docling_pdf_conversion(_convert)
+    result = run_docling_pdf_conversion(_convert)
 
-    assert isinstance(exc_info.value.__cause__, RuntimeError)
-    assert str(exc_info.value.__cause__) == "auto failed"
+    assert result == "ok"
+    assert build_log == [("docling-parse", "auto")]
 
 
 def test_run_docling_pdf_conversion_wraps_initialization_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """验证首轮转换器初始化的未知异常会被包装成统一运行时错误。
+    """验证首轮初始化的未知异常会被包装为统一运行时错误。
 
     Args:
         monkeypatch: pytest monkeypatch fixture。
@@ -421,17 +478,20 @@ def test_run_docling_pdf_conversion_wraps_initialization_failure(
         _ = converter
         return "never"
 
-    with pytest.raises(DoclingRuntimeInitializationError, match="Docling 转换器初始化失败: boom") as exc_info:
+    with pytest.raises(
+        DoclingRuntimeInitializationError,
+        match=r"Docling 转换器初始化失败 \(attempt 1/3:.*backend=docling-parse.*device=auto\): boom",
+    ) as exc_info:
         run_docling_pdf_conversion(_convert)
 
     assert isinstance(exc_info.value.__cause__, RuntimeError)
     assert str(exc_info.value.__cause__) == "boom"
 
 
-def test_run_docling_pdf_conversion_wraps_cpu_retry_initialization_failure(
+def test_run_docling_pdf_conversion_wraps_followup_initialization_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """验证 CPU 回退初始化失败时会抛出统一运行时错误。
+    """验证回退档初始化失败时仍抛 ``DoclingRuntimeInitializationError``。
 
     Args:
         monkeypatch: pytest monkeypatch fixture。
@@ -443,48 +503,31 @@ def test_run_docling_pdf_conversion_wraps_cpu_retry_initialization_failure(
         AssertionError: 断言失败时抛出。
     """
 
-    class _FakeConverter:
-        """携带设备名的假转换器。"""
-
-        def __init__(self, device_name: str) -> None:
-            """初始化假转换器。
-
-            Args:
-                device_name: 当前转换器绑定的设备名。
-
-            Returns:
-                无。
-
-            Raises:
-                无。
-            """
-
-            self.device_name = device_name
-
     monkeypatch.setattr("dayu.docling_runtime.resolve_docling_device_name", lambda: "auto")
 
     def _build_converter(**kwargs: str | bool) -> _FakeConverter:
-        """模拟首轮成功、CPU 回退初始化失败。
+        """模拟首档成功、第二档（pypdfium2/auto）初始化失败。
 
         Args:
             kwargs: 转换器构造参数。
 
         Returns:
-            首轮转换时返回假转换器。
+            首档时返回假转换器。
 
         Raises:
-            RuntimeError: CPU 回退初始化阶段固定抛出。
+            RuntimeError: 第二档初始化阶段固定抛出。
         """
 
+        backend_name = str(kwargs["backend_name"])
         device_name = str(kwargs["device_name"])
-        if device_name == "cpu":
-            raise RuntimeError("cpu init boom")
-        return _FakeConverter(device_name)
+        if backend_name == "pypdfium2":
+            raise RuntimeError("pypdfium2 init boom")
+        return _FakeConverter(backend_name=backend_name, device_name=device_name)
 
     monkeypatch.setattr("dayu.docling_runtime.build_docling_pdf_converter", _build_converter)
 
     def _convert(converter: object) -> str:
-        """模拟首轮 auto 转换失败，触发 CPU 回退。
+        """模拟首档转换失败，触发第二档初始化。
 
         Args:
             converter: Docling 转换器对象。
@@ -493,19 +536,19 @@ def test_run_docling_pdf_conversion_wraps_cpu_retry_initialization_failure(
             无。
 
         Raises:
-            RuntimeError: 当设备为 auto 时固定抛出。
+            RuntimeError: 当 backend 为 docling-parse 时固定抛出。
         """
 
         fake_converter = cast(_FakeConverter, converter)
-        if fake_converter.device_name == "auto":
+        if fake_converter.backend_name == "docling-parse":
             raise RuntimeError("auto failed")
         return "ok"
 
     with pytest.raises(
         DoclingRuntimeInitializationError,
-        match="Docling CPU 回退初始化失败: cpu init boom",
+        match=r"Docling 转换器初始化失败 \(attempt 2/3:.*backend=pypdfium2.*device=auto\): pypdfium2 init boom",
     ) as exc_info:
         run_docling_pdf_conversion(_convert)
 
     assert isinstance(exc_info.value.__cause__, RuntimeError)
-    assert str(exc_info.value.__cause__) == "cpu init boom"
+    assert str(exc_info.value.__cause__) == "pypdfium2 init boom"

@@ -88,7 +88,7 @@ pip install -r requirements.txt
 - 必须使用固定 fixture
 - 必须走真实第三方执行链
 - 表格退化不可接受，不能只断言“返回非空字符串”
-- 当前 Dayu 已将 upload / web tool 等 Docling PDF 转换入口统一收口到 `dayu.docling_runtime`；默认设备为 `auto`，若 `auto` 转换阶段失败则统一回退到 `cpu` 重试一次；若需要显式验证其他设备，可通过环境变量 `DAYU_DOCLING_DEVICE=auto|cpu|cuda|mps|xpu` 覆盖
+- 当前 Dayu 已将 upload / web tool 等 Docling PDF 转换入口统一收口到 `dayu.docling_runtime`；默认设备为 `auto`，转换走二维（backend × device）有序回退尝试链：先 `(docling-parse, resolved)`，再 `(pypdfium2, resolved)`，仅当 `resolved == auto` 时追加 `(docling-parse, cpu)`；任意一档成功即返回，全链失败时以首次失败作为 `__cause__`。若需要显式覆盖加速器设备，可通过环境变量 `DAYU_DOCLING_DEVICE=auto|cpu|cuda|mps|xpu` 调整
 - 与此对应，unit test 若只想隔离 Docling 转换结果，应优先 patch `run_docling_pdf_conversion()` 这类项目内真源 seam；若只测装配参数，再 patch `build_docling_pdf_converter()`，不要继续直接 patch 第三方 `DocumentConverter` 类
 
 ### 3.2 Service / Host / Agent 路径守护
@@ -489,4 +489,5 @@ Fins 相关改动时，至少同步更新：
 - 20-F / 报告类表单的 regression case，若依赖 source text 恢复 marker，至少要区分三类输入形态：显式 `Item` 标题、`cross-reference guide`、以及无 guide 的 `annual-report-style` 页标题（含页码且后续紧跟正文）；不要只覆盖其中一种文本形态。另需单独守住 `Item 3` narrative 中“重复 `Annual Report` + `Not applicable` 但无 locator/note”的误判回归，避免 child split 被过宽的 guide 判定提前吞掉。
 - 若 20-F regression case 同时包含“早期真实 heading fallback”和“晚期伪 marker”，断言必须覆盖最终修复结果优先采用完整单调 fallback 主链，而不是只验证 helper 能不能找到 fallback 候选。
 - 对 Fins 读工具 / runtime 的旧 fake repository，优先通过 `tests/fins/legacy_repository_adapters.py` 适配到 `company/source/processed/blob` 窄仓储；不要为了测试回加生产代码里的 `repository=` 兼容参数
+- 涉及创建文件 symlink 的边界用例，必须从 `tests/conftest.py` 复用 `requires_symlink` 装饰器，由其在导入期实际探测能力（成功则跑、失败则带原因 skip）；不要在每个用例里各写一份 `try: os.symlink ... except OSError: pytest.skip`，也不要按 `sys.platform == "win32"` 一刀切跳过——Windows 启用开发者模式或以管理员运行时仍应正常覆盖该边界。
 - 若某层已删除，对应旧测试也应删除，不做“保留纪念”
