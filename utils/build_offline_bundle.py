@@ -184,7 +184,18 @@ def _flatten_constraints_text(constraints_path: Path) -> str:
         visited.remove(resolved_path)
         return expanded_lines
 
-    return "\n".join(_expand(constraints_path)).strip() + "\n"
+    # 后出现的同名包约束覆盖先出现的（last-wins），使平台 lock 文件可以覆盖 common lock。
+    seen: dict[str, int] = {}
+    deduped: list[str] = []
+    for line in _expand(constraints_path):
+        pkg_name = line.split("==")[0].split(">=")[0].split("<=")[0].split("!=")[0].strip().lower()
+        if pkg_name in seen:
+            deduped[seen[pkg_name]] = line
+        else:
+            seen[pkg_name] = len(deduped)
+            deduped.append(line)
+
+    return "\n".join(deduped).strip() + "\n"
 
 
 def _write_install_script(bundle_dir: Path, *, version: str, platform_id: str) -> None:
