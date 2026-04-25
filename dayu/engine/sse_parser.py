@@ -603,6 +603,10 @@ class SSEStreamParser:
                         ),
                     )
                     continue
+                # 兼容不发 index 的 provider（如 Gemini OpenAI 兼容模式），
+                # 用数组下标补齐，使下游 _handle_tool_call_delta 无需特殊处理。
+                if "index" not in tc:
+                    tc = {**tc, "index": index}
                 async for event in self._handle_tool_call_delta(tc):
                     yield event
 
@@ -619,27 +623,19 @@ class SSEStreamParser:
         # 获取工具调用索引
         tool_index = tc.get("index")
         if tool_index is None or not isinstance(tool_index, int):
-            # Gemini OpenAI 兼容模式不发 index 字段，需自动推断。
-            # 策略：如果该 delta 携带了新的 id（缓冲区中没有），分配下一个连续索引；
-            # 否则（id 为空或与已有条目匹配），归入最后一个活跃条目。
-            tc_id_raw = tc.get("id")
-            existing_index = None
-            if tc_id_raw and isinstance(tc_id_raw, str):
-                for idx, buf in self._tool_calls_buffer.items():
-                    if buf.get("id") == tc_id_raw:
-                        existing_index = idx
-                        break
-            if existing_index is not None:
-                tool_index = existing_index
-            elif not tc_id_raw and self._tool_calls_buffer:
-                tool_index = max(self._tool_calls_buffer.keys())
-            else:
-                tool_index = max(self._tool_calls_buffer.keys()) + 1 if self._tool_calls_buffer else 0
-            if self._running_config.debug_tool_delta:
-                Log.debug(
-                    f"{self._log_prefix} 工具调用增量 index 缺失，自动推断为 {tool_index}",
-                    module=MODULE,
-                )
+            Log.warn(
+                f"{self._log_prefix} 工具调用增量 index 缺失或类型异常: {tool_index!r}",
+                module=MODULE,
+            )
+            self._record_protocol_error(
+                "tool_call_incomplete",
+                "Tool call arguments incomplete or invalid",
+                body=json.dumps(
+                    [f"tool_call entry invalid index: {tool_index!r}"],
+                    ensure_ascii=False,
+                ),
+            )
+            return
 
         entry = self._tool_calls_buffer.setdefault(
             tool_index,

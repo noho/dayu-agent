@@ -461,43 +461,21 @@ async def test_handle_tool_call_delta_covers_missing_index_and_debug_logs(monkey
         running_config=_RunningConfigStub(debug_tool_delta=True),
     )
 
-    # 1. 验证 Gemini 兼容模式下的 index 推断行为
-    # 1.1 携带新 id 但无 index -> 推断为 index 0
-    events_infer_1 = await _collect_events(parser._handle_tool_call_delta({
-        "id": "tc_infer_1",
-        "function": {"name": "tool_1", "arguments": ""}
-    }))
-    assert len(events_infer_1) == 1
-    assert events_infer_1[0].type == EventType.TOOL_CALL_START
-    
-    # 1.2 无 id 无 index -> 归入最后一个活跃条目 (index 0)
-    events_infer_2 = await _collect_events(parser._handle_tool_call_delta({
-        "function": {"arguments": "{"}
-    }))
-    assert len(events_infer_2) == 1
-    assert events_infer_2[0].type == EventType.TOOL_CALL_DELTA
-    assert events_infer_2[0].data["arguments_delta"] == "{"
-    
-    # 1.3 携带另一个新 id 无 index -> 推断为 index 1
-    events_infer_3 = await _collect_events(parser._handle_tool_call_delta({
-        "id": "tc_infer_2",
-        "function": {"name": "tool_2", "arguments": ""}
-    }))
-    assert len(events_infer_3) == 1
-    assert events_infer_3[0].type == EventType.TOOL_CALL_START
-    
-    assert any("工具调用增量 index 缺失" in message for message in debug_collector.messages)
+    missing_index_events = await _collect_events(parser._handle_tool_call_delta({"id": "tc_1"}))
 
-    # 2. 验证常规带有 index 时的日志行为
     full_events = await _collect_events(
         parser._handle_tool_call_delta(
             {
-                "index": 2,
-                "id": "tc_normal",
+                "index": 0,
+                "id": "tc_2",
                 "function": {"name": "read_file", "arguments": "{}"},
             }
         )
     )
+
+    assert missing_index_events == []
+    assert any("index" in message and ("缺失" in message or "异常" in message) for message in warn_collector.messages)
+
     assert [event.type for event in full_events] == [EventType.TOOL_CALL_START, EventType.TOOL_CALL_DELTA]
     assert any("记录 tool_call_id" in message for message in debug_collector.messages)
     assert any("记录工具名" in message for message in debug_collector.messages)
@@ -1187,3 +1165,80 @@ async def test_indented_data_line_not_parsed() -> None:
     assert len(content_deltas) == 1
     assert content_deltas[0].data == "visible"
     assert result.done_received is True
+
+
+@pytest.mark.asyncio
+async def test_parse_stream_gemini_parallel_tool_calls_without_index() -> None:
+    """验证 Gemini 风格的并行工具调用（无 index 字段）在 parse_stream 层正确解析。
+
+    Gemini OpenAI 兼容模式不发 index 字段，每个 tool call 在一个 delta 中一次给全。
+    本测试模拟一个 chunk 内并行调用 3 个工具的场景，验证上游自动补齐 index 后
+    下游正确组装出 3 个独立的工具调用。
+    """
+    parser = SSEStreamParser(
+        name="gemini",
+        request_id="req_gemini_parallel",
+        running_config=_RunningConfigStub(),
+    )
+
+    # 模拟 Gemini 并行 3 个 tool call（真实抓包结构，无 index 字段）
+    payload = json.dumps({
+        "choices": [{
+            "delta": {
+                "tool_calls": [
+                    {
+                        "id": "function-call-001",
+                        "type": "function",
+                        "function": {
+                            "name": "search_web",
+                            "arguments": '{"query":"杭州天气"}',
+                        },
+                    },
+                    {
+                        "id": "function-call-002",
+                        "type": "function",
+                        "function": {
+                            "name": "search_web",
+                            "arguments": '{"query":"北京天气"}',
+                        },
+                    },
+                    {
+                        "id": "function-call-003",
+                        "type": "function",
+                        "function": {
+                            "name": "search_web",
+                            "arguments": '{"query":"上海天气"}',
+                        },
+                    },
+                ],
+            },
+            "finish_reason": "tool_calls",
+        }],
+    })
+
+    response = _ResponseStub([
+        f"data: {payload}\n\n".encode("utf-8"),
+        b"data: [DONE]\n\n",
+    ])
+
+    events = await _collect_events(_parse_stream(parser, response))
+    result = parser.get_result()
+
+    # 应产出 3 组 tool_call_start + tool_call_delta 事件
+    start_events = [e for e in events if e.type == EventType.TOOL_CALL_START]
+    delta_events = [e for e in events if e.type == EventType.TOOL_CALL_DELTA]
+    assert len(start_events) == 3
+    assert len(delta_events) == 3
+
+    # 验证组装结果：3 个独立的工具调用，各自参数正确
+    assert len(result.tool_calls) == 3
+    assert result.tool_calls[0]["id"] == "function-call-001"
+    assert result.tool_calls[0]["arguments"] == {"query": "杭州天气"}
+    assert result.tool_calls[1]["id"] == "function-call-002"
+    assert result.tool_calls[1]["arguments"] == {"query": "北京天气"}
+    assert result.tool_calls[2]["id"] == "function-call-003"
+    assert result.tool_calls[2]["arguments"] == {"query": "上海天气"}
+
+    # 无 protocol_errors 和 validation_errors
+    assert result.protocol_errors == []
+    assert result.validation_errors == []
