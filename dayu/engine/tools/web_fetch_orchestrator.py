@@ -18,7 +18,7 @@ from requests.structures import CaseInsensitiveDict
 from dayu.contracts.cancellation import CancellationToken
 from dayu.docling_runtime import (
     DoclingRuntimeInitializationError,
-    run_docling_pdf_conversion,
+    convert_pdf_bytes_with_docling,
 )
 from bs4 import BeautifulSoup
 
@@ -700,20 +700,14 @@ def _docling_convert_to_markdown(raw_bytes: bytes, stream_name: str) -> tuple[st
         ``(title, markdown, extraction_source)`` 三元组。
 
     Raises:
-        RuntimeError: Docling 未安装或转换失败时抛出。
+        DoclingRuntimeInitializationError: Docling 装配失败时抛出。
+        RuntimeError: Docling 转换失败时抛出。
     """
 
     try:
-        from io import BytesIO
-
-        from docling.datamodel.base_models import DocumentStream
-    except ImportError as exc:
-        raise RuntimeError("Docling 未安装，无法转换非 HTML 内容") from exc
-
-    stream = DocumentStream(name=stream_name, stream=BytesIO(raw_bytes))
-    try:
-        result = run_docling_pdf_conversion(
-            lambda converter: converter.convert(stream),
+        result = convert_pdf_bytes_with_docling(
+            raw_bytes,
+            stream_name=stream_name,
             do_ocr=True,
             do_table_structure=True,
             table_mode="accurate",

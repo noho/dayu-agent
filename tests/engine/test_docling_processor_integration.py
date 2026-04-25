@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from dayu.engine.processors.docling_processor import DoclingProcessor
-from dayu.fins.pipelines.docling_upload_service import _convert_file_with_docling
+from dayu.fins.pipelines.docling_upload_service import _convert_bytes_with_docling
 from dayu.fins.storage.local_file_source import LocalFileSource
 
 pytestmark = pytest.mark.integration
@@ -55,7 +55,8 @@ def real_docling_json_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     output_dir = tmp_path_factory.mktemp("docling_processor_integration")
     docling_json_path = output_dir / "dayu_docling_integration_fixture_docling.json"
-    docling_payload = _convert_file_with_docling(_fixture_pdf_path())
+    fixture_path = _fixture_pdf_path()
+    docling_payload = _convert_bytes_with_docling(fixture_path.read_bytes(), fixture_path.name)
     docling_json_path.write_text(
         json.dumps(docling_payload, ensure_ascii=False, indent=2),
         encoding="utf-8",

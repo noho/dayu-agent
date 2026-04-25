@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import cast
 
 import pytest
@@ -10,6 +11,7 @@ from dayu.docling_runtime import (
     DOCLING_DEVICE_ENV,
     DoclingRuntimeInitializationError,
     build_docling_pdf_pipeline_options,
+    convert_pdf_bytes_with_docling,
     resolve_docling_device_name,
     run_docling_pdf_conversion,
 )
@@ -552,3 +554,86 @@ def test_run_docling_pdf_conversion_wraps_followup_initialization_failure(
 
     assert isinstance(exc_info.value.__cause__, RuntimeError)
     assert str(exc_info.value.__cause__) == "pypdfium2 init boom"
+
+
+def test_convert_pdf_bytes_with_docling_uses_document_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证 ``convert_pdf_bytes_with_docling`` 走 ``DocumentStream`` 路径。
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from io import BytesIO
+
+    from docling.datamodel.base_models import DocumentStream
+
+    captured: dict[str, object] = {}
+
+    class _StubConverter:
+        """伪转换器，仅记录 ``convert`` 入参。"""
+
+        def convert(self, source: object) -> str:
+            """记录入参并返回固定哨兵值。
+
+            Args:
+                source: ``DocumentStream`` 输入。
+
+            Returns:
+                固定字符串哨兵。
+
+            Raises:
+                无。
+            """
+
+            captured["source"] = source
+            return "ok-sentinel"
+
+    def _fake_run(
+        convert_operation: Callable[[object], str],
+        *,
+        do_ocr: bool,
+        do_table_structure: bool,
+        table_mode: str,
+        do_cell_matching: bool,
+    ) -> str:
+        """直接调用 convert_operation 模拟成功路径。
+
+        Args:
+            convert_operation: 真实转换回调。
+            do_ocr: OCR 开关。
+            do_table_structure: 表格结构开关。
+            table_mode: 表格模式。
+            do_cell_matching: 单元格匹配开关。
+
+        Returns:
+            转换回调返回值。
+
+        Raises:
+            无。
+        """
+
+        captured["pipeline"] = (do_ocr, do_table_structure, table_mode, do_cell_matching)
+        return convert_operation(_StubConverter())
+
+    monkeypatch.setattr("dayu.docling_runtime.run_docling_pdf_conversion", _fake_run)
+
+    result = cast(
+        str,
+        convert_pdf_bytes_with_docling(b"hello-bytes", stream_name="page.pdf"),
+    )
+
+    assert result == "ok-sentinel"
+    captured_source = cast(DocumentStream, captured["source"])
+    assert isinstance(captured_source, DocumentStream)
+    assert captured_source.name == "page.pdf"
+    assert isinstance(captured_source.stream, BytesIO)
+    assert captured_source.stream.getvalue() == b"hello-bytes"
+    assert captured["pipeline"] == (True, True, "accurate", True)

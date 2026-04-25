@@ -34,6 +34,8 @@ from dayu.log import Log
 if TYPE_CHECKING:
     from docling.backend.abstract_backend import AbstractDocumentBackend
     from docling.datamodel.accelerator_options import AcceleratorOptions
+    from docling.datamodel.base_models import DocumentStream
+    from docling.datamodel.document import ConversionResult
     from docling.datamodel.pipeline_options import PipelineOptions, TableFormerMode
     from docling.document_converter import DocumentConverter
 
@@ -469,3 +471,68 @@ def run_docling_pdf_conversion(
     if first_failure is not None and first_failure is not last_failure:
         raise last_failure from first_failure
     raise last_failure
+
+
+def _build_docling_document_stream(raw_bytes: bytes, *, stream_name: str) -> "DocumentStream":
+    """构造 Docling ``DocumentStream``。
+
+    Args:
+        raw_bytes: 原始字节内容。
+        stream_name: 流名称，决定 Docling 解析模式（按扩展名判别）。
+
+    Returns:
+        构造完成的 Docling ``DocumentStream`` 对象。
+
+    Raises:
+        DoclingRuntimeInitializationError: Docling 依赖缺失时抛出。
+    """
+
+    from io import BytesIO
+
+    try:
+        from docling.datamodel.base_models import DocumentStream
+    except ImportError as exc:  # pragma: no cover - 依赖缺失保护
+        raise DoclingRuntimeInitializationError("Docling 未安装，无法构造 DocumentStream") from exc
+
+    return DocumentStream(name=stream_name, stream=BytesIO(raw_bytes))
+
+
+def convert_pdf_bytes_with_docling(
+    raw_bytes: bytes,
+    *,
+    stream_name: str,
+    do_ocr: bool = True,
+    do_table_structure: bool = True,
+    table_mode: str = _TABLE_MODE_ACCURATE,
+    do_cell_matching: bool = True,
+) -> "ConversionResult":
+    """以字节流形式调用 Docling，规避 Windows 非 ASCII 路径编码问题。
+
+    Docling 在 Windows 上把 ``Path`` 输入按 mbcs（cp936）编码后传给
+    docling-parse C++ 后端，导致合法文档被判 ``not valid``。本函数把字节流
+    封装成 ``DocumentStream`` 直接喂给 Docling，绕开文件系统路径编码层。
+
+    Args:
+        raw_bytes: PDF 原始字节内容。
+        stream_name: 流名称，建议直接传文件名以保留扩展名。
+        do_ocr: 是否开启 OCR。
+        do_table_structure: 是否开启表格结构识别。
+        table_mode: 表格结构模式，仅支持 ``accurate`` 或 ``fast``。
+        do_cell_matching: 是否开启表格单元格匹配。
+
+    Returns:
+        Docling 转换结果对象。
+
+    Raises:
+        DoclingRuntimeInitializationError: Docling 依赖缺失或装配失败时抛出。
+        ValueError: ``table_mode`` 非法时抛出。
+    """
+
+    stream = _build_docling_document_stream(raw_bytes, stream_name=stream_name)
+    return run_docling_pdf_conversion(
+        lambda converter: converter.convert(stream),
+        do_ocr=do_ocr,
+        do_table_structure=do_table_structure,
+        table_mode=table_mode,
+        do_cell_matching=do_cell_matching,
+    )

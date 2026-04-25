@@ -8,7 +8,7 @@ import pytest
 
 from dayu.fins.domain.document_models import SourceHandle
 from dayu.fins.domain.enums import SourceKind
-from dayu.fins.pipelines.docling_upload_service import DoclingUploadService, _convert_file_with_docling
+from dayu.fins.pipelines.docling_upload_service import DoclingUploadService, _convert_bytes_with_docling
 from tests.fins.storage_testkit import FsStorageTestContext, build_fs_storage_test_context
 
 pytestmark = pytest.mark.integration
@@ -38,7 +38,7 @@ def _fixture_pdf_path() -> Path:
     return fixture_path
 
 
-def test_convert_file_with_docling_reads_real_pdf_table() -> None:
+def test_convert_bytes_with_docling_reads_real_pdf_table() -> None:
     """验证真实 PDF 经 Docling 转换后包含稳定表格数据。
 
     Args:
@@ -51,7 +51,8 @@ def test_convert_file_with_docling_reads_real_pdf_table() -> None:
         AssertionError: 断言失败时抛出。
     """
 
-    result = _convert_file_with_docling(_fixture_pdf_path())
+    fixture_path = _fixture_pdf_path()
+    result = _convert_bytes_with_docling(fixture_path.read_bytes(), fixture_path.name)
     assert result["name"] == "dayu_docling_integration_fixture"
 
     tables = result.get("tables")

@@ -23,7 +23,7 @@ from typing import Any, Callable, Literal, Optional
 
 from dayu.docling_runtime import (
     DoclingRuntimeInitializationError,
-    run_docling_pdf_conversion,
+    convert_pdf_bytes_with_docling,
 )
 from dayu.fins.domain.document_models import (
     SourceHandle,
@@ -103,7 +103,7 @@ class DoclingUploadService:
         source_repository: SourceDocumentRepositoryProtocol,
         blob_repository: DocumentBlobRepositoryProtocol,
         *,
-        convert_with_docling: Optional[Callable[[Path], dict[str, Any]]] = None,
+        convert_with_docling: Optional[Callable[[bytes, str], dict[str, Any]]] = None,
     ) -> None:
         """初始化服务。
 
@@ -125,7 +125,7 @@ class DoclingUploadService:
             raise ValueError("blob_repository 不能为空")
         self._source_repository = source_repository
         self._blob_repository = blob_repository
-        self._convert_with_docling = convert_with_docling or _convert_file_with_docling
+        self._convert_with_docling = convert_with_docling or _convert_bytes_with_docling
 
     def execute_upload(
         self,
@@ -434,18 +434,22 @@ class DoclingUploadService:
 
         Args:
             files: 源文件列表。
-            original_assets: 已读取完成的原始文件资产列表。
+            original_assets: 已读取完成的原始文件资产列表，顺序与 ``files`` 一一对应。
 
         Returns:
             `(待上传资产列表, 转换阶段事件列表)` 二元组。
 
         Raises:
             RuntimeError: Docling 转换失败时抛出。
+            ValueError: ``files`` 与 ``original_assets`` 长度不一致时抛出。
         """
+
+        if len(files) != len(original_assets):
+            raise ValueError("files 与 original_assets 数量不一致")
 
         assets = list(original_assets)
         conversion_events: list[UploadFileEventPayload] = []
-        for file_path in files:
+        for file_path, original_asset in zip(files, original_assets):
             conversion_events.append(
                 UploadFileEventPayload(
                     event_type="conversion_started",
@@ -456,7 +460,7 @@ class DoclingUploadService:
                     },
                 )
             )
-            docling_payload = self._convert_with_docling(file_path)
+            docling_payload = self._convert_with_docling(original_asset.data, file_path.name)
             docling_data = json.dumps(docling_payload, ensure_ascii=False, indent=2).encode("utf-8")
             docling_name = f"{file_path.stem}{DOCLING_FILE_SUFFIX}"
             docling_sha256 = hashlib.sha256(docling_data).hexdigest()
@@ -563,22 +567,27 @@ class DoclingUploadService:
         )
 
 
-def _convert_file_with_docling(file_path: Path) -> dict[str, Any]:
-    """使用 Docling 将文件转换为结构化 JSON。
+def _convert_bytes_with_docling(raw_data: bytes, stream_name: str) -> dict[str, Any]:
+    """使用 Docling 将字节流转换为结构化 JSON。
+
+    走 ``DocumentStream`` 输入，规避 Windows 上 ``Path`` mbcs 编码问题。
 
     Args:
-        file_path: 输入文件路径。
+        raw_data: 文件原始字节内容。
+        stream_name: 流名称（建议直接使用文件名，保留扩展名）。
 
     Returns:
         Docling 导出的结构化字典。
 
     Raises:
-        RuntimeError: 转换失败时抛出。
+        DoclingRuntimeInitializationError: Docling 装配失败时抛出。
+        RuntimeError: Docling 转换失败时抛出。
     """
 
     try:
-        result = run_docling_pdf_conversion(
-            lambda converter: converter.convert(file_path),
+        result = convert_pdf_bytes_with_docling(
+            raw_data,
+            stream_name=stream_name,
             do_ocr=True,
             do_table_structure=True,
             table_mode="accurate",
@@ -587,7 +596,7 @@ def _convert_file_with_docling(file_path: Path) -> dict[str, Any]:
     except DoclingRuntimeInitializationError:
         raise
     except Exception as exc:  # pragma: no cover - 第三方异常兜底
-        raise RuntimeError(f"Docling 转换失败: {file_path.name}") from exc
+        raise RuntimeError(f"Docling 转换失败: {stream_name}") from exc
     return result.document.export_to_dict()
 
 

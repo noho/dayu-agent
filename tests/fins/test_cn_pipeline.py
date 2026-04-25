@@ -102,8 +102,8 @@ async def test_upload_filing_stream_uploads_files_with_docling(tmp_path: Path) -
         workspace_root=tmp_path,
         processor_registry=build_fins_processor_registry(),
     )
-    pipeline._upload_service._convert_with_docling = lambda path: {  # type: ignore[attr-defined]
-        "name": path.name,
+    pipeline._upload_service._convert_with_docling = lambda raw_data, stream_name: {  # type: ignore[attr-defined]
+        "name": stream_name,
         "format": "docling",
     }
     sample_file = tmp_path / "sample.pdf"
@@ -167,8 +167,8 @@ async def test_upload_material_stream_uploads_files_with_docling(tmp_path: Path)
         workspace_root=tmp_path,
         processor_registry=build_fins_processor_registry(),
     )
-    pipeline._upload_service._convert_with_docling = lambda path: {  # type: ignore[attr-defined]
-        "name": path.name,
+    pipeline._upload_service._convert_with_docling = lambda raw_data, stream_name: {  # type: ignore[attr-defined]
+        "name": stream_name,
         "format": "docling",
     }
     sample_file = tmp_path / "material.pdf"
@@ -220,8 +220,8 @@ async def test_upload_filing_stream_auto_resolves_create_update_skip(tmp_path: P
         workspace_root=tmp_path,
         processor_registry=build_fins_processor_registry(),
     )
-    pipeline._upload_service._convert_with_docling = lambda path: {  # type: ignore[attr-defined]
-        "name": path.name,
+    pipeline._upload_service._convert_with_docling = lambda raw_data, stream_name: {  # type: ignore[attr-defined]
+        "name": stream_name,
         "format": "docling",
     }
     sample_file = tmp_path / "sample.pdf"
@@ -295,8 +295,8 @@ async def test_upload_material_stream_overwrite_resets_single_document(tmp_path:
         workspace_root=tmp_path,
         processor_registry=build_fins_processor_registry(),
     )
-    pipeline._upload_service._convert_with_docling = lambda path: {  # type: ignore[attr-defined]
-        "name": path.name,
+    pipeline._upload_service._convert_with_docling = lambda raw_data, stream_name: {  # type: ignore[attr-defined]
+        "name": stream_name,
         "format": "docling",
     }
     old_file = tmp_path / "deck_old.pdf"

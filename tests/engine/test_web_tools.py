@@ -1778,8 +1778,9 @@ def test_fetch_and_convert_content_pdf_convert_error(monkeypatch: pytest.MonkeyP
     )
 
     def _raise_convert_failure(
-        convert_operation: Callable[..., _FakeConvertResult],
+        raw_bytes: bytes,
         *,
+        stream_name: str,
         do_ocr: bool,
         do_table_structure: bool,
         table_mode: str,
@@ -1788,7 +1789,8 @@ def test_fetch_and_convert_content_pdf_convert_error(monkeypatch: pytest.MonkeyP
         """模拟统一 Docling 运行时抛出转换失败。
 
         Args:
-            convert_operation: 转换回调。
+            raw_bytes: 输入字节（占位）。
+            stream_name: 流名称（占位）。
             do_ocr: OCR 开关。
             do_table_structure: 表格结构开关。
             table_mode: 表格模式。
@@ -1801,11 +1803,11 @@ def test_fetch_and_convert_content_pdf_convert_error(monkeypatch: pytest.MonkeyP
             ValueError: 固定抛出。
         """
 
-        _ = (convert_operation, do_ocr, do_table_structure, table_mode, do_cell_matching)
+        _ = (raw_bytes, stream_name, do_ocr, do_table_structure, table_mode, do_cell_matching)
         raise ValueError("convert failed")
 
     monkeypatch.setattr(
-        "dayu.engine.tools.web_fetch_orchestrator.run_docling_pdf_conversion",
+        "dayu.engine.tools.web_fetch_orchestrator.convert_pdf_bytes_with_docling",
         _raise_convert_failure,
     )
 
@@ -1838,8 +1840,9 @@ def test_fetch_and_convert_content_pdf_success(monkeypatch: pytest.MonkeyPatch) 
     )
 
     def _return_success(
-        convert_operation: Callable[..., _FakeConvertResult],
+        raw_bytes: bytes,
         *,
+        stream_name: str,
         do_ocr: bool,
         do_table_structure: bool,
         table_mode: str,
@@ -1848,7 +1851,8 @@ def test_fetch_and_convert_content_pdf_success(monkeypatch: pytest.MonkeyPatch) 
         """模拟统一 Docling 运行时返回成功结果。
 
         Args:
-            convert_operation: 转换回调。
+            raw_bytes: 输入字节（占位）。
+            stream_name: 流名称（占位）。
             do_ocr: OCR 开关。
             do_table_structure: 表格结构开关。
             table_mode: 表格模式。
@@ -1861,11 +1865,11 @@ def test_fetch_and_convert_content_pdf_success(monkeypatch: pytest.MonkeyPatch) 
             无。
         """
 
-        _ = (convert_operation, do_ocr, do_table_structure, table_mode, do_cell_matching)
+        _ = (raw_bytes, stream_name, do_ocr, do_table_structure, table_mode, do_cell_matching)
         return _FakeConvertResult("# My Title\n\nBody")
 
     monkeypatch.setattr(
-        "dayu.engine.tools.web_fetch_orchestrator.run_docling_pdf_conversion",
+        "dayu.engine.tools.web_fetch_orchestrator.convert_pdf_bytes_with_docling",
         _return_success,
     )
 

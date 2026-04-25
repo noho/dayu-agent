@@ -30,8 +30,8 @@ async def test_upload_material_stream_uploads_docling_files(tmp_path: Path) -> N
         workspace_root=tmp_path,
         processor_registry=build_fins_processor_registry(),
     )
-    pipeline._upload_service._convert_with_docling = lambda path: {  # type: ignore[attr-defined]
-        "name": path.name,
+    pipeline._upload_service._convert_with_docling = lambda raw_data, stream_name: {  # type: ignore[attr-defined]
+        "name": stream_name,
         "format": "docling",
     }
     material_file = tmp_path / "material.pdf"
@@ -87,8 +87,8 @@ async def test_upload_material_stream_auto_action_and_overwrite_reset(tmp_path: 
         workspace_root=tmp_path,
         processor_registry=build_fins_processor_registry(),
     )
-    pipeline._upload_service._convert_with_docling = lambda path: {  # type: ignore[attr-defined]
-        "name": path.name,
+    pipeline._upload_service._convert_with_docling = lambda raw_data, stream_name: {  # type: ignore[attr-defined]
+        "name": stream_name,
         "format": "docling",
     }
     old_file = tmp_path / "deck_old.pdf"
