@@ -207,11 +207,12 @@ def _build_final_dataframe(
     # 处理删除：按索引删除行（从大到小删除避免索引变化）
     deleted_indices = editor_state.get("deleted_rows", [])
     if deleted_indices:
-        # 从大到小排序，确保删除时索引不偏移
-        for idx in sorted(deleted_indices, reverse=True):
-            if idx < len(df):
-                df = df.drop(df.index[idx], axis=0)
-        df = df.reset_index(drop=True)
+        valid_deleted = {
+            int(raw_idx) for raw_idx in deleted_indices if 0 <= int(raw_idx) < len(df)
+        }
+        if valid_deleted:
+            keep_positions = [pos for pos in range(len(df)) if pos not in valid_deleted]
+            df = df.iloc[keep_positions]
 
     # 处理编辑：更新指定行的数据
     edited_rows = editor_state.get("edited_rows", {})
