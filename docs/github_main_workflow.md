@@ -382,6 +382,11 @@ python utils/smoke_test_offline_bundle.py \
   --archive "$(ls dist/offline/dayu-agent-*-macos-arm64-offline.tar.gz | tail -n1)"
 ```
 
+若需额外手工验证，执行：
+```bash
+pip install -e ".[test,dev,browser,web]" -c constraints/lock-macos-arm64-py311.txt
+```
+
 #### 7.2 `macos-x64`
 
 在 Intel macOS 宿主机上执行与上面相同的流程，只把 constraints 和平台标识换掉。
@@ -412,6 +417,11 @@ rm -rf dist build && python -m build --wheel && python utils/build_offline_bundl
   --wheel-cache-dir "$CACHE_DIR"
 python utils/smoke_test_offline_bundle.py \
   --archive "$(ls dist/offline/dayu-agent-*-macos-x64-offline.tar.gz | tail -n1)"
+```
+
+若需额外手工验证，执行：
+```bash
+pip install -e ".[test,dev,browser,web]" -c constraints/lock-macos-x64-py311.txt
 ```
 
 说明：
@@ -480,7 +490,7 @@ python utils/smoke_test_offline_bundle.py \
 
 若需额外手工验证，容器内执行：
 ```bash
-pip install -e ".[test,dev,browser]" -c constraints/lock-linux-x64-py311.txt
+pip install -e ".[test,dev,browser,web]" -c constraints/lock-linux-x64-py311.txt
 export PATH=$PATH:/tmp/home/.local/bin
 ```
 
@@ -568,6 +578,10 @@ python utils/build_offline_bundle.py `
   --output-dir dist/offline
 $archive = Get-ChildItem dist/offline/dayu-agent-*-windows-x64-offline.zip | Select-Object -Last 1
 python utils/smoke_test_offline_bundle.py --archive $archive.FullName
+```
+若需额外手工验证，执行：
+```bash
+pip install -e ".[test,dev,browser,web]" -c constraints/lock-windows-x64-py311.txt
 ```
 
 #### 什么时候可以放心开 PR

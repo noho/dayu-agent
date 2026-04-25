@@ -108,7 +108,7 @@ PHASE="安装依赖"
 log "开始安装依赖（editable install + constraints）..."
 /usr/bin/time -lp -o "${INSTALL_TIME}" \
   "${VENV_DIR}/bin/pip" install \
-  -e ".[test,dev,browser]" \
+  -e ".[test,dev,browser,web]" \
   -c "${REPO_ROOT}/constraints/lock-macos-arm64-py311.txt" \
   2>&1 | tee "${INSTALL_LOG}"
 

@@ -29,7 +29,7 @@
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[test,dev,browser]" -c constraints/lock-macos-arm64-py311.txt
+pip install -e ".[test,dev,browser,web]" -c constraints/lock-macos-arm64-py311.txt
 ```
 
 说明：
@@ -41,7 +41,7 @@ pip install -e ".[test,dev,browser]" -c constraints/lock-macos-arm64-py311.txt
 
 如果为了专门验证最低支持边界，请使用：
 ```bash
-pip install -e ".[test,dev,browser]" -c constraints/min-py311.txt
+pip install -e ".[test,dev,browser,web]" -c constraints/min-py311.txt
 ```
 
 浏览器回退抓取是开发环境默认必备能力，因为它会直接影响 `web tools` 中 `fetch_web_page` 的表现；完成依赖安装后，还需要执行：
