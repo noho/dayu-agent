@@ -1381,7 +1381,9 @@ class _FakePromptAgent:
     def __init__(self, side_effects: list[AppResult] | None = None) -> None:
         """初始化测试 facade。"""
 
-        self._side_effects = list(side_effects or [AppResult(content="ok", errors=[], warnings=[])])
+        self._side_effects = list(
+            side_effects or [AppResult(content="```markdown\n## 占位\n\n占位正文足够长以通过脏数据校验。\n```", errors=[], warnings=[])]
+        )
         self.calls: list[dict[str, object]] = []
 
     async def stream(self, prepared_scene: object, turn_input: object):
@@ -2564,22 +2566,21 @@ def test_fill_overview_skips_audit_confirm_and_repair(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
-def test_run_overview_agent_prompt_raw_retries_and_raises_runtime_error(
+def test_run_overview_prompt_retries_and_raises_runtime_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """验证第0章概览 Agent 的错误处理与其它写作 Agent 保持一致。"""
 
     runner = _build_runner(tmp_path)
-    monkeypatch.setattr(runner._preparer, "_create_overview_agent", lambda: object())
-    monkeypatch.setattr(
-        runner._prompt_runner,
-        "run_prepared_scene_prompt",
-        lambda **_kwargs: AppResult(content="", errors=["boom"], warnings=[], degraded=False),
-    )
-    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    fake_agent = _make_fake_prompt_agent([
+        _make_app_result(errors=[{"error": "boom-1"}]),
+        _make_app_result(errors=[{"error": "boom-2"}]),
+    ])
+    monkeypatch.setattr(runner._prompt_runner, "_prompt_agent", fake_agent)
+    monkeypatch.setattr("dayu.services.internal.write_pipeline.scene_executor.time.sleep", lambda _seconds: None)
 
     with pytest.raises(RuntimeError, match="第0章概览 Agent 执行失败"):
-        runner._prompt_runner._run_overview_agent_prompt_raw("prompt")
+        runner._prompt_runner.run_overview_prompt("prompt")
 
 
 @pytest.mark.unit
@@ -3517,8 +3518,14 @@ def test_scene_contract_preparer_and_prompt_runner_emit_debug_logs(tmp_path: Pat
         ]
     )
 
-    runner._prompt_runner._run_agent_prompt_raw("请写第一段")
-    runner._prompt_runner._run_agent_prompt_raw("请写第二段")
+    runner._prompt_runner.run_prepared_scene_prompt(
+        prepared_scene=runner._preparer.get_or_create_write_scene(),
+        prompt_text="请写第一段",
+    )
+    runner._prompt_runner.run_prepared_scene_prompt(
+        prepared_scene=runner._preparer.get_or_create_write_scene(),
+        prompt_text="请写第二段",
+    )
 
     assert any("scene 准备结果: action=created, scene_name=write" in item for item in logs)
     assert any("scene 准备结果: action=cache_hit, scene_name=write" in item for item in logs)
@@ -4139,6 +4146,7 @@ def test_full_run_waits_for_all_middle_tasks_before_decision(
     monkeypatch.setattr(runner._report_assembler, "assemble_report", lambda *_a, **_kw: "# report")
     monkeypatch.setattr("dayu.services.internal.write_pipeline.pipeline.Log.info", lambda *_a, **_kw: None)
     monkeypatch.setattr("dayu.services.internal.write_pipeline.pipeline.Log.error", lambda *_a, **_kw: None)
+    monkeypatch.setattr("dayu.services.internal.write_pipeline.scene_executor.time.sleep", lambda _: None)
 
     run_thread = threading.Thread(target=_run_pipeline)
     run_thread.start()
@@ -6033,29 +6041,29 @@ def _make_fake_prompt_agent(side_effects: list[AppResult]) -> _FakePromptAgent:
 
 
 @pytest.mark.unit
-def test_run_agent_prompt_raw_retries_on_llm_error(
+def test_run_write_prompt_retries_on_llm_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """验证 _run_agent_prompt_raw 在首次 LLM 错误后成功重试。"""
+    """验证写作 prompt 在首次 LLM 错误后成功重试。"""
 
     runner = _build_runner(tmp_path)
     fake_agent = _make_fake_prompt_agent([
         _make_app_result(errors=[{"error": "temporary failure"}]),
-        _make_app_result(content="成功的输出"),
+        _make_app_result(content="```markdown\n成功的输出\n```"),
     ])
     monkeypatch.setattr(runner._prompt_runner, "_prompt_agent", fake_agent)
-    monkeypatch.setattr("dayu.services.internal.write_pipeline.pipeline.time.sleep", lambda _: None)
+    monkeypatch.setattr("dayu.services.internal.write_pipeline.scene_executor.time.sleep", lambda _: None)
 
-    result = runner._prompt_runner._run_agent_prompt_raw("测试 prompt")
+    result = runner._prompt_runner.run_write_prompt("测试 prompt")
 
     assert result == "成功的输出"
 
 
 @pytest.mark.unit
-def test_run_agent_prompt_raw_raises_after_retry_exhausted(
+def test_run_write_prompt_raises_after_retry_exhausted(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """验证 _run_agent_prompt_raw 重试耗尽后抛出 RuntimeError。"""
+    """验证写作 prompt 重试耗尽后抛出 RuntimeError。"""
 
     runner = _build_runner(tmp_path)
     fake_agent = _make_fake_prompt_agent([
@@ -6063,10 +6071,10 @@ def test_run_agent_prompt_raw_raises_after_retry_exhausted(
         _make_app_result(errors=[{"error": "fail-2"}]),
     ])
     monkeypatch.setattr(runner._prompt_runner, "_prompt_agent", fake_agent)
-    monkeypatch.setattr("dayu.services.internal.write_pipeline.pipeline.time.sleep", lambda _: None)
+    monkeypatch.setattr("dayu.services.internal.write_pipeline.scene_executor.time.sleep", lambda _: None)
 
     with pytest.raises(RuntimeError, match="写作 Agent 执行失败"):
-        runner._prompt_runner._run_agent_prompt_raw("测试 prompt")
+        runner._prompt_runner.run_write_prompt("测试 prompt")
 
 
 @pytest.mark.unit
@@ -6087,12 +6095,15 @@ def test_scene_prompt_runner_high_level_markdown_wrappers_extract_content(
         ensure_ascii=False,
     )
 
-    monkeypatch.setattr(runner._prompt_runner, "_run_agent_prompt_raw", lambda _prompt: markdown)
-    monkeypatch.setattr(runner._prompt_runner, "_run_decision_agent_prompt_raw", lambda _prompt: markdown)
-    monkeypatch.setattr(runner._prompt_runner, "_run_overview_agent_prompt_raw", lambda _prompt: markdown)
-    monkeypatch.setattr(runner._prompt_runner, "_run_fix_agent_prompt_raw", lambda _prompt: markdown)
-    monkeypatch.setattr(runner._prompt_runner, "_run_regenerate_agent_prompt_raw", lambda _prompt: markdown)
-    monkeypatch.setattr(runner._prompt_runner, "_run_infer_agent_prompt_raw", lambda _prompt: facet_json)
+    fake_agent = _make_fake_prompt_agent([
+        _make_app_result(content=markdown),
+        _make_app_result(content=markdown),
+        _make_app_result(content=markdown),
+        _make_app_result(content=markdown),
+        _make_app_result(content=markdown),
+        _make_app_result(content=facet_json),
+    ])
+    monkeypatch.setattr(runner._prompt_runner, "_prompt_agent", fake_agent)
     monkeypatch.setattr(
         runner._prompt_runner._preparer,
         "get_company_facet_catalog",
@@ -6114,33 +6125,66 @@ def test_scene_prompt_runner_high_level_markdown_wrappers_extract_content(
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
-    "method_name",
+    ("method_name", "success_content", "expected_factory"),
     [
-        "_run_infer_agent_prompt_raw",
-        "_run_decision_agent_prompt_raw",
-        "_run_fix_agent_prompt_raw",
-        "_run_regenerate_agent_prompt_raw",
+        (
+            "run_infer_prompt",
+            json.dumps(
+                {
+                    "business_model_tags": ["平台互联网"],
+                    "constraint_tags": ["监管敏感"],
+                    "judgement_notes": "note",
+                },
+                ensure_ascii=False,
+            ),
+            lambda result: result.primary_facets == ["平台互联网"],
+        ),
+        (
+            "run_decision_prompt",
+            "```markdown\n成功的输出\n```",
+            lambda result: result == "成功的输出",
+        ),
+        (
+            "run_fix_prompt",
+            "```markdown\n成功的输出\n```",
+            lambda result: result == "成功的输出",
+        ),
+        (
+            "run_regenerate_prompt",
+            "```markdown\n成功的输出\n```",
+            lambda result: result == "成功的输出",
+        ),
     ],
 )
-def test_scene_prompt_runner_raw_prompt_methods_retry_on_llm_error(
+def test_scene_prompt_runner_high_level_methods_retry_on_llm_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     method_name: str,
+    success_content: str,
+    expected_factory: Callable[[Any], bool],
 ) -> None:
-    """验证其余 raw prompt 方法在首次 LLM 错误后会按统一策略重试。"""
+    """验证高层 prompt 方法在首次 LLM 错误后会按统一策略重试。"""
 
     runner = _build_runner(tmp_path)
     fake_agent = _make_fake_prompt_agent([
         _make_app_result(errors=[{"error": "temporary failure"}]),
-        _make_app_result(content="成功的输出"),
+        _make_app_result(content=success_content),
     ])
 
     monkeypatch.setattr(runner._prompt_runner, "_prompt_agent", fake_agent)
     monkeypatch.setattr("dayu.services.internal.write_pipeline.scene_executor.time.sleep", lambda _: None)
+    monkeypatch.setattr(
+        runner._prompt_runner._preparer,
+        "get_company_facet_catalog",
+        lambda: {
+            "business_model_candidates": ["平台互联网"],
+            "constraint_candidates": ["监管敏感"],
+        },
+    )
 
     result = getattr(runner._prompt_runner, method_name)("测试 prompt")
 
-    assert result == "成功的输出"
+    assert expected_factory(result)
 
 
 @pytest.mark.unit
@@ -6160,7 +6204,7 @@ def test_chapter_audit_coordinator_audit_chapter_retries_on_llm_error(
         _make_app_result(content=audit_json),
     ])
     monkeypatch.setattr(runner._prompt_runner, "_prompt_agent", fake_agent)
-    monkeypatch.setattr("dayu.services.internal.write_pipeline.chapter_audit_coordinator.time.sleep", lambda _: None)
+    monkeypatch.setattr("dayu.services.internal.write_pipeline.scene_executor.time.sleep", lambda _: None)
     monkeypatch.setattr(runner._prompter, "_render_task_prompt", lambda **_kw: "fake audit prompt")
 
     result = runner._chapter_audit_coordinator._audit_chapter("## Test\n\n内容", company_name="TestCo")
@@ -6180,7 +6224,7 @@ def test_chapter_audit_coordinator_audit_chapter_raises_after_retry_exhausted(
         _make_app_result(errors=[{"error": "audit-fail-2"}]),
     ])
     monkeypatch.setattr(runner._prompt_runner, "_prompt_agent", fake_agent)
-    monkeypatch.setattr("dayu.services.internal.write_pipeline.chapter_audit_coordinator.time.sleep", lambda _: None)
+    monkeypatch.setattr("dayu.services.internal.write_pipeline.scene_executor.time.sleep", lambda _: None)
     monkeypatch.setattr(runner._prompter, "_render_task_prompt", lambda **_kw: "fake audit prompt")
 
     with pytest.raises(RuntimeError, match="审计 Agent 执行失败"):

@@ -101,6 +101,14 @@ class HostExecutorProtocol(Protocol):
         """清理 session 关联的所有 replay 状态。"""
         ...
 
+    def discard_replay_state(self, handle: ReplayHandle) -> None:
+        """释放单个未消费的 replay 句柄对应的内存状态。
+
+        Args:
+            handle: 待释放的句柄；若 stash 中已不存在则静默跳过。
+        """
+        ...
+
 
 __all__ = [
     "HostExecutorProtocol",

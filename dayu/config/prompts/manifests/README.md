@@ -38,6 +38,7 @@
 - **chat 场景**：瓶颈是延迟，不是上限。单 turn 上限存在的目的是**强制模型早点回话**，复杂问题靠多 turn 拆解。
 - **超出上限的处理由调用者决定**：写作流水线的 `infer` 失败会回退到未裁剪写作；`prompt`/`interactive` 由用户决定是否追问；不要在 manifest 里堆"以防万一"的 budget。
 - **不要为单一 case 整体抬高上限**。如果某个 scene 在某些场景下规律性触顶，先排查是否陷入工具循环（reasoning 已得到结论但仍在调工具），而不是加预算掩盖。
+- **解析失败 / 空输出由 service 层 replay 兜底**：写作流水线 9 个 scene（infer/audit/repair/confirm + write/overview/decision/regenerate/fix）在 `success_parser` 抛 `ValueError` 或 markdown 输出抽不到 ```markdown``` 代码块时，会调 `Host.replay_agent_and_wait` 在原对话末尾追加一条"按要求格式输出最终结果"的 user 消息再跑一次，复用前 N 轮取证证据。**不要为这种"末尾切不出文本"的现象抬 `max_iterations`** —— 抬了也无法跨过模型本身的工具调用终止行为，且会挤占其它取证轮次。
 
 ## 修改流程
 

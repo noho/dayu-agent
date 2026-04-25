@@ -693,6 +693,21 @@ class Host:
 
         self._executor.discard_replay_state_for_session(session_id)
 
+    def discard_replay_state(self, handle: ReplayHandle) -> None:
+        """释放单个未消费的 replay 句柄。
+
+        Args:
+            handle: 待释放的不透明句柄；若已不存在则静默跳过。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        self._executor.discard_replay_state(handle)
+
     def cancel_run(self, run_id: str) -> RunRecord:
         """请求取消指定 run。
 

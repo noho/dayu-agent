@@ -80,6 +80,8 @@ from dayu.services.internal.write_pipeline.scene_contract_preparer import (
 from dayu.services.internal.write_pipeline.scene_executor import (
     ScenePromptRunner,
 )
+from dayu.contracts.agent_execution import ExecutionContract, ReplayHandle
+from dayu.contracts.events import AppResult
 from dayu.services.internal.write_pipeline.prompt_builder import (
     PromptBuilder,
     _build_prior_decision_tasks,
@@ -90,6 +92,85 @@ from dayu.services.internal.write_pipeline.report_assembler import ReportAssembl
 MODULE = "APP.WRITE_PIPELINE"
 
 _INFER_COMPANY_META_EXCLUDED_FIELDS = frozenset({"company_id"})
+
+
+class _HostScenePromptContractExecutor:
+    """适配 ``Host`` 与 ``ScenePromptContractExecutorProtocol`` 的薄壳。
+
+    ScenePromptRunner 只关心 ``run_replayable`` / ``replay`` 两条入口，
+    本适配器把这两个调用直接透传到 ``HostExecutorProtocol`` 上对应方法，
+    避免在 helper 中泄漏 ``Host`` 类型，也避免回退到无历史的
+    ``run_agent_and_wait``——所有 scene 调用都通过 replayable 入口拿到
+    ``ReplayHandle``，统一了 helper 内的两条路径。
+    """
+
+    def __init__(self, *, host_executor: HostExecutorProtocol) -> None:
+        """初始化适配器。
+
+        Args:
+            host_executor: 已组装好的 Host 执行入口。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        self._host_executor = host_executor
+
+    async def run_replayable(
+        self,
+        execution_contract: ExecutionContract,
+    ) -> tuple[AppResult, ReplayHandle]:
+        """首发执行：转交给 ``Host.run_agent_and_wait_replayable``。
+
+        Args:
+            execution_contract: 已构建的执行契约。
+
+        Returns:
+            ``(AppResult, ReplayHandle)`` 二元组。
+
+        Raises:
+            无。
+        """
+
+        return await self._host_executor.run_agent_and_wait_replayable(execution_contract)
+
+    async def replay(
+        self,
+        handle: ReplayHandle,
+        execution_contract: ExecutionContract,
+    ) -> tuple[AppResult, ReplayHandle]:
+        """带历史回放：转交给 ``Host.replay_agent_and_wait``。
+
+        Args:
+            handle: 上一次首发返回的回放句柄。
+            execution_contract: 用于本次回放的执行契约。
+
+        Returns:
+            ``(AppResult, ReplayHandle)`` 二元组；新句柄可继续追加 replay。
+
+        Raises:
+            无。
+        """
+
+        return await self._host_executor.replay_agent_and_wait(handle, execution_contract)
+
+    def discard(self, handle: ReplayHandle) -> None:
+        """释放未消费的 replay 句柄；转交给 ``Host.discard_replay_state``。
+
+        Args:
+            handle: 待释放的句柄。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        self._host_executor.discard_replay_state(handle)
 
 
 def _sanitize_company_meta_for_infer(company_meta: dict[str, str]) -> dict[str, str]:
@@ -231,7 +312,7 @@ class WritePipelineRunner:
         )
         self._prompt_runner = ScenePromptRunner(
             preparer=self._preparer,
-            contract_executor=host_executor.run_agent_and_wait,
+            contract_executor=_HostScenePromptContractExecutor(host_executor=host_executor),
             write_config=write_config,
         )
 

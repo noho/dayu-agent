@@ -89,6 +89,36 @@ class RepairOutputError(RuntimeError):
         self.raw_output = raw_output
 
 
+class EmptyOutputError(RuntimeError):
+    """场景输出为空或脏数据（抽不到代码块、长度过短等）。
+
+    专门用于 markdown 类 scene（write/overview/decision/regenerate/fix）
+    的输出校验：当模型只返回工具调用而无文本、或文本未包裹在合法 ```markdown```
+    代码块且长度过短时，由 ``parse_markdown_scene_output`` 抛出 ``ValueError``，
+    helper 再以本异常包裹，向上层传达「需要 replay 兜底」的语义。
+
+    Attributes:
+        raw_output: 模型返回的原始文本，便于失败时落盘留痕。
+    """
+
+    def __init__(self, message: str, *, raw_output: str) -> None:
+        """初始化空输出异常。
+
+        Args:
+            message: 异常描述。
+            raw_output: 模型返回的原始文本。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        super().__init__(message)
+        self.raw_output = raw_output
+
+
 class ConfirmOutputError(RuntimeError):
     """confirm 输出异常。
 

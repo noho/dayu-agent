@@ -496,3 +496,8 @@ class StubHostExecutor:
         """Stub：测试不验证 replay stash 清理路径，无操作满足协议即可。"""
 
         del session_id
+
+    def discard_replay_state(self, handle: ReplayHandle) -> None:
+        """Stub：测试不验证 replay stash 清理路径，无操作满足协议即可。"""
+
+        del handle

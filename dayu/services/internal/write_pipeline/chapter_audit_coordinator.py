@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from dayu.log import Log
@@ -30,7 +29,6 @@ from dayu.services.internal.write_pipeline.audit_rules import (
     _log_chapter_confirm_result,
     _log_chapter_confirm_start,
     _merge_confirmed_evidence_results,
-    _parse_audit_decision,
     _run_programmatic_audits,
 )
 from dayu.services.internal.write_pipeline.artifact_store import ArtifactStore, _build_phase_artifact_name
@@ -54,11 +52,7 @@ from dayu.services.internal.write_pipeline.models import (
 )
 from dayu.services.internal.write_pipeline.prompt_builder import PromptBuilder
 from dayu.services.internal.write_pipeline.scene_contract_preparer import SceneContractPreparer
-from dayu.services.internal.write_pipeline.scene_executor import (
-    ScenePromptRunner,
-    _LLM_RETRY_DELAY_SECONDS,
-    _LLM_RETRY_LIMIT,
-)
+from dayu.services.internal.write_pipeline.scene_executor import ScenePromptRunner
 from dayu.services.internal.write_pipeline.source_list_builder import extract_evidence_items
 
 MODULE = "APP.WRITE_PIPELINE"
@@ -571,9 +565,12 @@ class ChapterAuditCoordinator:
         audit_mode: str = "初始整章审计",
         repair_contract: dict[str, Any] | None = None,
     ) -> AuditDecision:
-        """调用审计 Agent 获取结构化审计结果。"""
+        """调用审计 Agent 获取结构化审计结果。
 
-        prepared_scene = self._preparer.get_or_create_audit_scene()
+        重试与 replay 兜底由 ``ScenePromptRunner.run_audit_prompt`` 统一负责，
+        本方法仅负责 prompt 渲染与转发，避免 helper 之外再保留一份手写 retry。
+        """
+
         audit_prompt = self._prompter.render_task_prompt(
             prompt_name="audit_facts_tone_json",
             prompt_inputs={
@@ -588,19 +585,7 @@ class ChapterAuditCoordinator:
                 "repair_contract": repair_contract or {},
             },
         )
-        last_error = RuntimeError("审计 Agent 未执行（不应到达此处）")
-        for attempt in range(_LLM_RETRY_LIMIT + 1):
-            result = self._prompt_runner.run_prepared_scene_prompt(prepared_scene=prepared_scene, prompt_text=audit_prompt)
-            if not result.errors:
-                return _parse_audit_decision(result.content)
-            last_error = RuntimeError(f"审计 Agent 执行失败: {result.errors}")
-            if attempt < _LLM_RETRY_LIMIT:
-                Log.warning(
-                    f"审计 Agent 调用失败，{_LLM_RETRY_DELAY_SECONDS}s 后重试 ({attempt + 1}/{_LLM_RETRY_LIMIT}): {result.errors}",
-                    module=MODULE,
-                )
-                time.sleep(_LLM_RETRY_DELAY_SECONDS)
-        raise last_error
+        return self._prompt_runner.run_audit_prompt(audit_prompt)
 
     def _confirm_evidence_violations(
         self,

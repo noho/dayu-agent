@@ -1160,6 +1160,22 @@ class DefaultHostExecutor(HostExecutorProtocol):
             for handle_id in stale:
                 self._replay_stash.pop(handle_id, None)
 
+    def discard_replay_state(self, handle: ReplayHandle) -> None:
+        """释放单个未消费的 replay 句柄对应的内存状态。
+
+        Args:
+            handle: 待释放的句柄；若 stash 中已不存在则静默跳过。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        with self._replay_stash_lock:
+            self._replay_stash.pop(handle.handle_id, None)
+
     async def _run_prepared_agent_stream(
         self,
         *,
