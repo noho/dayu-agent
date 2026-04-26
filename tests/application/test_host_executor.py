@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -25,6 +26,7 @@ from dayu.contracts.agent_execution import (
     ScenePreparationSpec,
 )
 from dayu.contracts.agent_types import AgentMessage
+from dayu.contracts.host_execution import ConcurrencyAcquirePolicy
 from dayu.contracts.run import RunCancelReason, RunState
 from dayu.execution.options import ConversationMemorySettings, ExecutionOptions
 from dayu.host.host import Host
@@ -32,8 +34,12 @@ from dayu.host.conversation_store import ConversationTranscript
 from dayu.host.host_execution import HostedRunContext, HostedRunSpec
 from dayu.host.executor import DefaultHostExecutor
 from dayu.host.prepared_turn import (
+    AcceptedAgentTurnSnapshot,
     PreparedAgentTurnSnapshot,
     PreparedConversationSessionSnapshot,
+    deserialize_accepted_agent_turn_snapshot,
+    deserialize_prepared_agent_turn_snapshot,
+    serialize_accepted_agent_turn_snapshot,
     serialize_prepared_agent_turn_snapshot,
 )
 from dayu.host.scene_preparer import PreparedAgentExecution
@@ -70,19 +76,38 @@ class _StubGovernor:
     def __init__(self) -> None:
         self.acquired: list[str] = []
         self.acquire_timeouts: list[float | None] = []
+        self.acquire_cancellation_tokens: list[executor_module.CancellationToken | None] = []
         self.released: list[str] = []
 
-    def acquire(self, lane: str, *, timeout: float | None = None) -> _Permit:
+    def acquire(
+        self,
+        lane: str,
+        *,
+        timeout: float | None = None,
+        cancellation_token: executor_module.CancellationToken | None = None,
+    ) -> _Permit:
         self.acquired.append(lane)
         self.acquire_timeouts.append(timeout)
+        self.acquire_cancellation_tokens.append(cancellation_token)
         return _Permit(permit_id=f"permit-{lane}", lane=lane)
 
     def acquire_many(
-        self, lanes: list[str], *, timeout: float | None = None
+        self,
+        lanes: list[str],
+        *,
+        timeout: float | None = None,
+        cancellation_token: executor_module.CancellationToken | None = None,
     ) -> list[_Permit]:
         """一次性拿齐多 lane 的测试实现：转发给 acquire 逐个累积。"""
 
-        return [self.acquire(lane_name, timeout=timeout) for lane_name in lanes]
+        return [
+            self.acquire(
+                lane_name,
+                timeout=timeout,
+                cancellation_token=cancellation_token,
+            )
+            for lane_name in lanes
+        ]
 
     def try_acquire(self, lane: str):
         del lane
@@ -196,6 +221,37 @@ def test_run_stream_manages_run_lifecycle_and_event_publish() -> None:
 
 
 @pytest.mark.unit
+def test_run_stream_uses_explicit_concurrency_timeout_policy() -> None:
+    """显式有限等待策略应覆盖 Host 默认 acquire timeout。"""
+
+    from tests.application.conftest import StubRunRegistry
+
+    run_registry = StubRunRegistry()
+    governor = _StubGovernor()
+    executor = DefaultHostExecutor(
+        run_registry=run_registry,
+        concurrency_governor=governor,  # type: ignore[arg-type]
+    )
+    spec = HostedRunSpec(
+        operation_name="prompt",
+        session_id="s1",
+        business_concurrency_lane="sec_download",
+        concurrency_acquire_policy=ConcurrencyAcquirePolicy.with_timeout(7.5),
+    )
+
+    async def _stream(_context: HostedRunContext):
+        yield AppEvent(type=AppEventType.CONTENT_DELTA, payload="hello", meta={})
+
+    async def _collect() -> None:
+        async for _event in executor.run_operation_stream(spec=spec, event_stream_factory=_stream):
+            pass
+
+    asyncio.run(_collect())
+
+    assert governor.acquire_timeouts == [7.5]
+
+
+@pytest.mark.unit
 def test_run_stream_marks_failed_when_acquire_many_raises_after_start_run() -> None:
     """start_run 成功后 acquire_many 抛异常时，run 必须被显式收敛为 FAILED。
 
@@ -212,9 +268,13 @@ def test_run_stream_marks_failed_when_acquire_many_raises_after_start_run() -> N
         """acquire_many 会抛 TimeoutError 的治理器。"""
 
         def acquire_many(
-            self, lanes: list[str], *, timeout: float | None = None
+            self,
+            lanes: list[str],
+            *,
+            timeout: float | None = None,
+            cancellation_token: executor_module.CancellationToken | None = None,
         ) -> list[_Permit]:
-            del lanes, timeout
+            del lanes, timeout, cancellation_token
             raise TimeoutError("acquire timed out")
 
     run_registry = StubRunRegistry()
@@ -1747,6 +1807,105 @@ def test_run_operation_uses_run_timeout_as_concurrency_acquire_budget() -> None:
 
 
 @pytest.mark.unit
+def test_run_operation_uses_unbounded_concurrency_acquire_policy() -> None:
+    """显式无限等待策略应把 acquire timeout 透传为 ``None``。"""
+
+    from tests.application.conftest import StubRunRegistry
+
+    run_registry = StubRunRegistry()
+    governor = _StubGovernor()
+    executor = DefaultHostExecutor(
+        run_registry=run_registry,
+        concurrency_governor=governor,  # type: ignore[arg-type]
+    )
+    spec = HostedRunSpec(
+        operation_name="write_pipeline",
+        session_id="s1",
+        business_concurrency_lane="sec_download",
+        concurrency_acquire_policy=ConcurrencyAcquirePolicy.unbounded(),
+    )
+
+    def _operation(_context: HostedRunContext) -> int:
+        """测试桩：直接返回。"""
+
+        return 1
+
+    result = executor.run_operation_sync(spec=spec, operation=_operation)
+
+    assert result == 1
+    assert governor.acquire_timeouts == [None]
+
+
+@pytest.mark.unit
+def test_run_operation_cancelled_during_concurrency_wait_returns_on_cancel() -> None:
+    """等待 permit 阶段收到取消请求时，同步 run 应收敛为 CANCELLED 并返回取消退出码。"""
+
+    from tests.application.conftest import StubRunRegistry
+
+    wait_started = threading.Event()
+
+    class _BlockingGovernor(_StubGovernor):
+        """在 acquire_many 阶段阻塞，直到取消令牌被触发。"""
+
+        def acquire_many(
+            self,
+            lanes: list[str],
+            *,
+            timeout: float | None = None,
+            cancellation_token: executor_module.CancellationToken | None = None,
+        ) -> list[_Permit]:
+            del lanes, timeout
+            if cancellation_token is None:
+                raise AssertionError("测试前提失败：executor 未传入 cancellation_token")
+            self.acquire_cancellation_tokens.append(cancellation_token)
+            wait_started.set()
+            cancellation_token.wait(5.0)
+            cancellation_token.raise_if_cancelled()
+            raise AssertionError("测试前提失败：等待未被取消")
+
+    run_registry = StubRunRegistry()
+    governor = _BlockingGovernor()
+    executor = DefaultHostExecutor(
+        run_registry=run_registry,
+        concurrency_governor=governor,  # type: ignore[arg-type]
+    )
+    spec = HostedRunSpec(
+        operation_name="write_pipeline",
+        session_id="s1",
+        business_concurrency_lane="sec_download",
+        concurrency_acquire_policy=ConcurrencyAcquirePolicy.unbounded(),
+    )
+    result_holder: dict[str, int] = {}
+
+    def _run_sync_operation() -> None:
+        """在线程中执行同步 run，等待主线程触发取消。"""
+
+        result_holder["result"] = executor.run_operation_sync(
+            spec=spec,
+            operation=lambda _context: pytest.fail("取消发生在 acquire 阶段，不应进入业务回调"),
+            on_cancel=lambda: 130,
+        )
+
+    worker = threading.Thread(target=_run_sync_operation, name="test-host-cancel-during-acquire")
+    worker.start()
+    assert wait_started.wait(1.0) is True
+    [current_run] = list(run_registry._runs.values())
+    assert run_registry.request_cancel(
+        current_run.run_id,
+        cancel_reason=RunCancelReason.USER_CANCELLED,
+    ) is True
+    worker.join(timeout=3.0)
+
+    assert worker.is_alive() is False
+    assert result_holder["result"] == 130
+    assert governor.acquire_cancellation_tokens[0] is not None
+    final_run = run_registry.get_run(current_run.run_id)
+    assert final_run is not None
+    assert final_run.state == RunState.CANCELLED
+    assert final_run.cancel_reason == RunCancelReason.USER_CANCELLED
+
+
+@pytest.mark.unit
 def test_host_executor_finish_cancel_and_pending_turn_reconcile_helpers() -> None:
     """验证取消收口与 pending turn reconcile 的辅助分支。"""
 
@@ -2441,3 +2600,228 @@ def test_resume_pending_turn_stream_translates_session_closed_error_at_acquire()
     surviving = pending_turn_store.get_pending_turn_record(seeded.pending_turn_id)
     assert surviving is not None
     assert surviving.state is PendingConversationTurnState.PREPARED_BY_HOST
+
+
+async def _collect_resume_events(
+    *,
+    host: Host,
+    pending_turn_id: str,
+    session_id: str,
+) -> list[AppEvent]:
+    """收集一次 resume_pending_turn_stream 的全部事件。"""
+
+    events: list[AppEvent] = []
+    async for event in host.resume_pending_turn_stream(
+        pending_turn_id=pending_turn_id,
+        session_id=session_id,
+    ):
+        events.append(event)
+    return events
+
+
+@pytest.mark.unit
+def test_resume_pending_turn_stream_releases_resuming_lease_when_cancelled_during_acquire() -> None:
+    """resume 若在等待 permit 时被取消，必须释放已持有的 RESUMING lease。"""
+
+    from tests.application.conftest import (
+        StubPendingTurnStore,
+        StubRunRegistry,
+        StubSessionRegistry,
+    )
+
+    class _BlockingGovernor(_StubGovernor):
+        """在 acquire_many 阶段阻塞，直到取消令牌被触发。"""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.wait_started = threading.Event()
+
+        def acquire_many(
+            self,
+            lanes: list[str],
+            *,
+            timeout: float | None = None,
+            cancellation_token: executor_module.CancellationToken | None = None,
+        ) -> list[_Permit]:
+            del lanes, timeout
+            if cancellation_token is None:
+                raise AssertionError("测试前提失败：executor 未传入 cancellation_token")
+            self.acquire_cancellation_tokens.append(cancellation_token)
+            self.wait_started.set()
+            cancellation_token.wait(5.0)
+            cancellation_token.raise_if_cancelled()
+            raise AssertionError("测试前提失败：等待未被取消")
+
+    class _StubScenePreparation:
+        async def prepare(
+            self,
+            execution_contract: ExecutionContract,
+            run_context: HostedRunContext,
+        ) -> PreparedAgentExecution:
+            del execution_contract, run_context
+            raise AssertionError("resume 路径不应走 prepare")
+
+        async def restore_prepared_execution(
+            self,
+            prepared_turn: PreparedAgentTurnSnapshot,
+            run_context: HostedRunContext,
+        ) -> AgentInput:
+            del prepared_turn, run_context
+            raise AssertionError("取消发生在 acquire 阶段，不应进入 restore_prepared_execution")
+
+    session_registry = StubSessionRegistry()
+    session_registry.create_session(source=cast("object", "interactive"), session_id="s-resume-cancel")  # type: ignore[arg-type]
+    run_registry = StubRunRegistry()
+    pending_turn_store = StubPendingTurnStore()
+    governor = _BlockingGovernor()
+
+    execution_contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="interactive",
+        host_policy=ExecutionHostPolicy(session_key="s-resume-cancel", resumable=True),
+        preparation_spec=ScenePreparationSpec(),
+        message_inputs=ExecutionMessageInputs(user_message="问题-resume-cancel"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
+        execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
+        metadata={"delivery_channel": "interactive"},
+    )
+    prepared_execution = _build_prepared_execution(execution_contract=execution_contract)
+    prepared_turn = prepared_execution.resume_snapshot
+    assert prepared_turn is not None
+    prepared_turn_json = json.dumps(
+        serialize_prepared_agent_turn_snapshot(prepared_turn),
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+    source_run = run_registry.register_run(
+        session_id="s-resume-cancel",
+        service_type="chat_turn",
+        scene_name="interactive",
+    )
+    run_registry.start_run(source_run.run_id)
+    run_registry.mark_cancelled(source_run.run_id, cancel_reason=RunCancelReason.TIMEOUT)
+
+    seeded = pending_turn_store.seed_pending_turn(
+        session_id="s-resume-cancel",
+        scene_name="interactive",
+        user_text="问题-resume-cancel",
+        source_run_id=source_run.run_id,
+        resumable=True,
+        resume_source_json=prepared_turn_json,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+
+    executor = DefaultHostExecutor(
+        run_registry=run_registry,  # type: ignore[arg-type]
+        pending_turn_store=pending_turn_store,  # type: ignore[arg-type]
+        concurrency_governor=governor,  # type: ignore[arg-type]
+        scene_preparation=_StubScenePreparation(),  # type: ignore[arg-type]
+    )
+    host = Host(
+        executor=executor,
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=run_registry,  # type: ignore[arg-type]
+        pending_turn_store=pending_turn_store,  # type: ignore[arg-type]
+    )
+
+    event_holder: dict[str, list[AppEvent]] = {}
+    error_holder: dict[str, BaseException] = {}
+
+    def _run_resume_in_thread() -> None:
+        """在线程中跑 resume 流，主线程负责注入取消请求。"""
+
+        try:
+            event_holder["events"] = asyncio.run(
+                _collect_resume_events(
+                    host=host,
+                    pending_turn_id=seeded.pending_turn_id,
+                    session_id="s-resume-cancel",
+                )
+            )
+        except BaseException as exc:  # noqa: BLE001
+            error_holder["error"] = exc
+
+    worker = threading.Thread(
+        target=_run_resume_in_thread,
+        name="test-resume-cancel-during-acquire",
+    )
+    worker.start()
+    assert governor.wait_started.wait(1.0) is True
+    resumed_runs = [
+        run
+        for run in run_registry.list_runs(session_id="s-resume-cancel")
+        if run.run_id != source_run.run_id
+    ]
+    assert len(resumed_runs) == 1
+    assert run_registry.request_cancel(
+        resumed_runs[0].run_id,
+        cancel_reason=RunCancelReason.USER_CANCELLED,
+    ) is True
+    worker.join(timeout=3.0)
+
+    assert worker.is_alive() is False
+    assert "error" not in error_holder
+    events = event_holder["events"]
+
+    assert [event.type for event in events] == [AppEventType.CANCELLED]
+    surviving = pending_turn_store.get_pending_turn_record(seeded.pending_turn_id)
+    assert surviving is not None
+    assert surviving.state is PendingConversationTurnState.PREPARED_BY_HOST
+    assert surviving.pre_resume_state is None
+
+
+@pytest.mark.unit
+def test_prepared_turn_snapshot_rejects_missing_concurrency_policy() -> None:
+    """prepared snapshot 缺失并发等待策略时必须显式失败。"""
+
+    prepared_turn = PreparedAgentTurnSnapshot(
+        service_name="chat_turn",
+        scene_name="interactive",
+        metadata={"delivery_channel": "interactive"},
+        business_concurrency_lane="write_chapter",
+        concurrency_acquire_policy=ConcurrencyAcquirePolicy.unbounded(),
+        timeout_ms=None,
+        resumable=True,
+        system_prompt="sys",
+        messages=[{"role": "user", "content": "hi"}],
+        agent_create_args=AgentCreateArgs(runner_type="openai", model_name="test-model"),
+        selected_toolsets=(),
+        execution_permissions=ExecutionPermissions(),
+        toolset_configs=(),
+        trace_settings=None,
+        conversation_memory_settings=ConversationMemorySettings(),
+    )
+    payload = serialize_prepared_agent_turn_snapshot(prepared_turn)
+    payload.pop("concurrency_acquire_policy", None)
+
+    with pytest.raises(ValueError, match="concurrency_acquire_policy"):
+        deserialize_prepared_agent_turn_snapshot(payload)
+
+
+@pytest.mark.unit
+def test_accepted_turn_snapshot_rejects_missing_concurrency_policy() -> None:
+    """accepted snapshot 的 host_policy 缺失并发等待策略时必须显式失败。"""
+
+    snapshot = AcceptedAgentTurnSnapshot(
+        service_name="write_pipeline",
+        scene_name="write",
+        host_policy=ExecutionHostPolicy(
+            session_key="session-1",
+            business_concurrency_lane="write_chapter",
+            concurrency_acquire_policy=ConcurrencyAcquirePolicy.unbounded(),
+            timeout_ms=None,
+            resumable=True,
+        ),
+        preparation_spec=ScenePreparationSpec(),
+        message_inputs=ExecutionMessageInputs(user_message="请继续"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
+        execution_options=ExecutionOptions(),
+        metadata={"delivery_channel": "interactive"},
+    )
+    payload = serialize_accepted_agent_turn_snapshot(snapshot)
+    host_policy_payload = cast(dict[str, object], payload["host_policy"])
+    host_policy_payload.pop("concurrency_acquire_policy", None)
+
+    with pytest.raises(ValueError, match="host_policy.concurrency_acquire_policy"):
+        deserialize_accepted_agent_turn_snapshot(payload)

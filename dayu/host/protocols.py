@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Protocol, runtime_checkable
 
+from dayu.contracts.cancellation import CancellationToken
 from dayu.contracts.events import AppEvent, PublishedRunEventProtocol
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, ReplyOutboxSubmitRequest
@@ -540,18 +541,26 @@ class ConcurrencyGovernorProtocol(Protocol):
     基于 SQLite permits 表实现跨进程信号量语义。
     """
 
-    def acquire(self, lane: str, *, timeout: float | None = None) -> ConcurrencyPermit:
+    def acquire(
+        self,
+        lane: str,
+        *,
+        timeout: float | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> ConcurrencyPermit:
         """获取并发许可，超时前阻塞等待。
 
         Args:
             lane: 并发通道名。
             timeout: 最大等待秒数，None 表示无限等待。
+            cancellation_token: 可选取消令牌；若等待期间被触发，必须尽快结束等待。
 
         Returns:
             并发许可凭证。
 
         Raises:
             TimeoutError: 等待超时。
+            CancelledError: 等待期间收到取消请求。
         """
         ...
 
@@ -560,6 +569,7 @@ class ConcurrencyGovernorProtocol(Protocol):
         lanes: list[str],
         *,
         timeout: float | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> list[ConcurrencyPermit]:
         """原子获取多个 lane 的并发许可，要么全拿要么全不拿。
 
@@ -570,6 +580,7 @@ class ConcurrencyGovernorProtocol(Protocol):
             lanes: 需要 acquire 的 lane 名列表；调用方应保证已去重并按字母序排序，
                 以在跨 run 之间使用一致的顺序，规避潜在死锁。
             timeout: 最大等待秒数，None 表示无限等待。
+            cancellation_token: 可选取消令牌；若等待期间被触发，必须尽快结束等待。
 
         Returns:
             与 ``lanes`` 对应顺序的许可列表。
@@ -577,6 +588,7 @@ class ConcurrencyGovernorProtocol(Protocol):
         Raises:
             TimeoutError: 等待超时；此时不持有任何 permit。
             ValueError: 出现未配置的 lane 名时抛出；此时不持有任何 permit。
+            CancelledError: 等待期间收到取消请求；此时不持有任何 permit。
         """
         ...
 

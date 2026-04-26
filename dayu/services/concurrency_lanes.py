@@ -70,7 +70,8 @@ def resolve_hosted_run_concurrency_lane(operation_name: str) -> str | None:
         operation_name: Service 提交的操作名。
 
     Returns:
-        - ``"write_pipeline"`` → ``LANE_WRITE_CHAPTER``
+        - ``"write_pipeline"`` → ``None``。顶层 orchestration 不占业务 lane，
+          真实章节 scene 会在 ``ExecutionContract`` 侧声明 ``write_chapter``。
         - ``"fins_download"`` → ``LANE_SEC_DOWNLOAD``
         - 其他宿主操作 → ``None``，由 Host 根据调用路径自动补齐自治 lane。
 
@@ -79,8 +80,6 @@ def resolve_hosted_run_concurrency_lane(operation_name: str) -> str | None:
     """
 
     normalized = (operation_name or "").strip()
-    if normalized == "write_pipeline":
-        return LANE_WRITE_CHAPTER
     if normalized == f"fins_{FinsCommandName.DOWNLOAD}":
         return LANE_SEC_DOWNLOAD
     return None

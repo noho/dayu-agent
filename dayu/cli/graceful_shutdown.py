@@ -1,7 +1,7 @@
 """CLI 优雅退出钩子。
 
 模块职责：
-- 在 CLI 同步命令入口注册 SIGTERM / SIGHUP 信号处理器，
+- 在 CLI 同步命令入口注册 SIGINT / SIGTERM / SIGHUP 信号处理器，
   让收到终止信号的进程能把同 owner_pid 的活跃 run 主动收敛为 CANCELLED，
   而不是留给下一次启动的 cleanup 误判为 UNSETTLED orphan。
 - 通过 `atexit.register` 追加兜底，覆盖普通异常退出路径。
@@ -88,7 +88,7 @@ class _ShutdownCoordinator:
         return cancelled
 
 
-_SHUTDOWN_SIGNALS: tuple[str, ...] = ("SIGTERM", "SIGHUP")
+_SHUTDOWN_SIGNALS: tuple[str, ...] = ("SIGINT", "SIGTERM", "SIGHUP")
 
 
 def _resolve_signals() -> list[signal.Signals]:
@@ -114,7 +114,7 @@ def _resolve_signals() -> list[signal.Signals]:
 
 @contextlib.contextmanager
 def install_cli_signal_handlers(host: _HostShutdownHook) -> Iterator[None]:
-    """为 CLI 同步命令安装 SIGTERM / SIGHUP + atexit 优雅退出钩子。
+    """为 CLI 同步命令安装 SIGINT / SIGTERM / SIGHUP + atexit 优雅退出钩子。
 
     Args:
         host: Host 聚合根。

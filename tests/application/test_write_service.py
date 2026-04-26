@@ -16,6 +16,7 @@ from dayu.contracts.session import SessionSource
 from dayu.execution.options import ExecutionOptions
 from dayu.execution.options import ResolvedExecutionOptions, build_base_execution_options
 from dayu.host.host import Host
+from dayu.contracts.host_execution import ConcurrencyAcquirePolicy
 from dayu.host.host_execution import HostedRunContext, HostedRunSpec
 from dayu.host.protocols import HostedExecutionGatewayProtocol, HostGovernanceProtocol
 from dayu.host.protocols import RunRegistryProtocol
@@ -329,7 +330,8 @@ def test_write_service_runs_pipeline_via_host_executor(monkeypatch: pytest.Monke
     assert host_executor.sync_call_count == 1
     assert host_executor.last_spec is not None
     assert host_executor.last_spec.operation_name == "write_pipeline"
-    assert host_executor.last_spec.business_concurrency_lane == "write_chapter"
+    assert host_executor.last_spec.business_concurrency_lane is None
+    assert host_executor.last_spec.concurrency_acquire_policy == ConcurrencyAcquirePolicy.unbounded()
     assert host_executor.last_spec.metadata == {}
 
     assert isinstance(service, WriteServiceProtocol)

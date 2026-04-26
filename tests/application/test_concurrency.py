@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+import dayu.host.concurrency as concurrency_module
+from dayu.contracts.cancellation import CancelledError, CancellationToken
 from dayu.host.concurrency import SQLiteConcurrencyGovernor
 from dayu.host.host_store import HostStore
 
@@ -215,6 +217,59 @@ class TestAcquireMany:
         governor.release(blocker)
         permits = governor.acquire_many(["llm_api", "sec_download"], timeout=1.0)
         assert [p.lane for p in permits] == ["llm_api", "sec_download"]
+
+    @pytest.mark.unit
+    def test_acquire_many_raises_cancelled_error_when_wait_is_cancelled(
+        self,
+        governor: SQLiteConcurrencyGovernor,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """等待 permit 时若取消令牌触发，应立刻退出而不是继续阻塞。"""
+
+        blocker = governor.try_acquire("sec_download")
+        assert blocker is not None
+        token = CancellationToken()
+
+        def _cancel_on_wait(_timeout: float | None = None) -> bool:
+            """测试桩：首次等待时立刻触发取消。"""
+
+            token.cancel()
+            return True
+
+        monkeypatch.setattr(token, "wait", _cancel_on_wait)
+
+        with pytest.raises(CancelledError, match="操作已被取消"):
+            governor.acquire_many(
+                ["llm_api", "sec_download"],
+                timeout=None,
+                cancellation_token=token,
+            )
+
+    @pytest.mark.unit
+    def test_acquire_many_reaps_dead_pid_permit_while_waiting(
+        self,
+        governor: SQLiteConcurrencyGovernor,
+        host_store: HostStore,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """阻塞等待期间应能主动回收 dead-PID stale permit，而非依赖外部预清理。"""
+
+        blocker = governor.try_acquire("sec_download")
+        assert blocker is not None
+        conn = host_store.get_connection()
+        conn.execute(
+            "UPDATE permits SET owner_pid = ? WHERE permit_id = ?",
+            (999999, blocker.permit_id),
+        )
+        conn.commit()
+        monkeypatch.setattr(concurrency_module, "_POLL_INTERVAL", 0.0)
+        monkeypatch.setattr(concurrency_module, "_STALE_PERMIT_REAP_INTERVAL_SECONDS", 0.0)
+
+        permits = governor.acquire_many(["llm_api", "sec_download"], timeout=1.0)
+
+        assert [permit.lane for permit in permits] == ["llm_api", "sec_download"]
+        status = governor.get_lane_status("sec_download")
+        assert status.active == 1
 
 
 class TestCleanupStalePermits:

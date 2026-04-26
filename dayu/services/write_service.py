@@ -8,7 +8,7 @@ from typing import Callable
 
 from dayu.contracts.session import SessionSource
 from dayu.execution.options import ExecutionOptions
-from dayu.contracts.host_execution import HostedRunSpec
+from dayu.contracts.host_execution import ConcurrencyAcquirePolicy, HostedRunSpec
 from dayu.host.protocols import HostedExecutionGatewayProtocol, HostGovernanceProtocol
 from dayu.services.concurrency_lanes import resolve_hosted_run_concurrency_lane
 from dayu.services.contracts import WriteRequest
@@ -58,6 +58,7 @@ class WriteService(WriteServiceProtocol):
             session_id=session.session_id,
             scene_name=WriteSceneName.WRITE,
             business_concurrency_lane=resolve_hosted_run_concurrency_lane("write_pipeline"),
+            concurrency_acquire_policy=ConcurrencyAcquirePolicy.unbounded(),
         )
         return self.host.run_operation_sync(
             spec=spec,

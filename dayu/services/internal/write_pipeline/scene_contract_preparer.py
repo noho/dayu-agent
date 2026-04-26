@@ -15,6 +15,7 @@ import threading
 from typing import Callable
 
 from dayu.contracts.agent_execution import ExecutionContract, ReplayHandle
+from dayu.contracts.host_execution import ConcurrencyAcquirePolicy
 from dayu.contracts.infrastructure import ConfigLoaderProtocol
 from dayu.execution.options import ExecutionOptions
 from dayu.execution.runtime_config import OpenAIRunnerRuntimeConfig
@@ -499,6 +500,7 @@ class SceneContractPreparer:
             user_message=user_message,
             session_key=self._host_session_id,
             business_concurrency_lane=resolve_contract_concurrency_lane(prepared_scene.scene_name),
+            concurrency_acquire_policy=ConcurrencyAcquirePolicy.unbounded(),
             execution_options=self._build_execution_options_for_scene(prepared_scene.scene_name),
             timeout_ms=None,
             resumable=prepared_scene.default_resumable,

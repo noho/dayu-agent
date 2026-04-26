@@ -14,6 +14,7 @@ from dayu.contracts.agent_execution import (
     ScenePreparationSpec,
 )
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
+from dayu.contracts.host_execution import ConcurrencyAcquirePolicy
 from dayu.execution.options import ExecutionOptions, resolve_web_tools_config_from_toolset_configs
 from dayu.prompting.prompt_contribution_slots import select_prompt_contributions
 
@@ -68,6 +69,7 @@ def prepare_host_policy(
     *,
     session_key: str | None,
     business_concurrency_lane: str | None,
+    concurrency_acquire_policy: ConcurrencyAcquirePolicy | None = None,
     timeout_ms: int | None = None,
     resumable: bool = False,
 ) -> ExecutionHostPolicy:
@@ -76,6 +78,11 @@ def prepare_host_policy(
     return ExecutionHostPolicy(
         session_key=session_key,
         business_concurrency_lane=business_concurrency_lane,
+        concurrency_acquire_policy=(
+            concurrency_acquire_policy
+            if concurrency_acquire_policy is not None
+            else ConcurrencyAcquirePolicy.use_host_default()
+        ),
         timeout_ms=timeout_ms,
         resumable=resumable,
     )
@@ -125,6 +132,7 @@ def prepare_execution_contract(
     user_message: str,
     session_key: str | None,
     business_concurrency_lane: str | None,
+    concurrency_acquire_policy: ConcurrencyAcquirePolicy | None = None,
     metadata: ExecutionDeliveryContext | None = None,
     selected_toolsets: tuple[str, ...] = (),
     execution_permissions: ExecutionPermissions | None = None,
@@ -149,6 +157,7 @@ def prepare_execution_contract(
         host_policy=prepare_host_policy(
             session_key=session_key,
             business_concurrency_lane=business_concurrency_lane,
+            concurrency_acquire_policy=concurrency_acquire_policy,
             timeout_ms=timeout_ms,
             resumable=resumable,
         ),

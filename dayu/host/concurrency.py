@@ -9,6 +9,7 @@ import os
 import time
 import uuid
 
+from dayu.contracts.cancellation import CancelledError, CancellationToken
 from dayu.host.host_store import HostStore, write_transaction
 from dayu.host.protocols import ConcurrencyGovernorProtocol, ConcurrencyPermit, LaneStatus
 from dayu.process_liveness import is_pid_alive
@@ -24,6 +25,9 @@ DEFAULT_LANE_CONFIG: dict[str, int] = {
 
 # 轮询间隔（秒）
 _POLL_INTERVAL = 0.1
+
+# 在阻塞等待 permit 时，最多每隔这么久做一次 dead-PID stale permit 回收。
+_STALE_PERMIT_REAP_INTERVAL_SECONDS = 5.0
 
 
 from dayu.host._datetime_utils import now_utc as _now_utc
@@ -51,29 +55,66 @@ class SQLiteConcurrencyGovernor(ConcurrencyGovernorProtocol):
         self._host_store = host_store
         self._lane_config = lane_config or dict(DEFAULT_LANE_CONFIG)
 
-    def acquire(self, lane: str, *, timeout: float | None = None) -> ConcurrencyPermit:
-        """获取并发许可，超时前轮询等待。"""
+    def acquire(
+        self,
+        lane: str,
+        *,
+        timeout: float | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> ConcurrencyPermit:
+        """获取并发许可，超时前轮询等待。
 
-        deadline = None if timeout is None else time.monotonic() + timeout
+        Args:
+            lane: 目标并发通道名。
+            timeout: 最大等待秒数；`None` 表示无限等待。
+            cancellation_token: 可选取消令牌；等待期间若被触发，则立即结束等待。
+
+        Returns:
+            成功获取到的并发许可。
+
+        Raises:
+            TimeoutError: 达到等待超时仍未拿到 permit。
+            CancelledError: 等待期间收到取消请求。
+            ValueError: lane 未配置时由 `try_acquire()` 透传。
+        """
+
+        deadline = _build_deadline(timeout)
+        last_reap_started_at = time.monotonic()
         while True:
+            _raise_if_cancelled(cancellation_token)
             permit = self.try_acquire(lane)
             if permit is not None:
                 return permit
-            if deadline is not None and time.monotonic() >= deadline:
+            if _is_deadline_reached(deadline):
                 raise TimeoutError(
                     f"获取并发许可超时: lane={lane}, timeout={timeout}s"
                 )
-            time.sleep(_POLL_INTERVAL)
+            last_reap_started_at = self._maybe_reap_stale_permits(last_reap_started_at)
+            _wait_for_retry(deadline=deadline, cancellation_token=cancellation_token)
 
     def acquire_many(
         self,
         lanes: list[str],
         *,
         timeout: float | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> list[ConcurrencyPermit]:
         """原子获取多 lane 许可：单事务内全部检查+全部写入，要么全拿要么全不拿。
 
         单 lane 场景退化为单 INSERT，与 :meth:`try_acquire` 语义一致。
+
+        Args:
+            lanes: 待申请的 lane 名列表。
+            timeout: 最大等待秒数；`None` 表示无限等待。
+            cancellation_token: 可选取消令牌；等待期间若被触发，则立即结束等待。
+
+        Returns:
+            与 `lanes` 同序的 permit 列表。
+
+        Raises:
+            TimeoutError: 达到等待超时仍未拿到 permit。
+            CancelledError: 等待期间收到取消请求。
+            ValueError: 任一 lane 未配置时抛出。
         """
 
         if not lanes:
@@ -82,16 +123,19 @@ class SQLiteConcurrencyGovernor(ConcurrencyGovernorProtocol):
             if lane_name not in self._lane_config:
                 raise ValueError(f"未配置的并发通道: {lane_name}")
 
-        deadline = None if timeout is None else time.monotonic() + timeout
+        deadline = _build_deadline(timeout)
+        last_reap_started_at = time.monotonic()
         while True:
+            _raise_if_cancelled(cancellation_token)
             permits = self._try_acquire_many(lanes)
             if permits is not None:
                 return permits
-            if deadline is not None and time.monotonic() >= deadline:
+            if _is_deadline_reached(deadline):
                 raise TimeoutError(
                     f"获取多 lane 并发许可超时: lanes={lanes}, timeout={timeout}s"
                 )
-            time.sleep(_POLL_INTERVAL)
+            last_reap_started_at = self._maybe_reap_stale_permits(last_reap_started_at)
+            _wait_for_retry(deadline=deadline, cancellation_token=cancellation_token)
 
     def _try_acquire_many(self, lanes: list[str]) -> list[ConcurrencyPermit] | None:
         """在单个 BEGIN IMMEDIATE 事务内尝试一次性拿齐全部 lane。
@@ -234,6 +278,110 @@ class SQLiteConcurrencyGovernor(ConcurrencyGovernorProtocol):
                 )
 
         return stale_ids
+
+    def _maybe_reap_stale_permits(self, last_reap_started_at: float) -> float:
+        """在阻塞等待期间按节流频率回收 dead-PID stale permit。
+
+        Args:
+            last_reap_started_at: 上一次启动回收时的 monotonic 时间。
+
+        Returns:
+            最新一次回收启动时间；若本轮未触发回收，则原样返回入参。
+
+        Raises:
+            无。回收失败时静默降级到下一轮重试，避免把治理噪声放大成业务失败。
+        """
+
+        now = time.monotonic()
+        if now - last_reap_started_at < _STALE_PERMIT_REAP_INTERVAL_SECONDS:
+            return last_reap_started_at
+        try:
+            self.cleanup_stale_permits()
+        except Exception:
+            return now
+        return now
+
+
+def _build_deadline(timeout: float | None) -> float | None:
+    """根据超时秒数构造 monotonic deadline。
+
+    Args:
+        timeout: 最大等待秒数；`None` 表示无限等待。
+
+    Returns:
+        绝对 monotonic deadline；无限等待时返回 `None`。
+
+    Raises:
+        无。
+    """
+
+    if timeout is None:
+        return None
+    return time.monotonic() + timeout
+
+
+def _is_deadline_reached(deadline: float | None) -> bool:
+    """判断当前等待是否已经到达 deadline。
+
+    Args:
+        deadline: 绝对 monotonic deadline；`None` 表示无限等待。
+
+    Returns:
+        已到达或超过 deadline 时返回 `True`，否则返回 `False`。
+
+    Raises:
+        无。
+    """
+
+    return deadline is not None and time.monotonic() >= deadline
+
+
+def _raise_if_cancelled(cancellation_token: CancellationToken | None) -> None:
+    """在取消令牌已触发时抛出协作式取消异常。
+
+    Args:
+        cancellation_token: 可选取消令牌。
+
+    Returns:
+        无。
+
+    Raises:
+        CancelledError: 取消令牌已触发时抛出。
+    """
+
+    if cancellation_token is not None:
+        cancellation_token.raise_if_cancelled()
+
+
+def _wait_for_retry(
+    *,
+    deadline: float | None,
+    cancellation_token: CancellationToken | None,
+) -> None:
+    """在下一轮 permit 尝试前等待一小段时间，并对取消保持敏感。
+
+    Args:
+        deadline: 当前等待的绝对超时边界；`None` 表示无限等待。
+        cancellation_token: 可选取消令牌。
+
+    Returns:
+        无。
+
+    Raises:
+        CancelledError: 等待期间收到取消请求。
+    """
+
+    wait_seconds = _POLL_INTERVAL
+    if deadline is not None:
+        remaining_seconds = max(0.0, deadline - time.monotonic())
+        wait_seconds = min(wait_seconds, remaining_seconds)
+    if wait_seconds <= 0:
+        return
+    if cancellation_token is None:
+        time.sleep(wait_seconds)
+        return
+    if cancellation_token.wait(wait_seconds):
+        raise CancelledError("操作已被取消")
 
 
 __all__ = ["DEFAULT_LANE_CONFIG", "HOST_AGENT_LANE", "SQLiteConcurrencyGovernor"]

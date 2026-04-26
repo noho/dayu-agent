@@ -10,9 +10,9 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
-from typing import Any, TypeAlias, cast
+from typing import Any, Literal, TypeAlias, cast
 
 from dayu.contracts.agent_execution import (
     AcceptedInfrastructureSpec,
@@ -30,6 +30,7 @@ from dayu.contracts.agent_execution import (
 )
 from dayu.contracts.agent_types import AgentMessage, AgentTraceIdentity
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
+from dayu.contracts.host_execution import ConcurrencyAcquirePolicy
 from dayu.contracts.model_config import RunnerParams
 from dayu.contracts.toolset_config import (
     ToolsetConfigSnapshot,
@@ -99,6 +100,9 @@ class PreparedAgentTurnSnapshot:
     toolset_configs: tuple[ToolsetConfigSnapshot, ...]
     trace_settings: TraceSettings | None
     conversation_memory_settings: ConversationMemorySettings
+    concurrency_acquire_policy: ConcurrencyAcquirePolicy = field(
+        default_factory=ConcurrencyAcquirePolicy.use_host_default
+    )
     trace_identity: AgentTraceIdentity | None = None
     conversation_session: PreparedConversationSessionSnapshot | None = None
 
@@ -175,6 +179,12 @@ def deserialize_prepared_agent_turn_snapshot(
     scene_name = _normalize_required_text(payload.get("scene_name"), field_name="scene_name")
     system_prompt = str(payload.get("system_prompt") or "")
     business_concurrency_lane = _normalize_optional_text(payload.get("business_concurrency_lane"))
+    concurrency_acquire_policy = _parse_concurrency_acquire_policy(
+        _require_object(
+            payload.get("concurrency_acquire_policy"),
+            field_name="concurrency_acquire_policy",
+        )
+    )
     timeout_ms = _coerce_optional_int(payload.get("timeout_ms"), field_name="timeout_ms")
     resumable = bool(payload.get("resumable"))
     metadata = normalize_execution_delivery_context(_as_object(payload.get("metadata")))
@@ -194,6 +204,7 @@ def deserialize_prepared_agent_turn_snapshot(
         scene_name=scene_name,
         metadata=metadata,
         business_concurrency_lane=business_concurrency_lane,
+        concurrency_acquire_policy=concurrency_acquire_policy,
         timeout_ms=timeout_ms,
         resumable=resumable,
         system_prompt=system_prompt,
@@ -272,6 +283,29 @@ def _as_object(value: PendingTurnRawValue) -> dict[str, PendingTurnSnapshotValue
     return cast(dict[str, PendingTurnSnapshotValue], value)
 
 
+def _require_object(
+    value: PendingTurnRawValue,
+    *,
+    field_name: str,
+) -> dict[str, PendingTurnSnapshotValue]:
+    """把必填字段收窄为 JSON object。
+
+    Args:
+        value: 待校验的原始值。
+        field_name: 字段名，仅用于错误提示。
+
+    Returns:
+        规范化后的 JSON object。
+
+    Raises:
+        ValueError: 值不是 JSON object 时抛出。
+    """
+
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} 必须是 JSON object")
+    return cast(dict[str, PendingTurnSnapshotValue], value)
+
+
 def _snapshot_optional_object(value: PendingTurnRawValue) -> dict[str, PendingTurnSnapshotValue] | None:
     """把值收窄为可选 JSON object。"""
 
@@ -330,8 +364,48 @@ def _parse_execution_host_policy(value: dict[str, PendingTurnSnapshotValue]) -> 
     return ExecutionHostPolicy(
         session_key=_normalize_optional_text(value.get("session_key")),
         business_concurrency_lane=_normalize_optional_text(value.get("business_concurrency_lane")),
+        concurrency_acquire_policy=_parse_concurrency_acquire_policy(
+            _require_object(
+                value.get("concurrency_acquire_policy"),
+                field_name="host_policy.concurrency_acquire_policy",
+            )
+        ),
         timeout_ms=_coerce_optional_int(value.get("timeout_ms"), field_name="timeout_ms"),
         resumable=bool(value.get("resumable", False)),
+    )
+
+
+def _parse_concurrency_acquire_policy(
+    value: dict[str, PendingTurnSnapshotValue],
+) -> ConcurrencyAcquirePolicy:
+    """解析并发 permit 等待策略。
+
+    Args:
+        value: 序列化后的等待策略对象。
+
+    Returns:
+        反序列化后的等待策略。
+
+    Raises:
+        ValueError: 字段值非法时抛出。
+    """
+
+    timeout_seconds_raw = value.get("timeout_seconds")
+    timeout_seconds = (
+        None
+        if timeout_seconds_raw is None
+        else _coerce_optional_float(
+            timeout_seconds_raw,
+            field_name="concurrency_acquire_policy.timeout_seconds",
+        )
+    )
+    mode = cast(
+        Literal["host_default", "timeout", "unbounded"],
+        _normalize_required_text(value.get("mode"), field_name="concurrency_acquire_policy.mode"),
+    )
+    return ConcurrencyAcquirePolicy(
+        mode=mode,
+        timeout_seconds=timeout_seconds,
     )
 
 

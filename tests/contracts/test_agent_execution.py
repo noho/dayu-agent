@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import pytest
 
@@ -27,6 +27,7 @@ from dayu.contracts.agent_execution_serialization import (
     serialize_execution_contract_snapshot,
 )
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext
+from dayu.contracts.host_execution import ConcurrencyAcquirePolicy
 from dayu.contracts.tool_configs import DocToolLimits, FinsToolLimits, WebToolsConfig
 from dayu.contracts.toolset_config import ToolsetConfigSnapshot, build_toolset_config_snapshot
 from dayu.execution.options import (
@@ -83,6 +84,7 @@ def test_execution_contract_snapshot_roundtrip() -> None:
         host_policy=ExecutionHostPolicy(
             session_key="session-1",
             business_concurrency_lane=None,
+            concurrency_acquire_policy=ConcurrencyAcquirePolicy.with_timeout(9.0),
             timeout_ms=None,
             resumable=True,
         ),
@@ -138,6 +140,7 @@ def test_execution_contract_snapshot_roundtrip() -> None:
     restored = deserialize_execution_contract_snapshot(snapshot)
 
     assert restored.service_name == "chat_turn"
+    assert restored.host_policy.concurrency_acquire_policy == ConcurrencyAcquirePolicy.with_timeout(9.0)
     assert restored.scene_name == "wechat"
     assert restored.host_policy == contract.host_policy
     assert restored.preparation_spec.selected_toolsets == ("doc", "fins")
@@ -154,6 +157,121 @@ def test_execution_contract_snapshot_roundtrip() -> None:
     assert restored.execution_options.toolset_configs == contract.execution_options.toolset_configs
     assert restored.execution_options.web_tools_config is None
     assert restored.metadata == contract.metadata
+
+
+@pytest.mark.unit
+def test_execution_contract_snapshot_rejects_missing_concurrency_policy() -> None:
+    """缺失并发等待策略的旧快照应按坏数据拒绝，不能再猜测默认语义。"""
+
+    contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="wechat",
+        host_policy=ExecutionHostPolicy(
+            session_key="session-1",
+            business_concurrency_lane=None,
+            concurrency_acquire_policy=ConcurrencyAcquirePolicy.with_timeout(9.0),
+            timeout_ms=None,
+            resumable=True,
+        ),
+        preparation_spec=ScenePreparationSpec(
+            selected_toolsets=(),
+            execution_permissions=ExecutionPermissions(
+                web=ExecutionWebPermissions(allow_private_network_url=False),
+                doc=ExecutionDocPermissions(),
+            ),
+            prompt_contributions={},
+        ),
+        message_inputs=ExecutionMessageInputs(user_message="请继续"),
+        accepted_execution_spec=AcceptedExecutionSpec(
+            model=AcceptedModelSpec(model_name="gpt-test", temperature=0.2),
+            runtime=AcceptedRuntimeSpec(agent_running_config={"max_iterations": 6}),
+            tools=AcceptedToolConfigSpec(toolset_configs=()),
+            infrastructure=AcceptedInfrastructureSpec(
+                trace_settings=TraceSettings(enabled=False, output_dir=Path("/tmp/trace")),
+                conversation_memory_settings=ConversationMemorySettings(),
+            ),
+        ),
+        execution_options=ExecutionOptions(),
+    )
+
+    snapshot = serialize_execution_contract_snapshot(contract)
+    host_policy_payload = dict(cast(dict[str, ExecutionContractSnapshotValue], snapshot["host_policy"]))
+    host_policy_payload.pop("concurrency_acquire_policy", None)
+    snapshot = {**snapshot, "host_policy": host_policy_payload}
+
+    with pytest.raises(ValueError, match="host_policy.concurrency_acquire_policy"):
+        deserialize_execution_contract_snapshot(snapshot)
+
+
+@pytest.mark.unit
+def test_execution_contract_snapshot_rejects_missing_concurrency_policy_mode() -> None:
+    """并发等待策略对象存在但缺少 mode 时也必须显式失败。"""
+
+    contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="wechat",
+        host_policy=ExecutionHostPolicy(
+            session_key="session-1",
+            business_concurrency_lane=None,
+            concurrency_acquire_policy=ConcurrencyAcquirePolicy.with_timeout(9.0),
+            timeout_ms=None,
+            resumable=True,
+        ),
+        preparation_spec=ScenePreparationSpec(
+            selected_toolsets=(),
+            execution_permissions=ExecutionPermissions(
+                web=ExecutionWebPermissions(allow_private_network_url=False),
+                doc=ExecutionDocPermissions(),
+            ),
+            prompt_contributions={},
+        ),
+        message_inputs=ExecutionMessageInputs(user_message="请继续"),
+        accepted_execution_spec=AcceptedExecutionSpec(
+            model=AcceptedModelSpec(model_name="gpt-test", temperature=0.2),
+            runtime=AcceptedRuntimeSpec(agent_running_config={"max_iterations": 6}),
+            tools=AcceptedToolConfigSpec(toolset_configs=()),
+            infrastructure=AcceptedInfrastructureSpec(
+                trace_settings=TraceSettings(enabled=False, output_dir=Path("/tmp/trace")),
+                conversation_memory_settings=ConversationMemorySettings(),
+            ),
+        ),
+        execution_options=ExecutionOptions(),
+    )
+
+    snapshot = serialize_execution_contract_snapshot(contract)
+    host_policy_payload = dict(cast(dict[str, ExecutionContractSnapshotValue], snapshot["host_policy"]))
+    concurrency_policy_payload = dict(
+        cast(dict[str, ExecutionContractSnapshotValue], host_policy_payload["concurrency_acquire_policy"])
+    )
+    concurrency_policy_payload.pop("mode", None)
+    host_policy_payload["concurrency_acquire_policy"] = concurrency_policy_payload
+    snapshot = {**snapshot, "host_policy": host_policy_payload}
+
+    with pytest.raises(ValueError, match="host_policy.concurrency_acquire_policy.mode"):
+        deserialize_execution_contract_snapshot(snapshot)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mode", "timeout_seconds", "message"),
+    (
+        ("timeout", None, "timeout_seconds 必须是正数"),
+        ("timeout", -1.0, "timeout_seconds 必须是正数"),
+        ("host_default", 5.0, "仅在 mode='timeout' 时允许设置 timeout_seconds"),
+        ("invalid", None, "未知的 ConcurrencyAcquirePolicy.mode"),
+    ),
+)
+def test_concurrency_acquire_policy_rejects_invalid_payload(
+    mode: str,
+    timeout_seconds: float | None,
+    message: str,
+) -> None:
+    """ConcurrencyAcquirePolicy 应拒绝非法模式与非法超时参数。"""
+
+    typed_mode = cast(Literal["host_default", "timeout", "unbounded"], mode)
+
+    with pytest.raises(ValueError, match=message):
+        ConcurrencyAcquirePolicy(mode=typed_mode, timeout_seconds=timeout_seconds)
 
 
 @pytest.mark.unit

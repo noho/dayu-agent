@@ -49,7 +49,7 @@ def test_resolve_contract_concurrency_lane_returns_none_for_non_write_scenes(
 def test_resolve_hosted_run_concurrency_lane_maps_known_operations() -> None:
     """HostedRunSpec 层 resolver 覆盖三条业务分支。"""
 
-    assert resolve_hosted_run_concurrency_lane("write_pipeline") == LANE_WRITE_CHAPTER
+    assert resolve_hosted_run_concurrency_lane("write_pipeline") is None
     assert resolve_hosted_run_concurrency_lane("fins_download") == LANE_SEC_DOWNLOAD
     assert resolve_hosted_run_concurrency_lane("fins_analyze") is None
     assert resolve_hosted_run_concurrency_lane("") is None

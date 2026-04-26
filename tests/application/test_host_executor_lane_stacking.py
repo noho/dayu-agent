@@ -7,7 +7,8 @@ from typing import Callable
 
 import pytest
 
-from dayu.contracts.host_execution import HostedRunSpec
+import dayu.host.executor as executor_module
+from dayu.contracts.host_execution import ConcurrencyAcquirePolicy, HostedRunSpec
 from dayu.host.concurrency import HOST_AGENT_LANE
 from dayu.host.executor import DefaultHostExecutor, _required_lanes_for_spec
 
@@ -42,7 +43,11 @@ class _RecordingGovernor:
         return _Permit(permit_id=f"permit-{lane}", lane=lane)
 
     def acquire_many(
-        self, lanes: list[str], *, timeout: float | None = None
+        self,
+        lanes: list[str],
+        *,
+        timeout: float | None = None,
+        cancellation_token: executor_module.CancellationToken | None = None,
     ) -> list[_Permit]:
         """原子多 lane acquire 的测试实现。
 
@@ -50,7 +55,7 @@ class _RecordingGovernor:
         也不返回 permit，语义对齐 SQLite 实现"要么全拿要么全不拿"。
         """
 
-        del timeout
+        del timeout, cancellation_token
         for lane_name in lanes:
             if self._acquire_failure(lane_name):
                 raise TimeoutError(f"模拟 acquire_many 失败: {lane_name}")
@@ -117,6 +122,12 @@ class _StubRunRegistry:
 
         del run_id, kwargs
 
+    def is_cancel_requested(self, run_id: str) -> bool:
+        """最小实现：测试场景不触发取消请求。"""
+
+        del run_id
+        return False
+
 
 @pytest.mark.unit
 def test_required_lanes_agent_without_business_lane_returns_agent_lane_only() -> None:
@@ -128,7 +139,7 @@ def test_required_lanes_agent_without_business_lane_returns_agent_lane_only() ->
 
 @pytest.mark.unit
 def test_required_lanes_agent_with_business_lane_returns_sorted_pair() -> None:
-    """Agent 执行 + business=write_chapter → 按字母序 ['llm_api', 'write_chapter']。"""
+    """章节 Agent 执行 + business=write_chapter → 按字母序 ['llm_api', 'write_chapter']。"""
 
     spec = HostedRunSpec(
         operation_name="write_pipeline",
@@ -197,3 +208,54 @@ def test_start_run_propagates_timeout_without_leaking_permits() -> None:
     # acquire_many 原子失败：governor 没记录任何 lane，executor 也不会调用 release。
     assert governor.acquired == []
     assert governor.released == []
+
+
+@pytest.mark.unit
+def test_start_run_with_unbounded_policy_passes_none_timeout() -> None:
+    """显式无限等待策略应把 governor timeout 设为 ``None``。"""
+
+    class _RecordingTimeoutGovernor(_RecordingGovernor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.timeouts: list[float | None] = []
+
+        def acquire_many(
+            self,
+            lanes: list[str],
+            *,
+            timeout: float | None = None,
+            cancellation_token: executor_module.CancellationToken | None = None,
+        ) -> list[_Permit]:
+            self.timeouts.append(timeout)
+            return super().acquire_many(
+                lanes,
+                timeout=timeout,
+                cancellation_token=cancellation_token,
+            )
+
+    governor = _RecordingTimeoutGovernor()
+    executor = DefaultHostExecutor(
+        run_registry=_StubRunRegistry(),  # type: ignore[arg-type]
+        concurrency_governor=governor,  # type: ignore[arg-type]
+        event_bus=_StubEventBus(),  # type: ignore[arg-type]
+    )
+    spec = HostedRunSpec(
+        operation_name="write_pipeline",
+        session_id="s1",
+        business_concurrency_lane="write_chapter",
+        concurrency_acquire_policy=ConcurrencyAcquirePolicy.unbounded(),
+    )
+
+    _context, bridge, deadline_watcher, permits = executor._start_run(
+        spec=spec,
+        run_id="run-unbounded",
+        include_agent_lane=True,
+    )
+
+    executor._finish_run(
+        bridge=bridge,
+        deadline_watcher=deadline_watcher,
+        permits=permits,
+    )
+
+    assert governor.timeouts == [None]

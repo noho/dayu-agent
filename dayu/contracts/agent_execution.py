@@ -22,6 +22,7 @@ from dayu.contracts.agent_types import (
 )
 from dayu.contracts.cancellation import CancellationToken
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext
+from dayu.contracts.host_execution import ConcurrencyAcquirePolicy
 from dayu.contracts.execution_options import (
     ConversationMemorySettings,
     ExecutionOptions,
@@ -336,6 +337,8 @@ class ExecutionHostPolicy:
             ``sec_download``）；``llm_api`` 属于 Host 自治 lane，由 Host 根据
             ExecutionContract 的调用路径自动叠加，禁止在此字段写入 Host 自治
             lane 名。
+        concurrency_acquire_policy: Host 并发 permit 的等待策略。Service 仅
+            通过 contracts 层声明“按 Host 默认 / 有限等待 / 无限等待”的意图。
         timeout_ms: 本次执行超时。
         resumable: 是否允许恢复。
 
@@ -348,6 +351,9 @@ class ExecutionHostPolicy:
 
     session_key: str | None = None
     business_concurrency_lane: str | None = None
+    concurrency_acquire_policy: ConcurrencyAcquirePolicy = field(
+        default_factory=ConcurrencyAcquirePolicy.use_host_default
+    )
     timeout_ms: int | None = None
     resumable: bool = False
 

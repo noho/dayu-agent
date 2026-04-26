@@ -23,6 +23,7 @@ from dayu.contracts.agent_execution import (
     AcceptedRuntimeSpec,
     AcceptedToolConfigSpec,
 )
+from dayu.contracts.host_execution import ConcurrencyAcquirePolicy
 from dayu.contracts.cancellation import CancelledError
 from dayu.contracts.events import AppEvent, AppEventType, AppResult
 from dayu.contracts.infrastructure import WorkspaceResourcesProtocol
@@ -151,7 +152,7 @@ from dayu.services.internal.write_pipeline.models import (
     Violation,
     WriteRunConfig,
 )
-from dayu.services.internal.write_pipeline.template_parser import parse_template_layout
+from dayu.services.internal.write_pipeline.template_parser import TemplateLayout, parse_template_layout
 
 
 def _build_toolset_configs(
@@ -1553,6 +1554,7 @@ def _build_runner(
     company_meta_summary_resolver: Callable[[str], dict[str, str]] | None = None,
     infer: bool = False,
     fast: bool = False,
+    host_governance: HostGovernanceProtocol | None = None,
 ) -> WritePipelineRunner:
     """构建测试用写作执行器。
 
@@ -1578,13 +1580,31 @@ def _build_runner(
         write_config=write_config,
         scene_execution_acceptance_preparer=_as_scene_execution_acceptance_preparer(provider),
         host_executor=_build_test_host_executor(),
-        host_governance=_build_test_host_governance(),
+        host_governance=host_governance or _build_test_host_governance(),
         host_session_id="write_session",
         company_name_resolver=company_name_resolver,
         company_meta_summary_resolver=company_meta_summary_resolver,
     )
     cast(Any, runner._prompt_runner)._prompt_agent = provider.prompt_agent
     return runner
+
+
+@pytest.mark.unit
+def test_scene_contract_preparer_builds_unbounded_concurrency_acquire_policy(
+    tmp_path: Path,
+) -> None:
+    """写作 scene contract 应显式声明无限等待策略。"""
+
+    runner = _build_runner(tmp_path)
+    prepared_scene = runner._preparer.get_or_create_write_scene()
+
+    contract = runner._preparer.build_execution_contract(
+        prepared_scene=prepared_scene,
+        prompt_text="测试 prompt",
+    )
+
+    assert contract.host_policy.business_concurrency_lane == "write_chapter"
+    assert contract.host_policy.concurrency_acquire_policy == ConcurrencyAcquirePolicy.unbounded()
 
 
 @pytest.mark.unit

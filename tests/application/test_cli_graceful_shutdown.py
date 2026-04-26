@@ -131,6 +131,27 @@ def test_register_cli_shutdown_hook_is_idempotent(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.unit
+def test_register_cli_shutdown_hook_installs_sigint_handler_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """注册短命 CLI 钩子时，应把 SIGINT 纳入统一优雅退出路径。"""
+
+    graceful_shutdown._reset_registration_for_testing()
+    installed_signals: list[int] = []
+    monkeypatch.setattr(graceful_shutdown.atexit, "register", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        signal,
+        "signal",
+        lambda signum, _handler: installed_signals.append(signum) or signal.SIG_DFL,
+    )
+
+    register_cli_shutdown_hook(cast(object, _FakeHost()))  # type: ignore[arg-type]
+
+    assert getattr(signal, "SIGINT") in installed_signals
+    graceful_shutdown._reset_registration_for_testing()
+
+
+@pytest.mark.unit
 def test_install_cli_signal_handlers_handler_triggers_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
     """手工调用注册的 handler 应先收敛再抛 KeyboardInterrupt。"""
 

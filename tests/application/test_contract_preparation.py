@@ -13,6 +13,7 @@ from dayu.contracts.agent_execution import (
     AcceptedRuntimeSpec,
     AcceptedToolConfigSpec,
 )
+from dayu.contracts.host_execution import ConcurrencyAcquirePolicy
 from dayu.contracts.tool_configs import DocToolLimits, FinsToolLimits, WebToolsConfig
 from dayu.contracts.toolset_config import build_toolset_config_snapshot
 from dayu.execution.options import (
@@ -116,6 +117,24 @@ def test_prepare_execution_contract_filters_prompt_contributions_by_context_slot
     assert contract.preparation_spec.prompt_contributions == {
         "fins_default_subject": "# 当前分析对象",
     }
+
+
+@pytest.mark.unit
+def test_prepare_execution_contract_preserves_explicit_concurrency_acquire_policy() -> None:
+    """验证 contract preparation 会把并发等待策略写入 Host policy。"""
+
+    contract = prepare_execution_contract(
+        service_name="write_pipeline",
+        scene_name="write",
+        accepted_execution_spec=_build_accepted_execution_spec(allow_private_network_url=False),
+        prompt_contributions={"base_user": "x"},
+        user_message="hello",
+        session_key="session-1",
+        business_concurrency_lane="write_chapter",
+        concurrency_acquire_policy=ConcurrencyAcquirePolicy.unbounded(),
+    )
+
+    assert contract.host_policy.concurrency_acquire_policy == ConcurrencyAcquirePolicy.unbounded()
 
 
 @pytest.mark.unit

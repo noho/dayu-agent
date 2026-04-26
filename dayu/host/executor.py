@@ -14,7 +14,7 @@ import json
 import threading
 import uuid
 from contextlib import suppress
-from typing import Any, AsyncIterator, Callable, TypeVar
+from typing import Any, AsyncIterator, Callable, Literal, TypeVar
 
 from dayu.host.cancellation_bridge import CancellationBridge
 from dayu.host.events import build_app_event_from_stream_event
@@ -56,6 +56,9 @@ TStreamEvent = TypeVar("TStreamEvent", bound=PublishedRunEventProtocol)
 TSyncResult = TypeVar("TSyncResult")
 MODULE = "HOST.EXECUTOR"
 _DEFAULT_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS = 300.0
+_CONCURRENCY_POLICY_MODE_HOST_DEFAULT: Literal["host_default"] = "host_default"
+_CONCURRENCY_POLICY_MODE_TIMEOUT: Literal["timeout"] = "timeout"
+_CONCURRENCY_POLICY_MODE_UNBOUNDED: Literal["unbounded"] = "unbounded"
 
 
 def should_delete_pending_turn_after_terminal_run(
@@ -178,22 +181,27 @@ def _build_agent_settle_debug_message(
     )
 
 
-def _resolve_concurrency_acquire_timeout_seconds(timeout_ms: int | None) -> float:
+def _resolve_concurrency_acquire_timeout_seconds(spec: HostedRunSpec) -> float | None:
     """解析并发 permit 获取超时。
 
     Args:
-        timeout_ms: run 级超时毫秒数。
+        spec: 宿主 run 规格。
 
     Returns:
-        permit 获取最大等待秒数；未配置 run 超时时返回默认值。
+        permit 获取最大等待秒数；返回 ``None`` 表示无限等待。
 
     Raises:
         无。
     """
 
-    if timeout_ms is None:
+    policy = spec.concurrency_acquire_policy
+    if policy.mode == _CONCURRENCY_POLICY_MODE_UNBOUNDED:
+        return None
+    if policy.mode == _CONCURRENCY_POLICY_MODE_TIMEOUT:
+        return policy.timeout_seconds
+    if spec.timeout_ms is None:
         return _DEFAULT_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS
-    return max(0.001, timeout_ms / 1000.0)
+    return max(0.001, spec.timeout_ms / 1000.0)
 
 
 def _required_lanes_for_spec(spec: HostedRunSpec, *, include_agent_lane: bool) -> list[str]:
@@ -374,9 +382,13 @@ class DefaultHostExecutor(HostExecutorProtocol):
             scene_name=spec.scene_name,
             metadata=spec.metadata,
         )
-        context, bridge, deadline_watcher, permits = self._start_run(
-            spec=spec, run_id=run.run_id, include_agent_lane=False,
-        )
+        try:
+            context, bridge, deadline_watcher, permits = self._start_run(
+                spec=spec, run_id=run.run_id, include_agent_lane=False,
+            )
+        except CancelledError:
+            self._finalize_cancelled(run.run_id)
+            return
         try:
             async for event in event_stream_factory(context):
                 if spec.publish_events:
@@ -419,9 +431,12 @@ class DefaultHostExecutor(HostExecutorProtocol):
             scene_name=spec.scene_name,
             metadata=spec.metadata,
         )
-        context, bridge, deadline_watcher, permits = self._start_run(
-            spec=spec, run_id=run.run_id, include_agent_lane=False,
-        )
+        try:
+            context, bridge, deadline_watcher, permits = self._start_run(
+                spec=spec, run_id=run.run_id, include_agent_lane=False,
+            )
+        except CancelledError:
+            return self._finish_sync_cancelled_run(run_id=run.run_id, on_cancel=on_cancel)
         try:
             result = operation(context)
             if self._is_cancelled(run_id=run.run_id, token=context.cancellation_token):
@@ -507,6 +522,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             scene_name=execution_contract.scene_name,
             metadata=execution_contract.metadata,
             business_concurrency_lane=execution_contract.host_policy.business_concurrency_lane,
+            concurrency_acquire_policy=execution_contract.host_policy.concurrency_acquire_policy,
             timeout_ms=execution_contract.host_policy.timeout_ms,
         )
         run = self.run_registry.register_run(
@@ -515,10 +531,18 @@ class DefaultHostExecutor(HostExecutorProtocol):
             scene_name=spec.scene_name,
             metadata=spec.metadata,
         )
-        context, bridge, deadline_watcher, permits = self._start_run(
-            spec=spec, run_id=run.run_id, include_agent_lane=True,
-        )
         resumable = bool(execution_contract.host_policy.resumable)
+        try:
+            context, bridge, deadline_watcher, permits = self._start_run(
+                spec=spec, run_id=run.run_id, include_agent_lane=True,
+            )
+        except CancelledError:
+            yield self._settle_agent_cancelled_before_pending_turn_binding(
+                run_id=run.run_id,
+                resumed_pending_turn_id=resumed_pending_turn_id,
+                resumable=resumable,
+            )
+            return
         Log.debug(
             _build_agent_run_start_debug_message(
                 run_id=run.run_id,
@@ -620,10 +644,18 @@ class DefaultHostExecutor(HostExecutorProtocol):
             scene_name=spec.scene_name,
             metadata=spec.metadata,
         )
-        context, bridge, deadline_watcher, permits = self._start_run(
-            spec=spec, run_id=run.run_id, include_agent_lane=True,
-        )
         resumable = bool(prepared_turn.resumable)
+        try:
+            context, bridge, deadline_watcher, permits = self._start_run(
+                spec=spec, run_id=run.run_id, include_agent_lane=True,
+            )
+        except CancelledError:
+            yield self._settle_agent_cancelled_before_pending_turn_binding(
+                run_id=run.run_id,
+                resumed_pending_turn_id=resumed_pending_turn_id,
+                resumable=resumable,
+            )
+            return
         Log.debug(
             _build_agent_run_start_debug_message(
                 run_id=run.run_id,
@@ -900,6 +932,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             scene_name=execution_contract.scene_name,
             metadata=execution_contract.metadata,
             business_concurrency_lane=execution_contract.host_policy.business_concurrency_lane,
+            concurrency_acquire_policy=execution_contract.host_policy.concurrency_acquire_policy,
             timeout_ms=execution_contract.host_policy.timeout_ms,
         )
         run = self.run_registry.register_run(
@@ -1308,25 +1341,35 @@ class DefaultHostExecutor(HostExecutorProtocol):
             if self.concurrency_governor is not None:
                 lanes = _required_lanes_for_spec(spec, include_agent_lane=include_agent_lane)
                 if lanes:
-                    acquire_timeout = _resolve_concurrency_acquire_timeout_seconds(spec.timeout_ms)
+                    acquire_timeout = _resolve_concurrency_acquire_timeout_seconds(spec)
                     # 走 acquire_many：单事务原子拿齐全部 lane；
                     # 进程若在两步 acquire 之间被 SIGKILL，SQLite 事务未 COMMIT 等于没写，
                     # 不会残留半截 permit，无需 executor 层 try/except 回滚。
                     permits = self.concurrency_governor.acquire_many(
-                        lanes, timeout=acquire_timeout
+                        lanes,
+                        timeout=acquire_timeout,
+                        cancellation_token=token,
                     )
         except BaseException as exc:
+            cancelled_during_start = isinstance(exc, CancelledError) or self._is_cancelled(
+                run_id=run_id,
+                token=token,
+            )
             if run_started:
-                summary: str | None = None
-                if isinstance(exc, Exception):
-                    summary = self._summarize_error(exc, spec.error_summary_limit)
+                if cancelled_during_start:
+                    with suppress(Exception):
+                        self._finalize_cancelled(run_id)
                 else:
-                    summary = str(exc)[: spec.error_summary_limit] if spec.error_summary_limit else str(exc)
-                with suppress(Exception):
-                    self._fail_run_preserving_original_exception(
-                        run_id=run_id,
-                        error_summary=summary,
-                    )
+                    summary: str | None = None
+                    if isinstance(exc, Exception):
+                        summary = self._summarize_error(exc, spec.error_summary_limit)
+                    else:
+                        summary = str(exc)[: spec.error_summary_limit] if spec.error_summary_limit else str(exc)
+                    with suppress(Exception):
+                        self._fail_run_preserving_original_exception(
+                            run_id=run_id,
+                            error_summary=summary,
+                        )
             with suppress(Exception):
                 deadline_watcher.stop()
             with suppress(Exception):
@@ -1664,6 +1707,80 @@ class DefaultHostExecutor(HostExecutorProtocol):
         )
         return self._publish_cancelled_app_event(run_id=run_id, run=cancelled_run)
 
+    def _settle_agent_cancelled_before_pending_turn_binding(
+        self,
+        *,
+        run_id: str,
+        resumed_pending_turn_id: str | None,
+        resumable: bool,
+    ) -> AppEvent:
+        """收敛发生在 pending turn 绑定前的 Agent 取消。
+
+        该分支只会出现在 `_start_run()` 期间：run 已注册并可能已持有取消意图，
+        但 resumed pending turn 还没进入 executor 的常规调和路径。对普通
+        agent run，此时只需把 run 收敛为 `CANCELLED`；对 resume 路径，
+        必须显式释放 Host 外层已经持有的 `RESUMING` lease，避免记录长期卡在
+        `RESUMING` 中间态。
+
+        Args:
+            run_id: 当前 Host run ID。
+            resumed_pending_turn_id: Host 外层已持有的 resume lease 对应 pending turn ID；
+                非 resume 路径为 `None`。
+            resumable: 当前 scene 是否允许恢复。
+
+        Returns:
+            需要 yield 给调用方的取消事件。
+
+        Raises:
+            无。
+        """
+
+        Log.debug(
+            _build_agent_settle_debug_message(
+                phase="cancel-before-bind",
+                run_id=run_id,
+                pending_turn_id=resumed_pending_turn_id,
+                resumable=resumable,
+            ),
+            module=MODULE,
+        )
+        cancelled_run = self._finalize_cancelled(run_id)
+        self._release_resumed_pending_turn_lease_best_effort(
+            run_id=run_id,
+            pending_turn_id=resumed_pending_turn_id,
+        )
+        return self._publish_cancelled_app_event(run_id=run_id, run=cancelled_run)
+
+    def _release_resumed_pending_turn_lease_best_effort(
+        self,
+        *,
+        run_id: str,
+        pending_turn_id: str | None,
+    ) -> None:
+        """best-effort 释放 resume 路径已持有的 RESUMING lease。
+
+        Args:
+            run_id: 当前 Host run ID，仅用于日志。
+            pending_turn_id: 待释放 lease 的 pending turn ID；为 `None` 时直接返回。
+
+        Returns:
+            无。
+
+        Raises:
+            无。释放失败只记录告警，最终由 stale-RESUMING cleanup 兜底。
+        """
+
+        if pending_turn_id is None or self.pending_turn_store is None:
+            return
+        try:
+            self.pending_turn_store.release_resume_lease(pending_turn_id)
+        except Exception as exc:  # noqa: BLE001
+            Log.warn(
+                "resume 取消前释放 RESUMING lease 失败，依赖 cleanup 兜底: "
+                f"run_id={run_id}, pending_turn_id={pending_turn_id}, error={exc}",
+                module=MODULE,
+            )
+
     def _settle_agent_stream_completion(
         self,
         *,
@@ -1931,6 +2048,7 @@ def _build_run_spec_from_prepared_turn(prepared_turn: PreparedAgentTurnSnapshot)
         scene_name=prepared_turn.scene_name,
         metadata=prepared_turn.metadata,
         business_concurrency_lane=prepared_turn.business_concurrency_lane,
+        concurrency_acquire_policy=prepared_turn.concurrency_acquire_policy,
         timeout_ms=prepared_turn.timeout_ms,
     )
 

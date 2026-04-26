@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import MISSING, asdict, is_dataclass
 from pathlib import Path
-from typing import Mapping, cast
+from typing import Literal, Mapping, cast
 
 from dayu.contracts.agent_execution import (
     AcceptedExecutionSpec,
@@ -28,6 +28,7 @@ from dayu.contracts.agent_execution import (
     ScenePreparationSpec,
 )
 from dayu.contracts.execution_metadata import normalize_execution_delivery_context
+from dayu.contracts.host_execution import ConcurrencyAcquirePolicy
 from dayu.contracts.execution_options import (
     ConversationMemorySettings,
     ExecutionOptionsSnapshot,
@@ -157,6 +158,19 @@ def _snapshot_optional_str(value: ExecutionContractSnapshotValue | None) -> str 
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def _snapshot_required_str(
+    value: ExecutionContractSnapshotValue | None,
+    *,
+    field_name: str,
+) -> str:
+    """从快照值中读取必填字符串。"""
+
+    normalized = _snapshot_optional_str(value)
+    if normalized is None:
+        raise ValueError(f"{field_name} 不能为空")
+    return normalized
 
 
 def _snapshot_optional_int(value: ExecutionContractSnapshotValue | None) -> int | None:
@@ -595,6 +609,10 @@ def serialize_execution_contract_snapshot(
         "host_policy": {
             "session_key": execution_contract.host_policy.session_key,
             "business_concurrency_lane": execution_contract.host_policy.business_concurrency_lane,
+            "concurrency_acquire_policy": {
+                "mode": execution_contract.host_policy.concurrency_acquire_policy.mode,
+                "timeout_seconds": execution_contract.host_policy.concurrency_acquire_policy.timeout_seconds,
+            },
             "timeout_ms": execution_contract.host_policy.timeout_ms,
             "resumable": execution_contract.host_policy.resumable,
         },
@@ -652,12 +670,19 @@ def deserialize_execution_contract_snapshot(
     doc_permissions_payload = _snapshot_optional_object(execution_permissions_payload.get("doc")) or {}
     execution_options_payload = _snapshot_optional_object(snapshot.get("execution_options")) or {}
     metadata_payload = _snapshot_optional_object(snapshot.get("metadata")) or {}
+    concurrency_acquire_policy_payload = _snapshot_required_object(
+        host_policy.get("concurrency_acquire_policy"),
+        field_name="host_policy.concurrency_acquire_policy",
+    )
     return ExecutionContract(
         service_name=_snapshot_optional_str(snapshot.get("service_name")) or "",
         scene_name=_snapshot_optional_str(snapshot.get("scene_name")) or "",
         host_policy=ExecutionHostPolicy(
             session_key=_snapshot_optional_str(host_policy.get("session_key")),
             business_concurrency_lane=_snapshot_optional_str(host_policy.get("business_concurrency_lane")),
+            concurrency_acquire_policy=_deserialize_concurrency_acquire_policy(
+                concurrency_acquire_policy_payload
+            ),
             timeout_ms=_snapshot_optional_int(host_policy.get("timeout_ms")),
             resumable=bool(_snapshot_optional_bool(host_policy.get("resumable"))),
         ),
@@ -685,6 +710,24 @@ def deserialize_execution_contract_snapshot(
             _coerce_execution_options_snapshot(execution_options_payload)
         ),
         metadata=normalize_execution_delivery_context(metadata_payload),
+    )
+
+
+def _deserialize_concurrency_acquire_policy(
+    payload: Mapping[str, ExecutionContractSnapshotValue],
+) -> ConcurrencyAcquirePolicy:
+    """把序列化的并发等待策略恢复为强类型对象。"""
+
+    mode = cast(
+        Literal["host_default", "timeout", "unbounded"],
+        _snapshot_required_str(
+            payload.get("mode"),
+            field_name="host_policy.concurrency_acquire_policy.mode",
+        ),
+    )
+    return ConcurrencyAcquirePolicy(
+        mode=mode,
+        timeout_seconds=_snapshot_optional_float(payload.get("timeout_seconds")),
     )
 
 
