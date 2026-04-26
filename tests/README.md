@@ -88,7 +88,7 @@ pip install -r requirements.txt
 - 必须使用固定 fixture
 - 必须走真实第三方执行链
 - 表格退化不可接受，不能只断言“返回非空字符串”
-- 当前 Dayu 已将 upload / web tool 等 Docling PDF 转换入口统一收口到 `dayu.docling_runtime`；默认设备为 `auto`，转换走二维（backend × device）有序回退尝试链：先 `(docling-parse, resolved)`，再 `(pypdfium2, resolved)`，仅当 `resolved == auto` 时追加 `(docling-parse, cpu)`；任意一档成功即返回，全链失败时以首次失败作为 `__cause__`。若需要显式覆盖加速器设备，可通过环境变量 `DAYU_DOCLING_DEVICE=auto|cpu|cuda|mps|xpu` 调整。Docling 输入统一走 `DocumentStream(BytesIO(bytes))`（封装在 `convert_pdf_bytes_with_docling()`），以规避 Windows 上 `Path` 被 mbcs 编码导致的 `not valid` 误判
+- 当前 Dayu 已将 upload / web tool 等 Docling PDF 转换入口统一收口到 `dayu.docling_runtime`；默认设备为 `auto`，转换走二维（backend × device）有序回退尝试链：非 Windows、Windows 显式加速器设备（`cuda/mps/xpu`），以及 Windows `auto` 且 `torch.cuda.is_available()` 为真时，先 `(docling-parse, resolved)`，再 `(pypdfium2, resolved)`；Windows 的 `cpu` 设备或 `auto` 但 CUDA 不可用时，先 `(pypdfium2, resolved)`，再 `(docling-parse, resolved)`，用于规避 `docling-parse` 在 Windows CPU/auto 路径上的 C++ 层崩溃刷屏风险；仅当 `resolved == auto` 时追加 `(docling-parse, cpu)`；任意一档成功即返回，全链失败时以首次失败作为 `__cause__`。若需要显式覆盖加速器设备，可通过环境变量 `DAYU_DOCLING_DEVICE=auto|cpu|cuda|mps|xpu` 调整。Docling 输入统一走 `DocumentStream(BytesIO(bytes))`（封装在 `convert_pdf_bytes_with_docling()`），以规避 Windows 上 `Path` 被 mbcs 编码导致的 `not valid` 误判
 - 与此对应，unit test 若只想隔离 Docling 转换结果，应优先 patch `convert_pdf_bytes_with_docling()` 或 `run_docling_pdf_conversion()` 这类项目内真源 seam；若只测装配参数，再 patch `build_docling_pdf_converter()`，不要继续直接 patch 第三方 `DocumentConverter` 类
 
 ### 3.2 Service / Host / Agent 路径守护

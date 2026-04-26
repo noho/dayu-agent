@@ -643,10 +643,10 @@ def test_convert_pdf_bytes_with_docling_uses_document_stream(
     assert captured["pipeline"] == (True, True, "accurate", True)
 
 
-def test_run_docling_pdf_conversion_on_windows_prefers_pypdfium2(
+def test_run_docling_pdf_conversion_on_windows_auto_prefers_pypdfium2(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """验证 Windows 平台尝试链把 pypdfium2 提到首位。
+    """验证 Windows 平台 auto 设备尝试链把 pypdfium2 提到首位。
 
     Args:
         monkeypatch: pytest monkeypatch fixture。
@@ -663,6 +663,7 @@ def test_run_docling_pdf_conversion_on_windows_prefers_pypdfium2(
     _install_recording_builder(monkeypatch, build_log)
     # 覆盖 _install_recording_builder 内部默认的非 Windows stub，模拟 Windows。
     monkeypatch.setattr("dayu.docling_runtime._is_windows_platform", lambda: True)
+    monkeypatch.setattr("dayu.docling_runtime._is_windows_cuda_available", lambda: False)
 
     def _convert(converter: object) -> str:
         """首档（pypdfium2）即成功。
@@ -683,9 +684,102 @@ def test_run_docling_pdf_conversion_on_windows_prefers_pypdfium2(
     result = run_docling_pdf_conversion(_convert)
 
     assert result == "ok"
-    # Windows 链：pypdfium2 优先，docling-parse 兜底，auto 时再追加 (parse, cpu)
+    # Windows auto 链：pypdfium2 优先，docling-parse 兜底，auto 时再追加 (parse, cpu)
     # 首档命中即返回，build_log 仅有一条 pypdfium2 记录。
     assert build_log == [("pypdfium2", "auto")]
+
+
+def test_run_docling_pdf_conversion_on_windows_auto_with_cuda_prefers_docling_parse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证 Windows 平台 auto 设备检测到 CUDA 时优先使用 docling-parse。
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    build_log: list[tuple[str, str]] = []
+    monkeypatch.setattr("dayu.docling_runtime.resolve_docling_device_name", lambda: "auto")
+    _install_recording_builder(monkeypatch, build_log)
+    monkeypatch.setattr("dayu.docling_runtime._is_windows_platform", lambda: True)
+    monkeypatch.setattr("dayu.docling_runtime._is_windows_cuda_available", lambda: True)
+
+    def _convert(converter: object) -> str:
+        """前两档失败后由 docling-parse CPU 兜底成功。
+
+        Args:
+            converter: Docling 转换器对象。
+
+        Returns:
+            成功标记字符串。
+
+        Raises:
+            RuntimeError: 在 cpu 之前固定抛出。
+        """
+
+        fake_converter = cast(_FakeConverter, converter)
+        if fake_converter.device_name == "cpu":
+            return "ok"
+        raise RuntimeError(f"auto cuda failed@{fake_converter.backend_name}")
+
+    result = run_docling_pdf_conversion(_convert)
+
+    assert result == "ok"
+    assert build_log == [
+        ("docling-parse", "auto"),
+        ("pypdfium2", "auto"),
+        ("docling-parse", "cpu"),
+    ]
+
+
+def test_run_docling_pdf_conversion_on_windows_cuda_prefers_docling_parse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证 Windows 平台显式 CUDA 设备时优先使用 docling-parse。
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    build_log: list[tuple[str, str]] = []
+    monkeypatch.setattr("dayu.docling_runtime.resolve_docling_device_name", lambda: "cuda")
+    _install_recording_builder(monkeypatch, build_log)
+    monkeypatch.setattr("dayu.docling_runtime._is_windows_platform", lambda: True)
+
+    def _convert(converter: object) -> str:
+        """首档 docling-parse 失败后由 pypdfium2 兜底成功。
+
+        Args:
+            converter: Docling 转换器对象。
+
+        Returns:
+            成功标记字符串。
+
+        Raises:
+            RuntimeError: 当 backend 为 docling-parse 时固定抛出。
+        """
+
+        fake_converter = cast(_FakeConverter, converter)
+        if fake_converter.backend_name == "docling-parse":
+            raise RuntimeError("cuda parse failed")
+        return "ok"
+
+    result = run_docling_pdf_conversion(_convert)
+
+    assert result == "ok"
+    assert build_log == [("docling-parse", "cuda"), ("pypdfium2", "cuda")]
 
 
 def test_run_docling_pdf_conversion_on_windows_full_chain(
@@ -707,6 +801,7 @@ def test_run_docling_pdf_conversion_on_windows_full_chain(
     monkeypatch.setattr("dayu.docling_runtime.resolve_docling_device_name", lambda: "auto")
     _install_recording_builder(monkeypatch, build_log)
     monkeypatch.setattr("dayu.docling_runtime._is_windows_platform", lambda: True)
+    monkeypatch.setattr("dayu.docling_runtime._is_windows_cuda_available", lambda: False)
 
     def _convert(converter: object) -> str:
         """前两档失败、第三档（parse, cpu）成功。
@@ -736,4 +831,3 @@ def test_run_docling_pdf_conversion_on_windows_full_chain(
         ("docling-parse", "auto"),
         ("docling-parse", "cpu"),
     ]
-

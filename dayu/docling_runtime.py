@@ -18,7 +18,11 @@
     2. ``backend=pypdfium2, device=resolved``：救 docling-parse 解析失败。
     3. ``backend=docling-parse, device=cpu``：仅当 ``resolved == auto`` 追加，
        救加速器栈在 ``auto`` 阶段崩溃的故障。
-  - Windows：
+  - Windows + 显式加速器设备（``cuda/mps/xpu``）或 ``auto`` 且 CUDA 可用：
+    1. ``backend=docling-parse, device=resolved``：GPU 路径实测稳定，
+       优先保留解析质量。
+    2. ``backend=pypdfium2, device=resolved``：救 docling-parse 解析失败。
+  - Windows + ``cpu``，或 ``auto`` 但 CUDA 不可用：
     1. ``backend=pypdfium2, device=resolved``：优先，规避 docling-parse 在
        Windows 上的 ``std::bad_alloc`` 与 mbcs 路径编码两类已知崩溃。
     2. ``backend=docling-parse, device=resolved``：兜底，给特殊文档保留机会。
@@ -49,6 +53,12 @@ DOCLING_DEVICE_ENV = "DAYU_DOCLING_DEVICE"
 _SUPPORTED_DOCLING_DEVICES = frozenset({"auto", "cpu", "cuda", "mps", "xpu"})
 _AUTO_DEVICE_NAME = "auto"
 _CPU_DEVICE_NAME = "cpu"
+_CUDA_DEVICE_NAME = "cuda"
+_MPS_DEVICE_NAME = "mps"
+_XPU_DEVICE_NAME = "xpu"
+_ACCELERATOR_DEVICE_NAMES = frozenset(
+    {_CUDA_DEVICE_NAME, _MPS_DEVICE_NAME, _XPU_DEVICE_NAME}
+)
 _DOCLING_PARSE_BACKEND_NAME = "docling-parse"
 _PYPDFIUM2_BACKEND_NAME = "pypdfium2"
 _SUPPORTED_DOCLING_BACKENDS = frozenset({_DOCLING_PARSE_BACKEND_NAME, _PYPDFIUM2_BACKEND_NAME})
@@ -217,13 +227,73 @@ def _is_windows_platform() -> bool:
     return sys.platform == _WINDOWS_PLATFORM_NAME
 
 
+def _is_explicit_accelerator_device(device_name: str) -> bool:
+    """判断设备名是否指向显式加速器设备。
+
+    Args:
+        device_name: 已规范化的 Docling 设备名。
+
+    Returns:
+        True 表示设备名是显式加速器，False 表示 ``auto`` 或 ``cpu``。
+
+    Raises:
+        无。
+    """
+
+    return device_name in _ACCELERATOR_DEVICE_NAMES
+
+
+def _is_windows_cuda_available() -> bool:
+    """探测当前 Windows 运行环境是否可用 CUDA。
+
+    此处 lazy import `torch` 是为了把硬件探测成本限制在 Windows auto 设备
+    的策略分支内；Docling 运行时本身已经依赖 torch，探测失败时保守视为
+    CUDA 不可用。
+
+    Args:
+        无。
+
+    Returns:
+        True 表示 CUDA 当前可用，False 表示不可用或探测失败。
+
+    Raises:
+        无。
+    """
+
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def _should_prefer_docling_parse_first_on_windows(resolved_device_name: str) -> bool:
+    """判断 Windows 平台是否应优先使用 docling-parse。
+
+    Args:
+        resolved_device_name: 已规范化的 Docling 设备名。
+
+    Returns:
+        True 表示优先使用 ``docling-parse``，False 表示优先使用 ``pypdfium2``。
+
+    Raises:
+        无。
+    """
+
+    if _is_explicit_accelerator_device(resolved_device_name):
+        return True
+    return resolved_device_name == _AUTO_DEVICE_NAME and _is_windows_cuda_available()
+
+
 def _plan_conversion_attempts(resolved_device_name: str) -> list[_DoclingConversionAttempt]:
     """按二维回退策略生成 Docling 转换尝试链。
 
     Windows 上 docling-parse 后端在某些 PDF 上会在 C++ 层抛 ``std::bad_alloc``，
-    且对 mbcs 路径编码也存在已知 bug；为减少首次失败概率与日志刷屏，
-    Windows 平台把 ``pypdfium2`` 提到首位，``docling-parse`` 作为兜底。
-    其它平台保持 ``docling-parse`` 优先以维持既有解析质量。
+    且对 mbcs 路径编码也存在已知 bug；为减少 CPU/auto 路径的首次失败概率
+    与日志刷屏，Windows 在未显式选择加速器设备且 CUDA 不可用时把
+    ``pypdfium2`` 提到首位。Windows 显式加速器设备、Windows auto 且 CUDA
+    可用、以及其它平台保持 ``docling-parse`` 优先，以维持既有解析质量。
 
     Args:
         resolved_device_name: 已规范化的 Docling 设备名。
@@ -235,7 +305,10 @@ def _plan_conversion_attempts(resolved_device_name: str) -> list[_DoclingConvers
         无。
     """
 
-    if _is_windows_platform():
+    prefers_pypdfium2_first = _is_windows_platform() and not (
+        _should_prefer_docling_parse_first_on_windows(resolved_device_name)
+    )
+    if prefers_pypdfium2_first:
         attempts: list[_DoclingConversionAttempt] = [
             _DoclingConversionAttempt(
                 backend_name=_PYPDFIUM2_BACKEND_NAME,
