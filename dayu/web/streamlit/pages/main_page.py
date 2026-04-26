@@ -9,9 +9,18 @@ from pathlib import Path
 
 import streamlit as st
 
-from dayu.services.protocols import FinsServiceProtocol, WriteServiceProtocol
+from dayu.contracts.session import SessionSource
+from dayu.services.chat_service import ChatService
+from dayu.services.fins_service import FinsService
+from dayu.services.protocols import (
+    ChatServiceProtocol,
+    FinsServiceProtocol,
+    WriteServiceProtocol,
+)
+from dayu.services.startup_preparation import PreparedHostRuntimeDependencies
+from dayu.services.write_service import WriteService
 from dayu.web.streamlit.components.watchlist import WatchlistItem
-from dayu.web.streamlit.pages.chat_tab import ChatServiceClient, render_chat_tab
+from dayu.web.streamlit.pages.chat_tab import render_chat_tab
 from dayu.web.streamlit.pages.filing_tab import render_filing_tab
 from dayu.web.streamlit.pages.report_tab import render_report_tab
 
@@ -19,20 +28,16 @@ from dayu.web.streamlit.pages.report_tab import render_report_tab
 def render_welcome_page() -> None:
     """渲染欢迎页面（未选中自选股时展示）。"""
 
-    # 系统标题
     st.title("大禹 Agent")
     st.markdown("### 每个投资者的助理分析师")
     st.markdown("---")
 
-    # 系统介绍
     st.markdown("""
     #### 系统介绍
 
-    **大愚 Agent** 是一个面向买方财报分析场景的 Agent 系统，它让AI读财报的方式从丢给它整份财报“大海捞针”变成“按图索骥”，让数据有**置信度**，让投资结论、投资报告可审计、可追踪。  
+    **大愚 Agent** 是一个面向买方财报分析场景的 Agent 系统，它让AI读财报的方式从丢给它整份财报"大海捞针"变成"按图索骥"，让数据有**置信度**，让投资结论、投资报告可审计、可追踪。
     """)
-    
 
-    # 操作指引
     st.markdown("---")
     st.markdown("""
     ### 环境配置：
@@ -53,26 +58,68 @@ def render_welcome_page() -> None:
     st.info("注意：交互式分析或报告生成过程中不要关闭或刷新页面，否则应答会中断，需要重新开始对话或报告生成", icon="⚠️")
 
 
+def _resolve_fins_service(prepared_deps: PreparedHostRuntimeDependencies) -> FinsServiceProtocol:
+    """从 prepared_deps 获取或构造财报服务，缓存于 session_state。"""
+    if "fins_service" not in st.session_state:
+        st.session_state["fins_service"] = FinsService(
+            host=prepared_deps.host,
+            fins_runtime=prepared_deps.fins_runtime,
+            session_source=SessionSource.WEB,
+        )
+    return st.session_state["fins_service"]
+
+
+def _resolve_chat_service(prepared_deps: PreparedHostRuntimeDependencies) -> ChatServiceProtocol:
+    """从 prepared_deps 获取或构造聊天服务，缓存于 session_state。"""
+    if "chat_service" not in st.session_state:
+        st.session_state["chat_service"] = ChatService(
+            host=prepared_deps.host,
+            scene_execution_acceptance_preparer=prepared_deps.scene_execution_acceptance_preparer,
+            company_name_resolver=prepared_deps.fins_runtime.get_company_name,
+            session_source=SessionSource.WEB,
+        )
+    return st.session_state["chat_service"]
+
+
+def _resolve_write_service(prepared_deps: PreparedHostRuntimeDependencies) -> WriteServiceProtocol:
+    """从 prepared_deps 获取或构造写作服务，缓存于 session_state。"""
+    if "write_service" not in st.session_state:
+        st.session_state["write_service"] = WriteService(
+            host=prepared_deps.host,
+            host_governance=prepared_deps.host,
+            workspace=prepared_deps.workspace,
+            scene_execution_acceptance_preparer=prepared_deps.scene_execution_acceptance_preparer,
+            company_name_resolver=prepared_deps.fins_runtime.get_company_name,
+            company_meta_summary_resolver=prepared_deps.fins_runtime.get_company_meta_summary,
+        )
+    return st.session_state["write_service"]
+
+
 def render_stock_detail_page(
     selected_stock: WatchlistItem,
     workspace_root: Path,
-    fins_service: FinsServiceProtocol,
-    write_service: WriteServiceProtocol | None = None,
-    chat_service_client: ChatServiceClient | None = None,
+    prepared_deps: PreparedHostRuntimeDependencies,
 ) -> None:
     """渲染股票详情页面（选中自选股后展示）。
 
     参数:
         selected_stock: 当前选中的自选股。
         workspace_root: 工作区根目录。
-        fins_service: 财报服务实例。
-        write_service: 写作服务实例；为 None 时分析报告功能受限。
-        chat_service_client: 聊天Service客户端；为 None 时交互式分析功能不可用。
+        prepared_deps: 已装配的 Host 运行时依赖，本函数负责构造各 Service 并注入 Tab。
+
+    返回值:
+        无。
+
+    异常:
+        无。
     """
-    # 功能 Tab（带图标）
+
+    fins_service: FinsServiceProtocol = _resolve_fins_service(prepared_deps)
+    chat_service: ChatServiceProtocol = _resolve_chat_service(prepared_deps)
+    write_service: WriteServiceProtocol = _resolve_write_service(prepared_deps)
+
     tabs = st.tabs(["🧾 财报管理", "🧠 交互式分析", "📊 分析报告"])
 
-    # Tab 1: 财报管理
     with tabs[0]:
         render_filing_tab(
             selected_stock=selected_stock,
@@ -80,14 +127,12 @@ def render_stock_detail_page(
             fins_service=fins_service,
         )
 
-    # Tab 2: 交互式分析
     with tabs[1]:
         render_chat_tab(
             selected_stock=selected_stock,
-            chat_service_client=chat_service_client,
+            chat_service=chat_service,
         )
 
-    # Tab 3: 分析报告
     with tabs[2]:
         render_report_tab(
             selected_stock=selected_stock,

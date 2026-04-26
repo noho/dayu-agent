@@ -6,13 +6,13 @@
 
 from __future__ import annotations
 
-import math
+import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-import json
+
 import pandas as pd
 import streamlit as st
-from dataclasses import dataclass
 
 
 
@@ -56,32 +56,31 @@ def load_watchlist_items(workspace_root: Path) -> list[WatchlistItem]:
         workspace_root: 工作区根目录。
 
     返回值:
-        自选股条目列表；文件不存在或解析失败时返回空列表。
+        自选股条目列表；文件不存在时返回空列表。
 
     异常:
-        无：解析失败时返回空列表，不向调用方抛出。
+        json.JSONDecodeError: JSON 格式损坏时抛出（与文件不存在区分）。
+        KeyError: JSON 结构缺少必要字段时抛出。
     """
 
     storage_path = _watchlist_storage_path(workspace_root)
     if not storage_path.exists():
         return []
 
-    try:
-        with open(storage_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        items: list[WatchlistItem] = []
-        for item_data in data.get("items", []):
-            items.append(
-                WatchlistItem(
-                    ticker=str(item_data["ticker"]),
-                    company_name=str(item_data["company_name"]),
-                    created_at=str(item_data["created_at"]),
-                    updated_at=str(item_data["updated_at"]),
-                )
+    with open(storage_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    items: list[WatchlistItem] = []
+    for item_data in data.get("items", []):
+        items.append(
+            WatchlistItem(
+                ticker=str(item_data["ticker"]),
+                company_name=str(item_data["company_name"]),
+                created_at=str(item_data["created_at"]),
+                updated_at=str(item_data["updated_at"]),
             )
-        return items
-    except Exception:
-        return []
+        )
+    return items
 
 
 def save_watchlist_items(workspace_root: Path, items: list[WatchlistItem]) -> None:
@@ -115,7 +114,7 @@ def save_watchlist_items(workspace_root: Path, items: list[WatchlistItem]) -> No
 
 
 def _is_cell_empty(val: object) -> bool:
-    """判断表格单元格是否为空（含 NaN、pd.NA）。
+    """判断表格单元格是否为空（含 NaN、pd.NA、None）。
 
     参数:
         val: 单元格原始值。
@@ -130,13 +129,9 @@ def _is_cell_empty(val: object) -> bool:
     if val is None:
         return True
     try:
-        if val is pd.NA:
-            return True
-    except (TypeError, AttributeError):
-        pass
-    if isinstance(val, float) and math.isnan(val):
-        return True
-    return False
+        return bool(pd.isna(val))
+    except (TypeError, ValueError):
+        return False
 
 
 def _series_cell_str(series_row: pd.Series, key: str) -> str:

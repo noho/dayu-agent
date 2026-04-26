@@ -13,10 +13,6 @@ import streamlit as st
 
 from dayu.web.streamlit.components.watchlist import WatchlistItem, load_watchlist_items, render_watchlist_manager
 
-_INIT_ROLE_KEY = "_init_model_role"
-_ROLE_NON_THINKING = "non_thinking"
-_ROLE_THINKING = "thinking"
-_CONFIG_NEEDS_REFRESH_KEY = "config_needs_refresh"
 
 def render_sidebar(
     workspace_root: Path,
