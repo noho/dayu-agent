@@ -1274,6 +1274,8 @@ dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.html
 ## 9. 文档导航
 
 - 用户手册（当前文档）：[README.md](README.md)
+- 仓库结构总览（鸟瞰地图，按四层模型映射 `dayu/` 子包与 `tests/`）：[docs/repo_structure.md](docs/repo_structure.md)
+- 架构基线：[docs/architect.md](docs/architect.md)
 - 开发手册总览：[dayu/README.md](dayu/README.md)
 - Engine 包开发手册：[dayu/engine/README.md](dayu/engine/README.md)
 - Fins 包开发手册：[dayu/fins/README.md](dayu/fins/README.md)
