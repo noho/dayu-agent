@@ -9,16 +9,11 @@ from pathlib import Path
 
 import streamlit as st
 
-from dayu.contracts.session import SessionSource
-from dayu.services.chat_service import ChatService
-from dayu.services.fins_service import FinsService
 from dayu.services.protocols import (
     ChatServiceProtocol,
     FinsServiceProtocol,
     WriteServiceProtocol,
 )
-from dayu.services.startup_preparation import PreparedHostRuntimeDependencies
-from dayu.services.write_service import WriteService
 from dayu.web.streamlit.components.watchlist import WatchlistItem
 from dayu.web.streamlit.pages.chat_tab import render_chat_tab
 from dayu.web.streamlit.pages.filing_tab import render_filing_tab
@@ -58,54 +53,21 @@ def render_welcome_page() -> None:
     st.info("注意：交互式分析或报告生成过程中不要关闭或刷新页面，否则应答会中断，需要重新开始对话或报告生成", icon="⚠️")
 
 
-def _resolve_fins_service(prepared_deps: PreparedHostRuntimeDependencies) -> FinsServiceProtocol:
-    """从 prepared_deps 获取或构造财报服务，缓存于 session_state。"""
-    if "fins_service" not in st.session_state:
-        st.session_state["fins_service"] = FinsService(
-            host=prepared_deps.host,
-            fins_runtime=prepared_deps.fins_runtime,
-            session_source=SessionSource.WEB,
-        )
-    return st.session_state["fins_service"]
-
-
-def _resolve_chat_service(prepared_deps: PreparedHostRuntimeDependencies) -> ChatServiceProtocol:
-    """从 prepared_deps 获取或构造聊天服务，缓存于 session_state。"""
-    if "chat_service" not in st.session_state:
-        st.session_state["chat_service"] = ChatService(
-            host=prepared_deps.host,
-            scene_execution_acceptance_preparer=prepared_deps.scene_execution_acceptance_preparer,
-            company_name_resolver=prepared_deps.fins_runtime.get_company_name,
-            session_source=SessionSource.WEB,
-        )
-    return st.session_state["chat_service"]
-
-
-def _resolve_write_service(prepared_deps: PreparedHostRuntimeDependencies) -> WriteServiceProtocol:
-    """从 prepared_deps 获取或构造写作服务，缓存于 session_state。"""
-    if "write_service" not in st.session_state:
-        st.session_state["write_service"] = WriteService(
-            host=prepared_deps.host,
-            host_governance=prepared_deps.host,
-            workspace=prepared_deps.workspace,
-            scene_execution_acceptance_preparer=prepared_deps.scene_execution_acceptance_preparer,
-            company_name_resolver=prepared_deps.fins_runtime.get_company_name,
-            company_meta_summary_resolver=prepared_deps.fins_runtime.get_company_meta_summary,
-        )
-    return st.session_state["write_service"]
-
-
 def render_stock_detail_page(
     selected_stock: WatchlistItem,
     workspace_root: Path,
-    prepared_deps: PreparedHostRuntimeDependencies,
+    fins_service: FinsServiceProtocol,
+    chat_service: ChatServiceProtocol,
+    write_service: WriteServiceProtocol,
 ) -> None:
     """渲染股票详情页面（选中自选股后展示）。
 
     参数:
         selected_stock: 当前选中的自选股。
         workspace_root: 工作区根目录。
-        prepared_deps: 已装配的 Host 运行时依赖，本函数负责构造各 Service 并注入 Tab。
+        fins_service: 财报服务协议实例。
+        chat_service: 聊天服务协议实例。
+        write_service: 写作服务协议实例。
 
     返回值:
         无。
@@ -113,10 +75,6 @@ def render_stock_detail_page(
     异常:
         无。
     """
-
-    fins_service: FinsServiceProtocol = _resolve_fins_service(prepared_deps)
-    chat_service: ChatServiceProtocol = _resolve_chat_service(prepared_deps)
-    write_service: WriteServiceProtocol = _resolve_write_service(prepared_deps)
 
     tabs = st.tabs(["🧾 财报管理", "🧠 交互式分析", "📊 分析报告"])
 

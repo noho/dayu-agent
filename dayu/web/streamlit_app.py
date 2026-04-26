@@ -29,6 +29,11 @@ from typing import TYPE_CHECKING
 import streamlit as st
 
 if TYPE_CHECKING:
+    from dayu.services.protocols import (
+        ChatServiceProtocol,
+        FinsServiceProtocol,
+        WriteServiceProtocol,
+    )
     from dayu.services.startup_preparation import PreparedHostRuntimeDependencies
 
 MODULE = "WEB.STREAMLIT.APP"
@@ -64,7 +69,7 @@ def _prepare_host_runtime() -> PreparedHostRuntimeDependencies | None:
     """准备 Streamlit 页面所需的 Host 运行时依赖。
 
     调用 Service 层 ``prepare_host_runtime_dependencies()`` 完成 Host 运行时装配，
-    各 Tab 按需从返回的依赖中构造自己的 Service。
+    由入口 ``main()`` 统一构造各 Service 并注入页面。
 
     参数:
         无。
@@ -90,6 +95,55 @@ def _prepare_host_runtime() -> PreparedHostRuntimeDependencies | None:
         execution_options=None,
         runtime_label="Web Host runtime",
         log_module=MODULE,
+    )
+
+
+def _resolve_services(
+    prepared_deps: PreparedHostRuntimeDependencies,
+) -> tuple[FinsServiceProtocol, ChatServiceProtocol, WriteServiceProtocol]:
+    """从 prepared_deps 构造三个 Service 并缓存在 session_state。
+
+    参数:
+        prepared_deps: 已装配的 Host 运行时依赖。
+
+    返回值:
+        ``(fins_service, chat_service, write_service)`` 三元组。
+    """
+
+    from dayu.contracts.session import SessionSource
+    from dayu.services.chat_service import ChatService
+    from dayu.services.fins_service import FinsService
+    from dayu.services.write_service import WriteService
+
+    if "fins_service" not in st.session_state:
+        st.session_state["fins_service"] = FinsService(
+            host=prepared_deps.host,
+            fins_runtime=prepared_deps.fins_runtime,
+            session_source=SessionSource.WEB,
+        )
+
+    if "chat_service" not in st.session_state:
+        st.session_state["chat_service"] = ChatService(
+            host=prepared_deps.host,
+            scene_execution_acceptance_preparer=prepared_deps.scene_execution_acceptance_preparer,
+            company_name_resolver=prepared_deps.fins_runtime.get_company_name,
+            session_source=SessionSource.WEB,
+        )
+
+    if "write_service" not in st.session_state:
+        st.session_state["write_service"] = WriteService(
+            host=prepared_deps.host,
+            host_governance=prepared_deps.host,
+            workspace=prepared_deps.workspace,
+            scene_execution_acceptance_preparer=prepared_deps.scene_execution_acceptance_preparer,
+            company_name_resolver=prepared_deps.fins_runtime.get_company_name,
+            company_meta_summary_resolver=prepared_deps.fins_runtime.get_company_meta_summary,
+        )
+
+    return (
+        st.session_state["fins_service"],
+        st.session_state["chat_service"],
+        st.session_state["write_service"],
     )
 
 
@@ -142,10 +196,13 @@ def main() -> None:
     if selected_stock is None:
         render_welcome_page()
     elif prepared_deps is not None:
+        fins_service, chat_service, write_service = _resolve_services(prepared_deps)
         render_stock_detail_page(
             selected_stock=selected_stock,
             workspace_root=workspace_root,
-            prepared_deps=prepared_deps,
+            fins_service=fins_service,
+            chat_service=chat_service,
+            write_service=write_service,
         )
     else:
         st.error("财报服务不可用，无法展示股票详情。请检查配置后刷新页面。")
