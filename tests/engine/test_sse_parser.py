@@ -1239,6 +1239,70 @@ async def test_parse_stream_gemini_parallel_tool_calls_without_index() -> None:
     assert result.tool_calls[2]["id"] == "function-call-003"
     assert result.tool_calls[2]["arguments"] == {"query": "上海天气"}
 
+    # 加强：tool_call_id 互不相同，避免出现"3 个调用 args 都对但 id 被错误合并"
+    ids = {tc["id"] for tc in result.tool_calls}
+    assert len(ids) == 3, f"tool_call_id 出现重复: {ids}"
+
+    # 加强：每个 tool call 的 name 字段都非空且独立保留
+    names = [tc["name"] for tc in result.tool_calls]
+    assert all(name == "search_web" for name in names), f"name 字段错位: {names}"
+
     # 无 protocol_errors 和 validation_errors
     assert result.protocol_errors == []
     assert result.validation_errors == []
+
+
+@pytest.mark.asyncio
+async def test_handle_payload_logs_enumerate_fallback_when_index_missing(
+    monkeypatch: Any,
+) -> None:
+    """验证 enumerate 补齐分支在 ``debug_tool_delta=True`` 时打印可观测日志。
+
+    该日志是 Gemini 行为漂移时唯一的定位线索，不能完全静默。
+
+    Args:
+        monkeypatch: pytest monkeypatch 工具，用于替换 ``Log.debug``。
+    """
+    debug_collector = _LogCollector()
+    monkeypatch.setattr(Log, "debug", debug_collector.debug)
+
+    parser = SSEStreamParser(
+        name="gemini",
+        request_id="req_enumerate_log",
+        running_config=_RunningConfigStub(debug_tool_delta=True),
+    )
+
+    payload = json.dumps({
+        "choices": [{
+            "delta": {
+                "tool_calls": [
+                    {
+                        "id": "function-call-A",
+                        "type": "function",
+                        "function": {"name": "search_web", "arguments": "{}"},
+                    },
+                    {
+                        "id": "function-call-B",
+                        "type": "function",
+                        "function": {"name": "search_web", "arguments": "{}"},
+                    },
+                ],
+            },
+            "finish_reason": "tool_calls",
+        }],
+    })
+
+    response = _ResponseStub([
+        f"data: {payload}\n\n".encode("utf-8"),
+        b"data: [DONE]\n\n",
+    ])
+    await _collect_events(_parse_stream(parser, response))
+
+    fallback_messages = [
+        msg for msg in debug_collector.messages if "缺失 index" in msg and "enumerate" in msg
+    ]
+    assert len(fallback_messages) == 2, (
+        f"期望两条 enumerate fallback 日志，实际: {fallback_messages}"
+    )
+    assert any("下标 0" in msg for msg in fallback_messages)
+    assert any("下标 1" in msg for msg in fallback_messages)

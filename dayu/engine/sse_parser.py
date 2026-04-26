@@ -486,6 +486,13 @@ class SSEStreamParser:
         """
         解析单个 SSE payload（data 行内容），产出内容与工具调用增量事件。
 
+        非标 provider 兼容：
+            遍历 ``tool_calls`` 数组时，若某条目缺失 ``index`` 字段（如 Gemini
+            OpenAI 兼容模式），用 enumerate 下标补齐后再下发到
+            ``_handle_tool_call_delta``。该策略依赖 OpenAI 协议设计自洽性——
+            任何 provider 若做跨 chunk 增量必然提供 index 归属标识，因此
+            "无 index" 场景下 enumerate 下标等价于协议层应有的 index。
+
         Args:
             payload: SSE data 行载荷（JSON 字符串）。
 
@@ -605,7 +612,19 @@ class SSEStreamParser:
                     continue
                 # 兼容不发 index 的 provider（如 Gemini OpenAI 兼容模式），
                 # 用数组下标补齐，使下游 _handle_tool_call_delta 无需特殊处理。
+                # 该补齐依赖 OpenAI 协议自洽性：任何 provider 若做跨 chunk 增量，
+                # 必然提供 index 归属标识；因此 "无 index" 场景下 enumerate 下标
+                # 等价于协议层应有的 index。
                 if "index" not in tc:
+                    if self._running_config.debug_tool_delta:
+                        Log.debug(
+                            (
+                                f"{self._log_prefix} tool_call 缺失 index，"
+                                f"使用 enumerate 下标 {index} 补齐"
+                                f"（id={tc.get('id')!r}）"
+                            ),
+                            module=MODULE,
+                        )
                     tc = {**tc, "index": index}
                 async for event in self._handle_tool_call_delta(tc):
                     yield event
@@ -614,11 +633,25 @@ class SSEStreamParser:
         """
         处理单个工具调用增量（从 tool_calls 数组中的一项）。
 
+        本函数严格按 OpenAI 标准协议处理 tool call delta：
+        - 要求 ``tc`` 必须包含合法的 ``index: int``；缺失或类型异常视为协议错误。
+          非标 provider（如 Gemini OpenAI 兼容模式）不发 index 的兼容由上游
+          ``_handle_payload`` 在遍历 tool_calls 数组时用 enumerate 下标补齐后再
+          传入，本函数不做 fallback 推断。
+        - ``function.arguments`` 允许为字符串或 ``None``；``None`` 视为字段不存在
+          安全忽略（兼容 Qwen thinking 模式在 tool call 结束帧发送
+          ``arguments: null``）。其它非字符串类型仍按协议错误处理。
+
         Args:
-            tc: 工具调用增量字典（含 index、id、function 等）。
+            tc: 工具调用增量字典，标准字段含 ``index: int``、``id: str``、
+                ``function: {name: str, arguments: str | None}``。
 
         Yields:
-            StreamEvent — tool_call_start、tool_call_delta。
+            StreamEvent: ``tool_call_start``（id + name 就绪时触发一次）、
+            ``tool_call_delta``（每次有 arguments 增量时触发）。
+
+        Raises:
+            不直接抛异常；协议错误通过 ``_record_protocol_error`` 记录到 trace。
         """
         # 获取工具调用索引
         tool_index = tc.get("index")
