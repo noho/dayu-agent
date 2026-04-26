@@ -15,10 +15,16 @@ from dayu.cli.commands.init import (
     _CustomOpenAIConfig,
     _HF_MIRROR_URL,
     _INIT_ROLE_KEY,
+    _OLLAMA_CATALOG_KEY,
+    _OLLAMA_DEFAULT_MAX_CONTEXT_TOKENS,
+    _OLLAMA_DEFAULT_ENDPOINT,
+    _OllamaConfig,
+    _build_ollama_catalog_entry,
     _PROVIDER_OPTION_CUSTOM_OPENAI,
     _PROVIDER_OPTION_DEEPSEEK_FLASH,
     _PROVIDER_OPTION_DEEPSEEK_PRO,
     _PROVIDER_OPTION_MIMO_PRO,
+    _PROVIDER_OPTION_OLLAMA,
     _ROLE_NON_THINKING,
     _ROLE_THINKING,
     _THIRD_PARTY_OUTPUT_QUIET_ENV,
@@ -30,13 +36,14 @@ from dayu.cli.commands.init import (
     _detect_shell_profile,
     _is_hf_hub_reachable,
     _persist_env_var,
-    _reset_workspace_init_targets,
     _prompt_api_key,
     _prompt_custom_openai_config,
     _prompt_huggingface_config,
+    _prompt_ollama_config,
     _prompt_optional_search_keys,
     _prompt_provider_selection,
     _prompt_sec_user_agent,
+    _reset_workspace_init_targets,
     _resolve_role_from_package_manifest,
     _run_init_prewarm,
     _should_run_init_prewarm,
@@ -44,6 +51,7 @@ from dayu.cli.commands.init import (
     _write_custom_openai_catalog_entries,
     _write_env_to_shell_profile,
     _write_env_windows,
+    _write_ollama_catalog_entries,
     SEC_USER_AGENT_ENV,
     run_init_command,
 )
@@ -634,6 +642,146 @@ class TestWriteCustomOpenAICatalogEntries:
             )
 
 
+class TestPromptOllamaConfig:
+    """本地 Ollama 模型交互测试。"""
+
+    def test_collects_model_id_and_max_context_tokens(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """正常输入时返回收集结果。"""
+        inputs = iter(["qwen3:30b-thinking", "262144"])
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+        config = _prompt_ollama_config()
+
+        assert config == _OllamaConfig(
+            model_id="qwen3:30b-thinking",
+            max_context_tokens=262144,
+        )
+
+    def test_default_max_context_tokens(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """max_context_tokens 回车时使用默认值。"""
+        inputs = iter(["llama3:70b", ""])
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+        config = _prompt_ollama_config()
+
+        assert config.model_id == "llama3:70b"
+        assert config.max_context_tokens == _OLLAMA_DEFAULT_MAX_CONTEXT_TOKENS
+
+    def test_empty_model_id_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """模型 ID 为空时退出。"""
+        monkeypatch.setattr("builtins.input", lambda *_args: "")
+        with pytest.raises(SystemExit) as exc_info:
+            _prompt_ollama_config()
+        assert exc_info.value.code == 1
+
+    def test_invalid_max_context_tokens_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """max_context_tokens 非数字时退出。"""
+        inputs = iter(["qwen3:30b-thinking", "abc"])
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+        with pytest.raises(SystemExit) as exc_info:
+            _prompt_ollama_config()
+        assert exc_info.value.code == 1
+
+    def test_negative_max_context_tokens_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """max_context_tokens 为负数时退出。"""
+        inputs = iter(["qwen3:30b-thinking", "-1"])
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+        with pytest.raises(SystemExit) as exc_info:
+            _prompt_ollama_config()
+        assert exc_info.value.code == 1
+
+    def test_eof_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """EOF 时退出。"""
+        monkeypatch.setattr("builtins.input", lambda *_args: (_ for _ in ()).throw(EOFError))
+        with pytest.raises(SystemExit) as exc_info:
+            _prompt_ollama_config()
+        assert exc_info.value.code == 1
+
+
+class TestBuildOllamaCatalogEntry:
+    """_build_ollama_catalog_entry 返回结构测试。"""
+
+    def test_returns_complete_entry(self) -> None:
+        """验证返回字典包含所有关键字段。"""
+        entry = _build_ollama_catalog_entry(
+            model_id="qwen3:30b-thinking",
+            max_context_tokens=262144,
+            description="测试描述",
+        )
+        assert entry["runner_type"] == "openai_compatible"
+        assert entry["name"] == _OLLAMA_CATALOG_KEY
+        assert entry["endpoint_url"] == f"{_OLLAMA_DEFAULT_ENDPOINT}/v1/chat/completions"
+        assert entry["model"] == "qwen3:30b-thinking"
+        assert entry["headers"] == {"Content-Type": "application/json"}
+        assert entry["supports_usage"] is True
+        assert entry["supports_stream_usage"] is True
+        assert entry["max_context_tokens"] == 262144
+        assert entry["description"] == "测试描述"
+        runtime_hints = entry["runtime_hints"]
+        assert isinstance(runtime_hints, dict)
+        assert "temperature_profiles" in runtime_hints
+        assert "conversation_memory" in runtime_hints
+
+
+class TestWriteOllamaCatalogEntries:
+    """Ollama catalog 写入测试。"""
+
+    def test_merges_into_existing_catalog(self, tmp_path: Path) -> None:
+        """写入 ollama 时保留其他供应商条目。"""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        catalog_path = config_dir / "llm_models.json"
+        catalog_path.write_text(
+            json.dumps(
+                {
+                    "deepseek-v4-flash": {
+                        "runner_type": "openai_compatible",
+                        "name": "deepseek-v4-flash",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        _write_ollama_catalog_entries(
+            config_dir,
+            _OllamaConfig(model_id="qwen3:30b-thinking", max_context_tokens=262144),
+        )
+
+        data = json.loads(catalog_path.read_text(encoding="utf-8"))
+        assert "deepseek-v4-flash" in data
+        assert data[_OLLAMA_CATALOG_KEY]["endpoint_url"] == "http://localhost:11434/v1/chat/completions"
+        assert data[_OLLAMA_CATALOG_KEY]["model"] == "qwen3:30b-thinking"
+        assert data[_OLLAMA_CATALOG_KEY]["max_context_tokens"] == 262144
+        assert data[_OLLAMA_CATALOG_KEY]["runtime_hints"]["temperature_profiles"]["write"]["temperature"] == 0.6
+
+    def test_creates_new_catalog(self, tmp_path: Path) -> None:
+        """llm_models.json 不存在时创建新文件。"""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        _write_ollama_catalog_entries(
+            config_dir,
+            _OllamaConfig(model_id="llama3:70b", max_context_tokens=131072),
+        )
+
+        data = json.loads((config_dir / "llm_models.json").read_text(encoding="utf-8"))
+        assert data[_OLLAMA_CATALOG_KEY]["model"] == "llama3:70b"
+        assert data[_OLLAMA_CATALOG_KEY]["max_context_tokens"] == 131072
+
+    def test_invalid_json_raises_value_error(self, tmp_path: Path) -> None:
+        """损坏的 llm_models.json 应抛出用户可理解的 ValueError。"""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "llm_models.json").write_text("{broken json", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="不是合法 JSON"):
+            _write_ollama_catalog_entries(
+                config_dir,
+                _OllamaConfig(model_id="qwen3:30b-thinking", max_context_tokens=131072),
+            )
+
+
 # --------------------------------------------------------------------------- #
 #  run_init_command 集成测试
 # --------------------------------------------------------------------------- #
@@ -858,6 +1006,152 @@ class TestRunInit:
         llm_models = json.loads((base / "config" / "llm_models.json").read_text(encoding="utf-8"))
         assert llm_models[_CUSTOM_CATALOG_KEY]["model"] == "openai/gpt-4o"
         assert llm_models[_CUSTOM_CATALOG_KEY]["endpoint_url"] == "https://openrouter.ai/api/v1/chat/completions"
+
+    def test_ollama_flow(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """选择 Ollama 时应写入 catalog、更新 manifest，无需 API Key。"""
+        src = tmp_path / "pkg_config"
+        src.mkdir()
+        (src / "run.json").write_text("{}", encoding="utf-8")
+        manifests = src / "prompts" / "manifests"
+        manifests.mkdir(parents=True)
+        (manifests / "write.json").write_text(
+            json.dumps({"model": {"default_name": "mimo-v2.5-pro-plan", "allowed_names": ["mimo-v2.5-pro-plan"]}}),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(
+            "dayu.cli.commands.init.resolve_package_config_path",
+            lambda: src,
+        )
+
+        pkg_assets = tmp_path / "pkg_assets"
+        pkg_assets.mkdir()
+        (pkg_assets / "定性分析模板.md").write_text("# 模板", encoding="utf-8")
+        monkeypatch.setattr(
+            "dayu.cli.commands.init.resolve_package_assets_path",
+            lambda: pkg_assets,
+        )
+
+        _clear_provider_env_vars(monkeypatch)
+        for key in ("TAVILY_API_KEY", "SERPER_API_KEY", "FMP_API_KEY", "HF_ENDPOINT", "HF_TOKEN"):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.delenv(SEC_USER_AGENT_ENV, raising=False)
+        monkeypatch.setattr("dayu.cli.commands.init._is_hf_hub_reachable", lambda: False)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._run_init_prewarm",
+            lambda **_kwargs: (True, ""),
+        )
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_selection",
+            lambda: _PROVIDER_OPTION_OLLAMA,
+        )
+
+        persist_calls: list[tuple[str, str]] = []
+
+        def _mock_persist(key: str, value: str) -> tuple[str, bool]:
+            persist_calls.append((key, value))
+            return "~/.zshrc", True
+
+        monkeypatch.setattr("dayu.cli.commands.init._persist_env_var", _mock_persist)
+        inputs = iter(
+            [
+                "qwen3:30b-thinking",  # _prompt_ollama_config: model_id
+                "262144",              # _prompt_ollama_config: max_context_tokens
+                "",                    # _prompt_optional_search_keys: TAVILY_API_KEY（跳过）
+                "",                    # _prompt_optional_search_keys: SERPER_API_KEY（跳过）
+                "",                    # _prompt_optional_search_keys: FMP_API_KEY（跳过）
+                "",                    # _prompt_huggingface_config: HF 镜像（默认 Y）
+                "",                    # _prompt_huggingface_config: HF_TOKEN（跳过）
+                "",                    # _prompt_sec_user_agent: SEC_USER_AGENT（跳过）
+            ]
+        )
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+        base = tmp_path / "workspace"
+        base.mkdir()
+        args = Namespace(base=str(base), overwrite=False)
+
+        exit_code = run_init_command(args)
+
+        assert exit_code == 0
+        # persist_calls[0] 是 DAYU_INIT_PROVIDER_OPTION（记住用户选择），
+        # Ollama 不需要 API Key，不应有其他 persist 调用（除了可选项）
+        assert persist_calls[0] == ("DAYU_INIT_PROVIDER_OPTION", "ollama")
+        result_manifest = json.loads(
+            (base / "config" / "prompts" / "manifests" / "write.json").read_text(encoding="utf-8")
+        )
+        assert result_manifest["model"]["default_name"] == _OLLAMA_CATALOG_KEY
+        assert result_manifest["model"]["allowed_names"] == ["mimo-v2.5-pro-plan", _OLLAMA_CATALOG_KEY]
+        llm_models = json.loads((base / "config" / "llm_models.json").read_text(encoding="utf-8"))
+        assert llm_models[_OLLAMA_CATALOG_KEY]["model"] == "qwen3:30b-thinking"
+        assert llm_models[_OLLAMA_CATALOG_KEY]["endpoint_url"] == "http://localhost:11434/v1/chat/completions"
+        assert llm_models[_OLLAMA_CATALOG_KEY]["max_context_tokens"] == 262144
+
+    def test_ollama_flow_default_max_context_tokens(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Ollama 流程中 max_context_tokens 回车使用默认值。"""
+        src = tmp_path / "pkg_config"
+        src.mkdir()
+        (src / "run.json").write_text("{}", encoding="utf-8")
+        manifests = src / "prompts" / "manifests"
+        manifests.mkdir(parents=True)
+        (manifests / "write.json").write_text(
+            json.dumps({"model": {"default_name": "mimo-v2.5-pro-plan", "allowed_names": ["mimo-v2.5-pro-plan"]}}),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(
+            "dayu.cli.commands.init.resolve_package_config_path",
+            lambda: src,
+        )
+        pkg_assets = tmp_path / "pkg_assets"
+        pkg_assets.mkdir()
+        (pkg_assets / "定性分析模板.md").write_text("# 模板", encoding="utf-8")
+        monkeypatch.setattr(
+            "dayu.cli.commands.init.resolve_package_assets_path",
+            lambda: pkg_assets,
+        )
+
+        _clear_provider_env_vars(monkeypatch)
+        for key in ("TAVILY_API_KEY", "SERPER_API_KEY", "FMP_API_KEY", "HF_ENDPOINT", "HF_TOKEN"):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.delenv(SEC_USER_AGENT_ENV, raising=False)
+        monkeypatch.setattr("dayu.cli.commands.init._is_hf_hub_reachable", lambda: False)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._run_init_prewarm",
+            lambda **_kwargs: (True, ""),
+        )
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_selection",
+            lambda: _PROVIDER_OPTION_OLLAMA,
+        )
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._persist_env_var",
+            lambda _k, _v: ("~/.zshrc", True),
+        )
+        inputs = iter(
+            [
+                "llama3:70b",          # _prompt_ollama_config: model_id
+                "",                    # _prompt_ollama_config: max_context_tokens（使用默认值）
+                "",                    # _prompt_optional_search_keys: TAVILY_API_KEY（跳过）
+                "",                    # _prompt_optional_search_keys: SERPER_API_KEY（跳过）
+                "",                    # _prompt_optional_search_keys: FMP_API_KEY（跳过）
+                "",                    # _prompt_huggingface_config: HF 镜像（默认 Y）
+                "",                    # _prompt_huggingface_config: HF_TOKEN（跳过）
+                "",                    # _prompt_sec_user_agent: SEC_USER_AGENT（跳过）
+            ]
+        )
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+        base = tmp_path / "workspace"
+        base.mkdir()
+        args = Namespace(base=str(base), overwrite=False)
+
+        exit_code = run_init_command(args)
+
+        assert exit_code == 0
+        llm_models = json.loads((base / "config" / "llm_models.json").read_text(encoding="utf-8"))
+        assert llm_models[_OLLAMA_CATALOG_KEY]["model"] == "llama3:70b"
+        assert llm_models[_OLLAMA_CATALOG_KEY]["max_context_tokens"] == _OLLAMA_DEFAULT_MAX_CONTEXT_TOKENS
 
 
 class TestUpdateManifestSecondInit:

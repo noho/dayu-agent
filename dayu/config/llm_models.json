@@ -994,11 +994,11 @@
       }
     }
   },
-  "qwen3:30b-thinking": {
+  "ollama": {
     "runner_type": "openai_compatible",
-    "name": "qwen3:30b-thinking",
+    "name": "ollama",
     "endpoint_url": "http://localhost:11434/v1/chat/completions",
-    "model": "qwen3:30b-thinking",
+    "model": "YOUR_MODEL_HERE",
     "headers": {
       "Content-Type": "application/json"
     },
@@ -1007,10 +1007,10 @@
     "stream_idle_heartbeat_sec": 10.0,
     "supports_stream": true,
     "supports_tool_calling": true,
-    "supports_usage": false,
-    "supports_stream_usage": false,
+    "supports_usage": true,
+    "supports_stream_usage": true,
     "max_context_tokens": 262144,
-    "description": "Ollama 本地模型 - 请根据实际 num_ctx 配置调整 max_context_tokens",
+    "description": "Ollama 本地模型（通过 dayu-cli init 配置实际模型名和 max_context_tokens）",
     "runtime_hints": {
       "temperature_profiles": {
         "write": {

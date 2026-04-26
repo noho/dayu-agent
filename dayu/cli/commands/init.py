@@ -59,7 +59,27 @@ _PROVIDER_OPTION_OPENAI = "openai"
 _PROVIDER_OPTION_ANTHROPIC = "anthropic"
 _PROVIDER_OPTION_GEMINI = "gemini"
 _PROVIDER_OPTION_QWEN = "qwen"
+_PROVIDER_OPTION_OLLAMA = "ollama"
 _PROVIDER_OPTION_CUSTOM_OPENAI = "custom_openai"
+
+# 本地 Ollama 模型统一使用的目录键
+_OLLAMA_CATALOG_KEY = "ollama"
+_OLLAMA_DEFAULT_ENDPOINT = "http://localhost:11434"
+_OLLAMA_DEFAULT_MAX_CONTEXT_TOKENS = 262144
+_OLLAMA_TEMPERATURE_PROFILES: dict[str, dict[str, float]] = {
+    "write": {"temperature": 0.6},
+    "overview": {"temperature": 0.1},
+    "audit": {"temperature": 0.2},
+    "decision": {"temperature": 0.3},
+    "interactive": {"temperature": 0.2},
+    "prompt": {"temperature": 0.2},
+    "infer": {"temperature": 0.1},
+    "conversation_compaction": {"temperature": 0.1},
+}
+_OLLAMA_CONVERSATION_MEMORY: dict[str, int] = {
+    "episodic_memory_token_budget_floor": 6000,
+    "episodic_memory_token_budget_cap": 6000,
+}
 
 # 自定义 OpenAI 兼容 API（OpenRouter 等）统一使用的目录键
 _CUSTOM_CATALOG_KEY = "custom-openai"
@@ -141,6 +161,13 @@ _PROVIDER_OPTIONS: tuple[_ProviderOption, ...] = (
         api_key_name="QWEN_API_KEY",
         non_thinking_model="qwen-plus",
         thinking_model="qwen-plus-thinking",
+    ),
+    _ProviderOption(
+        option_key=_PROVIDER_OPTION_OLLAMA,
+        display_name="本地 Ollama 模型",
+        api_key_name="",
+        non_thinking_model=_OLLAMA_CATALOG_KEY,
+        thinking_model=_OLLAMA_CATALOG_KEY,
     ),
     _ProviderOption(
         option_key=_PROVIDER_OPTION_CUSTOM_OPENAI,
@@ -822,9 +849,12 @@ def _prompt_provider_selection() -> str:
 
     print("\n请选择你要使用的初始化模型方案（输入编号）：\n")
     for i, option in enumerate(_PROVIDER_OPTIONS, 1):
-        configured = "  ✓ 已配置" if os.environ.get(option.api_key_name) else ""
         default_marker = "（默认）" if (i - 1) == default_idx else ""
-        print(f"  {i}. {option.display_name}  — {option.api_key_name}{configured}{default_marker}")
+        if option.api_key_name:
+            configured = "  ✓ 已配置" if os.environ.get(option.api_key_name) else ""
+            print(f"  {i}. {option.display_name}  — {option.api_key_name}{configured}{default_marker}")
+        else:
+            print(f"  {i}. {option.display_name}{default_marker}")
 
     print()
     default_num = default_idx + 1
@@ -1027,6 +1057,145 @@ def _write_custom_openai_catalog_entries(
         api_key_name=api_key_name,
         model_id=custom.model_id,
         description=f"自定义 OpenAI 兼容 API（{custom.base_url}）",
+    )
+
+    catalog_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+# --------------------------------------------------------------------------- #
+#  本地 Ollama 模型配置
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class _OllamaConfig:
+    """用户配置的本地 Ollama 模型参数。"""
+
+    model_id: str
+    max_context_tokens: int
+
+
+def _prompt_ollama_config() -> _OllamaConfig:
+    """交互式收集本地 Ollama 模型参数。
+
+    收集模型 ID（必填）和最大上下文 tokens（可选，有默认值）。
+
+    Returns:
+        已收集完毕的 ``_OllamaConfig``。
+
+    Raises:
+        SystemExit: 用户中断或必填项为空。
+    """
+
+    print("\n— 本地 Ollama 模型配置 —")
+    print(f"  默认 endpoint: {_OLLAMA_DEFAULT_ENDPOINT}/v1/chat/completions")
+    try:
+        model_id = input("  模型 ID（如 qwen3:30b-thinking、llama3:70b）: ").strip()
+        if not model_id:
+            print("错误: 模型 ID 不能为空")
+            sys.exit(1)
+
+        raw_tokens = input(
+            f"  最大上下文 tokens（直接回车使用默认值 {_OLLAMA_DEFAULT_MAX_CONTEXT_TOKENS}）: "
+        ).strip()
+        if raw_tokens:
+            max_context_tokens = int(raw_tokens)
+            if max_context_tokens <= 0:
+                print("错误: 最大上下文 tokens 必须为正整数")
+                sys.exit(1)
+        else:
+            max_context_tokens = _OLLAMA_DEFAULT_MAX_CONTEXT_TOKENS
+    except (EOFError, KeyboardInterrupt):
+        print()
+        sys.exit(1)
+    except ValueError:
+        print(f"错误: 最大上下文 tokens 必须为正整数")
+        sys.exit(1)
+
+    return _OllamaConfig(
+        model_id=model_id,
+        max_context_tokens=max_context_tokens,
+    )
+
+
+def _build_ollama_catalog_entry(
+    *,
+    model_id: str,
+    max_context_tokens: int,
+    description: str,
+) -> dict[str, object]:
+    """构造本地 Ollama 模型的 catalog 条目。
+
+    Args:
+        model_id: 用户输入的 Ollama 模型 ID。
+        max_context_tokens: 最大上下文 tokens 数。
+        description: 写入 catalog 的描述信息。
+
+    Returns:
+        可直接写入 ``llm_models.json`` 的模型条目字典。
+    """
+
+    runtime_hints: dict[str, object] = {
+        "temperature_profiles": _OLLAMA_TEMPERATURE_PROFILES,
+        "conversation_memory": _OLLAMA_CONVERSATION_MEMORY,
+    }
+    return {
+        "runner_type": "openai_compatible",
+        "name": _OLLAMA_CATALOG_KEY,
+        "endpoint_url": f"{_OLLAMA_DEFAULT_ENDPOINT}/v1/chat/completions",
+        "model": model_id,
+        "headers": {
+            "Content-Type": "application/json",
+        },
+        "timeout": 3600,
+        "stream_idle_timeout": 120.0,
+        "stream_idle_heartbeat_sec": 10.0,
+        "supports_stream": True,
+        "supports_tool_calling": True,
+        "supports_usage": True,
+        "supports_stream_usage": True,
+        "max_context_tokens": max_context_tokens,
+        "extra_payloads": {},
+        "description": description,
+        "runtime_hints": runtime_hints,
+    }
+
+
+def _write_ollama_catalog_entries(
+    config_dir: Path,
+    ollama: _OllamaConfig,
+) -> None:
+    """将 Ollama 模型条目写入工作区 ``llm_models.json``。
+
+    thinking / 非 thinking 角色共享同一个 catalog key ``ollama``，
+    因而这里只覆盖该单个条目，同时保留文件中的其他供应商配置。
+
+    Args:
+        config_dir: 工作区配置目录。
+        ollama: 用户填写的 Ollama 模型参数。
+
+    Raises:
+        ValueError: ``llm_models.json`` 非法或顶层结构不是对象时抛出。
+        OSError: 文件读写失败时抛出。
+    """
+
+    catalog_path = config_dir / "llm_models.json"
+    data: dict[str, object] = {}
+    if catalog_path.exists():
+        raw_text = catalog_path.read_text(encoding="utf-8")
+        if raw_text.strip():
+            try:
+                parsed = json.loads(raw_text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{catalog_path} 不是合法 JSON，请先修复该文件后再重试 init。") from exc
+            if not isinstance(parsed, dict):
+                raise ValueError(f"{catalog_path} 顶层必须是 JSON 对象，请先修复该文件后再重试 init。")
+            data = parsed
+
+    data[_OLLAMA_CATALOG_KEY] = _build_ollama_catalog_entry(
+        model_id=ollama.model_id,
+        max_context_tokens=ollama.max_context_tokens,
+        description=f"Ollama 本地模型（{ollama.model_id}）",
     )
 
     catalog_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -1248,7 +1417,16 @@ def run_init_command(args: Namespace) -> int:
     env_vars_written = False
     main_key_persist_failed = False
 
-    if chosen_option_key == _PROVIDER_OPTION_CUSTOM_OPENAI:
+    if chosen_option_key == _PROVIDER_OPTION_OLLAMA:
+        effective_api_key_name = ""
+        ollama = _prompt_ollama_config()
+        try:
+            _write_ollama_catalog_entries(config_dir, ollama)
+        except ValueError as exc:
+            print(f"\n❌ {exc}")
+            return 1
+        print(f"✓ 已写入 Ollama 模型条目到 {config_dir / 'llm_models.json'}")
+    elif chosen_option_key == _PROVIDER_OPTION_CUSTOM_OPENAI:
         effective_api_key_name = chosen_option.api_key_name
         custom = _prompt_custom_openai_config(effective_api_key_name)
         try:
@@ -1293,7 +1471,8 @@ def run_init_command(args: Namespace) -> int:
     non_thinking = chosen_option.non_thinking_model
     thinking = chosen_option.thinking_model
     if main_key_persist_failed:
-        print(f"\n⚠️  跳过 manifest 更新（{effective_api_key_name} 未持久化）")
+        key_label = effective_api_key_name or "API Key"
+        print(f"\n⚠️  跳过 manifest 更新（{key_label} 未持久化）")
     else:
         updated_count = _update_manifest_default_models(config_dir, non_thinking, thinking)
         print(f"✓ 默认模型已设置为: {non_thinking} / {thinking}（更新了 {updated_count} 个 manifest）")

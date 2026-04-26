@@ -9,7 +9,7 @@
       "deepseek-v4-flash",
       "deepseek-v4-pro",
       "qwen-plus",
-      "qwen3:30b-thinking",
+      "ollama",
       "gpt-5.4",
       "claude-sonnet-4-6",
       "gemini-2.5-flash"
