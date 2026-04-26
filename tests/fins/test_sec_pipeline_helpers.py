@@ -3044,3 +3044,17 @@ def test_cleanup_stale_filing_dirs(tmp_path: Path) -> None:
         form_windows=form_windows,
         filing_results=[],
     ) == 0
+
+
+@pytest.mark.unit
+def test_split_form_input_preserves_forms_with_spaces() -> None:
+    """``split_form_input`` 仅按逗号拆分，不按空格拆，确保 SC 13G 等不被破坏。"""
+    assert _sec_form_utils.split_form_input("10-K,10-Q") == ["10-K", "10-Q"]
+    assert _sec_form_utils.split_form_input("SC 13G,10-K,DEF 14A") == ["SC 13G", "10-K", "DEF 14A"]
+    assert _sec_form_utils.split_form_input("SC 13G") == ["SC 13G"]
+    assert _sec_form_utils.split_form_input("10-K, 10-Q") == ["10-K", "10-Q"]
+
+    with pytest.raises(ValueError, match="form_type 不能为空"):
+        _sec_form_utils.split_form_input("")
+    with pytest.raises(ValueError, match="form_type 不能为空"):
+        _sec_form_utils.split_form_input(" , ")

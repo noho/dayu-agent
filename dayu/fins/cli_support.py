@@ -1327,7 +1327,7 @@ def _coerce_forms_input(raw_forms: Optional[Sequence[str] | str]) -> Optional[st
     cleaned_items = [str(item).strip() for item in raw_forms if str(item).strip()]
     if not cleaned_items:
         raise ValueError("forms 不能为空")
-    return " ".join(cleaned_items)
+    return ",".join(cleaned_items)
 
 
 def _coerce_document_ids_input(

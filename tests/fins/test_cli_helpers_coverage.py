@@ -461,6 +461,9 @@ def test_coerce_and_validate_helpers(tmp_path: Path) -> None:
 
     assert module._coerce_forms_input(None) is None
     assert module._coerce_forms_input("10-K") == "10-K"
+    # 序列输入使用逗号连接，不能错误拆分含空格的 form（如 SC 13G）
+    assert module._coerce_forms_input(["10-K", "10-Q"]) == "10-K,10-Q"
+    assert module._coerce_forms_input(("SC 13G", "10-K", "DEF 14A")) == "SC 13G,10-K,DEF 14A"
     assert module._coerce_document_ids_input(" fil_1 , fil_2 ") == ["fil_1", "fil_2"]
     assert module._coerce_document_ids_input(["fil_1", "fil_2", "fil_1"]) == ["fil_1", "fil_2"]
     with pytest.raises(ValueError, match="forms 不能为空"):

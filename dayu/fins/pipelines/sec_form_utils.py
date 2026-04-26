@@ -121,7 +121,7 @@ def split_form_input(raw_form_input: str) -> list[str]:
         ValueError: 输入为空时抛出。
     """
 
-    values = [item.strip() for item in re.split(r"[,\s]+", raw_form_input) if item.strip()]
+    values = [item.strip() for item in re.split(r",\s*", raw_form_input) if item.strip()]
     if not values:
         raise ValueError("form_type 不能为空")
     return values
