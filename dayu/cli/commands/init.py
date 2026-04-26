@@ -67,11 +67,6 @@ _OLLAMA_CATALOG_KEY = "ollama"
 _OLLAMA_DEFAULT_ENDPOINT = "http://localhost:11434"
 _OLLAMA_DEFAULT_MAX_CONTEXT_TOKENS = 262144
 _OLLAMA_DEFAULT_WRITE_CHAPTER_LANE = 2
-_DEFAULT_WRITE_CHAPTER_LANE = 5
-_PROVIDER_DEFAULT_WRITE_CHAPTER_LANES: frozenset[int] = frozenset({
-    _OLLAMA_DEFAULT_WRITE_CHAPTER_LANE,
-    _DEFAULT_WRITE_CHAPTER_LANE,
-})
 _OLLAMA_TEMPERATURE_PROFILES: dict[str, dict[str, float]] = {
     "write": {"temperature": 0.6},
     "overview": {"temperature": 0.1},
@@ -1213,19 +1208,55 @@ def _build_ollama_catalog_entry(
     }
 
 
-def _set_write_chapter_lane(config_dir: Path, target: int) -> None:
+def _read_package_default_write_chapter_lane() -> int | None:
+    """从包内 ``run.json`` 读取 ``write_chapter`` lane 默认值。
+
+    Returns:
+        包内配置的 ``write_chapter`` 值；文件缺失、解析失败或结构不符时返回 None。
+
+    Raises:
+        无。
+    """
+
+    try:
+        pkg_run_json = resolve_package_config_path() / "run.json"
+        raw_text = pkg_run_json.read_text(encoding="utf-8")
+        payload: object = json.loads(raw_text)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    host_config = payload.get("host_config")
+    if not isinstance(host_config, dict):
+        return None
+    lane_section = host_config.get("lane")
+    if not isinstance(lane_section, dict):
+        return None
+    value = lane_section.get("write_chapter")
+    return value if isinstance(value, int) else None
+
+
+def _set_write_chapter_lane(
+    config_dir: Path,
+    target: int,
+    *,
+    previous_default: int | None,
+) -> None:
     """设置 ``run.json`` 中 ``write_chapter`` lane 为指定供应商默认值。
 
-    仅当当前值属于已知的供应商默认值（2 或 5）时才覆写，
-    以尊重用户手动自定义的值。
+    仅当当前值等于 ``previous_default`` 时才覆写，以尊重用户手动自定义。
 
     Args:
         config_dir: 工作区配置目录，即 ``workspace/config``。
         target: 目标供应商默认值。
+        previous_default: 前一个供应商的默认值；为 None 时不做任何覆写。
 
     Raises:
         无：文件缺失、解析失败或结构不符预期均安静跳过。
     """
+
+    if previous_default is None:
+        return
 
     run_json_path = config_dir / "run.json"
     if not run_json_path.exists():
@@ -1244,7 +1275,7 @@ def _set_write_chapter_lane(config_dir: Path, target: int) -> None:
     if not isinstance(lane_section, dict):
         return
     current = lane_section.get("write_chapter")
-    if not isinstance(current, int) or current not in _PROVIDER_DEFAULT_WRITE_CHAPTER_LANES:
+    if current != previous_default:
         return
     if current == target:
         return
@@ -1520,7 +1551,10 @@ def run_init_command(args: Namespace) -> int:
             print(f"\n❌ {exc}")
             return 1
         print(f"✓ 已写入 Ollama 模型条目到 {config_dir / 'llm_models.json'}")
-        _set_write_chapter_lane(config_dir, _OLLAMA_DEFAULT_WRITE_CHAPTER_LANE)
+        _pkg_lane = _read_package_default_write_chapter_lane()
+        _set_write_chapter_lane(
+            config_dir, _OLLAMA_DEFAULT_WRITE_CHAPTER_LANE, previous_default=_pkg_lane,
+        )
     elif chosen_option_key == _PROVIDER_OPTION_CUSTOM_OPENAI:
         effective_api_key_name = chosen_option.api_key_name
         custom = _prompt_custom_openai_config(effective_api_key_name)
@@ -1562,9 +1596,12 @@ def run_init_command(args: Namespace) -> int:
                 print(f"   为避免切换模型后下次启动找不到 API Key，跳过 manifest 更新。")
                 print(f"   请手动配置环境变量后重新运行 dayu-cli init。")
 
-    # 非 Ollama 供应商恢复 write_chapter lane 为默认值（从 Ollama 切换时需要）
+    # 非 Ollama 供应商恢复 write_chapter lane 为包内默认值（从 Ollama 切换时需要）
     if chosen_option_key != _PROVIDER_OPTION_OLLAMA:
-        _set_write_chapter_lane(config_dir, _DEFAULT_WRITE_CHAPTER_LANE)
+        _pkg_lane = _read_package_default_write_chapter_lane()
+        _set_write_chapter_lane(
+            config_dir, _pkg_lane or 5, previous_default=_OLLAMA_DEFAULT_WRITE_CHAPTER_LANE,
+        )
 
     # 3. 更新 manifest 默认模型（仅在主 key 持久化成功或已存在时执行）
     non_thinking = chosen_option.non_thinking_model
