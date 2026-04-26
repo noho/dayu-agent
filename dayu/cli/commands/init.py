@@ -67,6 +67,11 @@ _OLLAMA_CATALOG_KEY = "ollama"
 _OLLAMA_DEFAULT_ENDPOINT = "http://localhost:11434"
 _OLLAMA_DEFAULT_MAX_CONTEXT_TOKENS = 262144
 _OLLAMA_DEFAULT_WRITE_CHAPTER_LANE = 2
+_DEFAULT_WRITE_CHAPTER_LANE = 5
+_PROVIDER_DEFAULT_WRITE_CHAPTER_LANES: frozenset[int] = frozenset({
+    _OLLAMA_DEFAULT_WRITE_CHAPTER_LANE,
+    _DEFAULT_WRITE_CHAPTER_LANE,
+})
 _OLLAMA_TEMPERATURE_PROFILES: dict[str, dict[str, float]] = {
     "write": {"temperature": 0.6},
     "overview": {"temperature": 0.1},
@@ -1208,13 +1213,15 @@ def _build_ollama_catalog_entry(
     }
 
 
-def _override_ollama_write_chapter_lane(config_dir: Path) -> None:
-    """将 ``run.json`` 中 ``write_chapter`` lane 覆盖为 Ollama 推荐值。
+def _set_write_chapter_lane(config_dir: Path, target: int) -> None:
+    """设置 ``run.json`` 中 ``write_chapter`` lane 为指定供应商默认值。
 
-    仅当当前值等于迁移脚本的默认值（5）时才覆写，以尊重用户自定义。
+    仅当当前值属于已知的供应商默认值（2 或 5）时才覆写，
+    以尊重用户手动自定义的值。
 
     Args:
         config_dir: 工作区配置目录，即 ``workspace/config``。
+        target: 目标供应商默认值。
 
     Raises:
         无：文件缺失、解析失败或结构不符预期均安静跳过。
@@ -1237,9 +1244,11 @@ def _override_ollama_write_chapter_lane(config_dir: Path) -> None:
     if not isinstance(lane_section, dict):
         return
     current = lane_section.get("write_chapter")
-    if current != 5:
+    if not isinstance(current, int) or current not in _PROVIDER_DEFAULT_WRITE_CHAPTER_LANES:
         return
-    lane_section["write_chapter"] = _OLLAMA_DEFAULT_WRITE_CHAPTER_LANE
+    if current == target:
+        return
+    lane_section["write_chapter"] = target
     run_json_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -1511,7 +1520,7 @@ def run_init_command(args: Namespace) -> int:
             print(f"\n❌ {exc}")
             return 1
         print(f"✓ 已写入 Ollama 模型条目到 {config_dir / 'llm_models.json'}")
-        _override_ollama_write_chapter_lane(config_dir)
+        _set_write_chapter_lane(config_dir, _OLLAMA_DEFAULT_WRITE_CHAPTER_LANE)
     elif chosen_option_key == _PROVIDER_OPTION_CUSTOM_OPENAI:
         effective_api_key_name = chosen_option.api_key_name
         custom = _prompt_custom_openai_config(effective_api_key_name)
@@ -1552,6 +1561,10 @@ def run_init_command(args: Namespace) -> int:
                 print(f"   已为当前进程设置，但重开终端后会丢失。")
                 print(f"   为避免切换模型后下次启动找不到 API Key，跳过 manifest 更新。")
                 print(f"   请手动配置环境变量后重新运行 dayu-cli init。")
+
+    # 非 Ollama 供应商恢复 write_chapter lane 为默认值（从 Ollama 切换时需要）
+    if chosen_option_key != _PROVIDER_OPTION_OLLAMA:
+        _set_write_chapter_lane(config_dir, _DEFAULT_WRITE_CHAPTER_LANE)
 
     # 3. 更新 manifest 默认模型（仅在主 key 持久化成功或已存在时执行）
     non_thinking = chosen_option.non_thinking_model

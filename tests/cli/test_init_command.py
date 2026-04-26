@@ -23,11 +23,12 @@ from dayu.cli.commands.init import (
     _OLLAMA_DEFAULT_MAX_CONTEXT_TOKENS,
     _OLLAMA_DEFAULT_ENDPOINT,
     _OLLAMA_DEFAULT_WRITE_CHAPTER_LANE,
+    _DEFAULT_WRITE_CHAPTER_LANE,
     _OllamaConfig,
     _SMALL_CONTEXT_EPISODIC_MEMORY_CAP,
     _SMALL_CONTEXT_EPISODIC_MEMORY_FLOOR,
     _build_ollama_catalog_entry,
-    _override_ollama_write_chapter_lane,
+    _set_write_chapter_lane,
     _PROVIDER_OPTION_CUSTOM_OPENAI,
     _PROVIDER_OPTION_DEEPSEEK_FLASH,
     _PROVIDER_OPTION_DEEPSEEK_PRO,
@@ -2405,57 +2406,85 @@ class TestBuildConversationMemoryOverrides:
 # --------------------------------------------------------------------------- #
 
 
-class TestOverrideOllamaWriteChapterLane:
-    """Ollama write_chapter lane 覆盖测试。"""
+class TestSetWriteChapterLane:
+    """write_chapter lane 供应商切换测试。"""
 
-    def test_overrides_default_5_to_2(self, tmp_path: Path) -> None:
-        """当前值为迁移默认值 5 时覆盖为 2。"""
+    def test_ollama_overrides_5_to_2(self, tmp_path: Path) -> None:
+        """当前值为 5（非 Ollama 默认）时覆盖为 2。"""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         run_json = config_dir / "run.json"
         run_json.write_text(
             json.dumps({
                 "host_config": {
-                    "lane": {
-                        "llm_api": 8,
-                        "write_chapter": 5,
-                    }
+                    "lane": {"llm_api": 8, "write_chapter": 5}
                 }
             }),
             encoding="utf-8",
         )
 
-        _override_ollama_write_chapter_lane(config_dir)
+        _set_write_chapter_lane(config_dir, _OLLAMA_DEFAULT_WRITE_CHAPTER_LANE)
 
         data = json.loads(run_json.read_text(encoding="utf-8"))
         assert data["host_config"]["lane"]["write_chapter"] == _OLLAMA_DEFAULT_WRITE_CHAPTER_LANE
 
-    def test_preserves_custom_value(self, tmp_path: Path) -> None:
-        """当前值不是 5 时保留用户自定义值。"""
+    def test_switch_from_ollama_to_other_restores_5(self, tmp_path: Path) -> None:
+        """当前值为 2（Ollama 默认）时恢复为 5。"""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         run_json = config_dir / "run.json"
         run_json.write_text(
             json.dumps({
                 "host_config": {
-                    "lane": {
-                        "write_chapter": 3,
-                    }
+                    "lane": {"llm_api": 8, "write_chapter": 2}
                 }
             }),
             encoding="utf-8",
         )
 
-        _override_ollama_write_chapter_lane(config_dir)
+        _set_write_chapter_lane(config_dir, _DEFAULT_WRITE_CHAPTER_LANE)
+
+        data = json.loads(run_json.read_text(encoding="utf-8"))
+        assert data["host_config"]["lane"]["write_chapter"] == _DEFAULT_WRITE_CHAPTER_LANE
+
+    def test_preserves_custom_value(self, tmp_path: Path) -> None:
+        """当前值不属于已知供应商默认值时保留用户自定义值。"""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        run_json = config_dir / "run.json"
+        run_json.write_text(
+            json.dumps({
+                "host_config": {
+                    "lane": {"write_chapter": 3}
+                }
+            }),
+            encoding="utf-8",
+        )
+
+        _set_write_chapter_lane(config_dir, _DEFAULT_WRITE_CHAPTER_LANE)
 
         data = json.loads(run_json.read_text(encoding="utf-8"))
         assert data["host_config"]["lane"]["write_chapter"] == 3
+
+    def test_same_value_noop(self, tmp_path: Path) -> None:
+        """当前值与目标值相同时不写入。"""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        run_json = config_dir / "run.json"
+        original = json.dumps({
+            "host_config": {"lane": {"write_chapter": 5}}
+        }, ensure_ascii=False, indent=2) + "\n"
+        run_json.write_text(original, encoding="utf-8")
+
+        _set_write_chapter_lane(config_dir, _DEFAULT_WRITE_CHAPTER_LANE)
+
+        assert run_json.read_text(encoding="utf-8") == original
 
     def test_missing_run_json_noop(self, tmp_path: Path) -> None:
         """run.json 不存在时安静跳过。"""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
-        _override_ollama_write_chapter_lane(config_dir)
+        _set_write_chapter_lane(config_dir, _DEFAULT_WRITE_CHAPTER_LANE)
 
     def test_missing_lane_section_noop(self, tmp_path: Path) -> None:
         """host_config.lane 不存在时安静跳过。"""
@@ -2463,7 +2492,7 @@ class TestOverrideOllamaWriteChapterLane:
         config_dir.mkdir()
         run_json = config_dir / "run.json"
         run_json.write_text(json.dumps({"host_config": {}}), encoding="utf-8")
-        _override_ollama_write_chapter_lane(config_dir)
+        _set_write_chapter_lane(config_dir, _DEFAULT_WRITE_CHAPTER_LANE)
 
 
 # --------------------------------------------------------------------------- #
