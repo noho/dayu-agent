@@ -1149,7 +1149,7 @@ def _prompt_ollama_config() -> _OllamaConfig:
     print("\n— 本地 Ollama 模型配置 —")
     print(f"  默认 endpoint: {_OLLAMA_DEFAULT_ENDPOINT}/v1/chat/completions")
     try:
-        model_id = input("  模型 ID（如 qwen3:30b-thinking、llama3:70b）: ").strip()
+        model_id = input("  模型 ID（如 qwen3:30b-thinking、gemma4:31b、llama3:70b）: ").strip()
         if not model_id:
             print("错误: 模型 ID 不能为空")
             sys.exit(1)
