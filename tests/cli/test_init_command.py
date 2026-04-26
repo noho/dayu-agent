@@ -21,7 +21,9 @@ from dayu.cli.commands.init import (
     _PROVIDER_OPTION_MIMO_PRO,
     _ROLE_NON_THINKING,
     _ROLE_THINKING,
+    _THIRD_PARTY_OUTPUT_QUIET_ENV,
     _classify_model_role,
+    _configure_third_party_output_quiet_env,
     _confirm_workspace_reset,
     _copy_assets,
     _copy_config,
@@ -64,6 +66,13 @@ def _clear_provider_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
 
     for key in _PROVIDER_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
+
+
+def _set_quiet_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    """设置第三方库输出降噪环境变量为 init 推荐值。"""
+
+    for key, value in _THIRD_PARTY_OUTPUT_QUIET_ENV:
+        monkeypatch.setenv(key, value)
 
 
 # --------------------------------------------------------------------------- #
@@ -737,6 +746,7 @@ class TestRunInit:
         # 预设 HF 环境变量
         monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com")
         monkeypatch.setenv("HF_TOKEN", "hf-test-xxx")
+        _set_quiet_env_vars(monkeypatch)
 
         # _persist_env_var 不应被调用
         persist_calls: list[str] = []
@@ -1174,6 +1184,87 @@ class TestPersistEnvVar:
 
 
 # --------------------------------------------------------------------------- #
+#  _configure_third_party_output_quiet_env
+# --------------------------------------------------------------------------- #
+
+
+class TestConfigureThirdPartyOutputQuietEnv:
+    """第三方库输出降噪环境变量配置测试。"""
+
+    def test_missing_values_are_persisted(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """推荐降噪变量缺失时应逐项持久化，并输出告知信息。"""
+
+        for key, _value in _THIRD_PARTY_OUTPUT_QUIET_ENV:
+            monkeypatch.delenv(key, raising=False)
+
+        persist_calls: list[tuple[str, str]] = []
+
+        def _mock_persist(key: str, value: str) -> tuple[str, bool]:
+            persist_calls.append((key, value))
+            monkeypatch.setenv(key, value)
+            return "~/.zshrc", True
+
+        monkeypatch.setattr("dayu.cli.commands.init._persist_env_var", _mock_persist)
+
+        written, failed = _configure_third_party_output_quiet_env()
+
+        assert written is True
+        assert failed is False
+        assert persist_calls == list(_THIRD_PARTY_OUTPUT_QUIET_ENV)
+        captured = capsys.readouterr()
+        assert "第三方库输出降噪已配置" in captured.out
+        assert "TRANSFORMERS_VERBOSITY=error" in captured.out
+        assert "HF_HUB_DISABLE_PROGRESS_BARS=1" in captured.out
+        assert "TQDM_DISABLE=1" in captured.out
+
+    def test_existing_values_are_idempotent(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """推荐降噪变量已存在且值一致时不重复持久化。"""
+
+        _set_quiet_env_vars(monkeypatch)
+        persist_calls: list[tuple[str, str]] = []
+
+        def _mock_persist(key: str, value: str) -> tuple[str, bool]:
+            persist_calls.append((key, value))
+            return "~/.zshrc", True
+
+        monkeypatch.setattr("dayu.cli.commands.init._persist_env_var", _mock_persist)
+
+        written, failed = _configure_third_party_output_quiet_env()
+
+        assert written is False
+        assert failed is False
+        assert persist_calls == []
+        captured = capsys.readouterr()
+        assert "第三方库输出降噪已存在，跳过写入" in captured.out
+        assert "第三方库输出降噪已配置" not in captured.out
+
+    def test_persist_failure_returns_failure_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """任一降噪变量持久化失败时返回失败标记供 init 统一告警。"""
+
+        for key, _value in _THIRD_PARTY_OUTPUT_QUIET_ENV:
+            monkeypatch.delenv(key, raising=False)
+
+        def _mock_persist(key: str, value: str) -> tuple[str, bool]:
+            monkeypatch.setenv(key, value)
+            return "~/.zshrc", key != "HF_HUB_DISABLE_PROGRESS_BARS"
+
+        monkeypatch.setattr("dayu.cli.commands.init._persist_env_var", _mock_persist)
+
+        written, failed = _configure_third_party_output_quiet_env()
+
+        assert written is True
+        assert failed is True
+
+
+# --------------------------------------------------------------------------- #
 #  _resolve_role_from_package_manifest — 错误分支
 # --------------------------------------------------------------------------- #
 
@@ -1543,7 +1634,7 @@ class TestRunInitFailurePaths:
         assert prewarm_calls == []
 
     def test_search_key_persist_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """搜索 Key 持久化失败时触发 search_persist_failed 分支。"""
+        """搜索 Key 持久化失败时触发辅助环境变量持久化失败分支。"""
         base = self._prepare_mocks(tmp_path, monkeypatch)
 
         inputs = iter(["sk-test", "tvly-test", "", "", "n", "", ""])
@@ -1936,7 +2027,7 @@ class TestInitPrewarm:
         assert exit_code == 0
 
     def test_hf_persist_fails_sets_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """HF 环境变量持久化失败时也触发 search_persist_failed。"""
+        """HF 环境变量持久化失败时也触发辅助环境变量持久化失败分支。"""
         base = self._prepare_run_init_environment(tmp_path, monkeypatch)
         monkeypatch.setattr(
             "dayu.cli.commands.init._run_init_prewarm",

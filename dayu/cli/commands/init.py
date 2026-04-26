@@ -177,6 +177,12 @@ _ROLE_THINKING = "thinking"
 # 时静默降级到声明顺序靠前的另一档。
 _INIT_PROVIDER_OPTION_ENV = "DAYU_INIT_PROVIDER_OPTION"
 
+_THIRD_PARTY_OUTPUT_QUIET_ENV: tuple[tuple[str, str], ...] = (
+    ("TRANSFORMERS_VERBOSITY", "error"),
+    ("HF_HUB_DISABLE_PROGRESS_BARS", "1"),
+    ("TQDM_DISABLE", "1"),
+)
+
 _OPTIONAL_SEARCH_KEYS: list[str] = [
     TAVILY_API_KEY_ENV,
     SERPER_API_KEY_ENV,
@@ -337,6 +343,46 @@ def _persist_env_var(key: str, value: str) -> tuple[str, bool]:
     except OSError:
         return str(profile), False
     return str(profile), True
+
+
+def _configure_third_party_output_quiet_env() -> tuple[bool, bool]:
+    """配置第三方模型下载库的终端输出降噪环境变量。
+
+    Args:
+        无。
+
+    Returns:
+        ``(env_vars_written, persist_failed)`` 元组。
+        ``env_vars_written`` 表示本次是否尝试写入持久化环境变量；
+        ``persist_failed`` 表示是否存在至少一个变量持久化失败。
+
+    Raises:
+        无。
+    """
+
+    env_vars_written = False
+    persist_failed = False
+    configured_items: list[str] = []
+
+    for key, value in _THIRD_PARTY_OUTPUT_QUIET_ENV:
+        configured_items.append(f"{key}={value}")
+        if os.environ.get(key) == value:
+            continue
+
+        _target, ok = _persist_env_var(key, value)
+        env_vars_written = True
+        if not ok:
+            persist_failed = True
+
+    configured_text = "、".join(configured_items)
+    if persist_failed:
+        print(f"⚠️  第三方库输出降噪已应用到当前进程，部分变量未能持久化: {configured_text}")
+    elif not env_vars_written:
+        print(f"✓ 第三方库输出降噪已存在，跳过写入: {configured_text}")
+    else:
+        print(f"✓ 第三方库输出降噪已配置: {configured_text}")
+
+    return env_vars_written, persist_failed
 
 
 # --------------------------------------------------------------------------- #
@@ -1259,13 +1305,13 @@ def run_init_command(args: Namespace) -> int:
     )
 
     # 4. 可选联网检索 Key
-    search_persist_failed = False
+    auxiliary_env_persist_failed = False
     search_keys = _prompt_optional_search_keys()
     for key, value in search_keys:
         _search_target, search_ok = _persist_env_var(key, value)
         env_vars_written = True
         if not search_ok:
-            search_persist_failed = True
+            auxiliary_env_persist_failed = True
         print(f"✓ {key} 已配置")
 
     # 5. HuggingFace 镜像与 Token
@@ -1274,17 +1320,24 @@ def run_init_command(args: Namespace) -> int:
         _hf_target, hf_ok = _persist_env_var(key, value)
         env_vars_written = True
         if not hf_ok:
-            search_persist_failed = True
+            auxiliary_env_persist_failed = True
         display = value if key == "HF_ENDPOINT" else f"{value[:4]}***"
         print(f"✓ {key} 已配置: {display}")
 
-    # 6. SEC User-Agent
+    # 6. 第三方库终端输出降噪
+    quiet_env_written, quiet_env_failed = _configure_third_party_output_quiet_env()
+    if quiet_env_written:
+        env_vars_written = True
+    if quiet_env_failed:
+        auxiliary_env_persist_failed = True
+
+    # 7. SEC User-Agent
     sec_ua = _prompt_sec_user_agent()
     if sec_ua is not None:
         _sec_target, sec_ok = _persist_env_var(sec_ua[0], sec_ua[1])
         env_vars_written = True
         if not sec_ok:
-            search_persist_failed = True
+            auxiliary_env_persist_failed = True
         print(f"✓ {sec_ua[0]} 已配置: {sec_ua[1]}")
 
     if should_run_prewarm and not main_key_persist_failed:
@@ -1299,15 +1352,15 @@ def run_init_command(args: Namespace) -> int:
             print(f"⚠️  CLI 运行时预热失败: {prewarm_message}")
             print("   不影响当前工作区初始化成功；后续首次运行 prompt / interactive / write 时可能更慢。")
 
-    # 6. 完成提示
+    # 8. 完成提示
     print(f"\n✓ 工作区已初始化: {base_dir}")
 
     if env_vars_written:
-        if main_key_persist_failed or search_persist_failed:
+        if main_key_persist_failed or auxiliary_env_persist_failed:
             shell_name = os.environ.get("SHELL", "").rsplit("/", 1)[-1] or "unknown"
             print(f"\n⚠️  当前环境（shell={shell_name}）不支持自动写入环境变量。")
             print(f"   已为当前进程设置环境变量，但重开终端后会丢失。")
-            print(f"   请手动将 API Key 添加到你的 shell 配置文件中。\n")
+            print(f"   请手动将相关环境变量添加到你的 shell 配置文件中。\n")
         elif platform.system() != "Windows":
             profile, _ = _detect_shell_profile()
             print(f"\n⚠️  环境变量已写入 {profile}，但当前终端尚未生效。")

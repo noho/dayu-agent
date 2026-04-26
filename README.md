@@ -151,6 +151,7 @@ dayu-cli init
 3. 输入对应 API Key 并永久写入环境变量。
 4. 可选配置联网检索 API Key（TAVILY / SERPER / FMP）
 5. 自动检测 HuggingFace 官方 Hub 连通性：不可达时默认启用镜像加速，可达时默认跳过。可选配置 `HF_TOKEN` 提升下载稳定性。
+6. 自动配置 `transformers` / `huggingface_hub` / `tqdm` 输出降噪环境变量，避免下载进度打断终端状态栏。
 
 
 可选参数：
