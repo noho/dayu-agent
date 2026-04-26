@@ -1070,6 +1070,59 @@ class TestSSEErrorPathContentComplete:
         assert types[-2] == EventType.CONTENT_COMPLETE
         assert types[-1] == EventType.ERROR
         assert events[-1].metadata.get("error_type") == "tool_call_incomplete"
+        assert events[-1].metadata.get("error_source") == "sse_protocol"
+        assert events[-1].metadata.get("partial_tool_name") is None
+        assert events[-1].metadata.get("partial_tool_calls") == [
+            {
+                "index_in_iteration": 0,
+                "id": "",
+                "function": {
+                    "name": "",
+                    "arguments": "{}",
+                },
+            }
+        ]
+
+    async def test_validation_error_carries_partial_tool_name_and_attempt(self):
+        """SSE tool_call 截断错误应附带部分工具名与 attempt 元数据。"""
+
+        runner = AsyncOpenAIRunner(
+            endpoint_url="https://api.example.com",
+            model="gpt-4",
+            headers={},
+        )
+        response = _fake_client_response([
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_section","arguments":"{\\"ref\\":\\"sec_1\\""}}]},"finish_reason":"tool_calls"}]}\n\n',
+            'data: [DONE]\n\n',
+        ])
+        events = []
+        trace_meta = {
+            "run_id": "run_test",
+            "iteration_id": "run_test_iteration",
+            "request_id": "test_request",
+        }
+        async for event in runner._process_sse_stream(
+            response,
+            "test_request",
+            trace_meta,
+            attempt=2,
+        ):
+            events.append(event)
+
+        assert events[-1].type == EventType.ERROR
+        assert events[-1].metadata.get("partial_tool_name") == "read_section"
+        assert events[-1].metadata.get("attempt") == 2
+        assert events[-1].metadata.get("partial_tool_calls") == [
+            {
+                "index_in_iteration": 0,
+                "id": "call_1",
+                "function": {
+                    "name": "read_section",
+                    "arguments": '{"ref":"sec_1"',
+                },
+            }
+        ]
+        assert events[-2].metadata.get("attempt") is None
 
     async def test_empty_output_done_event_has_truncated_field(self):
         """T8: 空输出的 done_event 应包含 truncated 字段。"""

@@ -953,6 +953,7 @@ python -m utils.analyze_tool_trace \
 这个脚本会输出：
 - 工具级诊断总表（成功率、截断率、载荷大小、错误分布）
 - 详细失败签名（例如 URL 拦截、HTTP 状态、超时等），而不只停留在粗粒度 `error_code`
+- 单独汇总 `sse_protocol_error`，直接展示 `partial_tool_name`、失败时的 `arguments` 前缀以及对应 `sse_error_*.json` 冷存路径
 - 围绕“降低模型认知负担”的信号分析
 - 截断续读、重复调用、上下文负担、失败与降级诊断
 - 各 run / turn 的工具调用链与 trace 完整性检查

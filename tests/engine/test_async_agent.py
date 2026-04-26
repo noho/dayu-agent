@@ -276,6 +276,7 @@ class DummyToolTraceRecorder:
         self.iteration_usages: list[dict] = []
         self.finished_iterations: list[dict] = []
         self.final_responses: list[dict] = []
+        self.sse_protocol_errors: list[dict[str, Any]] = []
         self.closed = False
 
     def start_iteration(
@@ -420,6 +421,44 @@ class DummyToolTraceRecorder:
                 "degraded": degraded,
                 "filtered": filtered,
                 "finish_reason": finish_reason,
+            }
+        )
+
+    def record_sse_protocol_error(
+        self,
+        *,
+        iteration_id: str,
+        error_type: str,
+        partial_tool_name: str | None,
+        partial_tool_calls: list[dict[str, Any]],
+        request_id: str,
+        attempt: int | None = None,
+    ) -> None:
+        """记录 SSE 协议错误现场。
+
+        Args:
+            iteration_id: iteration ID。
+            error_type: 协议错误类型。
+            partial_tool_name: 首个可识别工具名。
+            partial_tool_calls: 部分 tool call 片段。
+            request_id: 当前请求 ID。
+            attempt: 当前请求尝试次数。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        self.sse_protocol_errors.append(
+            {
+                "iteration_id": iteration_id,
+                "error_type": error_type,
+                "partial_tool_name": partial_tool_name,
+                "partial_tool_calls": partial_tool_calls,
+                "request_id": request_id,
+                "attempt": attempt,
             }
         )
 
@@ -1787,6 +1826,62 @@ class TestAsyncAgentStreaming:
         assert len(recorder.finished_iterations) == 1
         assert len(recorder.final_responses) == 0
         assert recorder.closed is True
+
+    async def test_tool_trace_recorder_records_sse_protocol_error_payload(self):
+        """验证 SSE 协议错误会透传到 trace recorder。"""
+
+        runner = DummyRunner(
+            [
+                [
+                    content_complete(""),
+                    error_event(
+                        "Tool call arguments incomplete or invalid",
+                        recoverable=False,
+                        error_type="tool_call_incomplete",
+                        error_source="sse_protocol",
+                        sse_protocol_error_type="tool_call_incomplete",
+                        partial_tool_name="read_section",
+                        partial_tool_calls=[
+                            {
+                                "index_in_iteration": 0,
+                                "id": "call_1",
+                                "function": {
+                                    "name": "read_section",
+                                    "arguments": '{"ref":"sec_1"',
+                                },
+                            }
+                        ],
+                        request_id="req_deadbeef",
+                        attempt=2,
+                    ),
+                ]
+            ]
+        )
+        trace_factory = DummyToolTraceRecorderFactory()
+        agent = AsyncAgent(runner, tool_trace_recorder_factory=trace_factory)
+
+        result = await agent.run_and_wait("test prompt")
+        recorder = trace_factory.created_recorders[0]["recorder"]
+
+        assert result.success is False
+        assert len(recorder.sse_protocol_errors) == 1
+        assert recorder.sse_protocol_errors[0] == {
+            "iteration_id": recorder.started_iterations[0]["iteration_id"],
+            "error_type": "tool_call_incomplete",
+            "partial_tool_name": "read_section",
+            "partial_tool_calls": [
+                {
+                    "index_in_iteration": 0,
+                    "id": "call_1",
+                    "function": {
+                        "name": "read_section",
+                        "arguments": '{"ref":"sec_1"',
+                    },
+                }
+            ],
+            "request_id": "req_deadbeef",
+            "attempt": 2,
+        }
 
     async def test_tool_trace_recorder_force_answer_propagates_filtered_finish_reason(self):
         """回归 finding 086：force_answer 降级路径也必须透传 filtered / finish_reason。

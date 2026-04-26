@@ -249,6 +249,59 @@ def test_v2_tool_trace_recorder_records_iteration_context_and_final_response(tmp
 
 
 @pytest.mark.unit
+def test_v2_tool_trace_recorder_records_sse_protocol_error(tmp_path: Path) -> None:
+    """验证 SSE 协议错误会写入结构化记录与 raw payload。"""
+
+    output_dir = tmp_path / "trace"
+    _, recorder = _build_recorder(output_dir, run_id="run_sse_error", session_id="sess_sse_error")
+
+    recorder.record_sse_protocol_error(
+        iteration_id="run_sse_error_iteration_1",
+        error_type="tool_call_incomplete",
+        partial_tool_name="read_section",
+        partial_tool_calls=[
+            {
+                "index_in_iteration": 0,
+                "id": "call_1",
+                "function": {
+                    "name": "read_section",
+                    "arguments": '{"ref":"sec_1"',
+                },
+            }
+        ],
+        request_id="req_deadbeef",
+        attempt=2,
+    )
+
+    records = _read_trace_records(output_dir)
+    assert len(records) == 1
+    record = records[0]
+    assert record["trace_type"] == "sse_protocol_error"
+    assert record["error_type"] == "tool_call_incomplete"
+    assert record["partial_tool_name"] == "read_section"
+    assert record["request_id"] == "req_deadbeef"
+    assert record["attempt"] == 2
+    storage_uri = Path(record["partial_arguments_ref"]["storage_uri"])
+    assert storage_uri.name.startswith("sse_error_")
+    raw_payload = json.loads(storage_uri.read_text(encoding="utf-8"))
+    assert raw_payload == {
+        "error_type": "tool_call_incomplete",
+        "request_id": "req_deadbeef",
+        "attempt": 2,
+        "tool_calls": [
+            {
+                "index_in_iteration": 0,
+                "id": "call_1",
+                "function": {
+                    "name": "read_section",
+                    "arguments": '{"ref":"sec_1"',
+                },
+            }
+        ],
+    }
+
+
+@pytest.mark.unit
 def test_v2_tool_trace_recorder_uses_shorter_excerpt_for_system_messages(tmp_path: Path) -> None:
     """验证系统消息 excerpt 比当前轮用户消息更短。"""
 

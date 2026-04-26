@@ -62,6 +62,7 @@ class SSEParseResult:
         protocol_errors: SSE 协议层错误列表（坏 UTF-8 / 坏 JSON / 非法 tool_calls 结构）。
         usage: 流式响应中捕获的 token 用量统计（需 stream_options.include_usage=true）。
         raw_tool_call_count: 模型尝试的工具调用数（含验证失败的），用于判断是否进入工具调用分支。
+        partial_tool_calls: 截止失败点已累计到的 tool call 片段，供 trace 落盘定位截断现场。
     """
 
     content: str = ""
@@ -73,6 +74,7 @@ class SSEParseResult:
     protocol_errors: list[dict[str, Any]] = field(default_factory=list)
     usage: dict[str, Any] | None = None
     raw_tool_call_count: int = 0
+    partial_tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
 
 def should_log_debug(
@@ -196,6 +198,7 @@ class SSEStreamParser:
             protocol_errors=list(self._protocol_errors),
             usage=self._usage,
             raw_tool_call_count=len(self._tool_calls_buffer),
+            partial_tool_calls=self._build_partial_tool_calls_snapshot(),
         )
 
     async def parse_stream(self, response: "ClientResponse") -> AsyncIterator[StreamEvent]:
@@ -830,3 +833,41 @@ class SSEStreamParser:
             })
 
         return tool_calls, validation_errors
+
+    def _build_partial_tool_calls_snapshot(self) -> list[dict[str, Any]]:
+        """构建失败时可落盘的部分 tool call 片段快照。
+
+        Args:
+            无。
+
+        Returns:
+            按 `index_in_iteration` 排序的部分 tool call 列表；每项保留
+            `id` / `function.name` / 累计到当前时刻的 `arguments` 字符串。
+
+        Raises:
+            无。
+        """
+
+        partial_tool_calls: list[dict[str, Any]] = []
+        for tool_index in sorted(self._tool_calls_buffer.keys()):
+            tc_data = self._tool_calls_buffer[tool_index]
+            function_name = tc_data.get("name")
+            if not isinstance(function_name, str):
+                function_name = ""
+            tool_call_id = tc_data.get("id")
+            if not isinstance(tool_call_id, str):
+                tool_call_id = ""
+            arguments_buf = tc_data.get("arguments_buf")
+            if not isinstance(arguments_buf, str):
+                arguments_buf = ""
+            partial_tool_calls.append(
+                {
+                    "index_in_iteration": tool_index,
+                    "id": tool_call_id,
+                    "function": {
+                        "name": function_name,
+                        "arguments": arguments_buf,
+                    },
+                }
+            )
+        return partial_tool_calls

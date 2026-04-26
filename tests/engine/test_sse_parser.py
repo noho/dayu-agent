@@ -533,6 +533,50 @@ async def test_handle_tool_call_delta_replays_buffered_prefix_when_id_name_arriv
             "index_in_iteration": 0,
         }
     ]
+    assert result.partial_tool_calls == [
+        {
+            "index_in_iteration": 0,
+            "id": "tc_3",
+            "function": {
+                "name": "tool",
+                "arguments": '{"a":1}',
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_parse_result_exposes_partial_tool_calls_when_arguments_incomplete() -> None:
+    """验证工具参数未闭合时会保留失败点前的部分 tool call 片段。"""
+
+    parser = SSEStreamParser(
+        name="test",
+        request_id="req_partial_tool_call",
+        running_config=_RunningConfigStub(),
+    )
+
+    await _collect_events(
+        parser._handle_tool_call_delta(
+            {
+                "index": 0,
+                "id": "tc_partial",
+                "function": {"name": "read_section", "arguments": '{"ref":"sec_1"'},
+            }
+        )
+    )
+    result = parser.get_result()
+
+    assert result.validation_errors
+    assert result.partial_tool_calls == [
+        {
+            "index_in_iteration": 0,
+            "id": "tc_partial",
+            "function": {
+                "name": "read_section",
+                "arguments": '{"ref":"sec_1"',
+            },
+        }
+    ]
 
 
 @pytest.mark.asyncio

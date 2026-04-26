@@ -40,6 +40,7 @@ TRACE_TYPE_TOOL_CALL = "tool_call"
 TRACE_TYPE_ITERATION_CONTEXT_SNAPSHOT = "iteration_context_snapshot"
 TRACE_TYPE_FINAL_RESPONSE = "final_response"
 TRACE_TYPE_ITERATION_USAGE = "iteration_usage"
+TRACE_TYPE_SSE_PROTOCOL_ERROR = "sse_protocol_error"
 
 _MISSING_RESULT_CODE = "RESULT_MISSING"
 _MISSING_REQUEST_CODE = "REQUEST_MISSING"
@@ -300,6 +301,27 @@ def _build_result_summary(result: dict[str, Any]) -> str:
     code = get_error_code(result) or "UNKNOWN"
     message = get_error_message(result) or ""
     return f"error(code={code}, message={message[:80]})"
+
+
+def _normalize_partial_tool_name(partial_tool_name: str | None) -> str | None:
+    """规范化部分 tool call 的工具名。
+
+    Args:
+        partial_tool_name: 原始工具名。
+
+    Returns:
+        去除空白后的工具名；为空时返回 `None`。
+
+    Raises:
+        无。
+    """
+
+    if partial_tool_name is None:
+        return None
+    normalized_tool_name = partial_tool_name.strip()
+    if not normalized_tool_name:
+        return None
+    return normalized_tool_name
 
 
 def _extract_result_data(result: dict[str, Any]) -> Optional[dict[str, Any]]:
@@ -1111,6 +1133,68 @@ class V2ToolTraceRecorder:
                 module=MODULE,
             )
 
+    def record_sse_protocol_error(
+        self,
+        *,
+        iteration_id: str,
+        error_type: str,
+        partial_tool_name: str | None,
+        partial_tool_calls: list[dict[str, Any]],
+        request_id: str,
+        attempt: int | None = None,
+    ) -> None:
+        """记录 SSE 协议错误现场。
+
+        Args:
+            iteration_id: iteration ID。
+            error_type: 协议错误类型。
+            partial_tool_name: 首个可识别的部分工具名。
+            partial_tool_calls: 截止失败点累计的部分 tool call 片段。
+            request_id: 当前请求 ID。
+            attempt: 当前请求尝试次数。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        try:
+            partial_arguments_ref = self._store.store_raw_payload(
+                run_id=self._run_id,
+                iteration_id=iteration_id,
+                payload_type="sse_error",
+                payload={
+                    "error_type": error_type,
+                    "request_id": request_id,
+                    "attempt": attempt,
+                    "tool_calls": partial_tool_calls,
+                },
+            )
+            self._remember_raw_ref(partial_arguments_ref)
+            record: dict[str, Any] = {
+                "trace_schema_version": TRACE_SCHEMA_VERSION,
+                "trace_type": TRACE_TYPE_SSE_PROTOCOL_ERROR,
+                "recorded_at": datetime.now(UTC).isoformat(),
+                "run_id": self._run_id,
+                "session_id": self._session_id,
+                "iteration_id": iteration_id,
+                "error_type": error_type,
+                "partial_tool_name": _normalize_partial_tool_name(partial_tool_name),
+                "partial_arguments_ref": partial_arguments_ref,
+                "request_id": request_id,
+                "attempt": attempt,
+            }
+            if self._agent_metadata:
+                record.update(self._agent_metadata)
+            self._store.append_record(record)
+        except Exception as exc:
+            Log.warn(
+                f"tool trace 记录 sse_protocol_error 失败: run_id={self._run_id}, iteration_id={iteration_id}, error={exc}",
+                module=MODULE,
+            )
+
     def finish_iteration(
         self,
         *,
@@ -1412,6 +1496,7 @@ __all__ = [
     "TRACE_TYPE_ITERATION_CONTEXT_SNAPSHOT",
     "TRACE_TYPE_FINAL_RESPONSE",
     "TRACE_TYPE_ITERATION_USAGE",
+    "TRACE_TYPE_SSE_PROTOCOL_ERROR",
     "ToolTraceRecorder",
     "ToolTraceRecorderFactory",
     "JsonlToolTraceStore",

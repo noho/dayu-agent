@@ -115,6 +115,35 @@ class ToolTraceRecorder(Protocol):
 
         ...
 
+    def record_sse_protocol_error(
+        self,
+        *,
+        iteration_id: str,
+        error_type: str,
+        partial_tool_name: str | None,
+        partial_tool_calls: list[dict[str, Any]],
+        request_id: str,
+        attempt: int | None = None,
+    ) -> None:
+        """记录 SSE 协议错误现场。
+
+        Args:
+            iteration_id: 当前 iteration ID。
+            error_type: SSE 协议错误类型，例如 ``tool_call_incomplete``。
+            partial_tool_name: 首个可识别的部分工具名；未知时为 ``None``。
+            partial_tool_calls: 截止失败点累计到的部分 tool call 片段。
+            request_id: 当前模型请求 ID。
+            attempt: 当前请求尝试次数；未知时为 ``None``。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        ...
+
     def finish_iteration(
         self,
         *,

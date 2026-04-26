@@ -272,6 +272,12 @@ PrepareIteration
 - `ToolTraceRecorderFactory` 为本次 run 提供 recorder
 - Runner / Agent / ToolRegistry 在执行过程中写 trace
 
+当前稳定 trace 事件补充：
+- `iteration_context_snapshot` 记录本轮送模上下文摘要与冷存引用。
+- `tool_call` 记录工具请求/返回配对后的结构化事实。
+- `iteration_usage` 与 `final_response` 分别记录 token 用量和最终回答。
+- `sse_protocol_error` 记录流式协议失败现场；当 `AsyncOpenAIRunner` 在 SSE tool call 聚合阶段遇到 `tool_call_incomplete` 一类错误时，Engine 会把累计到失败点的部分 `tool_calls` 片段冷存到 `raw_payloads/<run>/<iter>/sse_error_*.json`，并在 session jsonl 中写入 `error_type / partial_tool_name / partial_arguments_ref / request_id / attempt`，用于直接定位被截断的工具名与参数前缀。
+
 Engine 自己不做 run registry，也不做跨进程取消桥接。
 
 ## 8. 当前默认 Runner

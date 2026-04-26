@@ -35,6 +35,8 @@ TRACE_TYPE_TOOL_CALL = "tool_call"
 TRACE_TYPE_ITERATION_USAGE = "iteration_usage"
 TRACE_TYPE_ITERATION_CONTEXT = "iteration_context_snapshot"
 TRACE_TYPE_FINAL_RESPONSE = "final_response"
+# 注意：该字面量必须与 `dayu.engine.tool_trace.TRACE_TYPE_SSE_PROTOCOL_ERROR` 保持一致。
+TRACE_TYPE_SSE_PROTOCOL_ERROR = "sse_protocol_error"
 
 TOP_RECORD_LIMIT = 12
 MAX_EXCERPT_CHARS = 80
@@ -153,6 +155,22 @@ class FinalResponseInfo:
 
 
 @dataclass(slots=True)
+class SSEProtocolErrorInfo:
+    """SSE 协议错误记录。"""
+
+    run_id: str
+    session_id: str
+    iteration_id: str
+    error_type: str
+    partial_tool_name: str | None
+    partial_arguments_ref: RawRef | None
+    request_id: str
+    attempt: int | None
+    recorded_at: str
+    identity: TraceIdentity
+
+
+@dataclass(slots=True)
 class RunInfo:
     """单个 run 的聚合视图。"""
 
@@ -162,7 +180,8 @@ class RunInfo:
     tool_calls: list[ToolCallInfo] = field(default_factory=list)
     iteration_usages: list[IterationUsageInfo] = field(default_factory=list)
     iteration_contexts: list[IterationContextInfo] = field(default_factory=list)
-    final_response: Optional[FinalResponseInfo] = None
+    final_response: FinalResponseInfo | None = None
+    sse_protocol_errors: list[SSEProtocolErrorInfo] = field(default_factory=list)
 
     @property
     def start_time(self) -> str:
@@ -170,7 +189,12 @@ class RunInfo:
 
         timestamps = [
             item.recorded_at
-            for item in [*self.tool_calls, *self.iteration_usages, *self.iteration_contexts]
+            for item in [
+                *self.tool_calls,
+                *self.iteration_usages,
+                *self.iteration_contexts,
+                *self.sse_protocol_errors,
+            ]
             if item.recorded_at
         ]
         if self.final_response and self.final_response.recorded_at:
@@ -183,7 +207,12 @@ class RunInfo:
 
         timestamps = [
             item.recorded_at
-            for item in [*self.tool_calls, *self.iteration_usages, *self.iteration_contexts]
+            for item in [
+                *self.tool_calls,
+                *self.iteration_usages,
+                *self.iteration_contexts,
+                *self.sse_protocol_errors,
+            ]
             if item.recorded_at
         ]
         if self.final_response and self.final_response.recorded_at:
@@ -277,6 +306,20 @@ class RunInfo:
         ordered = sorted(self.iteration_contexts, key=lambda item: item.iteration_index)
         return ordered[0].current_user_message
 
+    @property
+    def sse_protocol_error_count(self) -> int:
+        """返回 SSE 协议错误条数。"""
+
+        return len(self.sse_protocol_errors)
+
+    @property
+    def latest_sse_protocol_error(self) -> Optional[SSEProtocolErrorInfo]:
+        """返回最近一条 SSE 协议错误。"""
+
+        if not self.sse_protocol_errors:
+            return None
+        return max(self.sse_protocol_errors, key=lambda item: item.recorded_at)
+
 
 @dataclass(slots=True)
 class ToolStats:
@@ -300,6 +343,7 @@ class AnalysisBundle:
     """聚合后的分析结果。"""
 
     runs: list[RunInfo]
+    sse_protocol_errors: list[SSEProtocolErrorInfo]
     tool_stats: list[ToolStats]
     duplicate_calls: list[dict[str, Any]]
     truncation_issues: list[dict[str, Any]]
@@ -571,6 +615,28 @@ def _parse_final_response(record: dict[str, Any]) -> Optional[FinalResponseInfo]
     )
 
 
+def _parse_sse_protocol_error(record: dict[str, Any]) -> Optional[SSEProtocolErrorInfo]:
+    """解析 V2 `sse_protocol_error` 记录。"""
+
+    if record.get("trace_type") != TRACE_TYPE_SSE_PROTOCOL_ERROR:
+        return None
+    if record.get("trace_schema_version") != TRACE_SCHEMA_VERSION:
+        return None
+
+    return SSEProtocolErrorInfo(
+        run_id=str(record.get("run_id") or ""),
+        session_id=str(record.get("session_id") or ""),
+        iteration_id=str(record.get("iteration_id") or ""),
+        error_type=str(record.get("error_type") or ""),
+        partial_tool_name=_to_optional_text(record.get("partial_tool_name")),
+        partial_arguments_ref=_parse_raw_ref(record.get("partial_arguments_ref")),
+        request_id=str(record.get("request_id") or ""),
+        attempt=_to_optional_int(record.get("attempt")),
+        recorded_at=str(record.get("recorded_at") or ""),
+        identity=_parse_trace_identity(record),
+    )
+
+
 def _to_optional_text(value: Any) -> Optional[str]:
     """转换为可选字符串。"""
 
@@ -630,6 +696,12 @@ def _group_runs(records: list[dict[str, Any]]) -> list[RunInfo]:
         final_response = _parse_final_response(record)
         if final_response is not None:
             run.final_response = final_response
+            continue
+
+        sse_protocol_error = _parse_sse_protocol_error(record)
+        if sse_protocol_error is not None:
+            run.sse_protocol_errors.append(sse_protocol_error)
+            continue
 
     return sorted(runs.values(), key=lambda item: item.start_time)
 
@@ -831,6 +903,42 @@ def _load_raw_json(raw_ref: Optional[RawRef]) -> Any:
     except (json.JSONDecodeError, OSError):
         return None
     return payload
+
+
+def _extract_sse_partial_arguments_excerpt(sse_error: SSEProtocolErrorInfo) -> str:
+    """从 SSE 协议错误冷存中提取部分 arguments 前缀摘要。"""
+
+    payload = _load_raw_json(sse_error.partial_arguments_ref)
+    if not isinstance(payload, dict):
+        return "-"
+    tool_calls = payload.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return "-"
+
+    target_tool_name = sse_error.partial_tool_name
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            continue
+        function_payload = tool_call.get("function")
+        if not isinstance(function_payload, dict):
+            continue
+        tool_name = _to_optional_text(function_payload.get("name"))
+        if target_tool_name and tool_name != target_tool_name:
+            continue
+        arguments = function_payload.get("arguments")
+        if isinstance(arguments, str) and arguments.strip():
+            return _excerpt(arguments, max_chars=100)
+
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            continue
+        function_payload = tool_call.get("function")
+        if not isinstance(function_payload, dict):
+            continue
+        arguments = function_payload.get("arguments")
+        if isinstance(arguments, str) and arguments.strip():
+            return _excerpt(arguments, max_chars=100)
+    return "-"
 
 
 def _build_large_payload_calls(runs: list[RunInfo]) -> list[dict[str, Any]]:
@@ -1193,13 +1301,14 @@ def _build_context_pressure_runs(runs: list[RunInfo]) -> list[dict[str, Any]]:
         over_soft_limit = any(item.is_over_soft_limit for item in run.iteration_usages)
         compaction_count = max((item.compaction_count for item in run.iteration_usages), default=0)
         continuation_count = max((item.continuation_count for item in run.iteration_usages), default=0)
+        has_sse_protocol_error = run.sse_protocol_error_count > 0
         if not (
             over_soft_limit
             or compaction_count > 0
             or continuation_count > 0
             or run.degraded
             or run.filtered
-            or not run.has_final_response
+            or (not run.has_final_response and not has_sse_protocol_error)
         ):
             continue
         findings.append(
@@ -1216,6 +1325,7 @@ def _build_context_pressure_runs(runs: list[RunInfo]) -> list[dict[str, Any]]:
                 "filtered": run.filtered,
                 "finish_reason": run.finish_reason,
                 "has_final_response": run.has_final_response,
+                "has_sse_protocol_error": has_sse_protocol_error,
                 "max_raw_input_bytes": run.max_raw_input_bytes,
             }
         )
@@ -1283,7 +1393,34 @@ def _build_trace_integrity_issues(runs: list[RunInfo]) -> list[dict[str, Any]]:
                         "detail": f"tool={call.tool_name}, tool_call_id={call.tool_call_id}",
                     }
                 )
+        for sse_error in run.sse_protocol_errors:
+            if sse_error.partial_arguments_ref is None:
+                findings.append(
+                    {
+                        "issue": "sse_protocol_error 缺少 partial_arguments_ref",
+                        "run_id": sse_error.run_id,
+                        "iteration_id": sse_error.iteration_id,
+                        "detail": (
+                            f"error_type={sse_error.error_type}, partial_tool_name="
+                            f"{sse_error.partial_tool_name or '-'}"
+                        ),
+                    }
+                )
     return findings
+
+
+def _collect_sse_protocol_errors(runs: list[RunInfo]) -> list[SSEProtocolErrorInfo]:
+    """收集并排序全部 SSE 协议错误记录。"""
+
+    errors = [item for run in runs for item in run.sse_protocol_errors]
+    return sorted(
+        errors,
+        key=lambda item: (
+            item.recorded_at,
+            item.run_id,
+            _extract_iteration_index(item.iteration_id),
+        ),
+    )
 
 
 def _build_prompt_pairs(runs: list[RunInfo]) -> list[dict[str, Any]]:
@@ -1724,6 +1861,16 @@ def _build_recommendations(bundle: AnalysisBundle) -> list[dict[str, str]]:
             }
         )
 
+    if bundle.sse_protocol_errors:
+        recommendations.append(
+            {
+                "priority": "P0",
+                "title": "优先检查 SSE 协议错误现场，确认问题在工具参数生成还是流式输出稳定性",
+                "reason": "当前 trace 已记录到 `sse_protocol_error`。这类 run 的失败点通常不是工具执行失败，而是模型在流式 tool call 阶段输出了未闭合或非法的 arguments；如果不先看 `partial_tool_name` 与 `sse_error_*.json`，后续所有“工具成功率/降级率”判断都容易偏题。",
+                "action": "优先按报告中的 `partial_tool_name / request_id / attempt / raw_blob` 回放失败现场；先确认是哪一个工具、哪段 arguments 前缀被截断，再决定是收窄 schema、缩短参数面，还是排查上游模型/网关的 SSE 稳定性。",
+            }
+        )
+
     if bundle.large_payload_calls:
         recommendations.append(
             {
@@ -1916,8 +2063,10 @@ def _build_analysis_bundle(runs: list[RunInfo]) -> AnalysisBundle:
     fetch_more_quality = _analyze_fetch_more_quality(runs)
     web_fetch_gaps = _build_web_fetch_gaps(runs)
     web_search_empty_streaks = _build_web_search_empty_streaks(runs)
+    sse_protocol_errors = _collect_sse_protocol_errors(runs)
     bundle = AnalysisBundle(
         runs=runs,
+        sse_protocol_errors=sse_protocol_errors,
         tool_stats=tool_stats,
         duplicate_calls=duplicate_calls,
         truncation_issues=truncation_issues,
@@ -2019,6 +2168,7 @@ def _render_executive_summary(bundle: AnalysisBundle) -> list[str]:
 
     degraded_runs = sum(1 for run in bundle.runs if run.degraded)
     interrupted_runs = sum(1 for run in bundle.runs if not run.has_final_response)
+    sse_protocol_error_runs = sum(1 for run in bundle.runs if run.sse_protocol_error_count > 0)
     total_tool_calls = sum(run.total_tool_calls for run in bundle.runs)
     successful_tool_calls = sum(run.successful_tool_calls for run in bundle.runs)
     lines = [
@@ -2028,6 +2178,7 @@ def _render_executive_summary(bundle: AnalysisBundle) -> list[str]:
         f"- **工具成功率**: {_fmt_ratio(successful_tool_calls, total_tool_calls)}",
         f"- **降级 run 数**: {degraded_runs}/{len(bundle.runs)}",
         f"- **中断 run 数**: {interrupted_runs}/{len(bundle.runs)}",
+        f"- **SSE 协议错误 run 数**: {sse_protocol_error_runs}/{len(bundle.runs)}",
     ]
     if bundle.recommendations:
         lines.append("- **优先建议**:")
@@ -2051,14 +2202,15 @@ def _render_run_overview(bundle: AnalysisBundle) -> list[str]:
     lines = [
         "## 2. Run 总览",
         "",
-        "| run_id | scene | model | iterations | tool_calls | degraded | final_response | max_input_bytes | 首轮用户问题 |",
-        "|---|---|---:|---:|---:|---|---|---:|---|",
+        "| run_id | scene | model | iterations | tool_calls | degraded | final_response | sse_error | max_input_bytes | 首轮用户问题 |",
+        "|---|---|---:|---:|---:|---|---|---|---:|---|",
     ]
     for run in bundle.runs:
         lines.append(
             f"| `{run.run_id}` | `{run.identity.scene_name or '-'}` | `{run.identity.model_name or '-'}` "
             f"| {run.iteration_count} | {run.total_tool_calls} | {'是' if run.degraded else '否'} "
-            f"| {'是' if run.has_final_response else '否'} | {run.max_raw_input_bytes:,} | {_md_escape(_excerpt(run.first_user_message))} |"
+            f"| {'是' if run.has_final_response else '否'} | {'是' if run.sse_protocol_error_count > 0 else '否'} "
+            f"| {run.max_raw_input_bytes:,} | {_md_escape(_excerpt(run.first_user_message))} |"
         )
     lines.append("")
     return lines
@@ -2209,7 +2361,21 @@ def _render_reliability_signals(bundle: AnalysisBundle) -> list[str]:
                 f"| {'是' if item['has_final_response'] else '否'} | {item['max_raw_input_bytes']:,} |"
             )
 
-    lines.extend(["", "### 5.3 工具特定质量信号", ""])
+    lines.extend(["", "### 5.3 SSE 协议错误", ""])
+    if not bundle.sse_protocol_errors:
+        lines.append("- 当前 trace 未记录到 `sse_protocol_error`。")
+    else:
+        lines.append("| run_id | iteration_id | error_type | partial_tool_name | attempt | request_id | arguments_prefix | raw_blob |")
+        lines.append("|---|---|---|---|---:|---|---|---|")
+        for item in bundle.sse_protocol_errors[:TOP_RECORD_LIMIT]:
+            raw_blob = item.partial_arguments_ref.storage_uri if item.partial_arguments_ref is not None else "-"
+            lines.append(
+                f"| `{item.run_id}` | `{item.iteration_id}` | `{item.error_type or '-'}` | "
+                f"`{item.partial_tool_name or '-'}` | {item.attempt or 0} | `{item.request_id or '-'}` | "
+                f"{_md_escape(_extract_sse_partial_arguments_excerpt(item))} | {_md_escape(raw_blob)} |"
+            )
+
+    lines.extend(["", "### 5.4 工具特定质量信号", ""])
     lines.extend(_render_search_document_quality(bundle.search_quality))
     lines.extend(_render_list_documents_quality(bundle.list_documents_quality))
     lines.extend(_render_fetch_more_quality(bundle.fetch_more_quality))
@@ -2362,13 +2528,32 @@ def _render_run_chains(bundle: AnalysisBundle) -> list[str]:
         lines.append(
             f"- scene=`{run.identity.scene_name or '-'}`, model=`{run.identity.model_name or '-'}`, "
             f"agent=`{run.identity.agent_name or '-'}`, degraded={'是' if run.degraded else '否'}, "
-            f"final_response={'是' if run.has_final_response else '否'}"
+            f"final_response={'是' if run.has_final_response else '否'}, "
+            f"sse_protocol_error={'是' if run.sse_protocol_error_count > 0 else '否'}"
         )
         if run.first_user_message:
             lines.append(f"- 首轮用户问题: {_md_escape(_excerpt(run.first_user_message, max_chars=140))}")
+        latest_sse_protocol_error = run.latest_sse_protocol_error
+        if latest_sse_protocol_error is not None:
+            raw_blob = (
+                latest_sse_protocol_error.partial_arguments_ref.storage_uri
+                if latest_sse_protocol_error.partial_arguments_ref is not None
+                else "-"
+            )
+            lines.append(
+                "- 最近一次 SSE 协议错误: "
+                f"error_type=`{latest_sse_protocol_error.error_type or '-'}`, "
+                f"partial_tool_name=`{latest_sse_protocol_error.partial_tool_name or '-'}`, "
+                f"attempt={latest_sse_protocol_error.attempt or '-'}, "
+                f"request_id=`{latest_sse_protocol_error.request_id or '-'}`"
+            )
+            lines.append(
+                f"- 部分 arguments 前缀: {_md_escape(_extract_sse_partial_arguments_excerpt(latest_sse_protocol_error))}"
+            )
+            lines.append(f"- SSE raw blob: {_md_escape(raw_blob)}")
         lines.append("")
         if not run.tool_calls:
-            lines.append("- 本 run 无工具调用。")
+            lines.append("- 本 run 无成功落盘的 `tool_call` 记录。")
             lines.append("")
             continue
         lines.append("| iteration | idx | tool | status | truncated | latency_ms | result_bytes | 参数摘要 | 结果摘要 |")

@@ -110,6 +110,58 @@ _COMPACTION_VALUE_SUMMARY_MAX_CHARS = 160
 _COMPACTION_ERROR_SUMMARY_MAX_CHARS = 120
 
 
+def _extract_sse_protocol_error_trace_payload(
+    error_meta: dict[str, Any],
+) -> tuple[str, str | None, list[dict[str, Any]], str, int | None] | None:
+    """从 Runner 错误 metadata 中提取 SSE 协议错误 trace 载荷。
+
+    Args:
+        error_meta: Runner 产出的错误 metadata。
+
+    Returns:
+        `(
+            error_type,
+            partial_tool_name,
+            partial_tool_calls,
+            request_id,
+            attempt,
+        )` 五元组；若当前错误不是可落盘的 SSE 协议错误则返回 `None`。
+
+    Raises:
+        无。
+    """
+
+    if error_meta.get("error_source") != "sse_protocol":
+        return None
+    raw_error_type = error_meta.get("sse_protocol_error_type")
+    if not isinstance(raw_error_type, str) or not raw_error_type.strip():
+        return None
+    raw_request_id = error_meta.get("request_id")
+    if not isinstance(raw_request_id, str) or not raw_request_id.strip():
+        return None
+    raw_partial_tool_name = error_meta.get("partial_tool_name")
+    partial_tool_name = (
+        raw_partial_tool_name.strip()
+        if isinstance(raw_partial_tool_name, str) and raw_partial_tool_name.strip()
+        else None
+    )
+    raw_partial_tool_calls = error_meta.get("partial_tool_calls")
+    partial_tool_calls = (
+        [tool_call for tool_call in raw_partial_tool_calls if isinstance(tool_call, dict)]
+        if isinstance(raw_partial_tool_calls, list)
+        else []
+    )
+    raw_attempt = error_meta.get("attempt")
+    attempt = raw_attempt if isinstance(raw_attempt, int) and raw_attempt > 0 else None
+    return (
+        raw_error_type,
+        partial_tool_name,
+        partial_tool_calls,
+        raw_request_id,
+        attempt,
+    )
+
+
 def _normalize_system_prompt(system_prompt: Optional[str]) -> str:
     """规范化系统提示词文本。
 
@@ -797,6 +849,24 @@ class AsyncAgent:
                 elif event.type == EventType.ERROR:
                     error_data = event.data if isinstance(event.data, dict) else {}
                     error_meta = event.metadata if isinstance(event.metadata, dict) else {}
+                    if trace_recorder is not None:
+                        sse_protocol_error_payload = _extract_sse_protocol_error_trace_payload(error_meta)
+                        if sse_protocol_error_payload is not None:
+                            (
+                                sse_error_type,
+                                partial_tool_name,
+                                partial_tool_calls,
+                                request_id,
+                                attempt,
+                            ) = sse_protocol_error_payload
+                            trace_recorder.record_sse_protocol_error(
+                                iteration_id=iteration_id,
+                                error_type=sse_error_type,
+                                partial_tool_name=partial_tool_name,
+                                partial_tool_calls=partial_tool_calls,
+                                request_id=request_id,
+                                attempt=attempt,
+                            )
                     err_type = error_meta.get("error_type", "")
                     # context_overflow 特殊处理：尝试压缩后重试
                     overflow_exhausted = False

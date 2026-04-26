@@ -187,6 +187,31 @@ def _require_tool_executor(executor: Optional[ToolExecutor]) -> ToolExecutor:
         raise RuntimeError("tool executor is not set")
     return executor
 
+
+def _extract_partial_tool_name(
+    partial_tool_calls: list[dict[str, Any]],
+) -> str | None:
+    """从部分 tool call 片段中提取首个可用工具名。
+
+    Args:
+        partial_tool_calls: 部分 tool call 片段列表。
+
+    Returns:
+        首个非空工具名；若不存在则返回 `None`。
+
+    Raises:
+        无。
+    """
+
+    for tool_call in partial_tool_calls:
+        function_payload = tool_call.get("function")
+        if not isinstance(function_payload, dict):
+            continue
+        tool_name = function_payload.get("name")
+        if isinstance(tool_name, str) and tool_name.strip():
+            return tool_name
+    return None
+
 # HTTP 状态码常量
 # 可重试状态码（瞬时故障或限流场景）
 RETRIABLE_STATUS_CODES = {
@@ -1032,12 +1057,13 @@ class AsyncOpenAIRunner:
         try:
             for attempt in range(self.max_retries + 1):
                 self._raise_if_cancelled()
+                attempt_number = attempt + 1
                 post_context: Any = None
                 response: Any = None
                 response_entered = False
                 try:
                     Log.debug(
-                        f"{log_prefix} 发送请求到 {self.endpoint_url}（第 {attempt + 1} 次尝试）",
+                        f"{log_prefix} 发送请求到 {self.endpoint_url}（第 {attempt_number} 次尝试）",
                         module=MODULE,
                     )
                     post_context = session.post(
@@ -1058,7 +1084,7 @@ class AsyncOpenAIRunner:
                     response_entered = True
 
                     if response.status == 200:
-                        Log.debug(f"{log_prefix} HTTP 200 成功（第 {attempt + 1} 次尝试）", module=MODULE)
+                        Log.debug(f"{log_prefix} HTTP 200 成功（第 {attempt_number} 次尝试）", module=MODULE)
                         content_type = response.headers.get("Content-Type", "")
 
                         if "text/event-stream" in content_type:
@@ -1067,7 +1093,12 @@ class AsyncOpenAIRunner:
                                     f"{log_prefix} 请求非流式模式但服务端返回 SSE 格式（Content-Type: {content_type}）",
                                     module=MODULE,
                                 )
-                            async for event in self._process_sse_stream(response, request_id, trace_meta):
+                            async for event in self._process_sse_stream(
+                                response,
+                                request_id,
+                                trace_meta,
+                                attempt=attempt_number,
+                            ):
                                 yield event
                         elif "application/json" in content_type or not stream:
                             if stream and "application/json" in content_type:
@@ -1088,7 +1119,12 @@ class AsyncOpenAIRunner:
                                 yield event
                         else:
                             if stream:
-                                async for event in self._process_sse_stream(response, request_id, trace_meta):
+                                async for event in self._process_sse_stream(
+                                    response,
+                                    request_id,
+                                    trace_meta,
+                                    attempt=attempt_number,
+                                ):
                                     yield event
                             else:
                                 result = await _await_or_cancel(
@@ -1312,6 +1348,8 @@ class AsyncOpenAIRunner:
         response: "ClientResponse",
         request_id: str,
         trace_meta: Dict[str, Any],
+        *,
+        attempt: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """
         处理 SSE (Server-Sent Events) streaming 响应。
@@ -1350,6 +1388,12 @@ class AsyncOpenAIRunner:
 
         if result.protocol_errors:
             error_item = result.protocol_errors[0]
+            error_metadata = self._build_sse_protocol_error_metadata(
+                request_id=request_id,
+                error_type=str(error_item.get("error_type") or "response_error"),
+                partial_tool_calls=result.partial_tool_calls,
+                attempt=attempt,
+            )
             Log.error(
                 f"{log_prefix} SSE 协议错误: {error_item.get('message', '')}"
                 f"（error_type={error_item.get('error_type', 'response_error')}）",
@@ -1363,6 +1407,7 @@ class AsyncOpenAIRunner:
                     recoverable=False,
                     error_type=error_item.get("error_type", "response_error"),
                     body=error_item.get("body"),
+                    **error_metadata,
                 ),
                 trace_meta,
             )
@@ -1409,6 +1454,12 @@ class AsyncOpenAIRunner:
                     f"（error_type=tool_call_incomplete）",
                     module=MODULE,
                 )
+                error_metadata = self._build_sse_protocol_error_metadata(
+                    request_id=request_id,
+                    error_type="tool_call_incomplete",
+                    partial_tool_calls=result.partial_tool_calls,
+                    attempt=attempt,
+                )
                 # 保持事件契约：先发 content_complete 再发 error
                 yield self._annotate_event(content_complete(full_content), trace_meta)
                 yield self._annotate_event(error_event(
@@ -1416,6 +1467,7 @@ class AsyncOpenAIRunner:
                     recoverable=False,
                     error_type="tool_call_incomplete",
                     body=json.dumps(result.validation_errors, ensure_ascii=False),
+                    **error_metadata,
                 ), trace_meta)
                 return
 
@@ -1777,6 +1829,44 @@ class AsyncOpenAIRunner:
                 metadata.setdefault("tool_call_id", tool_call_id)
         event.metadata = metadata
         return event
+
+    def _build_sse_protocol_error_metadata(
+        self,
+        *,
+        request_id: str,
+        error_type: str,
+        partial_tool_calls: list[dict[str, Any]],
+        attempt: int | None = None,
+    ) -> dict[str, Any]:
+        """构造 SSE 协议错误的 trace 元数据。
+
+        Args:
+            request_id: 当前请求 ID。
+            error_type: SSE 协议错误类型。
+            partial_tool_calls: 失败点前已累计的部分 tool call 片段。
+            attempt: 当前请求尝试次数。
+
+        Returns:
+            可附着到 error_event metadata 的结构化字典。
+
+        Raises:
+            无。
+        """
+
+        metadata: dict[str, Any] = {
+            "error_source": "sse_protocol",
+            "sse_protocol_error_type": error_type,
+            "request_id": request_id,
+        }
+        if isinstance(attempt, int) and attempt > 0:
+            metadata["attempt"] = attempt
+        if not partial_tool_calls:
+            return metadata
+        metadata["partial_tool_calls"] = partial_tool_calls
+        partial_tool_name = _extract_partial_tool_name(partial_tool_calls)
+        if partial_tool_name is not None:
+            metadata["partial_tool_name"] = partial_tool_name
+        return metadata
     
     def _tool_to_openai_spec(self, tool: Dict) -> Dict:
         """
