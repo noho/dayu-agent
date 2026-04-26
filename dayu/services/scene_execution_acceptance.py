@@ -19,6 +19,7 @@ from dayu.execution.runtime_config import build_agent_running_config_snapshot, b
 from dayu.execution.options import (
     ExecutionOptions,
     ResolvedExecutionOptions,
+    apply_model_runner_runtime_overrides,
     resolve_scene_temperature,
     resolve_scene_execution_options,
 )
@@ -151,7 +152,10 @@ class SceneExecutionAcceptancePreparer:
             model_config=model_config,
         )
         resolved_execution_options = replace(
-            resolved_execution_options,
+            apply_model_runner_runtime_overrides(
+                resolved_execution_options=resolved_execution_options,
+                model_config=model_config,
+            ),
             conversation_memory_settings=conversation_memory_settings,
         )
         accepted_scene = AcceptedSceneExecution(

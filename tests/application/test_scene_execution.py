@@ -24,6 +24,9 @@ from dayu.contracts.model_config import ModelConfig, RunnerType
 from dayu.contracts.protocols import PromptToolExecutorProtocol
 from dayu.contracts.toolset_config import ToolsetConfigSnapshot, build_toolset_config_snapshot
 from dayu.services.contract_preparation import prepare_execution_contract
+from dayu.services.conversation_policy_reader import ConversationPolicyReader
+from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
+from dayu.services.scene_definition_reader import SceneDefinitionReader
 from dayu.host.agent_builder import build_agent_running_config, build_async_runner
 import dayu.host.scene_preparer as scene_preparer_module
 from dayu.host.scene_preparer import DefaultScenePreparer, PreparedSceneState, _resolve_enabled_toolsets
@@ -42,6 +45,7 @@ from dayu.execution.runtime_config import (
     OpenAIRunnerRuntimeConfig,
 )
 from dayu.execution.options import (
+    apply_model_runner_runtime_overrides,
     ConversationMemorySettings,
     DocToolLimits,
     ExecutionOptions,
@@ -189,6 +193,91 @@ class _MissingRegistrarConfigLoader(_ConfigLoaderStub):
         return {"doc": "x.y.z"}
 
 
+class _ModelCatalogStub:
+    """返回固定模型配置的模型目录桩。"""
+
+    def __init__(self, model_config: ModelConfig) -> None:
+        """初始化模型目录桩。
+
+        Args:
+            model_config: 测试用模型配置。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        self._model_config = model_config
+
+    def load_model(self, model_name: str) -> ModelConfig:
+        """读取指定模型配置。
+
+        Args:
+            model_name: 模型名称。
+
+        Returns:
+            固定的测试模型配置。
+
+        Raises:
+            无。
+        """
+
+        del model_name
+        return self._model_config
+
+    def load_models(self) -> dict[str, ModelConfig]:
+        """读取全部模型配置。
+
+        Args:
+            无。
+
+        Returns:
+            模型名称到测试模型配置的映射。
+
+        Raises:
+            无。
+        """
+
+        return {"test-model": self._model_config}
+
+
+class _SceneDefinitionReaderStub:
+    """返回固定 scene 定义的读取器桩。"""
+
+    def __init__(self, scene_definition: SceneDefinition) -> None:
+        """初始化 scene 定义读取器桩。
+
+        Args:
+            scene_definition: 测试用 scene 定义。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        self._scene_definition = scene_definition
+
+    def read(self, scene_name: str) -> SceneDefinition:
+        """读取指定 scene 定义。
+
+        Args:
+            scene_name: scene 名称。
+
+        Returns:
+            固定的测试 scene 定义。
+
+        Raises:
+            无。
+        """
+
+        del scene_name
+        return self._scene_definition
+
+
 def _build_toolset_configs(
     *,
     doc_tool_limits: DocToolLimits | None = None,
@@ -205,6 +294,39 @@ def _build_toolset_configs(
             build_toolset_config_snapshot("web", web_tools_config),
         )
         if snapshot is not None
+    )
+
+
+def _build_openai_model_config(
+    *,
+    stream_idle_timeout: float = 1800.0,
+    stream_idle_heartbeat_sec: float = 3.0,
+) -> ModelConfig:
+    """构造包含 stream idle 配置的 OpenAI 兼容模型配置。
+
+    Args:
+        stream_idle_timeout: 流式响应空闲读超时秒数。
+        stream_idle_heartbeat_sec: 流式响应空闲心跳日志间隔秒数。
+
+    Returns:
+        测试用模型配置。
+
+    Raises:
+        无。
+    """
+
+    return cast(
+        ModelConfig,
+        {
+            "runner_type": "openai_compatible",
+            "name": "test-model",
+            "endpoint_url": "http://example.com",
+            "model": "provider-model",
+            "headers": {"Authorization": "Bearer token"},
+            "stream_idle_timeout": stream_idle_timeout,
+            "stream_idle_heartbeat_sec": stream_idle_heartbeat_sec,
+            "max_context_tokens": 8192,
+        },
     )
 
 
@@ -400,6 +522,182 @@ def test_resolve_scene_execution_options_accepts_toolset_config_overrides() -> N
     assert resolved_web_config.fetch_truncate_chars == 12345
 
 
+def test_apply_model_runner_runtime_overrides_prefers_model_stream_idle_values() -> None:
+    """模型级 stream idle 配置应覆盖已解析 execution options 的 runner 配置。"""
+
+    resolved_options = ResolvedExecutionOptions(
+        model_name="test-model",
+        runner_running_config=OpenAIRunnerRuntimeConfig(
+            tool_timeout_seconds=45.0,
+            stream_idle_timeout=120.0,
+            stream_idle_heartbeat_sec=10.0,
+        ),
+        agent_running_config=AgentRuntimeConfig(),
+        toolset_configs=_build_toolset_configs(
+            doc_tool_limits=DocToolLimits(),
+            fins_tool_limits=FinsToolLimits(),
+            web_tools_config=WebToolsConfig(provider="off"),
+        ),
+        trace_settings=TraceSettings(enabled=False, output_dir=Path("/tmp/trace")),
+        conversation_memory_settings=ConversationMemorySettings(),
+    )
+
+    updated = apply_model_runner_runtime_overrides(
+        resolved_execution_options=resolved_options,
+        model_config=_build_openai_model_config(
+            stream_idle_timeout=1800.0,
+            stream_idle_heartbeat_sec=3.0,
+        ),
+    )
+
+    runner_config = cast(OpenAIRunnerRuntimeConfig, updated.runner_running_config)
+    assert runner_config.tool_timeout_seconds == pytest.approx(45.0)
+    assert runner_config.stream_idle_timeout == pytest.approx(1800.0)
+    assert runner_config.stream_idle_heartbeat_sec == pytest.approx(3.0)
+
+
+def test_apply_model_runner_runtime_overrides_preserves_baseline_when_model_values_missing() -> None:
+    """模型未配置 stream idle 字段时应保留已解析 runner 基线值。"""
+
+    resolved_options = ResolvedExecutionOptions(
+        model_name="test-model",
+        runner_running_config=OpenAIRunnerRuntimeConfig(
+            tool_timeout_seconds=45.0,
+            stream_idle_timeout=120.0,
+            stream_idle_heartbeat_sec=10.0,
+        ),
+        agent_running_config=AgentRuntimeConfig(),
+        toolset_configs=_build_toolset_configs(web_tools_config=WebToolsConfig(provider="off")),
+        trace_settings=TraceSettings(enabled=False, output_dir=Path("/tmp/trace")),
+        conversation_memory_settings=ConversationMemorySettings(),
+    )
+
+    updated = apply_model_runner_runtime_overrides(
+        resolved_execution_options=resolved_options,
+        model_config=cast(ModelConfig, {"runner_type": "openai_compatible"}),
+    )
+
+    runner_config = cast(OpenAIRunnerRuntimeConfig, updated.runner_running_config)
+    assert runner_config.tool_timeout_seconds == pytest.approx(45.0)
+    assert runner_config.stream_idle_timeout == pytest.approx(120.0)
+    assert runner_config.stream_idle_heartbeat_sec == pytest.approx(10.0)
+
+
+def test_apply_model_runner_runtime_overrides_preserves_unconfigured_stream_idle_field() -> None:
+    """模型只配置一个 stream idle 字段时，未配置字段应保留 runner 基线值。"""
+
+    resolved_options = ResolvedExecutionOptions(
+        model_name="test-model",
+        runner_running_config=OpenAIRunnerRuntimeConfig(
+            tool_timeout_seconds=45.0,
+            stream_idle_timeout=120.0,
+            stream_idle_heartbeat_sec=10.0,
+        ),
+        agent_running_config=AgentRuntimeConfig(),
+        toolset_configs=_build_toolset_configs(web_tools_config=WebToolsConfig(provider="off")),
+        trace_settings=TraceSettings(enabled=False, output_dir=Path("/tmp/trace")),
+        conversation_memory_settings=ConversationMemorySettings(),
+    )
+
+    timeout_only = apply_model_runner_runtime_overrides(
+        resolved_execution_options=resolved_options,
+        model_config=cast(
+            ModelConfig,
+            {
+                "runner_type": "openai_compatible",
+                "stream_idle_timeout": 1800.0,
+            },
+        ),
+    )
+    heartbeat_only = apply_model_runner_runtime_overrides(
+        resolved_execution_options=resolved_options,
+        model_config=cast(
+            ModelConfig,
+            {
+                "runner_type": "openai_compatible",
+                "stream_idle_heartbeat_sec": 3.0,
+            },
+        ),
+    )
+
+    timeout_only_config = cast(OpenAIRunnerRuntimeConfig, timeout_only.runner_running_config)
+    heartbeat_only_config = cast(OpenAIRunnerRuntimeConfig, heartbeat_only.runner_running_config)
+    assert timeout_only_config.stream_idle_timeout == pytest.approx(1800.0)
+    assert timeout_only_config.stream_idle_heartbeat_sec == pytest.approx(10.0)
+    assert heartbeat_only_config.stream_idle_timeout == pytest.approx(120.0)
+    assert heartbeat_only_config.stream_idle_heartbeat_sec == pytest.approx(3.0)
+
+
+def test_apply_model_runner_runtime_overrides_rejects_invalid_stream_idle_values() -> None:
+    """模型级 stream idle 配置非法时应显式失败，避免配置静默不生效。"""
+
+    resolved_options = ResolvedExecutionOptions(
+        model_name="test-model",
+        runner_running_config=OpenAIRunnerRuntimeConfig(),
+        agent_running_config=AgentRuntimeConfig(),
+        toolset_configs=_build_toolset_configs(web_tools_config=WebToolsConfig(provider="off")),
+        trace_settings=TraceSettings(enabled=False, output_dir=Path("/tmp/trace")),
+        conversation_memory_settings=ConversationMemorySettings(),
+    )
+    model_config = cast(
+        ModelConfig,
+        {
+            "runner_type": "openai_compatible",
+            "stream_idle_timeout": 0.0,
+            "stream_idle_heartbeat_sec": 3.0,
+        },
+    )
+
+    with pytest.raises(ValueError, match="stream_idle_timeout"):
+        apply_model_runner_runtime_overrides(
+            resolved_execution_options=resolved_options,
+            model_config=model_config,
+        )
+
+
+def test_scene_execution_acceptance_includes_model_stream_idle_in_snapshot(tmp_path: Path) -> None:
+    """Service 接受规格应把模型级 stream idle 配置写入 runner 快照。"""
+
+    model_config = _build_openai_model_config(
+        stream_idle_timeout=1800.0,
+        stream_idle_heartbeat_sec=3.0,
+    )
+    base_options = ResolvedExecutionOptions(
+        model_name="",
+        runner_running_config=OpenAIRunnerRuntimeConfig(
+            tool_timeout_seconds=45.0,
+            stream_idle_timeout=120.0,
+            stream_idle_heartbeat_sec=10.0,
+        ),
+        agent_running_config=AgentRuntimeConfig(max_iterations=5),
+        toolset_configs=_build_toolset_configs(web_tools_config=WebToolsConfig(provider="off")),
+        trace_settings=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
+        conversation_memory_settings=ConversationMemorySettings(),
+    )
+    scene_definition = SceneDefinition(
+        name="prompt",
+        model=SceneModelDefinition(default_name="test-model", allowed_names=("test-model",)),
+        version="v1",
+        description="test",
+    )
+    preparer = SceneExecutionAcceptancePreparer(
+        workspace_dir=tmp_path,
+        base_execution_options=base_options,
+        model_catalog=_ModelCatalogStub(model_config),
+        scene_definition_reader=cast(SceneDefinitionReader, _SceneDefinitionReaderStub(scene_definition)),
+        conversation_policy_reader=ConversationPolicyReader(),
+    )
+
+    accepted_scene = preparer.prepare("prompt", ExecutionOptions(temperature=0.2))
+
+    runner_config = cast(OpenAIRunnerRuntimeConfig, accepted_scene.resolved_execution_options.runner_running_config)
+    runner_snapshot = accepted_scene.accepted_execution_spec.runtime.runner_running_config
+    assert runner_config.stream_idle_timeout == pytest.approx(1800.0)
+    assert runner_config.stream_idle_heartbeat_sec == pytest.approx(3.0)
+    assert runner_snapshot.get("stream_idle_timeout") == pytest.approx(1800.0)
+    assert runner_snapshot.get("stream_idle_heartbeat_sec") == pytest.approx(3.0)
+
+
 def test_resolve_scene_temperature_prefers_explicit_override() -> None:
     """显式 temperature 应优先于模型 profile。"""
 
@@ -490,6 +788,44 @@ def _build_scene_preparer(tmp_path: Path, *, web_provider: str) -> DefaultSceneP
         default_execution_options=resolved_options,
         tool_registry_factory=lambda: ToolRegistry(),
     )
+
+
+@pytest.mark.unit
+def test_host_owned_scene_state_includes_model_stream_idle_in_agent_create_args(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Host 自有子执行应把模型级 stream idle 配置写入 AgentCreateArgs。"""
+
+    preparer = _build_scene_preparer(tmp_path, web_provider="off")
+    model_config = _build_openai_model_config(
+        stream_idle_timeout=1800.0,
+        stream_idle_heartbeat_sec=3.0,
+    )
+    scene_definition = SceneDefinition(
+        name="prompt",
+        model=SceneModelDefinition(default_name="test-model", allowed_names=("test-model",)),
+        version="v1",
+        description="test",
+    )
+    tool_registry = cast(PromptToolExecutorProtocol, ToolRegistry())
+    preparer.model_catalog = _ModelCatalogStub(model_config)
+    monkeypatch.setattr("dayu.host.scene_preparer.load_scene_definition", lambda *_args, **_kwargs: scene_definition)
+    monkeypatch.setattr(preparer, "_build_tool_registry", lambda **_kwargs: tool_registry)
+    monkeypatch.setattr(preparer._trace_provider, "get_or_create", lambda _settings: "trace-factory")
+
+    prepared_scene = preparer._prepare_host_owned_scene_state(
+        scene_name="prompt",
+        execution_options=ExecutionOptions(temperature=0.2),
+        web_tools_config=WebToolsConfig(provider="off"),
+    )
+
+    runner_snapshot = prepared_scene.agent_create_args.runner_running_config
+    runner_config = cast(OpenAIRunnerRuntimeConfig, prepared_scene.resolved_options.runner_running_config)
+    assert runner_config.stream_idle_timeout == pytest.approx(1800.0)
+    assert runner_config.stream_idle_heartbeat_sec == pytest.approx(3.0)
+    assert runner_snapshot.get("stream_idle_timeout") == pytest.approx(1800.0)
+    assert runner_snapshot.get("stream_idle_heartbeat_sec") == pytest.approx(3.0)
 
 
 @pytest.mark.unit

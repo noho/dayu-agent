@@ -207,6 +207,8 @@ Prompt 装配还遵循一条 Prefix Cache 导向的顺序约束：
 | `max_context_tokens` | 最大上下文 token |
 | `extra_payloads` | Provider 扩展请求参数；禁止放入 `model`、`messages`、`temperature`、`stream`、`tools` 等显式字段 |
 
+`stream_idle_timeout` 与 `stream_idle_heartbeat_sec` 是模型级 Runner 运行时覆盖项；Service / Host 在解析 scene 时会把它们写入 `runner_running_config` 快照，最终由 OpenAI 兼容 Runner 使用。
+
 ### 4.2 CLI runner 状态
 
 CLI runner 已彻底禁用，不再允许通过 `llm_models.json` 配置或使用 `runner_type=cli`。

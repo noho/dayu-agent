@@ -13,7 +13,7 @@ from dayu.contracts.execution_options import (
     ExecutionOptions,
     TraceSettings,
 )
-from dayu.contracts.model_config import ConversationMemoryRuntimeHints, ModelConfig
+from dayu.contracts.model_config import ConversationMemoryRuntimeHints, ModelConfig, RunnerType, normalize_runner_type
 from dayu.contracts.tool_configs import (
     DocToolLimits,
     FinsToolLimits,
@@ -63,6 +63,7 @@ _MAX_TEMPERATURE = 2.0
 
 ExecutionOptionsOverrideValue: TypeAlias = str | int | float | bool | None
 ExecutionOptionsOverridePayload: TypeAlias = dict[str, ExecutionOptionsOverrideValue]
+ModelRunnerRuntimeOverrideValue: TypeAlias = str | int | float | bool | None
 
 ExecutionOptionsSnapshotValue: TypeAlias = (
     str
@@ -1182,6 +1183,98 @@ def resolve_conversation_memory_settings(
     return settings
 
 
+def _parse_model_runner_positive_float(
+    value: ModelRunnerRuntimeOverrideValue,
+    *,
+    field_name: str,
+) -> float | None:
+    """解析模型级 Runner 正数秒值。
+
+    Args:
+        value: 模型配置中的原始秒值。
+        field_name: 字段名，仅用于错误提示。
+
+    Returns:
+        解析后的正数秒值；未配置时返回 ``None``。
+
+    Raises:
+        ValueError: 当值不是正有限数值时抛出。
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} 必须是正数")
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError(f"{field_name} 必须是正数")
+        try:
+            normalized = float(stripped)
+        except ValueError as exc:
+            raise ValueError(f"{field_name} 必须是正数") from exc
+    elif isinstance(value, int | float):
+        normalized = float(value)
+    else:
+        raise ValueError(f"{field_name} 必须是正数")
+    if not math.isfinite(normalized) or normalized <= 0:
+        raise ValueError(f"{field_name} 必须是正有限数值")
+    return normalized
+
+
+def apply_model_runner_runtime_overrides(
+    *,
+    resolved_execution_options: ResolvedExecutionOptions,
+    model_config: ModelConfig,
+) -> ResolvedExecutionOptions:
+    """按模型配置覆盖 Runner 运行时参数。
+
+    Args:
+        resolved_execution_options: 已解析的执行选项基线。
+        model_config: 当前模型配置。
+
+    Returns:
+        应用模型级 Runner 覆盖后的执行选项。
+
+    Raises:
+        ValueError: 当 runner_type 或模型级 Runner 运行时配置非法时抛出。
+    """
+
+    runner_type = normalize_runner_type(model_config.get("runner_type"))
+    if runner_type != RunnerType.OPENAI_COMPATIBLE:
+        return resolved_execution_options
+    runner_running_config = resolved_execution_options.runner_running_config
+    if not isinstance(runner_running_config, OpenAIRunnerRuntimeConfig):
+        return resolved_execution_options
+    stream_idle_timeout = _parse_model_runner_positive_float(
+        cast(ModelRunnerRuntimeOverrideValue, model_config.get("stream_idle_timeout")),
+        field_name="stream_idle_timeout",
+    )
+    stream_idle_heartbeat_sec = _parse_model_runner_positive_float(
+        cast(ModelRunnerRuntimeOverrideValue, model_config.get("stream_idle_heartbeat_sec")),
+        field_name="stream_idle_heartbeat_sec",
+    )
+    next_runner_running_config = replace(
+        runner_running_config,
+        stream_idle_timeout=(
+            stream_idle_timeout
+            if stream_idle_timeout is not None
+            else runner_running_config.stream_idle_timeout
+        ),
+        stream_idle_heartbeat_sec=(
+            stream_idle_heartbeat_sec
+            if stream_idle_heartbeat_sec is not None
+            else runner_running_config.stream_idle_heartbeat_sec
+        ),
+    )
+    if next_runner_running_config == runner_running_config:
+        return resolved_execution_options
+    return replace(
+        resolved_execution_options,
+        runner_running_config=next_runner_running_config,
+    )
+
+
 def _resolve_trace_output_dir(path_value: str | Path, *, workspace_dir: Path) -> Path:
     """解析 trace 输出目录。"""
 
@@ -1477,8 +1570,10 @@ __all__ = [
     "ExecutionOptionsOverrideValue",
     "ExecutionOptionsSnapshot",
     "ExecutionOptionsSnapshotValue",
+    "ModelRunnerRuntimeOverrideValue",
     "ResolvedExecutionOptions",
     "TraceSettings",
+    "apply_model_runner_runtime_overrides",
     "build_base_execution_options",
     "deserialize_execution_options_snapshot",
     "merge_execution_options",
