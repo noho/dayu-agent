@@ -11,15 +11,23 @@ from unittest.mock import patch
 import pytest
 
 from dayu.cli.commands.init import (
+    _build_conversation_memory_overrides,
+    _CONTEXT_TOKENS_LARGE_THRESHOLD,
     _CUSTOM_CATALOG_KEY,
+    _CUSTOM_OPENAI_DEFAULT_MAX_CONTEXT_TOKENS,
     _CustomOpenAIConfig,
     _HF_MIRROR_URL,
     _INIT_ROLE_KEY,
+    _LARGE_CONTEXT_WORKING_MEMORY_CAP,
     _OLLAMA_CATALOG_KEY,
     _OLLAMA_DEFAULT_MAX_CONTEXT_TOKENS,
     _OLLAMA_DEFAULT_ENDPOINT,
+    _OLLAMA_DEFAULT_WRITE_CHAPTER_LANE,
     _OllamaConfig,
+    _SMALL_CONTEXT_EPISODIC_MEMORY_CAP,
+    _SMALL_CONTEXT_EPISODIC_MEMORY_FLOOR,
     _build_ollama_catalog_entry,
+    _override_ollama_write_chapter_lane,
     _PROVIDER_OPTION_CUSTOM_OPENAI,
     _PROVIDER_OPTION_DEEPSEEK_FLASH,
     _PROVIDER_OPTION_DEEPSEEK_PRO,
@@ -550,7 +558,7 @@ class TestPromptCustomOpenAIConfig:
     def test_collects_values_and_normalizes_base_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """正常输入时返回收集结果，并去掉 base URL 末尾斜杠。"""
         monkeypatch.delenv("CUSTOM_OPENAI_API_KEY", raising=False)
-        inputs = iter(["https://openrouter.ai/api/v1/", "sk-custom", "openai/gpt-4o"])
+        inputs = iter(["https://openrouter.ai/api/v1/", "sk-custom", "openai/gpt-4o", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
 
         config = _prompt_custom_openai_config("CUSTOM_OPENAI_API_KEY")
@@ -559,18 +567,20 @@ class TestPromptCustomOpenAIConfig:
             base_url="https://openrouter.ai/api/v1",
             api_key_value="sk-custom",
             model_id="openai/gpt-4o",
+            max_context_tokens=_CUSTOM_OPENAI_DEFAULT_MAX_CONTEXT_TOKENS,
         )
 
     def test_reuses_existing_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """环境变量已存在时复用现有 API Key，不再重复输入。"""
         monkeypatch.setenv("CUSTOM_OPENAI_API_KEY", "sk-existing-123456")
-        inputs = iter(["https://openrouter.ai/api/v1", "anthropic/claude-sonnet-4"])
+        inputs = iter(["https://openrouter.ai/api/v1", "anthropic/claude-sonnet-4", "200000"])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
 
         config = _prompt_custom_openai_config("CUSTOM_OPENAI_API_KEY")
 
         assert config.api_key_value == "sk-existing-123456"
         assert config.model_id == "anthropic/claude-sonnet-4"
+        assert config.max_context_tokens == 200000
 
     def test_empty_base_url_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Base URL 为空时退出。"""
@@ -613,6 +623,7 @@ class TestWriteCustomOpenAICatalogEntries:
                 base_url="https://openrouter.ai/api/v1",
                 api_key_value="sk-custom",
                 model_id="openai/gpt-4o",
+                max_context_tokens=_CUSTOM_OPENAI_DEFAULT_MAX_CONTEXT_TOKENS,
             ),
             api_key_name="CUSTOM_OPENAI_API_KEY",
         )
@@ -637,6 +648,7 @@ class TestWriteCustomOpenAICatalogEntries:
                     base_url="https://openrouter.ai/api/v1",
                     api_key_value="sk-custom",
                     model_id="openai/gpt-4o",
+                    max_context_tokens=_CUSTOM_OPENAI_DEFAULT_MAX_CONTEXT_TOKENS,
                 ),
                 api_key_name="CUSTOM_OPENAI_API_KEY",
             )
@@ -977,6 +989,7 @@ class TestRunInit:
                 "https://openrouter.ai/api/v1/",
                 "sk-custom-openrouter",
                 "openai/gpt-4o",
+                "",                    # max_context_tokens（使用默认值）
                 "",
                 "",
                 "",
@@ -1967,7 +1980,7 @@ class TestRunInitFailurePaths:
             "dayu.cli.commands.init._prompt_provider_selection",
             lambda: _PROVIDER_OPTION_CUSTOM_OPENAI,
         )
-        inputs = iter(["https://openrouter.ai/api/v1", "sk-custom", "openai/gpt-4o"])
+        inputs = iter(["https://openrouter.ai/api/v1", "sk-custom", "openai/gpt-4o", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
 
         args = Namespace(base=str(base), overwrite=False)
@@ -2348,3 +2361,222 @@ class TestInitPrewarm:
         args = Namespace(base=str(base), overwrite=False)
         exit_code = run_init_command(args)
         assert exit_code == 0
+
+
+# --------------------------------------------------------------------------- #
+#  _build_conversation_memory_overrides
+# --------------------------------------------------------------------------- #
+
+
+class TestBuildConversationMemoryOverrides:
+    """conversation_memory 动态构建测试。"""
+
+    def test_large_context_returns_working_memory_cap(self) -> None:
+        """max_context_tokens >= 100 万时返回 working_memory_token_budget_cap。"""
+        result = _build_conversation_memory_overrides(1_000_000)
+        assert result == {"working_memory_token_budget_cap": _LARGE_CONTEXT_WORKING_MEMORY_CAP}
+
+    def test_large_context_above_threshold(self) -> None:
+        """远超阈值时仍返回 working_memory_token_budget_cap。"""
+        result = _build_conversation_memory_overrides(2_000_000)
+        assert result == {"working_memory_token_budget_cap": _LARGE_CONTEXT_WORKING_MEMORY_CAP}
+
+    def test_small_context_returns_episodic_memory(self) -> None:
+        """max_context_tokens < 100 万时返回 episodic_memory 覆盖。"""
+        result = _build_conversation_memory_overrides(262144)
+        assert result == {
+            "episodic_memory_token_budget_floor": _SMALL_CONTEXT_EPISODIC_MEMORY_FLOOR,
+            "episodic_memory_token_budget_cap": _SMALL_CONTEXT_EPISODIC_MEMORY_CAP,
+        }
+
+    def test_threshold_boundary(self) -> None:
+        """恰好等于阈值时走大上下文分支。"""
+        result = _build_conversation_memory_overrides(_CONTEXT_TOKENS_LARGE_THRESHOLD)
+        assert "working_memory_token_budget_cap" in result
+
+    def test_just_below_threshold(self) -> None:
+        """阈值减 1 时走小上下文分支。"""
+        result = _build_conversation_memory_overrides(_CONTEXT_TOKENS_LARGE_THRESHOLD - 1)
+        assert "episodic_memory_token_budget_cap" in result
+
+
+# --------------------------------------------------------------------------- #
+#  _override_ollama_write_chapter_lane
+# --------------------------------------------------------------------------- #
+
+
+class TestOverrideOllamaWriteChapterLane:
+    """Ollama write_chapter lane 覆盖测试。"""
+
+    def test_overrides_default_5_to_2(self, tmp_path: Path) -> None:
+        """当前值为迁移默认值 5 时覆盖为 2。"""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        run_json = config_dir / "run.json"
+        run_json.write_text(
+            json.dumps({
+                "host_config": {
+                    "lane": {
+                        "llm_api": 8,
+                        "write_chapter": 5,
+                    }
+                }
+            }),
+            encoding="utf-8",
+        )
+
+        _override_ollama_write_chapter_lane(config_dir)
+
+        data = json.loads(run_json.read_text(encoding="utf-8"))
+        assert data["host_config"]["lane"]["write_chapter"] == _OLLAMA_DEFAULT_WRITE_CHAPTER_LANE
+
+    def test_preserves_custom_value(self, tmp_path: Path) -> None:
+        """当前值不是 5 时保留用户自定义值。"""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        run_json = config_dir / "run.json"
+        run_json.write_text(
+            json.dumps({
+                "host_config": {
+                    "lane": {
+                        "write_chapter": 3,
+                    }
+                }
+            }),
+            encoding="utf-8",
+        )
+
+        _override_ollama_write_chapter_lane(config_dir)
+
+        data = json.loads(run_json.read_text(encoding="utf-8"))
+        assert data["host_config"]["lane"]["write_chapter"] == 3
+
+    def test_missing_run_json_noop(self, tmp_path: Path) -> None:
+        """run.json 不存在时安静跳过。"""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        _override_ollama_write_chapter_lane(config_dir)
+
+    def test_missing_lane_section_noop(self, tmp_path: Path) -> None:
+        """host_config.lane 不存在时安静跳过。"""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        run_json = config_dir / "run.json"
+        run_json.write_text(json.dumps({"host_config": {}}), encoding="utf-8")
+        _override_ollama_write_chapter_lane(config_dir)
+
+
+# --------------------------------------------------------------------------- #
+#  集成测试：conversation_memory 与 write_chapter lane 验证
+# --------------------------------------------------------------------------- #
+
+
+class TestInitConversationMemoryAndLane:
+    """init 流程中 conversation_memory 和 write_chapter lane 集成验证。"""
+
+    def test_ollama_small_context_conversation_memory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Ollama 小上下文模型应写入 episodic_memory 覆盖。"""
+        src = tmp_path / "pkg_config"
+        src.mkdir()
+        (src / "run.json").write_text(
+            json.dumps({
+                "host_config": {
+                    "lane": {"llm_api": 8, "write_chapter": 5}
+                }
+            }),
+            encoding="utf-8",
+        )
+        manifests = src / "prompts" / "manifests"
+        manifests.mkdir(parents=True)
+        (manifests / "write.json").write_text(
+            json.dumps({"model": {"default_name": "mimo-v2.5-pro-plan"}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("dayu.cli.commands.init.resolve_package_config_path", lambda: src)
+        pkg_assets = tmp_path / "pkg_assets"
+        pkg_assets.mkdir()
+        (pkg_assets / "template.md").write_text("# t", encoding="utf-8")
+        monkeypatch.setattr("dayu.cli.commands.init.resolve_package_assets_path", lambda: pkg_assets)
+
+        _clear_provider_env_vars(monkeypatch)
+        for k in ("TAVILY_API_KEY", "SERPER_API_KEY", "FMP_API_KEY", "HF_ENDPOINT", "HF_TOKEN"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.delenv(SEC_USER_AGENT_ENV, raising=False)
+        monkeypatch.setattr("dayu.cli.commands.init._is_hf_hub_reachable", lambda: True)
+        monkeypatch.setattr("dayu.cli.commands.init._run_init_prewarm", lambda **_kw: (True, ""))
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_OLLAMA)
+        monkeypatch.setattr("dayu.cli.commands.init._persist_env_var", lambda _k, _v: ("~/.zshrc", True))
+        inputs = iter([
+            "qwen3:30b-thinking",
+            "262144",              # max_context_tokens < 100 万
+            "", "", "",            # search keys
+            "", "",                # HF
+            "",                    # SEC
+        ])
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+        base = tmp_path / "workspace"
+        base.mkdir()
+        exit_code = run_init_command(Namespace(base=str(base), overwrite=False))
+        assert exit_code == 0
+
+        llm_models = json.loads((base / "config" / "llm_models.json").read_text(encoding="utf-8"))
+        cm = llm_models[_OLLAMA_CATALOG_KEY]["runtime_hints"]["conversation_memory"]
+        assert cm["episodic_memory_token_budget_floor"] == _SMALL_CONTEXT_EPISODIC_MEMORY_FLOOR
+        assert cm["episodic_memory_token_budget_cap"] == _SMALL_CONTEXT_EPISODIC_MEMORY_CAP
+        assert "working_memory_token_budget_cap" not in cm
+
+        # 验证 write_chapter lane 从 5 覆盖为 2
+        run_data = json.loads((base / "config" / "run.json").read_text(encoding="utf-8"))
+        assert run_data["host_config"]["lane"]["write_chapter"] == _OLLAMA_DEFAULT_WRITE_CHAPTER_LANE
+
+    def test_custom_openai_large_context_conversation_memory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Custom OpenAI 大上下文模型应写入 working_memory_token_budget_cap。"""
+        src = tmp_path / "pkg_config"
+        src.mkdir()
+        (src / "run.json").write_text("{}", encoding="utf-8")
+        manifests = src / "prompts" / "manifests"
+        manifests.mkdir(parents=True)
+        (manifests / "write.json").write_text(
+            json.dumps({"model": {"default_name": "mimo-v2.5-pro-plan"}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("dayu.cli.commands.init.resolve_package_config_path", lambda: src)
+        pkg_assets = tmp_path / "pkg_assets"
+        pkg_assets.mkdir()
+        (pkg_assets / "template.md").write_text("# t", encoding="utf-8")
+        monkeypatch.setattr("dayu.cli.commands.init.resolve_package_assets_path", lambda: pkg_assets)
+
+        _clear_provider_env_vars(monkeypatch)
+        for k in ("TAVILY_API_KEY", "SERPER_API_KEY", "FMP_API_KEY", "HF_ENDPOINT", "HF_TOKEN"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.delenv(SEC_USER_AGENT_ENV, raising=False)
+        monkeypatch.setattr("dayu.cli.commands.init._is_hf_hub_reachable", lambda: True)
+        monkeypatch.setattr("dayu.cli.commands.init._run_init_prewarm", lambda **_kw: (True, ""))
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_selection",
+            lambda: _PROVIDER_OPTION_CUSTOM_OPENAI,
+        )
+        monkeypatch.setattr("dayu.cli.commands.init._persist_env_var", lambda _k, _v: ("~/.zshrc", True))
+        inputs = iter([
+            "https://openrouter.ai/api/v1",
+            "sk-custom",
+            "openai/gpt-4o",
+            "1000000",             # max_context_tokens >= 100 万
+            "", "", "",            # search keys
+            "", "",                # HF
+            "",                    # SEC
+        ])
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+        base = tmp_path / "workspace"
+        base.mkdir()
+        exit_code = run_init_command(Namespace(base=str(base), overwrite=False))
+        assert exit_code == 0
+
+        llm_models = json.loads((base / "config" / "llm_models.json").read_text(encoding="utf-8"))
+        cm = llm_models[_CUSTOM_CATALOG_KEY]["runtime_hints"]["conversation_memory"]
+        assert cm["working_memory_token_budget_cap"] == _LARGE_CONTEXT_WORKING_MEMORY_CAP
+        assert "episodic_memory_token_budget_cap" not in cm

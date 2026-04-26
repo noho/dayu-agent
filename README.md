@@ -172,7 +172,8 @@ API Key 申请地址：
 说明：
 - 默认推荐 Mimo Token Plan（mimo-v2.5-pro-plan），性价比最优。（注： MIMO_PLAN_API_KEY / MIMO_API_KEY 是两个不同的KEY，不能混用）。
 - 海外用户选Mimo Token Plan SG。
-- 如需接入 OpenRouter 等聚合服务，可在 `init` 中选择“自定义 OpenAI 兼容 API”，填写 `CUSTOM_OPENAI_API_KEY`、Base URL 与模型 ID。
+- 如需接入 OpenRouter 等聚合服务，可在 `init` 中选择”自定义 OpenAI 兼容 API”，填写 `CUSTOM_OPENAI_API_KEY`、Base URL、模型 ID 与最大上下文 tokens。
+- 本地 Ollama 模型和自定义 OpenAI 兼容 API 在 `init` 时会根据最大上下文 tokens 自动配置 `conversation_memory`（>= 100 万 tokens 扩大工作记忆上限，< 100 万收紧情景记忆预算）；Ollama 的 `write_chapter` 并发 lane 默认设为 2。
 - `--reset` 确认后会删除 `workspace/.dayu/`、`workspace/config/`、`workspace/assets/`，再按首次初始化流程重建；它比 `--overwrite` 更彻底，会一并清空运行时状态。
 - 联网搜索默认可走 `auto`，若配置了 Tavily / Serper，会优先使用对应 provider。
 - 若运行环境需要访问 `localhost`、私网 IP 或内网域名，可在 `workspace/config/run.json` 的 `web_tools_config.allow_private_network_url` 中显式打开内网访问开关。

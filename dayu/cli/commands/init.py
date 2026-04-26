@@ -66,6 +66,7 @@ _PROVIDER_OPTION_CUSTOM_OPENAI = "custom_openai"
 _OLLAMA_CATALOG_KEY = "ollama"
 _OLLAMA_DEFAULT_ENDPOINT = "http://localhost:11434"
 _OLLAMA_DEFAULT_MAX_CONTEXT_TOKENS = 262144
+_OLLAMA_DEFAULT_WRITE_CHAPTER_LANE = 2
 _OLLAMA_TEMPERATURE_PROFILES: dict[str, dict[str, float]] = {
     "write": {"temperature": 0.6},
     "overview": {"temperature": 0.1},
@@ -76,13 +77,68 @@ _OLLAMA_TEMPERATURE_PROFILES: dict[str, dict[str, float]] = {
     "infer": {"temperature": 0.1},
     "conversation_compaction": {"temperature": 0.1},
 }
-_OLLAMA_CONVERSATION_MEMORY: dict[str, int] = {
-    "episodic_memory_token_budget_floor": 6000,
-    "episodic_memory_token_budget_cap": 6000,
-}
+_CONTEXT_TOKENS_LARGE_THRESHOLD = 1_000_000
+_LARGE_CONTEXT_WORKING_MEMORY_CAP = 80000
+_SMALL_CONTEXT_EPISODIC_MEMORY_FLOOR = 6000
+_SMALL_CONTEXT_EPISODIC_MEMORY_CAP = 6000
+
+
+def _build_conversation_memory_overrides(max_context_tokens: int) -> dict[str, int]:
+    """根据 ``max_context_tokens`` 构建 ``conversation_memory`` 覆盖项。
+
+    大上下文模型（>= 100 万 tokens）侧重扩大工作记忆上限；
+    小上下文模型侧重收紧情景记忆以节省预算。
+
+    Args:
+        max_context_tokens: 模型的最大上下文 tokens 数。
+
+    Returns:
+        可直接写入 ``runtime_hints.conversation_memory`` 的覆盖字典。
+    """
+
+    if max_context_tokens >= _CONTEXT_TOKENS_LARGE_THRESHOLD:
+        return {"working_memory_token_budget_cap": _LARGE_CONTEXT_WORKING_MEMORY_CAP}
+    return {
+        "episodic_memory_token_budget_floor": _SMALL_CONTEXT_EPISODIC_MEMORY_FLOOR,
+        "episodic_memory_token_budget_cap": _SMALL_CONTEXT_EPISODIC_MEMORY_CAP,
+    }
+
+
+def _prompt_max_context_tokens(default: int) -> int:
+    """交互式收集最大上下文 tokens 数。
+
+    Args:
+        default: 用户直接回车时使用的默认值。
+
+    Returns:
+        用户输入的或默认的最大上下文 tokens 正整数。
+
+    Raises:
+        SystemExit: 用户中断或输入非法值。
+    """
+
+    try:
+        raw_tokens = input(
+            f"  最大上下文 tokens（直接回车使用默认值 {default}）: "
+        ).strip()
+        if raw_tokens:
+            value = int(raw_tokens)
+            if value <= 0:
+                print("错误: 最大上下文 tokens 必须为正整数")
+                sys.exit(1)
+            return value
+        return default
+    except (EOFError, KeyboardInterrupt):
+        print()
+        sys.exit(1)
+    except ValueError:
+        print("错误: 最大上下文 tokens 必须为正整数")
+        sys.exit(1)
+
 
 # 自定义 OpenAI 兼容 API（OpenRouter 等）统一使用的目录键
 _CUSTOM_CATALOG_KEY = "custom-openai"
+_CUSTOM_OPENAI_DEFAULT_MAX_CONTEXT_TOKENS = 131072
 _CUSTOM_OPENAI_TEMPERATURE_PROFILES: dict[str, dict[str, float]] = {
     "write": {"temperature": 1.0},
     "overview": {"temperature": 1.0},
@@ -92,10 +148,6 @@ _CUSTOM_OPENAI_TEMPERATURE_PROFILES: dict[str, dict[str, float]] = {
     "prompt": {"temperature": 1.0},
     "infer": {"temperature": 0.5},
     "conversation_compaction": {"temperature": 0.4},
-}
-_CUSTOM_OPENAI_CONVERSATION_MEMORY: dict[str, int] = {
-    "episodic_memory_token_budget_floor": 4000,
-    "episodic_memory_token_budget_cap": 4000,
 }
 
 _PROVIDER_OPTIONS: tuple[_ProviderOption, ...] = (
@@ -913,6 +965,7 @@ class _CustomOpenAIConfig:
     base_url: str
     api_key_value: str
     model_id: str
+    max_context_tokens: int
 
 
 def _prompt_custom_openai_config(api_key_name: str) -> _CustomOpenAIConfig:
@@ -960,10 +1013,13 @@ def _prompt_custom_openai_config(api_key_name: str) -> _CustomOpenAIConfig:
         print()
         sys.exit(1)
 
+    max_context_tokens = _prompt_max_context_tokens(_CUSTOM_OPENAI_DEFAULT_MAX_CONTEXT_TOKENS)
+
     return _CustomOpenAIConfig(
         base_url=base_url,
         api_key_value=api_key_value,
         model_id=model_id,
+        max_context_tokens=max_context_tokens,
     )
 
 
@@ -972,6 +1028,7 @@ def _build_custom_openai_catalog_entry(
     endpoint_url: str,
     api_key_name: str,
     model_id: str,
+    max_context_tokens: int,
     description: str,
 ) -> dict[str, object]:
     """构造自定义 OpenAI 兼容模型的 catalog 条目。
@@ -980,6 +1037,7 @@ def _build_custom_openai_catalog_entry(
         endpoint_url: OpenAI 兼容接口的 ``/chat/completions`` 地址。
         api_key_name: 对应 API Key 的环境变量名。
         model_id: 用户输入的目标模型 ID。
+        max_context_tokens: 最大上下文 tokens 数。
         description: 写入 catalog 的描述信息。
 
     Returns:
@@ -995,7 +1053,7 @@ def _build_custom_openai_catalog_entry(
     }
     runtime_hints = {
         "temperature_profiles": _CUSTOM_OPENAI_TEMPERATURE_PROFILES,
-        "conversation_memory": _CUSTOM_OPENAI_CONVERSATION_MEMORY,
+        "conversation_memory": _build_conversation_memory_overrides(max_context_tokens),
     }
     return {
         "runner_type": "openai_compatible",
@@ -1010,7 +1068,7 @@ def _build_custom_openai_catalog_entry(
         "supports_tool_calling": True,
         "supports_usage": True,
         "supports_stream_usage": True,
-        "max_context_tokens": 131072,
+        "max_context_tokens": max_context_tokens,
         "extra_payloads": {},
         "description": description,
         "runtime_hints": runtime_hints,
@@ -1056,6 +1114,7 @@ def _write_custom_openai_catalog_entries(
         endpoint_url=endpoint_url,
         api_key_name=api_key_name,
         model_id=custom.model_id,
+        max_context_tokens=custom.max_context_tokens,
         description=f"自定义 OpenAI 兼容 API（{custom.base_url}）",
     )
 
@@ -1094,23 +1153,11 @@ def _prompt_ollama_config() -> _OllamaConfig:
         if not model_id:
             print("错误: 模型 ID 不能为空")
             sys.exit(1)
-
-        raw_tokens = input(
-            f"  最大上下文 tokens（直接回车使用默认值 {_OLLAMA_DEFAULT_MAX_CONTEXT_TOKENS}）: "
-        ).strip()
-        if raw_tokens:
-            max_context_tokens = int(raw_tokens)
-            if max_context_tokens <= 0:
-                print("错误: 最大上下文 tokens 必须为正整数")
-                sys.exit(1)
-        else:
-            max_context_tokens = _OLLAMA_DEFAULT_MAX_CONTEXT_TOKENS
     except (EOFError, KeyboardInterrupt):
         print()
         sys.exit(1)
-    except ValueError:
-        print(f"错误: 最大上下文 tokens 必须为正整数")
-        sys.exit(1)
+
+    max_context_tokens = _prompt_max_context_tokens(_OLLAMA_DEFAULT_MAX_CONTEXT_TOKENS)
 
     return _OllamaConfig(
         model_id=model_id,
@@ -1137,7 +1184,7 @@ def _build_ollama_catalog_entry(
 
     runtime_hints: dict[str, object] = {
         "temperature_profiles": _OLLAMA_TEMPERATURE_PROFILES,
-        "conversation_memory": _OLLAMA_CONVERSATION_MEMORY,
+        "conversation_memory": _build_conversation_memory_overrides(max_context_tokens),
     }
     return {
         "runner_type": "openai_compatible",
@@ -1159,6 +1206,44 @@ def _build_ollama_catalog_entry(
         "description": description,
         "runtime_hints": runtime_hints,
     }
+
+
+def _override_ollama_write_chapter_lane(config_dir: Path) -> None:
+    """将 ``run.json`` 中 ``write_chapter`` lane 覆盖为 Ollama 推荐值。
+
+    仅当当前值等于迁移脚本的默认值（5）时才覆写，以尊重用户自定义。
+
+    Args:
+        config_dir: 工作区配置目录，即 ``workspace/config``。
+
+    Raises:
+        无：文件缺失、解析失败或结构不符预期均安静跳过。
+    """
+
+    run_json_path = config_dir / "run.json"
+    if not run_json_path.exists():
+        return
+    try:
+        raw_text = run_json_path.read_text(encoding="utf-8")
+        payload: object = json.loads(raw_text)
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(payload, dict):
+        return
+    host_config = payload.get("host_config")
+    if not isinstance(host_config, dict):
+        return
+    lane_section = host_config.get("lane")
+    if not isinstance(lane_section, dict):
+        return
+    current = lane_section.get("write_chapter")
+    if current != 5:
+        return
+    lane_section["write_chapter"] = _OLLAMA_DEFAULT_WRITE_CHAPTER_LANE
+    run_json_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _write_ollama_catalog_entries(
@@ -1426,6 +1511,7 @@ def run_init_command(args: Namespace) -> int:
             print(f"\n❌ {exc}")
             return 1
         print(f"✓ 已写入 Ollama 模型条目到 {config_dir / 'llm_models.json'}")
+        _override_ollama_write_chapter_lane(config_dir)
     elif chosen_option_key == _PROVIDER_OPTION_CUSTOM_OPENAI:
         effective_api_key_name = chosen_option.api_key_name
         custom = _prompt_custom_openai_config(effective_api_key_name)
