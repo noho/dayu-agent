@@ -13,7 +13,7 @@ from dayu.contracts.execution_options import (
     ExecutionOptions,
     TraceSettings,
 )
-from dayu.contracts.model_config import ConversationMemoryRuntimeHints, ModelConfig
+from dayu.contracts.model_config import ConversationMemoryRuntimeHints, ModelConfig, RunnerType, normalize_runner_type
 from dayu.contracts.tool_configs import (
     DocToolLimits,
     FinsToolLimits,
@@ -1182,6 +1182,55 @@ def resolve_conversation_memory_settings(
     return settings
 
 
+def apply_model_runner_runtime_overrides(
+    *,
+    resolved_execution_options: ResolvedExecutionOptions,
+    model_config: ModelConfig,
+) -> ResolvedExecutionOptions:
+    """按模型配置覆盖 Runner 运行时参数。
+
+    Args:
+        resolved_execution_options: 已解析的执行选项基线。
+        model_config: 当前模型配置。
+
+    Returns:
+        应用模型级 Runner 覆盖后的执行选项。
+
+    Raises:
+        无。
+    """
+
+    runner_type = normalize_runner_type(model_config.get("runner_type"))
+    if runner_type != RunnerType.OPENAI_COMPATIBLE:
+        return resolved_execution_options
+    runner_running_config = resolved_execution_options.runner_running_config
+    if not isinstance(runner_running_config, OpenAIRunnerRuntimeConfig):
+        return resolved_execution_options
+    stream_idle_timeout = model_config.get("stream_idle_timeout")
+    stream_idle_heartbeat_sec = model_config.get("stream_idle_heartbeat_sec")
+    merged_stream_idle_timeout = (
+        float(stream_idle_timeout)
+        if isinstance(stream_idle_timeout, int | float) and not isinstance(stream_idle_timeout, bool)
+        else runner_running_config.stream_idle_timeout
+    )
+    merged_stream_idle_heartbeat_sec = (
+        float(stream_idle_heartbeat_sec)
+        if isinstance(stream_idle_heartbeat_sec, int | float) and not isinstance(stream_idle_heartbeat_sec, bool)
+        else runner_running_config.stream_idle_heartbeat_sec
+    )
+    next_runner_running_config = replace(
+        runner_running_config,
+        stream_idle_timeout=merged_stream_idle_timeout,
+        stream_idle_heartbeat_sec=merged_stream_idle_heartbeat_sec,
+    )
+    if next_runner_running_config == runner_running_config:
+        return resolved_execution_options
+    return replace(
+        resolved_execution_options,
+        runner_running_config=next_runner_running_config,
+    )
+
+
 def _resolve_trace_output_dir(path_value: str | Path, *, workspace_dir: Path) -> Path:
     """解析 trace 输出目录。"""
 
@@ -1483,6 +1532,7 @@ __all__ = [
     "deserialize_execution_options_snapshot",
     "merge_execution_options",
     "normalize_temperature",
+    "apply_model_runner_runtime_overrides",
     "resolve_scene_temperature",
     "resolve_scene_execution_options",
     "resolve_conversation_memory_settings",

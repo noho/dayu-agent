@@ -37,6 +37,7 @@ from dayu.execution.runtime_config import build_agent_running_config_from_snapsh
 from dayu.execution.options import (
     ConversationMemorySettings,
     ResolvedExecutionOptions,
+    apply_model_runner_runtime_overrides,
     resolve_web_tools_config_from_toolset_configs,
     resolve_scene_execution_options,
     resolve_scene_temperature,
@@ -581,6 +582,10 @@ class DefaultScenePreparer(ScenePreparationProtocol):
                 if build_toolset_config_snapshot("web", effective_web_tools_config) is not None
                 else (),
             ),
+        )
+        resolved_options = apply_model_runner_runtime_overrides(
+            resolved_execution_options=resolved_options,
+            model_config=model_config,
         )
         agent_create_args = build_agent_create_args(
             resolved_execution_options=resolved_options,
