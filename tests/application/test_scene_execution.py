@@ -42,6 +42,7 @@ from dayu.execution.runtime_config import (
     OpenAIRunnerRuntimeConfig,
 )
 from dayu.execution.options import (
+    apply_model_runner_runtime_overrides,
     ConversationMemorySettings,
     DocToolLimits,
     ExecutionOptions,
@@ -398,6 +399,44 @@ def test_resolve_scene_execution_options_accepts_toolset_config_overrides() -> N
     assert resolved_doc_limits.get_sections_max == 999
     assert resolved_fins_limits.read_section_max_chars == 1200
     assert resolved_web_config.fetch_truncate_chars == 12345
+
+
+def test_apply_model_runner_runtime_overrides_prefers_model_stream_idle_values() -> None:
+    """模型级 stream idle 配置应覆盖已解析 execution options 的 runner 配置。"""
+
+    resolved_options = ResolvedExecutionOptions(
+        model_name="test-model",
+        runner_running_config=OpenAIRunnerRuntimeConfig(
+            tool_timeout_seconds=45.0,
+            stream_idle_timeout=120.0,
+            stream_idle_heartbeat_sec=10.0,
+        ),
+        agent_running_config=AgentRuntimeConfig(),
+        toolset_configs=_build_toolset_configs(
+            doc_tool_limits=DocToolLimits(),
+            fins_tool_limits=FinsToolLimits(),
+            web_tools_config=WebToolsConfig(provider="off"),
+        ),
+        trace_settings=TraceSettings(enabled=False, output_dir=Path("/tmp/trace")),
+        conversation_memory_settings=ConversationMemorySettings(),
+    )
+
+    updated = apply_model_runner_runtime_overrides(
+        resolved_execution_options=resolved_options,
+        model_config=cast(
+            ModelConfig,
+            {
+                "runner_type": "openai_compatible",
+                "stream_idle_timeout": 1800.0,
+                "stream_idle_heartbeat_sec": 3.0,
+            },
+        ),
+    )
+
+    runner_config = cast(OpenAIRunnerRuntimeConfig, updated.runner_running_config)
+    assert runner_config.tool_timeout_seconds == pytest.approx(45.0)
+    assert runner_config.stream_idle_timeout == pytest.approx(1800.0)
+    assert runner_config.stream_idle_heartbeat_sec == pytest.approx(3.0)
 
 
 def test_resolve_scene_temperature_prefers_explicit_override() -> None:

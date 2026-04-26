@@ -86,6 +86,43 @@ def test_build_agent_create_args_maps_execution_options_to_openai_runner_params(
 
 
 @pytest.mark.unit
+def test_build_agent_create_args_uses_resolved_runner_running_config_snapshot() -> None:
+    """Agent builder 只透传已解析的 runner_running_config，不再理解模型级覆盖细节。"""
+
+    resolved = ResolvedExecutionOptions(
+        model_name="resolved-model",
+        runner_running_config=OpenAIRunnerRuntimeConfig(
+            tool_timeout_seconds=12.0,
+            stream_idle_timeout=120.0,
+            stream_idle_heartbeat_sec=10.0,
+        ),
+        agent_running_config=AgentRuntimeConfig(max_iterations=7),
+        trace_settings=TraceSettings(enabled=False, output_dir=Path("/tmp/trace")),
+        temperature=0.4,
+        conversation_memory_settings=ConversationMemorySettings(),
+        toolset_configs=(ToolsetConfigSnapshot("doc", payload={"limit": 1}),),
+    )
+    model_config = cast(
+        dict[str, object],
+        {
+            "runner_type": RunnerType.OPENAI_COMPATIBLE,
+            "endpoint_url": "http://example.com",
+            "model": "provider-model",
+            "headers": {"Authorization": "Bearer token"},
+        },
+    )
+
+    created = module.build_agent_create_args(
+        resolved_execution_options=resolved,
+        model_config=cast(Any, model_config),
+    )
+
+    assert created.runner_running_config.get("stream_idle_timeout") == pytest.approx(120.0)
+    assert created.runner_running_config.get("stream_idle_heartbeat_sec") == pytest.approx(10.0)
+    assert created.runner_running_config.get("tool_timeout_seconds") == pytest.approx(12.0)
+
+
+@pytest.mark.unit
 def test_build_async_agent_delegates_runner_and_running_config(monkeypatch: pytest.MonkeyPatch) -> None:
     """构造 AsyncAgent 时应把 runner、运行配置和追踪身份完整透传。"""
 
