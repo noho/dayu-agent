@@ -1251,7 +1251,7 @@ def test_dispatch_download_supports_multiple_forms() -> None:
     result = cli._dispatch_action(fake, args)
 
     assert result["action"] == "download"
-    assert result["form_type"] == "10Q 10K DEF14A"
+    assert result["form_type"] == "10Q,10K,DEF14A"
 
 
 def test_dispatch_process_passes_ci_flag() -> None:
