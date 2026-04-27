@@ -462,6 +462,93 @@ def _format_cancelled_message(payload: Any) -> str:
         return f"[cancelled] 执行已取消: {reason}"
     return "[cancelled] 执行已取消"
 
+
+def _extract_run_id_from_event(event: object) -> str | None:
+    """从事件对象中提取稳定的 ``run_id``。
+
+    Args:
+        event: 事件流中产生的事件对象，期望其 ``meta`` 字段为 ``dict``，
+            且包含字符串 ``run_id`` 键。
+
+    Returns:
+        非空字符串形式的 ``run_id``；事件未携带合法 ``run_id`` 时返回 ``None``。
+
+    Raises:
+        无。
+    """
+
+    meta = getattr(event, "meta", None)
+    if isinstance(meta, dict):
+        candidate = meta.get("run_id")
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return None
+
+
+class _RunIdLifecycleTracker:
+    """在事件流期间登记/清理当前 run 的小型生命周期跟踪器。
+
+    职责：把 `_consume_chat_turn_stream` 与 `_consume_prompt_stream` 中
+    重复的「首帧 ``meta["run_id"]`` 登记 → finally clear」样板抽到一处，
+    避免在两个事件消费器内重复维护协调器交互逻辑。
+    """
+
+    def __init__(self, observer: RunLifecycleObserver | None) -> None:
+        """初始化跟踪器。
+
+        Args:
+            observer: 可选的进程级 run 生命周期观察者；为 ``None`` 时
+                所有跟踪操作都是 no-op。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        self._observer = observer
+        self._registered_run_id: str | None = None
+
+    def observe(self, event: object) -> None:
+        """检查事件并在拿到首个 ``run_id`` 时登记到观察者。
+
+        Args:
+            event: 事件流中产生的事件对象。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        if self._observer is None or self._registered_run_id is not None:
+            return
+        run_id = _extract_run_id_from_event(event)
+        if run_id is None:
+            return
+        self._observer.register_active_run(run_id)
+        self._registered_run_id = run_id
+
+    def clear(self) -> None:
+        """事件流结束后从观察者清理已登记的 run。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        if self._observer is None or self._registered_run_id is None:
+            return
+        self._observer.clear_active_run(self._registered_run_id)
+        self._registered_run_id = None
+
 async def _consume_chat_turn_stream(
     session: ChatServiceProtocol,
     user_input: str,
@@ -504,23 +591,13 @@ async def _consume_chat_turn_stream(
         session_resolution_policy=SessionResolutionPolicy.ENSURE_DETERMINISTIC,
     )
     submission = await session.submit_turn(request)
-    registered_run_id: str | None = None
+    tracker = _RunIdLifecycleTracker(run_lifecycle_observer)
     try:
         async for event in submission.event_stream:
-            if (
-                run_lifecycle_observer is not None
-                and registered_run_id is None
-            ):
-                meta = getattr(event, "meta", None)
-                if isinstance(meta, dict):
-                    candidate = meta.get("run_id")
-                    if isinstance(candidate, str) and candidate:
-                        run_lifecycle_observer.register_active_run(candidate)
-                        registered_run_id = candidate
+            tracker.observe(event)
             _render_stream_event(event, state)
     finally:
-        if run_lifecycle_observer is not None and registered_run_id is not None:
-            run_lifecycle_observer.clear_active_run(registered_run_id)
+        tracker.clear()
     return state.final_content, submission.session_id
 
 def _resume_interactive_pending_turn_if_needed(
@@ -633,23 +710,13 @@ async def _consume_prompt_stream(
         execution_options=execution_options,
     )
     submission = await session.submit(request)
-    registered_run_id: str | None = None
+    tracker = _RunIdLifecycleTracker(run_lifecycle_observer)
     try:
         async for event in submission.event_stream:
-            if (
-                run_lifecycle_observer is not None
-                and registered_run_id is None
-            ):
-                meta = getattr(event, "meta", None)
-                if isinstance(meta, dict):
-                    candidate = meta.get("run_id")
-                    if isinstance(candidate, str) and candidate:
-                        run_lifecycle_observer.register_active_run(candidate)
-                        registered_run_id = candidate
+            tracker.observe(event)
             _render_stream_event(event, state)
     finally:
-        if run_lifecycle_observer is not None and registered_run_id is not None:
-            run_lifecycle_observer.clear_active_run(registered_run_id)
+        tracker.clear()
     return state.final_content
 
 

@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from dayu.host.host import Host
 from dayu.log import Log
 from dayu.process_lifecycle import (
-    EXIT_CODE_SIGINT,
     ProcessShutdownCoordinator,
     install_async_signal_handlers,
 )
@@ -123,7 +122,6 @@ def run_run_command(args: argparse.Namespace) -> int:
 
 
 __all__ = [
-    "EXIT_CODE_SIGINT",
     "_run_daemon_with_graceful_shutdown",
     "_run_run_command",
     "run_run_command",
