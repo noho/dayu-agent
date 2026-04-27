@@ -13,6 +13,7 @@ from dayu.cli.dependency_setup import (
     _build_execution_options,
     _prepare_cli_host_dependencies,
     _resolve_interactive_session_id,
+    get_cli_shutdown_coordinator,
     setup_loglevel,
     setup_paths,
 )
@@ -148,6 +149,7 @@ def run_interactive_command(args: argparse.Namespace) -> int:
             scene_name=interactive_scene_name,
             execution_options=execution_options,
             show_thinking=bool(getattr(args, "thinking", False)),
+            run_lifecycle_observer=get_cli_shutdown_coordinator(),
         )
         return 0
     finally:

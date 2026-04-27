@@ -12,6 +12,7 @@ from dayu.cli.dependency_setup import (
     _build_execution_options,
     _build_prompt_service,
     _prepare_cli_host_dependencies,
+    get_cli_shutdown_coordinator,
     setup_loglevel,
     setup_paths,
 )
@@ -118,6 +119,7 @@ def _run_one_shot_prompt_command(
         ticker=paths_config.ticker,
         execution_options=execution_options,
         show_thinking=bool(getattr(args, "thinking", False)),
+        run_lifecycle_observer=get_cli_shutdown_coordinator(),
     )
 
 
@@ -205,6 +207,7 @@ def _run_labeled_prompt_command(
                 ticker=paths_config.ticker,
                 execution_options=execution_options,
                 show_thinking=bool(getattr(args, "thinking", False)),
+                run_lifecycle_observer=get_cli_shutdown_coordinator(),
             )
     except ValueError as exc:
         Log.error(str(exc), module=MODULE)

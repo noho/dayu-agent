@@ -62,6 +62,12 @@ class _NoopStatusLine:
 def _patch_status_line_controller(monkeypatch: pytest.MonkeyPatch) -> None:
     """全局 patch _StatusLineController，防止动画线程向 stdout 写入干扰测试断言。"""
     monkeypatch.setattr(app_interactive, "_StatusLineController", lambda: _NoopStatusLine())
+    # 每个 case 重置进程级协调器单例，避免上一 case 残留影响 run_lifecycle_observer。
+    from dayu.cli.dependency_setup import _reset_cli_shutdown_coordinator_for_testing
+    from dayu.process_lifecycle.sync_signals import _reset_registration_for_testing
+
+    _reset_cli_shutdown_coordinator_for_testing()
+    _reset_registration_for_testing()
 
 
 def _build_workspace(tmp_path: Path, *, ticker: str = "AAPL") -> Path:
@@ -632,6 +638,7 @@ def test_interactive_command_prints_restore_context_for_labeled_session(
             "scene_name": "prompt_mt",
             "execution_options": ExecutionOptions(),
             "show_thinking": False,
+            "run_lifecycle_observer": None,
         }
     ]
     assert "上一轮对话" in captured.out
@@ -2214,3 +2221,53 @@ def test_prompt_prints_single_response(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert result == 0
     assert "single" in outputs
     assert "-response" in outputs
+
+
+@pytest.mark.unit
+def test_prompt_registers_run_id_with_observer_for_cooperative_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """one-shot ``dayu prompt`` 应在事件流首帧带 ``meta["run_id"]`` 时登记到协调器。
+
+    回归覆盖：之前 ``prompt`` / ``_consume_prompt_stream`` 不接受
+    ``run_lifecycle_observer``，普通 prompt 路径绕过协调器，Ctrl-C 不能触发协作式取消。
+    """
+
+    class _RecordingObserver:
+        def __init__(self) -> None:
+            self.registered: list[str] = []
+            self.cleared: list[str] = []
+
+        def register_active_run(self, run_id: str) -> None:
+            self.registered.append(run_id)
+
+        def clear_active_run(self, run_id: str) -> None:
+            self.cleared.append(run_id)
+
+    observer = _RecordingObserver()
+
+    class _PromptSessionWithRunId:
+        async def submit(self, request: PromptRequest):
+            async def _stream() -> AsyncIterator[AppEvent]:
+                yield AppEvent(
+                    type=AppEventType.FINAL_ANSWER,
+                    payload={"content": "ok", "degraded": False},
+                    meta={"run_id": "run-prompt-1"},
+                )
+
+            return PromptSubmission(
+                session_id=request.session_id or "test-session",
+                event_stream=_stream(),
+            )
+
+    monkeypatch.setattr(builtins, "print", lambda *args, **kwargs: None)
+
+    result = app_interactive.prompt(
+        cast(Any, _PromptSessionWithRunId()),
+        "测试问题",
+        run_lifecycle_observer=cast(Any, observer),
+    )
+
+    assert result == 0
+    assert observer.registered == ["run-prompt-1"]
+    assert observer.cleared == ["run-prompt-1"]

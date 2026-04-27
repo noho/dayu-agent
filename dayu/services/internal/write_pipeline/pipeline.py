@@ -22,7 +22,7 @@ try:
 except ImportError:  # pragma: no cover - Windows 不提供 fcntl
     fcntl = None
 
-from dayu.contracts.cancellation import CancelledError
+from dayu.contracts.cancellation import CancelledError, CancellationToken
 from dayu.host import HostExecutorProtocol
 from dayu.host.protocols import HostGovernanceProtocol
 from dayu.execution.options import ExecutionOptions, ResolvedExecutionOptions
@@ -260,6 +260,7 @@ class WritePipelineRunner:
         execution_options: ExecutionOptions | None = None,
         company_name_resolver: Callable[[str], str] | None = None,
         company_meta_summary_resolver: Callable[[str], dict[str, str]] | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> None:
         """初始化写作流水线。
 
@@ -344,6 +345,25 @@ class WritePipelineRunner:
         )
         self._company_facets: CompanyFacetProfile | None = None
         self._company_facet_catalog: dict[str, list[str]] = {}
+        self._cancellation_token: CancellationToken | None = cancellation_token
+
+    def _check_cancellation(self) -> None:
+        """章节边界 checkpoint：触发 ``CancelledError`` 让流水线协作退出。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            CancelledError: ``cancellation_token`` 已触发时抛出，由
+                ``WriteService.on_cancel`` 收口为 ``WRITE_CANCELLED_EXIT_CODE``。
+        """
+
+        token = self._cancellation_token
+        if token is not None:
+            token.raise_if_cancelled()
 
     def run(self) -> int:
         """执行完整写作流水线。
@@ -359,6 +379,7 @@ class WritePipelineRunner:
             RuntimeError: 核心流程异常时抛出。
         """
 
+        self._check_cancellation()
         template_path = Path(self._write_config.template_path).resolve()
         if not template_path.exists() or not template_path.is_file():
             Log.error(f"模板文件不存在: {template_path}", module=MODULE)
@@ -414,6 +435,7 @@ class WritePipelineRunner:
             for task in middle_tasks:
                 if task.title != chapter_filter:
                     continue
+                self._check_cancellation()
                 existing_result = chapter_results.get(task.title)
                 if self._should_skip_with_resume(existing_result):
                     Log.info(f"[单章模式] 显式指定章节，强制重跑: {task.title}", module=MODULE)
@@ -507,6 +529,7 @@ class WritePipelineRunner:
                         Log.info(f"跳过已完成章节: {_DECISION_CHAPTER_TITLE}", module=MODULE)
                         decision_result = existing_decision
                 if decision_result is None:
+                    self._check_cancellation()
                     try:
                         decision_result = self._run_single_chapter(
                             task=decision_task,
@@ -580,6 +603,7 @@ class WritePipelineRunner:
                         module=MODULE,
                     )
                     return 4
+            self._check_cancellation()
             try:
                 overview_result = self._run_single_chapter(
                     task=overview_task,
@@ -732,6 +756,7 @@ class WritePipelineRunner:
 
             try:
                 while future_to_task:
+                    self._check_cancellation()
                     completed_futures, _ = concurrent.futures.wait(
                         tuple(future_to_task),
                         return_when=concurrent.futures.FIRST_COMPLETED,
@@ -1291,6 +1316,7 @@ def run_write_pipeline(
     execution_options: ExecutionOptions | None = None,
     company_name_resolver: Callable[[str], str] | None = None,
     company_meta_summary_resolver: Callable[[str], dict[str, str]] | None = None,
+    cancellation_token: CancellationToken | None = None,
 ) -> int:
     """执行写作流水线入口函数。
 
@@ -1304,6 +1330,9 @@ def run_write_pipeline(
         execution_options: 请求级覆盖参数。
         company_name_resolver: 可选公司名称解析函数。
         company_meta_summary_resolver: 可选公司基础 meta 摘要解析函数。
+        cancellation_token: 进程级协调器透传下来的协作式取消令牌；当
+            ``host.cancel_run`` 经 ``CancellationBridge`` 触发该 token 后，
+            流水线在章节边界主动 ``raise_if_cancelled`` 协作退出。
 
     Returns:
         流程退出码。
@@ -1323,6 +1352,7 @@ def run_write_pipeline(
         execution_options=execution_options,
         company_name_resolver=company_name_resolver,
         company_meta_summary_resolver=company_meta_summary_resolver,
+        cancellation_token=cancellation_token,
     )
     return runner.run()
 

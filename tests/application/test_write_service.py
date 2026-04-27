@@ -411,3 +411,66 @@ def test_write_service_returns_cancelled_exit_code_when_host_sync_path_is_cancel
     assert host_gateway.sync_call_count == 1
     assert host_gateway.last_spec is not None
     assert host_gateway.last_spec.operation_name == "write_pipeline"
+
+
+@pytest.mark.unit
+def test_write_service_passes_hosted_run_context_cancellation_token_to_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WriteService 必须把 ``HostedRunContext.cancellation_token`` 透传给 ``run_write_pipeline``。
+
+    回归覆盖：之前 ``operation`` lambda 直接丢弃 ``context``，
+    导致 pipeline 无法在章节边界响应 ``host.cancel_run`` 触发的协作式取消。
+    """
+
+    from tests.application.conftest import StubHostExecutor, StubSessionRegistry
+
+    workspace = _build_workspace(Path("/tmp/dayu-write-service-token"))
+    host = Host(
+        executor=StubHostExecutor(),
+        session_registry=StubSessionRegistry(),
+        run_registry=_run_registry(),
+    )
+    service = WriteService(
+        host=host,
+        host_governance=host,
+        workspace=workspace,
+        scene_execution_acceptance_preparer=_FakeSceneExecutionAcceptancePreparer(
+            workspace_dir=workspace.workspace_dir,
+        ),
+    )
+
+    captured: dict[str, object] = {}
+
+    def _capture(**kwargs: object) -> int:
+        captured["cancellation_token"] = kwargs.get("cancellation_token")
+        return 0
+
+    monkeypatch.setattr("dayu.services.write_service.run_write_pipeline", _capture)
+
+    assert service.run(_build_request()) == 0
+
+    from dayu.contracts.cancellation import CancellationToken
+
+    assert isinstance(captured.get("cancellation_token"), CancellationToken)
+
+
+@pytest.mark.unit
+def test_write_service_run_pipeline_cancellation_token_triggers_pipeline_cancelled_error() -> None:
+    """token 触发后，``run_write_pipeline`` 内部应立刻抛 ``CancelledError``。
+
+    回归覆盖：write 真正接入了协作式取消的章节边界 checkpoint。
+    """
+
+    from dayu.contracts.cancellation import CancelledError, CancellationToken
+    from dayu.services.internal.write_pipeline.pipeline import WritePipelineRunner
+
+    token = CancellationToken()
+    token.cancel()
+
+    runner = object.__new__(WritePipelineRunner)
+    # 仅供 _check_cancellation 单元 verify。
+    runner._cancellation_token = token  # type: ignore[attr-defined]
+
+    with pytest.raises(CancelledError):
+        runner._check_cancellation()  # type: ignore[attr-defined]

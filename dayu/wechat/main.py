@@ -6,6 +6,7 @@ import argparse
 
 from dayu.console_output import configure_standard_streams_for_console_output
 from dayu.log import Log
+from dayu.process_lifecycle import EXIT_CODE_SIGINT
 from dayu.wechat.arg_parsing import MODULE, parse_arguments, setup_loglevel
 
 
@@ -62,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         return _dispatch_command(args)
     except KeyboardInterrupt:
         Log.info("收到中断信号，WeChat daemon 正在退出", module=MODULE)
-        return 130
+        return EXIT_CODE_SIGINT
     except Exception as exc:
         Log.error(f"WeChat 命令失败: {exc}", module=MODULE)
         return 1

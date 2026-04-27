@@ -236,15 +236,21 @@ def test_run_command_uses_existing_login(monkeypatch: pytest.MonkeyPatch, tmp_pa
             return WeChatDaemonState(bot_token="token-1", base_url="https://ilink.example")
 
     fake_daemon = object()
+    fake_host = object()
 
-    async def _fake_run_daemon_with_graceful_shutdown(_daemon, *, require_existing_auth: bool) -> int:
+    async def _fake_run_daemon_with_graceful_shutdown(_daemon, *, host, require_existing_auth: bool) -> int:
         captured["daemon"] = _daemon
+        captured["host"] = host
         captured["require_existing_auth"] = require_existing_auth
         return 0
 
     monkeypatch.setattr(wechat_run_module, "_resolve_command_context", lambda _args: context)
     monkeypatch.setattr(wechat_run_module, "FileWeChatStateStore", _FakeStore)
-    monkeypatch.setattr(wechat_run_module, "_create_run_daemon", lambda _args, _context: fake_daemon)
+    monkeypatch.setattr(
+        wechat_run_module,
+        "_create_run_daemon",
+        lambda _args, _context: (fake_daemon, fake_host),
+    )
     monkeypatch.setattr(
         wechat_run_module,
         "_run_daemon_with_graceful_shutdown",
@@ -256,7 +262,7 @@ def test_run_command_uses_existing_login(monkeypatch: pytest.MonkeyPatch, tmp_pa
     exit_code = asyncio.run(wechat_run_module._run_run_command(args))
 
     assert exit_code == 0
-    assert captured == {"daemon": fake_daemon, "require_existing_auth": True}
+    assert captured == {"daemon": fake_daemon, "host": fake_host, "require_existing_auth": True}
 
 
 @pytest.mark.unit
@@ -281,60 +287,39 @@ def test_run_daemon_with_graceful_shutdown_maps_signal_to_exit_code(
         async def aclose(self) -> None:
             captured["closed"] = True
 
-    def _fake_install_signal_handlers(loop, run_task, shutdown_state):
-        loop.call_soon(
-            lambda: wechat_run_module._request_daemon_shutdown(
-                run_task,
-                shutdown_state,
-                signal_name=signal_name,
-                exit_code=exit_code,
-            )
-        )
-        return [signal.SIGTERM]
+    class _FakeHost:
+        def cancel_run(self, _run_id: str) -> bool:
+            return False
 
-    monkeypatch.setattr(wechat_run_module, "_install_daemon_signal_handlers", _fake_install_signal_handlers)
-    monkeypatch.setattr(wechat_run_module, "_remove_daemon_signal_handlers", lambda _loop, _signals: None)
+        def shutdown_active_runs_for_owner(self) -> list[str]:
+            return []
+
+    import contextlib as _contextlib
+
+    @_contextlib.contextmanager
+    def _fake_install_async_signal_handlers(loop, _coordinator, *, on_signal):
+        loop.call_soon(on_signal, signal_name, exit_code)
+        try:
+            yield [signal.SIGTERM]
+        finally:
+            pass
+
+    monkeypatch.setattr(
+        wechat_run_module,
+        "install_async_signal_handlers",
+        _fake_install_async_signal_handlers,
+    )
 
     actual_exit_code = asyncio.run(
         wechat_run_module._run_daemon_with_graceful_shutdown(
             _FakeDaemon(),
+            host=_FakeHost(),
             require_existing_auth=True,
         )
     )
 
     assert actual_exit_code == exit_code
     assert captured == {"require_existing_auth": True, "closed": True}
-
-
-@pytest.mark.unit
-def test_install_daemon_signal_handlers_passes_positional_callback_args(monkeypatch: pytest.MonkeyPatch) -> None:
-    """验证 asyncio signal handler 安装使用的位置参数可直接调用回调。"""
-
-    captured: dict[str, object] = {}
-    loop = asyncio.new_event_loop()
-    shutdown_state = wechat_run_module.DaemonShutdownState()
-
-    class _FakeTask:
-        def cancel(self) -> None:
-            captured["cancelled"] = True
-
-    fake_task = _FakeTask()
-
-    def _fake_add_signal_handler(os_signal, callback, *args):
-        captured["signal"] = os_signal
-        callback(*args)
-
-    monkeypatch.setattr(loop, "add_signal_handler", _fake_add_signal_handler)
-    monkeypatch.setattr(wechat_run_module.Log, "info", lambda *_args, **_kwargs: None)
-
-    installed = wechat_run_module._install_daemon_signal_handlers(loop, fake_task, shutdown_state)
-
-    assert installed == [signal.SIGINT, signal.SIGTERM]
-    assert captured["cancelled"] is True
-    assert shutdown_state.signal_name == "SIGINT"
-    assert shutdown_state.exit_code == 130
-
-    loop.close()
 
 
 @pytest.mark.unit
@@ -1104,7 +1089,6 @@ def test_wechat_main_helper_functions_cover_env_identity_parsing_and_signal_clea
     parser = wechat_arg_module._create_parser()
     args = parser.parse_args(["service", "status", "--base", str(tmp_path)])
     errors: list[str] = []
-    removed_signals: list[signal.Signals] = []
 
     monkeypatch.setattr(wechat_runtime_module, "ConfigFileResolver", lambda config_root: ("resolver", config_root))
     monkeypatch.setattr(
@@ -1126,12 +1110,6 @@ def test_wechat_main_helper_functions_cover_env_identity_parsing_and_signal_clea
     )
     monkeypatch.setattr(wechat_arg_module.Log, "error", lambda message, **_kwargs: errors.append(str(message)))
 
-    class _Loop:
-        def remove_signal_handler(self, os_signal: signal.Signals) -> None:
-            removed_signals.append(os_signal)
-            if os_signal == signal.SIGTERM:
-                raise RuntimeError("ignore")
-
     captured_environment = wechat_runtime_module._collect_service_environment_variables(context)
     identity = wechat_runtime_module._resolve_service_identity(args)
 
@@ -1148,13 +1126,11 @@ def test_wechat_main_helper_functions_cover_env_identity_parsing_and_signal_clea
         parse_limits_override('{"nested": []}', field_name="--doc-limits-json")
     with pytest.raises(SystemExit, match="2"):
         parse_temperature_argument("bad", field_name="--temperature")
-    wechat_run_module._remove_daemon_signal_handlers(_Loop(), [signal.SIGINT, signal.SIGTERM])
 
     assert any("不是合法 JSON" in message for message in errors)
     assert any("必须是 JSON 对象" in message for message in errors)
     assert any("只允许 JSON 标量值" in message for message in errors)
     assert any("--temperature" in message for message in errors)
-    assert removed_signals == [signal.SIGINT, signal.SIGTERM]
 
 
 @pytest.mark.unit

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Protocol
 
 from dayu.contracts.session import SessionSource
+from dayu.host.host import Host
 from dayu.log import Log
 from dayu.services import prepare_host_runtime_dependencies
 from dayu.services.chat_service import ChatService
@@ -666,7 +667,9 @@ def _prepare_wechat_host_dependencies(
     )
 
 
-def _create_run_daemon(args: argparse.Namespace, context: ResolvedWechatContext) -> WeChatDaemonLike:
+def _create_run_daemon(
+    args: argparse.Namespace, context: ResolvedWechatContext
+) -> tuple[WeChatDaemonLike, Host]:
     """构建运行命令使用的 WeChat daemon。
 
     Args:
@@ -674,7 +677,9 @@ def _create_run_daemon(args: argparse.Namespace, context: ResolvedWechatContext)
         context: 已解析的共享上下文。
 
     Returns:
-        可直接运行的 WeChat daemon 协议对象。
+        ``(WeChat daemon, host)``。``host`` 用于让上层接入进程级
+        ``ProcessShutdownCoordinator``，将 SIGINT/SIGTERM 收敛到统一的
+        优雅退出契约。
 
     Raises:
         无。
@@ -697,12 +702,13 @@ def _create_run_daemon(args: argparse.Namespace, context: ResolvedWechatContext)
         session_source=SessionSource.WECHAT,
     )
     reply_delivery_service = ReplyDeliveryService(host=host)
-    return WeChatDaemon(
+    daemon = WeChatDaemon(
         chat_service=chat_service,
         reply_delivery_service=reply_delivery_service,
         state_store=FileWeChatStateStore(context.state_dir),
         config=_build_daemon_config(args, context, allow_interactive_relogin=False),
     )
+    return daemon, host
 
 
 def _query_installed_service_status(identity: ResolvedWechatServiceIdentity) -> ServiceStatus | None:

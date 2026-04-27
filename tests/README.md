@@ -105,6 +105,9 @@ pip install -r requirements.txt
 - `tests/application/test_web_routes.py`
 - `tests/application/test_wechat_outbox_integration.py`
 - `tests/application/test_host_commands.py`
+- `tests/application/test_process_lifecycle_coordinator.py`
+- `tests/application/test_process_lifecycle_sync_signals.py`
+- `tests/application/test_process_lifecycle_async_signals.py`
 - `tests/engine/test_prompt_composer.py`
 - `tests/engine/test_conversation_memory.py`
 - `tests/engine/test_async_agent.py`

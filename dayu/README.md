@@ -1013,7 +1013,7 @@ Host Session
 - `dayu-cli sessions` 当前统一通过 `HostAdminService.list_sessions(state/source/scene)` 列出 Host session digest，并展示 `SCENE / TURNS / OVERVIEW`；`OVERVIEW` 首版只按 `first_question -> last_question -> "-"` 选择文本。
 - Host 不负责决定“上一次 interactive 是哪个 session”，它只接收 UI 已解析并校验过的 `session_id`。
 - CLI / WeChat 在完成 Host runtime 装配后，会先统一执行一次 Host-owned 启动恢复：清理 orphan run（写入独立的 `RunState.UNSETTLED` 吸收态，不再与业务 `FAILED` 混用）、stale permit、以及陈旧的 `reply_outbox.DELIVERY_IN_PROGRESS`；interactive 进入 REPL 前只负责恢复上一轮 pending turn，本身不再直接持有宿主管理依赖。Owner 自愈判据是 `state == UNSETTLED && owner_pid == os.getpid()`，不再依赖 `error_summary` 字符串。
-- CLI 主入口会在 Host 装配阶段一次性注册 SIGTERM / SIGHUP / `atexit` 优雅退出 hook：进程收到信号或正常退出时主动调用 `Host.shutdown_active_runs_for_owner()`，把本 pid 仍活跃的 run 主动收敛为 `CANCELLED`，避免把下次启动的 orphan 判定窗口暴露给用户。
+- 进程级优雅退出由 `dayu.process_lifecycle` 协调器统一覆盖 sync CLI（SIGINT/SIGTERM/SIGHUP/atexit）、async daemon（asyncio loop signal handler）与 `KeyboardInterrupt`：先调 `Host.cancel_run` 走协作式取消（cancellation_bridge 触发 `HostedRunContext.cancellation_token`，让 write/interactive 在下个 checkpoint 自然退出），再调 `Host.shutdown_active_runs_for_owner()` 强收敛，最后由入口决定退出码（`EXIT_CODE_SIGINT=130` / `EXIT_CODE_SIGTERM=0`）。SIGKILL / 断电仍由下次启动 `cleanup_orphan_runs` 兜底，是稳定例外。
 - CLI interactive 与 WeChat daemon 都按各自 `state_dir` 持有单实例锁，避免同一 workspace / label 下两个前台进程并发共享本地状态目录。
 - WeChat daemon 的自动恢复还会额外绑定当前 `state_dir` 派生的 runtime identity，避免不同 daemon 实例在相同 `scene=wechat` 下串恢复彼此的 pending turn；同时同一个 `state_dir` 只允许一个 daemon 持锁运行，只有在单实例前提下，daemon 才会把上一进程遗留的 `delivery_in_progress` reply outbox 记录回收为可重试状态，再进入 pending turn 恢复 / 补发 / 长轮询主循环。
 - 如果某个微信会话的旧 pending turn 无法恢复，daemon 不会再静默吞掉错误并继续收新消息；它会在该会话下一条入站消息到达时显式拒绝处理，并返回固定错误提示，避免同一 `session_id + scene` 槽位被坏 pending turn 永久卡死后又退化成通用错误回复。

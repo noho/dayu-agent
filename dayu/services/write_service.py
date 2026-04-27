@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
+from dayu.contracts.cancellation import CancellationToken
+from dayu.contracts.host_execution import (
+    ConcurrencyAcquirePolicy,
+    HostedRunContext,
+    HostedRunSpec,
+)
 from dayu.contracts.session import SessionSource
 from dayu.execution.options import ExecutionOptions
-from dayu.contracts.host_execution import ConcurrencyAcquirePolicy, HostedRunSpec
 from dayu.host.protocols import HostedExecutionGatewayProtocol, HostGovernanceProtocol
+from dayu.process_lifecycle import RunLifecycleObserver
 from dayu.services.concurrency_lanes import resolve_hosted_run_concurrency_lane
 from dayu.services.contracts import WriteRequest
 from dayu.services.internal.write_pipeline.enums import (
@@ -38,6 +44,7 @@ class WriteService(WriteServiceProtocol):
     scene_execution_acceptance_preparer: SceneExecutionAcceptancePreparer
     company_name_resolver: Callable[[str], str] | None = None
     company_meta_summary_resolver: Callable[[str], dict[str, str]] | None = None
+    run_lifecycle_observer: RunLifecycleObserver | None = field(default=None)
 
     def run(self, request: WriteRequest) -> int:
         """执行写作流水线。
@@ -62,11 +69,61 @@ class WriteService(WriteServiceProtocol):
         )
         return self.host.run_operation_sync(
             spec=spec,
-            operation=lambda _context: self._run_pipeline(request, host_session_id=session.session_id),
+            operation=lambda context: self._run_pipeline_with_observer(
+                request,
+                host_session_id=session.session_id,
+                context=context,
+            ),
             on_cancel=lambda: WRITE_CANCELLED_EXIT_CODE,
         )
 
-    def _run_pipeline(self, request: WriteRequest, *, host_session_id: str) -> int:
+    def _run_pipeline_with_observer(
+        self,
+        request: WriteRequest,
+        *,
+        host_session_id: str,
+        context: HostedRunContext,
+    ) -> int:
+        """在生命周期观察者登记 run_id 之后执行写作流水线。
+
+        本方法负责把当前 ``HostedRunContext`` 的 run_id 暴露给可选的
+        ``RunLifecycleObserver``（让进程级协调器能在 Ctrl-C 时触发
+        ``host.cancel_run`` → ``CancellationBridge``），同时把
+        ``HostedRunContext.cancellation_token`` 透传给写作流水线，让其在
+        章节边界主动 ``raise_if_cancelled`` 协作退出。
+
+        Args:
+            request: 写作执行请求。
+            host_session_id: 当前写作流水线复用的 Host Session。
+            context: Host 注入的运行时上下文，承载 run_id 与 token。
+
+        Returns:
+            写作流水线退出码。
+
+        Raises:
+            RuntimeError: 写作流水线主体抛出的运行时异常会继续向上传播。
+        """
+
+        observer = self.run_lifecycle_observer
+        if observer is not None and context.run_id:
+            observer.register_active_run(context.run_id)
+        try:
+            return self._run_pipeline(
+                request,
+                host_session_id=host_session_id,
+                cancellation_token=context.cancellation_token,
+            )
+        finally:
+            if observer is not None and context.run_id:
+                observer.clear_active_run(context.run_id)
+
+    def _run_pipeline(
+        self,
+        request: WriteRequest,
+        *,
+        host_session_id: str,
+        cancellation_token: CancellationToken | None = None,
+    ) -> int:
         """执行写作流水线主体。"""
 
         main_execution_options = build_execution_options_with_model_override(
@@ -99,6 +156,7 @@ class WriteService(WriteServiceProtocol):
             execution_options=main_execution_options,
             company_name_resolver=self.company_name_resolver,
             company_meta_summary_resolver=self.company_meta_summary_resolver,
+            cancellation_token=cancellation_token,
         )
 
     @staticmethod
@@ -131,3 +189,4 @@ def _resolve_write_scene_models(
 
 
 __all__ = ["WRITE_CANCELLED_EXIT_CODE", "WriteRunConfig", "WriteService"]
+

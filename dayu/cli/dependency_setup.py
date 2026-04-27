@@ -19,7 +19,10 @@ from dayu.cli.interactive_state import (
     build_interactive_key,
     resolve_interactive_session_id as resolve_interactive_state_session_id,
 )
-from dayu.cli.graceful_shutdown import register_cli_shutdown_hook
+from dayu.process_lifecycle import (
+    ProcessShutdownCoordinator,
+    register_process_shutdown_hook,
+)
 from dayu.contracts.infrastructure import ConfigLoaderProtocol, PromptAssetStoreProtocol
 from dayu.contracts.session import SessionSource
 from dayu.contracts.tool_configs import DocToolLimits, FinsToolLimits
@@ -503,7 +506,8 @@ def _prepare_cli_host_dependencies(
         runtime_label="CLI Host runtime",
         log_module=MODULE,
     )
-    register_cli_shutdown_hook(prepared.host)
+    coordinator = _ensure_cli_shutdown_coordinator(prepared.host)
+    register_process_shutdown_hook(coordinator)
     return (
         prepared.workspace,
         prepared.default_execution_options,
@@ -511,6 +515,51 @@ def _prepare_cli_host_dependencies(
         prepared.host,
         prepared.fins_runtime,
     )
+
+
+_CLI_SHUTDOWN_COORDINATOR: ProcessShutdownCoordinator | None = None
+
+
+def _ensure_cli_shutdown_coordinator(host: Host) -> ProcessShutdownCoordinator:
+    """构造或返回 CLI 进程内共享的退出协调器。
+
+    Args:
+        host: 已装配的 Host 聚合根。
+
+    Returns:
+        与本进程绑定的协调器；多次调用返回同一实例，避免重复登记 active run。
+
+    Raises:
+        无。
+    """
+
+    global _CLI_SHUTDOWN_COORDINATOR
+    if _CLI_SHUTDOWN_COORDINATOR is None:
+        _CLI_SHUTDOWN_COORDINATOR = ProcessShutdownCoordinator(host)
+    return _CLI_SHUTDOWN_COORDINATOR
+
+
+def get_cli_shutdown_coordinator() -> ProcessShutdownCoordinator | None:
+    """获取已构造的 CLI 进程级协调器。
+
+    Args:
+        无。
+
+    Returns:
+        协调器实例；若 CLI 装配尚未完成则返回 ``None``，调用方应静默回退。
+
+    Raises:
+        无。
+    """
+
+    return _CLI_SHUTDOWN_COORDINATOR
+
+
+def _reset_cli_shutdown_coordinator_for_testing() -> None:
+    """仅供测试重置进程级协调器单例。"""
+
+    global _CLI_SHUTDOWN_COORDINATOR
+    _CLI_SHUTDOWN_COORDINATOR = None
 
 
 def _build_chat_service(
@@ -598,6 +647,7 @@ def _build_write_service(
         scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
         company_name_resolver=fins_runtime.get_company_name,
         company_meta_summary_resolver=fins_runtime.get_company_meta_summary,
+        run_lifecycle_observer=get_cli_shutdown_coordinator(),
     )
 
 
