@@ -329,7 +329,7 @@ class SQLiteRunRegistry(RunRegistryProtocol):
             )
             rowcount = cursor.rowcount
         if rowcount > 0:
-            Log.info(
+            Log.debug(
                 f"登记 run 取消请求: run_id={run_id}, cancel_reason={cancel_reason.value}",
                 module=MODULE,
             )
@@ -474,7 +474,7 @@ class SQLiteRunRegistry(RunRegistryProtocol):
                     if cursor.rowcount > 0:
                         orphan_ids.append(oid)
             if orphan_ids:
-                Log.info(
+                Log.debug(
                     f"清理 orphan runs -> UNSETTLED: count={len(orphan_ids)}, run_ids={','.join(orphan_ids)}",
                     module=MODULE,
                 )

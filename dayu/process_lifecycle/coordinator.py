@@ -194,7 +194,7 @@ class ProcessShutdownCoordinator:
                 continue
             cancelled.append(run_id)
         if cancelled:
-            Log.info(
+            Log.debug(
                 f"协调器协作式取消 active runs: trigger={trigger}, count={len(cancelled)}",
                 module=MODULE,
             )
@@ -227,7 +227,7 @@ class ProcessShutdownCoordinator:
             )
             return []
         if cancelled:
-            Log.info(
+            Log.debug(
                 f"进程优雅退出强收敛 active runs: trigger={trigger}, count={len(cancelled)}",
                 module=MODULE,
             )

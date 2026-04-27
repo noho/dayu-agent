@@ -214,7 +214,7 @@ class SQLiteSessionRegistry(SessionRegistryProtocol):
             rowcount = cursor.rowcount
         if rowcount == 0:
             raise KeyError(f"session 不存在: {session_id}")
-        Log.info(f"关闭 session: session_id={session_id}", module=MODULE)
+        Log.debug(f"关闭 session: session_id={session_id}", module=MODULE)
 
     def is_session_active(self, session_id: str) -> bool:
         """查询 session 是否仍处于非 CLOSED 状态。

@@ -725,7 +725,7 @@ class Host:
         run = self._run_registry.get_run(run_id)
         if run is None:
             raise KeyError(f"run 不存在: {run_id}")
-        Log.info(f"Host 请求取消 run: run_id={run_id}", module=MODULE)
+        Log.debug(f"Host 请求取消 run: run_id={run_id}", module=MODULE)
         return run
 
     def cancel_session(self, session_id: str) -> tuple[SessionRecord, list[str]]:
@@ -842,7 +842,7 @@ class Host:
             if self._run_registry.request_cancel(run.run_id):
                 cancelled_ids.append(run.run_id)
         if cancelled_ids:
-            Log.info(
+            Log.debug(
                 f"Host 批量取消 session 下活跃 runs: session_id={session_id}, run_ids={','.join(cancelled_ids)}",
                 module=MODULE,
             )
@@ -915,7 +915,7 @@ class Host:
                     module=MODULE,
                 )
         if cancelled_ids:
-            Log.info(
+            Log.debug(
                 f"Host 进程退出前收敛活跃 runs: count={len(cancelled_ids)}, run_ids={','.join(cancelled_ids)}",
                 module=MODULE,
             )
@@ -961,7 +961,7 @@ class Host:
             Log.warn(f"Host 清理 stale reply outbox 失败: {exc}", module=MODULE)
             return []
         if stale_ids:
-            Log.info(
+            Log.debug(
                 f"Host 清理 stale reply outbox: count={len(stale_ids)}, ids={','.join(stale_ids)}",
                 module=MODULE,
             )
@@ -1069,19 +1069,19 @@ class Host:
                     continue
                 expired_ids.append(record.pending_turn_id)
         if cleaned_ids:
-            Log.info(
+            Log.debug(
                 f"Host 清理 stale pending turns: count={len(cleaned_ids)}, "
                 f"ids={','.join(cleaned_ids)}",
                 module=MODULE,
             )
         if released_ids:
-            Log.info(
+            Log.debug(
                 f"Host 回退 stale RESUMING pending turns: count={len(released_ids)}, "
                 f"ids={','.join(released_ids)}",
                 module=MODULE,
             )
         if expired_ids:
-            Log.info(
+            Log.debug(
                 f"Host 清理超保留期 pending turns: count={len(expired_ids)}, "
                 f"ids={','.join(expired_ids)}",
                 module=MODULE,
