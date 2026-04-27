@@ -4134,6 +4134,84 @@ def test_fetch_web_page_applies_storage_state_cookies_to_requests_session(
 
 
 @pytest.mark.unit
+def test_fetch_web_page_skips_cookies_with_non_latin1_values(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证含非 latin-1 字符的 cookie 被跳过，不触发 UnicodeEncodeError。"""
+
+    storage_dir = tmp_path / "storage_states"
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    state_path = storage_dir / "finance.sina.com.cn.json"
+    state_path.write_text(
+        '{"cookies": [{"name": "session_id", "value": "abc", "domain": ".sina.com.cn", "path": "/"}, '
+        '{"name": "NowDate", "value": "Mon Apr 06 2026 21:33:33 GMT+0800 (\\u4e2d\\u56fd\\u6807\\u51c6\\u65f6\\u95f4)", '
+        '"domain": ".sina.com.cn", "path": "/"}], "origins": []}',
+        encoding="utf-8",
+    )
+
+    registry = ToolRegistry()
+    _, fetch_web_page, _ = _create_fetch_web_page_tool(
+        registry,
+        request_timeout_seconds=12.0,
+        fetch_truncate_chars=80000,
+        playwright_storage_state_dir=str(storage_dir),
+        timeout_budget=10.0,
+    )
+    monkeypatch.setattr("dayu.engine.tools.web_tools._get_web_session", requests.Session)
+    no_retry_session = requests.Session()
+    monkeypatch.setattr("dayu.engine.tools.web_tools._get_no_retry_web_session", lambda: no_retry_session)
+    monkeypatch.setattr(
+        "dayu.engine.tools.web_tools._warmup_domain",
+        lambda *args, **kwargs: {"attempted": True, "success": True, "http_status": 200},
+    )
+    monkeypatch.setattr(
+        "dayu.engine.tools.web_tools._probe_content_type",
+        lambda *args, **kwargs: {"attempted": True, "ok": True, "content_type": "text/html; charset=utf-8"},
+    )
+
+    captured: dict[str, Any] = {}
+
+    def _fake_fetch_and_convert_content(
+        url: str,
+        *,
+        timeout_seconds: float,
+        session: Optional[requests.Session] = None,
+        headers: Optional[dict[str, str]] = None,
+        content_type_probe: Optional[dict[str, Any]] = None,
+        timeout_budget: float | None = None,
+        deadline_monotonic: float | None = None,
+    ) -> dict[str, Any]:
+        _ = (headers, content_type_probe, timeout_budget, deadline_monotonic)
+        assert isinstance(session, requests.Session)
+        captured["session_id"] = session.cookies.get("session_id", domain=".sina.com.cn", path="/")
+        captured["now_date"] = session.cookies.get("NowDate", domain=".sina.com.cn", path="/")
+        return {
+            "title": "新浪财经",
+            "content": "# 新浪财经\n\n正文内容。",
+            "extraction_source": "trafilatura",
+            "renderer_source": "markdownify",
+            "normalization_applied": True,
+            "quality_flags": [],
+            "content_stats": {"text_length": 10, "markdown_length": 20},
+            "http_status": 200,
+            "final_url": url,
+            "redirect_hops": 0,
+            "response": _FakeHttpResponse(status_code=200, url=url),
+            "response_headers": {"content-type": "text/html; charset=utf-8"},
+            "response_excerpt": "新浪财经",
+        }
+
+    monkeypatch.setattr("dayu.engine.tools.web_tools._fetch_and_convert_content", _fake_fetch_and_convert_content)
+
+    output = fetch_web_page(url="https://finance.sina.com.cn/stock/y/2026-04-27/doc-inhvwscs9380008.shtml")
+
+    assert output["title"] == "新浪财经"
+    assert captured["session_id"] == "abc"
+    assert captured["now_date"] is None
+
+
+@pytest.mark.unit
 def test_fetch_and_convert_with_playwright_rejects_challenge_page(monkeypatch: pytest.MonkeyPatch) -> None:
     """验证浏览器回退若拿到挑战页，不会被误判为正文成功。"""
 

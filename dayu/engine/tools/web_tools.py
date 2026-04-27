@@ -229,6 +229,14 @@ def _apply_storage_state_cookies_to_session(
         path = str(cookie.get("path", "") or "").strip() or "/"
         if not name:
             continue
+        # HTTP header 值使用 latin-1 编码；含非 latin-1 字符的 cookie
+        # （如本地化日期时间戳）会导致 requests 发送时 UnicodeEncodeError。
+        # 这类 cookie 通常不含认证信息，直接跳过。
+        try:
+            name.encode("latin-1")
+            value.encode("latin-1")
+        except UnicodeEncodeError:
+            continue
         session.cookies.set(
             name,
             value,
