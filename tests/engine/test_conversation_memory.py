@@ -317,17 +317,19 @@ def test_build_base_execution_options_keeps_default_conversation_memory_settings
         run_config={
             "conversation_memory": {
                 "default": {
-                    "working_memory_token_budget_cap": 7000,
-                    "episodic_memory_token_budget_floor": 2100,
-                    "episodic_memory_token_budget_cap": 2100,
+                    "memory_token_budget_ratio": 0.10,
+                    "memory_token_budget_floor": 4000,
+                    "memory_token_budget_cap": 7000,
+                    "recent_turns_floor": 2,
+                    "compaction_trigger_context_ratio": 0.60,
                 },
             }
         },
     )
 
-    assert base_options.conversation_memory_settings.working_memory_token_budget_cap == 7000
-    assert base_options.conversation_memory_config.default.episodic_memory_token_budget_floor == 2100
-    assert base_options.conversation_memory_config.default.episodic_memory_token_budget_cap == 2100
+    assert base_options.conversation_memory_settings.memory_token_budget_cap == 7000
+    assert base_options.conversation_memory_config.default.memory_token_budget_floor == 4000
+    assert base_options.conversation_memory_config.default.memory_token_budget_cap == 7000
 
 
 @pytest.mark.unit
@@ -341,8 +343,8 @@ def test_build_base_execution_options_keeps_typed_default_run_config_values(tmp_
 
     assert cast(OpenAIRunnerRuntimeConfig, base_options.runner_running_config).tool_timeout_seconds == 90.0
     assert base_options.agent_running_config.max_iterations == 16
-    assert base_options.conversation_memory_settings.working_memory_token_budget_cap == 12000
-    assert base_options.conversation_memory_settings.episodic_memory_token_budget_cap == 12000
+    assert base_options.conversation_memory_settings.memory_token_budget_cap == 60000
+    assert base_options.conversation_memory_settings.memory_token_budget_floor == 4000
 
 
 @pytest.mark.unit
@@ -356,9 +358,11 @@ def test_merge_execution_options_keeps_default_conversation_memory_settings(
         run_config={
             "conversation_memory": {
                 "default": {
-                    "working_memory_token_budget_cap": 6500,
-                    "episodic_memory_token_budget_floor": 2600,
-                    "episodic_memory_token_budget_cap": 2600,
+                    "memory_token_budget_ratio": 0.10,
+                    "memory_token_budget_floor": 4000,
+                    "memory_token_budget_cap": 6500,
+                    "recent_turns_floor": 2,
+                    "compaction_trigger_context_ratio": 0.60,
                 },
             }
         },
@@ -371,9 +375,8 @@ def test_merge_execution_options_keeps_default_conversation_memory_settings(
     )
 
     assert resolved.model_name == "deepseek-v4-flash-thinking"
-    assert resolved.conversation_memory_settings.working_memory_token_budget_cap == 6500
-    assert resolved.conversation_memory_settings.episodic_memory_token_budget_floor == 2600
-    assert resolved.conversation_memory_settings.episodic_memory_token_budget_cap == 2600
+    assert resolved.conversation_memory_settings.memory_token_budget_cap == 6500
+    assert resolved.conversation_memory_settings.memory_token_budget_floor == 4000
 
 
 @pytest.mark.unit
@@ -385,9 +388,11 @@ def test_build_base_execution_options_uses_default_when_model_has_no_runtime_hin
         run_config={
             "conversation_memory": {
                 "default": {
-                    "working_memory_token_budget_cap": 9000,
-                    "episodic_memory_token_budget_floor": 2600,
-                    "episodic_memory_token_budget_cap": 2600,
+                    "memory_token_budget_ratio": 0.10,
+                    "memory_token_budget_floor": 4000,
+                    "memory_token_budget_cap": 9000,
+                    "recent_turns_floor": 2,
+                    "compaction_trigger_context_ratio": 0.60,
                 },
             }
         },
@@ -400,9 +405,7 @@ def test_build_base_execution_options_uses_default_when_model_has_no_runtime_hin
     )
 
     assert resolved.model_name == "qwen-plus-thinking"
-    assert resolved.conversation_memory_settings.working_memory_token_budget_cap == 9000
-    assert resolved.conversation_memory_settings.episodic_memory_token_budget_floor == 2600
-    assert resolved.conversation_memory_settings.episodic_memory_token_budget_cap == 2600
+    assert resolved.conversation_memory_settings.memory_token_budget_cap == 9000
 
 
 @pytest.mark.unit
@@ -414,9 +417,11 @@ def test_resolve_conversation_memory_settings_merges_model_runtime_hints(tmp_pat
         run_config={
             "conversation_memory": {
                 "default": {
-                    "working_memory_token_budget_cap": 9000,
-                    "episodic_memory_token_budget_floor": 2600,
-                    "episodic_memory_token_budget_cap": 2600,
+                    "memory_token_budget_ratio": 0.10,
+                    "memory_token_budget_floor": 4000,
+                    "memory_token_budget_cap": 9000,
+                    "recent_turns_floor": 2,
+                    "compaction_trigger_context_ratio": 0.60,
                 }
             }
         },
@@ -427,22 +432,20 @@ def test_resolve_conversation_memory_settings_merges_model_runtime_hints(tmp_pat
         model_config={
             "runtime_hints": {
                 "conversation_memory": {
-                    "working_memory_token_budget_cap": 20000,
-                    "episodic_memory_token_budget_floor": 4200,
-                    "episodic_memory_token_budget_cap": 4200,
+                    "memory_token_budget_cap": 20000,
+                    "recent_turns_floor": 3,
                 }
             }
         },
     )
 
-    assert settings.working_memory_token_budget_cap == 20000
-    assert settings.episodic_memory_token_budget_floor == 4200
-    assert settings.episodic_memory_token_budget_cap == 4200
+    assert settings.memory_token_budget_cap == 20000
+    assert settings.recent_turns_floor == 3
 
 
 @pytest.mark.unit
 def test_working_memory_policy_uses_uncompacted_tail_and_budget() -> None:
-    """验证 working memory 只从未压缩 tail 中按预算选 turn。"""
+    """验证 working memory 强制保留最近 N 轮，并按预算回放更老 raw turn。"""
 
     policy = DefaultWorkingMemoryPolicy()
     transcript = ConversationTranscript.create_empty("sess_1")
@@ -454,13 +457,14 @@ def test_working_memory_policy_uses_uncompacted_tail_and_budget() -> None:
         compacted_turn_count=3,
     )
     settings = ConversationMemorySettings(
-        working_memory_max_turns=2,
-        working_memory_token_budget_ratio=0.01,
-        working_memory_token_budget_floor=120,
-        working_memory_token_budget_cap=120,
+        memory_token_budget_ratio=0.01,
+        memory_token_budget_floor=120,
+        memory_token_budget_cap=120,
+        recent_turns_floor=2,
     )
 
-    selected = policy.select_turns(transcript, settings=settings, max_context_tokens=1000)
+    # 总预算 120 tokens 仅够最近 2 轮 forced 保留，更老 raw 不进。
+    selected = policy.select_turns(transcript, settings=settings, available_token_budget=0, max_context_tokens=200_000)
 
     assert tuple(turn.turn_id for turn in selected) == ("turn_6", "turn_7")
 
@@ -479,7 +483,12 @@ def test_working_memory_policy_does_not_overrun_small_context_budget() -> None:
         )
     )
 
-    selected = policy.select_turns(transcript, settings=ConversationMemorySettings(), max_context_tokens=1024)
+    selected = policy.select_turns(
+        transcript,
+        settings=ConversationMemorySettings(),
+        available_token_budget=1024,
+        max_context_tokens=200_000,
+    )
 
     assert len(selected) == 1
     assert selected[0].turn_id == "turn_1"
@@ -489,7 +498,7 @@ def test_working_memory_policy_does_not_overrun_small_context_budget() -> None:
 
 @pytest.mark.unit
 def test_working_memory_policy_keeps_latest_turn_as_truncated_view_when_single_turn_exceeds_budget() -> None:
-    """验证最新 turn 即使超预算也会以裁剪视图保留，而不是整轮消失。"""
+    """验证最新 turn 即使超 cap 也会以裁剪视图保留，而不是整轮消失。"""
 
     policy = DefaultWorkingMemoryPolicy()
     transcript = ConversationTranscript.create_empty("sess_1").append_turn(
@@ -511,13 +520,13 @@ def test_working_memory_policy_keeps_latest_turn_as_truncated_view_when_single_t
         )
     )
     settings = ConversationMemorySettings(
-        working_memory_max_turns=6,
-        working_memory_token_budget_ratio=0.01,
-        working_memory_token_budget_floor=120,
-        working_memory_token_budget_cap=120,
+        memory_token_budget_ratio=0.01,
+        memory_token_budget_floor=120,
+        memory_token_budget_cap=120,
+        recent_turns_floor=1,
     )
 
-    selected = policy.select_turns(transcript, settings=settings, max_context_tokens=1000)
+    selected = policy.select_turns(transcript, settings=settings, available_token_budget=0, max_context_tokens=240)
 
     assert len(selected) == 1
     assert selected[0].turn_id == "turn_1"
@@ -532,10 +541,10 @@ def test_default_conversation_memory_manager_builds_memory_block_and_raw_tail(tm
     """验证 memory manager 会把 pinned state、episodes 和 raw tail 一起编译进消息。"""
 
     settings = ConversationMemorySettings(
-        episodic_memory_token_budget_ratio=0.0,
-        episodic_memory_token_budget_floor=400,
-        episodic_memory_token_budget_cap=400,
-        working_memory_max_turns=2,
+        memory_token_budget_ratio=0.0,
+        memory_token_budget_floor=400,
+        memory_token_budget_cap=400,
+        recent_turns_floor=2,
     )
     runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
     manager = DefaultConversationMemoryManager(
@@ -717,7 +726,10 @@ def test_default_episodic_memory_compressor_rejects_empty_summary_title() -> Non
 def test_conversation_memory_manager_compacts_in_background_and_replans(tmp_path: Path) -> None:
     """验证后台 compaction 会取消旧任务并按最新 transcript 重排。"""
 
-    settings = ConversationMemorySettings(compaction_trigger_turn_count=2, compaction_tail_preserve_turns=1)
+    settings = ConversationMemorySettings(
+        compaction_trigger_context_ratio=0.001,
+        compaction_tail_preserve_turns=1,
+    )
     store = FileConversationStore(tmp_path / "conversations")
     runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
     compressor = _FakeCompressor(delay=0.02)
@@ -736,6 +748,7 @@ def test_conversation_memory_manager_compacts_in_background_and_replans(tmp_path
             session_id="sess_1",
             prepared_scene=_build_prepared_scene(settings=settings),
             transcript=transcript,
+            system_prompt="sys",
         )
         await asyncio.sleep(0)
         current = store.load("sess_1")
@@ -747,6 +760,7 @@ def test_conversation_memory_manager_compacts_in_background_and_replans(tmp_path
             session_id="sess_1",
             prepared_scene=_build_prepared_scene(settings=settings),
             transcript=updated,
+            system_prompt="sys",
         )
         await manager.wait_for_session("sess_1")
 
@@ -791,6 +805,8 @@ def test_prepare_transcript_compacts_persisted_tail_before_resumed_turn(tmp_path
             session_id="sess_1",
             prepared_scene=_build_prepared_scene(settings=settings, max_context_tokens=2048),
             transcript=transcript,
+            system_prompt="sys",
+            user_text="hi",
         )
     )
 
@@ -838,12 +854,15 @@ def test_conversation_memory_emits_compaction_logs(tmp_path: Path, monkeypatch: 
             session_id="sess_log",
             prepared_scene=_build_prepared_scene(settings=settings, max_context_tokens=2048),
             transcript=transcript,
+            system_prompt="sys",
+            user_text="hi",
         )
     )
     manager.schedule_compaction(
         session_id="sess_log",
         prepared_scene=_build_prepared_scene(settings=settings, max_context_tokens=100000),
         transcript=prepared,
+        system_prompt="sys",
     )
 
     verbose_messages = [call.args[0] for call in verbose_mock.call_args_list]
@@ -852,3 +871,356 @@ def test_conversation_memory_emits_compaction_logs(tmp_path: Path, monkeypatch: 
     assert any("准备同步压缩 transcript" in message for message in verbose_messages)
     assert any("同步压缩写回 transcript" in message for message in verbose_messages)
     assert any("无需调度 compaction" in message for message in debug_messages)
+
+
+@pytest.mark.unit
+def test_resolve_memory_total_budget_clamped_by_floor_and_cap() -> None:
+    """验证总池预算公式 ``clamp(window * ratio, floor, cap)`` 在跨档位都生效。"""
+
+    from dayu.host.conversation_memory import _resolve_memory_total_budget
+
+    settings = ConversationMemorySettings(
+        memory_token_budget_ratio=0.10,
+        memory_token_budget_floor=4000,
+        memory_token_budget_cap=32000,
+    )
+    # 1M 档：100K 算出被 cap 截到 32K
+    assert _resolve_memory_total_budget(settings=settings, max_context_tokens=1_000_000) == 32000
+    # 256K 档：自然落到 25.6K
+    assert _resolve_memory_total_budget(settings=settings, max_context_tokens=256_000) == 25_600
+    # 8K 档：800 太小被 floor 兜底
+    assert _resolve_memory_total_budget(settings=settings, max_context_tokens=8_000) == 4000
+
+
+@pytest.mark.unit
+def test_recent_turns_floor_forced_preserved_when_budget_zero() -> None:
+    """``recent_turns_floor`` 在 budget=0 时仍强制保留最近 N 轮。"""
+
+    policy = DefaultWorkingMemoryPolicy()
+    transcript = ConversationTranscript.create_empty("sess_floor")
+    for index in range(1, 6):
+        transcript = transcript.append_turn(_build_turn(index))
+    settings = ConversationMemorySettings(
+        memory_token_budget_ratio=0.10,
+        memory_token_budget_floor=4000,
+        memory_token_budget_cap=32000,
+        recent_turns_floor=2,
+    )
+
+    selected = policy.select_turns(transcript, settings=settings, available_token_budget=0, max_context_tokens=200_000)
+
+    assert tuple(t.turn_id for t in selected) == ("turn_4", "turn_5")
+
+
+@pytest.mark.unit
+def test_compaction_triggered_by_window_ratio(tmp_path: Path) -> None:
+    """当 window_used 超过 ``max_context_tokens * trigger_context_ratio`` 时触发 compaction。"""
+
+    settings = ConversationMemorySettings(
+        compaction_trigger_context_ratio=0.50,
+        compaction_tail_preserve_turns=1,
+    )
+    runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
+    manager = DefaultConversationMemoryManager(
+        runtime,
+        conversation_store=FileConversationStore(tmp_path / "conversations"),
+    )
+    transcript = ConversationTranscript.create_empty("sess_trig")
+    for index in range(1, 5):
+        transcript = transcript.append_turn(
+            ConversationTurnRecord(
+                turn_id=f"turn_{index}",
+                scene_name="interactive",
+                user_text="x" * 800,
+                assistant_final="",
+            )
+        )
+
+    candidates = manager._select_compaction_candidate(
+        transcript=transcript,
+        settings=settings,
+        max_context_tokens=2048,
+    )
+    assert len(candidates) > 0
+
+
+@pytest.mark.unit
+def test_compaction_not_triggered_below_ratio(tmp_path: Path) -> None:
+    """当 window_used 远小于阈值时不触发 compaction。"""
+
+    settings = ConversationMemorySettings(
+        compaction_trigger_context_ratio=0.99,
+        compaction_tail_preserve_turns=1,
+    )
+    runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
+    manager = DefaultConversationMemoryManager(
+        runtime,
+        conversation_store=FileConversationStore(tmp_path / "conversations"),
+    )
+    transcript = ConversationTranscript.create_empty("sess_low")
+    for index in range(1, 4):
+        transcript = transcript.append_turn(_build_turn(index))
+
+    candidates = manager._select_compaction_candidate(
+        transcript=transcript,
+        settings=settings,
+        max_context_tokens=1_000_000,
+    )
+    assert candidates == ()
+
+
+@pytest.mark.unit
+def test_forced_turn_overflow_threshold_decoupled_from_cap() -> None:
+    """Fix #1：单轮兜底阈值由 ``max_context_tokens`` 派生，与 ``memory_token_budget_cap`` 解耦。
+
+    构造场景：单轮 token 数 < cap 但 > 当前模型窗口。旧逻辑会按 cap 兜底，
+    把整轮原样回放从而撑爆窗口；新逻辑必须走 ``_build_minimum_preserved_turn_view``。
+    """
+
+    policy = DefaultWorkingMemoryPolicy()
+    transcript = ConversationTranscript.create_empty("sess_decouple").append_turn(
+        ConversationTurnRecord(
+            turn_id="turn_1",
+            scene_name="interactive",
+            user_text="问题",
+            assistant_final="x" * 4000,  # ~1000 tokens 远小于 cap=60000
+        )
+    )
+    settings = ConversationMemorySettings(
+        memory_token_budget_cap=60000,  # 故意调高 cap
+        recent_turns_floor=1,
+    )
+    # 模型窗口仅 200，单轮就超出窗口；阈值应由 max_context_tokens 派生，触发 minimum_preserve。
+    selected = policy.select_turns(
+        transcript,
+        settings=settings,
+        available_token_budget=0,
+        max_context_tokens=200,
+    )
+    assert len(selected) == 1
+    assert selected[0].assistant_text.endswith("...<truncated>")
+
+
+@pytest.mark.unit
+def test_forced_turn_overflow_threshold_uses_actual_forced_count() -> None:
+    """Round3 #1：单轮兜底阈值除数取**当前实际 forced 轮数**而非 ``settings.recent_turns_floor``。
+
+    场景：``recent_turns_floor=5`` 但当前 transcript 仅 1 轮 raw turn，``max_context_tokens=300``。
+    旧实现按 ``floor + 1 = 6`` 派生阈值 ``300/6 = 50``，单轮（约 75 tokens）会被错误判定溢出
+    走 minimum_preserve；新实现按 ``actual_forced_count + 1 = 2`` 派生阈值 ``300/2 = 150``，
+    单轮可完整保留。
+    """
+
+    policy = DefaultWorkingMemoryPolicy()
+    transcript = ConversationTranscript.create_empty("sess_actual_floor").append_turn(
+        ConversationTurnRecord(
+            turn_id="turn_only",
+            scene_name="interactive",
+            user_text="新对话第一轮",
+            assistant_final="x" * 200,  # ~50 tokens
+        )
+    )
+    settings = ConversationMemorySettings(
+        memory_token_budget_cap=60000,
+        recent_turns_floor=5,  # 配置高 floor，但实际只有 1 轮
+    )
+    selected = policy.select_turns(
+        transcript,
+        settings=settings,
+        available_token_budget=0,
+        max_context_tokens=300,
+    )
+    assert len(selected) == 1
+    # 实际 forced=1，阈值=300/2=150，单轮 ~50 tokens 完整保留，不应被截断。
+    assert not selected[0].assistant_text.endswith("...<truncated>")
+
+
+@pytest.mark.unit
+def test_compaction_trigger_does_not_count_episodes(tmp_path: Path) -> None:
+    """Round 1 Fix #2 + Round 2 #1：``transcript.episodes`` 仅按 ``_build_memory_block``
+    裁切后真实进入 prompt 的部分计入 ``window_used``；超大 episode 在剩余预算放不下时
+    应被丢弃，不计入触发判定，避免压缩抖动。"""
+
+    settings = ConversationMemorySettings(
+        compaction_trigger_context_ratio=0.50,
+        compaction_tail_preserve_turns=1,
+    )
+    runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
+    manager = DefaultConversationMemoryManager(
+        runtime,
+        conversation_store=FileConversationStore(tmp_path / "conversations"),
+    )
+    transcript = ConversationTranscript.create_empty("sess_no_eps")
+    transcript = transcript.append_turn(_build_turn(1))
+    transcript = transcript.append_turn(_build_turn(2))
+    # 注入一个超大 episode；若错误计入 window_used，会无谓触发压缩。
+    huge_episode = ConversationEpisodeSummary(
+        episode_id="ep_huge",
+        start_turn_id="turn_1",
+        end_turn_id="turn_1",
+        title="历史摘要",
+        goal="x" * 50_000,
+        confirmed_facts=(),
+    )
+    transcript = transcript.replace_memory(
+        pinned_state=transcript.pinned_state,
+        episodes=(huge_episode,),
+        compacted_turn_count=transcript.compacted_turn_count,
+    )
+
+    # raw turn 体量很小，加 system/user 远不到 1M*0.5=500K 阈值；episode 不应让公式越线。
+    candidates = manager._select_compaction_candidate(
+        transcript=transcript,
+        settings=settings,
+        max_context_tokens=1_000_000,
+        system_prompt_tokens=200,
+        user_text_tokens=50,
+    )
+    assert candidates == ()
+
+
+@pytest.mark.unit
+def test_schedule_compaction_passes_system_prompt_token_estimate(tmp_path: Path) -> None:
+    """``schedule_compaction`` 必须把 system_prompt 估算 token 接到触发公式。
+
+    Round2 #2：``schedule_compaction`` 在 ``persist_turn`` 之后调用，当前轮 user_text
+    已落入 ``transcript.turns`` 最末位，自然出现在 ``uncompressed_tokens`` 中，
+    本入口不再接收 ``user_text`` 避免重复计数。``prepare_transcript`` 仍显式传
+    ``user_text``（开局尚未 persist）。
+    """
+
+    settings = ConversationMemorySettings(
+        compaction_trigger_context_ratio=0.50,
+        compaction_tail_preserve_turns=1,
+    )
+    runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
+    manager = DefaultConversationMemoryManager(
+        runtime,
+        conversation_store=FileConversationStore(tmp_path / "conversations"),
+    )
+    transcript = ConversationTranscript.create_empty("sess_wired")
+    for index in range(1, 4):
+        transcript = transcript.append_turn(
+            ConversationTurnRecord(
+                turn_id=f"turn_{index}",
+                scene_name="interactive",
+                user_text="x" * 100,
+                assistant_final="",
+            )
+        )
+
+    captured: dict[str, int] = {}
+    original = manager._select_compaction_candidate
+
+    def _spy(
+        *,
+        transcript: ConversationTranscript,
+        settings: ConversationMemorySettings,
+        max_context_tokens: int,
+        system_prompt_tokens: int = 0,
+        user_text_tokens: int = 0,
+    ) -> tuple[ConversationTurnRecord, ...]:
+        captured["system_prompt_tokens"] = system_prompt_tokens
+        captured["user_text_tokens"] = user_text_tokens
+        return original(
+            transcript=transcript,
+            settings=settings,
+            max_context_tokens=max_context_tokens,
+            system_prompt_tokens=system_prompt_tokens,
+            user_text_tokens=user_text_tokens,
+        )
+
+    manager._select_compaction_candidate = _spy  # type: ignore[method-assign]
+
+    manager.schedule_compaction(
+        session_id="sess_wired",
+        prepared_scene=_build_prepared_scene(settings=settings),
+        transcript=transcript,
+        system_prompt="SYS:" + "y" * 1000,
+    )
+
+    assert captured["system_prompt_tokens"] > 100
+    # Round2 #2 回归：schedule_compaction 不再把 user_text 重复计入触发公式。
+    assert captured["user_text_tokens"] == 0
+
+
+@pytest.mark.unit
+def test_compaction_trigger_counts_actual_episode_in_prompt(tmp_path: Path) -> None:
+    """Round2 #1：触发公式必须计入 ``_build_memory_block`` 的兜底分支保留的 episode。
+
+    场景：单条 episode 远大于 ``total_budget``。``_build_memory_block`` 仍会保留这条
+    最新 episode（避免 episodic 层完全失效）。如果 ``_select_compaction_candidate``
+    把 ``transcript.episodes`` 完全踢出 ``window_used``，会低估真实 prompt 体积、
+    在该压缩时不压缩。
+    """
+
+    settings = ConversationMemorySettings(
+        memory_token_budget_ratio=0.10,
+        memory_token_budget_floor=2000,
+        memory_token_budget_cap=2000,  # 把 budget 锁到 2000，让大 episode 必然超 budget
+        compaction_trigger_context_ratio=0.50,
+        compaction_tail_preserve_turns=1,
+    )
+    runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
+    manager = DefaultConversationMemoryManager(
+        runtime,
+        conversation_store=FileConversationStore(tmp_path / "conversations"),
+    )
+    transcript = ConversationTranscript.create_empty("sess_round2_1")
+    # raw turns 体量很小，单独不会触发。
+    transcript = transcript.append_turn(_build_turn(1))
+    transcript = transcript.append_turn(_build_turn(2))
+    huge_summary = "x" * 100_000  # ~25K tokens，远超 budget 2000
+    transcript = transcript.replace_memory(
+        pinned_state=transcript.pinned_state,
+        episodes=(
+            ConversationEpisodeSummary(
+                episode_id="ep_huge",
+                start_turn_id="turn_0",
+                end_turn_id="turn_0",
+                title="历史摘要",
+                goal=huge_summary,
+            ),
+        ),
+        compacted_turn_count=transcript.compacted_turn_count,
+    )
+
+    # 模型窗口 30K，阈值 = 30K * 0.5 = 15K。raw + system + user 单独 < 15K，
+    # 但 _build_memory_block 兜底保留的大 episode 会让 actual_episodic > 15K，触发公式必须包含。
+    candidates = manager._select_compaction_candidate(
+        transcript=transcript,
+        settings=settings,
+        max_context_tokens=30_000,
+        system_prompt_tokens=200,
+        user_text_tokens=50,
+    )
+    assert len(candidates) > 0
+
+
+@pytest.mark.unit
+def test_default_conversation_memory_settings_match_runtime_default() -> None:
+    """Round2 #3：``ConversationMemorySettings()`` dataclass 默认值必须与 run.json
+    / ``options.py`` 运行时默认一致，避免快照恢复 / dataclass 直构 / run.json
+    三条路径得到不同 memory policy。"""
+
+    from dayu.execution.options import _DEFAULT_RUN_CONFIG  # type: ignore[attr-defined]
+
+    runtime_default = _DEFAULT_RUN_CONFIG.conversation_memory.default
+    dataclass_default = ConversationMemorySettings()
+    assert dataclass_default.memory_token_budget_ratio == runtime_default.memory_token_budget_ratio
+    assert dataclass_default.memory_token_budget_floor == runtime_default.memory_token_budget_floor
+    assert dataclass_default.memory_token_budget_cap == runtime_default.memory_token_budget_cap
+    assert dataclass_default.recent_turns_floor == runtime_default.recent_turns_floor
+    assert (
+        dataclass_default.compaction_trigger_context_ratio
+        == runtime_default.compaction_trigger_context_ratio
+    )
+    assert (
+        dataclass_default.compaction_tail_preserve_turns
+        == runtime_default.compaction_tail_preserve_turns
+    )
+    assert (
+        dataclass_default.compaction_context_episode_window
+        == runtime_default.compaction_context_episode_window
+    )
+    assert dataclass_default.compaction_scene_name == runtime_default.compaction_scene_name

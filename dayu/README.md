@@ -70,7 +70,7 @@ playwright install chromium
   - 普通文件（非财报文件）信息提取还需要优化。
   - 优化 Fins 里的港股/A股/美股财报信息提取。
   - Anthropic 原生 API 支持。
-  - Durable memory / Retrieval layer（ Memory只实现了working memory 和 episode summary ）。
+  - Durable memory / Retrieval layer（Memory 当前只实现了单总池 raw turn 回放与 episode summary）。
   - FMP 工具（调研工作已做，见 [../docs/fmp_integration_research.md](../docs/fmp_integration_research.md) ）尚未实现。
   - 更多LLM 工具。
 
@@ -844,7 +844,7 @@ resume 属于执行真源；reply outbox 属于出站交付真源。Host interna
 
 ### 6.2 能力机制
 
-Host 九项能力的具体机制（包括 Session / Run 状态机、pending turn 与 reply outbox 状态机与 CAS 契约、并发治理 lane 合并顺序、cancel 两层语义、启动恢复顺序、分层记忆裁剪与 compaction 乐观锁等）统一收口到 [host/README.md](host/README.md)。本总览不复述。
+Host 九项能力的具体机制（包括 Session / Run 状态机、pending turn 与 reply outbox 状态机与 CAS 契约、并发治理 lane 合并顺序、cancel 两层语义、启动恢复顺序、两层记忆裁剪与 compaction 乐观锁等）统一收口到 [host/README.md](host/README.md)。本总览不复述。
 
 ### 6.3 sub-agent 扩展边界
 
@@ -928,32 +928,30 @@ Scene 当前负责声明：
 
 ## 8. 多轮会话机制
 
-多轮会话当前采用分层记忆模型，而不是简单回放所有历史消息。
-
-当前分层记忆模型由三个层次组成：
+多轮会话采用**两层记忆模型**——`pinned_state` 独立保留不参与 token 池竞争；其余历史共享一个**单总池**，按预算从新到老回放最近 raw turn 与 episode 摘要。不是简单回放所有历史消息。
 
 ```text
 ┌──────────────────────────────────────────────────────────┐
 │  Pinned State（钉住状态）                                 │
-│  ↳ 不可压缩的会话级最小状态，跨 episode 保留              │
+│  ↳ 不可压缩的会话级反幻觉锚点，跨 episode 单调演进        │
 │  ↳ 内容：当前主任务、已确认对象、用户约束、未决问题        │
+│  ↳ 不计入 token budget，独立路径渲染                      │
 ├──────────────────────────────────────────────────────────┤
-│  Episodic Memory（阶段摘要）                              │
-│  ↳ 已压缩的 episode 结构化摘要                            │
-│  ↳ 由 conversation_compaction scene 调用 LLM 生成         │
-│  ↳ 按 token 预算从最近向前回溯选入                        │
+│  单总池（budget = clamp(window*ratio, floor, cap)）       │
+│  ├─ 最近 N 轮 raw turn（recent_turns_floor 强制保留）     │
+│  │   ↳ 不计入 budget，单轮极长走 minimum_preserve 兜底    │
+│  ├─ 更老 raw turn（按 budget 从新到老回放）               │
+│  └─ Episode summaries（剩余 budget 从新到老填充）         │
+│      ↳ confirmed_facts 永远完整保留不参与截断             │
 ├──────────────────────────────────────────────────────────┤
-│  Working Memory（工作记忆）                               │
-│  ↳ 最近的未压缩 turn，高保真回放                          │
-│  ↳ 从后向前选择，受轮数上限和 token 预算双重约束           │
-├──────────────────────────────────────────────────────────┤
-│  Raw Transcript（原始 transcript）                        │
+│  Raw Transcript（原始 transcript，独立物理存储）          │
 │  ↳ 所有原始 turn 的完整记录，以文件系统落盘               │
 │  ↳ 含用户文本、助手回复、工具调用摘要、警告、错误          │
+│  ↳ 永不被 compaction 物理删除，仅 compacted_turn_count 推进│
 └──────────────────────────────────────────────────────────┘
 ```
 
-当前固定机制概述：当前轮用户输入由 `ExecutionContract.message_inputs.user_message` 带入，`system_prompt` 由 scene preparation 生成；Host 在本轮开始前执行同步压缩，再装配历史消息、memory block 与当前轮输入；compaction 预算从最终模型上下文窗口推导。具体裁剪规则、触发阈值、乐观锁写回、默认配置表见 [host/README.md](host/README.md)。
+当前固定机制概述：当前轮用户输入由 `ExecutionContract.message_inputs.user_message` 带入，`system_prompt` 由 scene preparation 生成；Host 在本轮开始前执行同步压缩（`prepare_transcript`，显式接收 `user_text`），再装配历史消息、memory block 与当前轮输入；本轮结束后 `persist_turn` 触发后台 compaction（`schedule_compaction`，不接 `user_text`，避免双计）。compaction 触发以"占模型窗口百分比"单维度判定，预算从最终模型上下文窗口推导。具体裁剪规则、触发公式、乐观锁写回、默认配置表与跨档表（含 128K 档使用注意事项）见 [host/README.md §10](host/README.md)。
 
 ### 8.1 为什么多轮会话属于 Host
 
@@ -961,18 +959,18 @@ Scene 当前负责声明：
 
 - session 持久化
 - transcript 读写
-- working memory 裁剪
+- 单总池裁剪（最近 N 轮 raw + 老 raw + episode summary）
 - episode summary 压缩
 - compaction 后台任务
 - 取消与恢复
 
-这些都属于托管执行能力，因此必须归 `Host`，而不是归 `Agent`。分层记忆模型（Pinned State / Episodic Memory / Working Memory / Raw Transcript）、裁剪顺序、compaction 触发条件、同步/后台压缩的乐观锁语义、配置默认值等机制细节收口于 [host/README.md](host/README.md)，总览不复述。
+这些都属于托管执行能力，因此必须归 `Host`，而不是归 `Agent`。两层记忆模型（Pinned State + 单总池）、裁剪顺序、compaction 触发公式、同步/后台压缩的双路径语义（`prepare_transcript` 显式接 `user_text` / `schedule_compaction` 不接）、乐观锁语义、配置默认值与跨档自适应表（含 128K 档使用注意事项）等机制细节收口于 [host/README.md §10](host/README.md)，总览不复述。
 
 ### 8.2 Durable Memory / Retrieval 扩展边界
 
 当前 memory 只实现了：
 
-- working memory
+- 单总池 raw turn 回放
 - episode summary
 
 当前代码中 `DurableMemoryStoreProtocol` 和 `ConversationRetrievalIndexProtocol` 已定义协议接口，但使用的是空实现（`NullDurableMemoryStore` / `NullConversationRetrievalIndex`）。

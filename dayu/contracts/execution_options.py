@@ -63,18 +63,19 @@ class TraceSettings:
 
 @dataclass(frozen=True)
 class ConversationMemorySettings:
-    """多轮会话分层记忆配置。
+    """多轮会话单总池两层记忆配置。
+
+    两层结构：``pinned_state`` 独立保留、不计入 token 池；其余历史共享一个总池，
+    ``budget = clamp(window * memory_token_budget_ratio, memory_token_budget_floor,
+    memory_token_budget_cap)``；``recent_turns_floor`` 给出最近 N 轮强制保留下限，
+    不计入 budget；compaction 触发改为占模型窗口百分比。
 
     Args:
-        working_memory_max_turns: 工作记忆保留的最大轮数。
-        working_memory_token_budget_ratio: 工作记忆预算比例。
-        working_memory_token_budget_floor: 工作记忆预算下限。
-        working_memory_token_budget_cap: 工作记忆预算上限。
-        episodic_memory_token_budget_ratio: 情节记忆预算比例。
-        episodic_memory_token_budget_floor: 情节记忆预算下限。
-        episodic_memory_token_budget_cap: 情节记忆预算上限。
-        compaction_trigger_turn_count: 触发压缩的轮数阈值。
-        compaction_trigger_token_ratio: 触发压缩的 token 比例阈值。
+        memory_token_budget_ratio: 单总池占模型窗口的比例。
+        memory_token_budget_floor: 单总池预算下限（绝对值）。
+        memory_token_budget_cap: 单总池预算上限（绝对值）。
+        recent_turns_floor: 最近 N 轮 raw turn 强制保留下限。
+        compaction_trigger_context_ratio: 触发压缩占模型窗口的比例阈值。
         compaction_tail_preserve_turns: 压缩后保留的尾部轮数。
         compaction_context_episode_window: 压缩时携带的 episode 窗口数。
         compaction_scene_name: 执行压缩使用的 scene 名称。
@@ -86,15 +87,11 @@ class ConversationMemorySettings:
         无。
     """
 
-    working_memory_max_turns: int = 6
-    working_memory_token_budget_ratio: float = 0.08
-    working_memory_token_budget_floor: int = 1500
-    working_memory_token_budget_cap: int = 12000
-    episodic_memory_token_budget_ratio: float = 0.02
-    episodic_memory_token_budget_floor: int = 2000
-    episodic_memory_token_budget_cap: int = 12000
-    compaction_trigger_turn_count: int = 8
-    compaction_trigger_token_ratio: float = 1.5
+    memory_token_budget_ratio: float = 0.10
+    memory_token_budget_floor: int = 4000
+    memory_token_budget_cap: int = 60000
+    recent_turns_floor: int = 2
+    compaction_trigger_context_ratio: float = 0.70
     compaction_tail_preserve_turns: int = 4
     compaction_context_episode_window: int = 2
     compaction_scene_name: str = "conversation_compaction"

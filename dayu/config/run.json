@@ -71,18 +71,14 @@
   },
   "conversation_memory": {
     "default": {
-      "working_memory_max_turns": 6,
-      "working_memory_token_budget_ratio": 0.08,
-      "working_memory_token_budget_floor": 1500,
-      "working_memory_token_budget_cap": 12000,
-      "compaction_trigger_turn_count": 8,
-      "compaction_trigger_token_ratio": 1.5,
+      "memory_token_budget_ratio": 0.10,
+      "memory_token_budget_floor": 4000,
+      "memory_token_budget_cap": 60000,
+      "recent_turns_floor": 2,
+      "compaction_trigger_context_ratio": 0.70,
       "compaction_tail_preserve_turns": 4,
       "compaction_context_episode_window": 2,
-      "compaction_scene_name": "conversation_compaction",
-      "episodic_memory_token_budget_ratio": 0.02,
-      "episodic_memory_token_budget_floor": 2000,
-      "episodic_memory_token_budget_cap": 12000
+      "compaction_scene_name": "conversation_compaction"
     }
   }
 }

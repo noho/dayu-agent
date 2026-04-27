@@ -150,15 +150,11 @@ _DEFAULT_RUN_CONFIG = _DefaultRunConfig(
     ),
     conversation_memory=ConversationMemoryConfig(
         default=ConversationMemorySettings(
-            working_memory_max_turns=6,
-            working_memory_token_budget_ratio=0.08,
-            working_memory_token_budget_floor=1500,
-            working_memory_token_budget_cap=12000,
-            episodic_memory_token_budget_ratio=0.02,
-            episodic_memory_token_budget_floor=2000,
-            episodic_memory_token_budget_cap=12000,
-            compaction_trigger_turn_count=8,
-            compaction_trigger_token_ratio=1.5,
+            memory_token_budget_ratio=0.10,
+            memory_token_budget_floor=4000,
+            memory_token_budget_cap=60000,
+            recent_turns_floor=2,
+            compaction_trigger_context_ratio=0.70,
             compaction_tail_preserve_turns=4,
             compaction_context_episode_window=2,
             compaction_scene_name="conversation_compaction",
@@ -1063,15 +1059,11 @@ def _build_conversation_memory_settings(section: dict[str, Any]) -> Conversation
     """
 
     return ConversationMemorySettings(
-        working_memory_max_turns=int(section["working_memory_max_turns"]),
-        working_memory_token_budget_ratio=float(section["working_memory_token_budget_ratio"]),
-        working_memory_token_budget_floor=int(section["working_memory_token_budget_floor"]),
-        working_memory_token_budget_cap=int(section["working_memory_token_budget_cap"]),
-        episodic_memory_token_budget_ratio=float(section["episodic_memory_token_budget_ratio"]),
-        episodic_memory_token_budget_floor=int(section["episodic_memory_token_budget_floor"]),
-        episodic_memory_token_budget_cap=int(section["episodic_memory_token_budget_cap"]),
-        compaction_trigger_turn_count=int(section["compaction_trigger_turn_count"]),
-        compaction_trigger_token_ratio=float(section["compaction_trigger_token_ratio"]),
+        memory_token_budget_ratio=float(section["memory_token_budget_ratio"]),
+        memory_token_budget_floor=int(section["memory_token_budget_floor"]),
+        memory_token_budget_cap=int(section["memory_token_budget_cap"]),
+        recent_turns_floor=int(section["recent_turns_floor"]),
+        compaction_trigger_context_ratio=float(section["compaction_trigger_context_ratio"]),
         compaction_tail_preserve_turns=int(section["compaction_tail_preserve_turns"]),
         compaction_context_episode_window=int(section["compaction_context_episode_window"]),
         compaction_scene_name=str(section["compaction_scene_name"]).strip() or "conversation_compaction",
@@ -1134,20 +1126,26 @@ def _validate_conversation_memory_settings(settings: ConversationMemorySettings)
         ValueError: 当配置违反静态约束时抛出。
     """
 
-    if settings.working_memory_max_turns <= 0:
-        raise ValueError("conversation_memory.working_memory_max_turns 必须大于 0")
-    if not math.isfinite(settings.working_memory_token_budget_ratio) or settings.working_memory_token_budget_ratio < 0:
-        raise ValueError("conversation_memory.working_memory_token_budget_ratio 必须是非负有限数值")
-    if settings.working_memory_token_budget_floor <= 0:
-        raise ValueError("conversation_memory.working_memory_token_budget_floor 必须大于 0")
-    if settings.working_memory_token_budget_cap < settings.working_memory_token_budget_floor:
-        raise ValueError("conversation_memory.working_memory_token_budget_cap 不能小于 floor")
-    if not math.isfinite(settings.episodic_memory_token_budget_ratio) or settings.episodic_memory_token_budget_ratio < 0:
-        raise ValueError("conversation_memory.episodic_memory_token_budget_ratio 必须是非负有限数值")
-    if settings.episodic_memory_token_budget_floor < 0:
-        raise ValueError("conversation_memory.episodic_memory_token_budget_floor 必须是非负整数")
-    if settings.episodic_memory_token_budget_cap < settings.episodic_memory_token_budget_floor:
-        raise ValueError("conversation_memory.episodic_memory_token_budget_cap 不能小于 floor")
+    if settings.memory_token_budget_floor <= 0:
+        raise ValueError("conversation_memory.memory_token_budget_floor 必须大于 0")
+    if not math.isfinite(settings.memory_token_budget_ratio) or settings.memory_token_budget_ratio < 0:
+        raise ValueError("conversation_memory.memory_token_budget_ratio 必须是非负有限数值")
+    if settings.memory_token_budget_ratio > 1.0:
+        raise ValueError("conversation_memory.memory_token_budget_ratio 不能大于 1")
+    if settings.memory_token_budget_cap < settings.memory_token_budget_floor:
+        raise ValueError("conversation_memory.memory_token_budget_cap 不能小于 floor")
+    if settings.recent_turns_floor < 0:
+        raise ValueError("conversation_memory.recent_turns_floor 必须是非负整数")
+    if not math.isfinite(settings.compaction_trigger_context_ratio):
+        raise ValueError("conversation_memory.compaction_trigger_context_ratio 必须是有限数值")
+    if settings.compaction_trigger_context_ratio <= 0 or settings.compaction_trigger_context_ratio > 1.0:
+        raise ValueError("conversation_memory.compaction_trigger_context_ratio 必须落在 (0, 1] 区间")
+    if settings.compaction_tail_preserve_turns < 0:
+        raise ValueError("conversation_memory.compaction_tail_preserve_turns 必须是非负整数")
+    if settings.compaction_context_episode_window < 0:
+        raise ValueError("conversation_memory.compaction_context_episode_window 必须是非负整数")
+    if not settings.compaction_scene_name.strip():
+        raise ValueError("conversation_memory.compaction_scene_name 不能为空")
 
 
 def resolve_conversation_memory_settings(

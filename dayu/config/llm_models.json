@@ -51,9 +51,6 @@
         "conversation_compaction": {
           "temperature": 0.4
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -106,9 +103,6 @@
         "conversation_compaction": {
           "temperature": 0.4
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -161,9 +155,6 @@
         "conversation_compaction": {
           "temperature": 0.4
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -216,9 +207,6 @@
         "conversation_compaction": {
           "temperature": 0.4
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -269,9 +257,6 @@
         "conversation_compaction": {
           "temperature": 0.2
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -322,9 +307,6 @@
         "conversation_compaction": {
           "temperature": 0.2
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -377,9 +359,6 @@
         "conversation_compaction": {
           "temperature": 0.2
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -434,9 +413,6 @@
         "conversation_compaction": {
           "temperature": 0.2
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -493,9 +469,6 @@
         "conversation_compaction": {
           "temperature": 0.2
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -552,9 +525,6 @@
         "conversation_compaction": {
           "temperature": 0.2
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -607,9 +577,6 @@
         "conversation_compaction": {
           "temperature": 0.3
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -662,9 +629,6 @@
         "conversation_compaction": {
           "temperature": 0.3
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -717,9 +681,6 @@
         "conversation_compaction": {
           "temperature": 0.3
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -772,9 +733,6 @@
         "conversation_compaction": {
           "temperature": 0.3
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -827,9 +785,6 @@
         "conversation_compaction": {
           "temperature": 0.3
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -882,9 +837,6 @@
         "conversation_compaction": {
           "temperature": 0.3
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -935,9 +887,6 @@
         "conversation_compaction": {
           "temperature": 0.1
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -988,9 +937,6 @@
         "conversation_compaction": {
           "temperature": 0.1
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 80000
       }
     }
   },
@@ -1037,11 +983,6 @@
         "conversation_compaction": {
           "temperature": 0.1
         }
-      },
-      "conversation_memory": {
-        "working_memory_token_budget_cap": 32000,
-        "episodic_memory_token_budget_floor": 6000,
-        "episodic_memory_token_budget_cap": 6000
       }
     }
   }

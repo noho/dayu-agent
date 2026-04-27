@@ -363,9 +363,8 @@ export MIMO_API_KEY="sk-xxxxxxxx"
     "interactive": {"temperature": 0.6}
   },
   "conversation_memory": {
-    "working_memory_token_budget_cap": 20000,
-    "episodic_memory_token_budget_floor": 4000,
-    "episodic_memory_token_budget_cap": 4000
+    "memory_token_budget_cap": 24000,
+    "recent_turns_floor": 3
   }
 }
 ```
@@ -374,7 +373,7 @@ Runtime 的选择规则是：
 
 - 先用 `run.json.conversation_memory.default` 作为全局公式
 - 再合并 `llm_models.json[{model_name}].runtime_hints.conversation_memory`
-- 然后结合该模型的 `max_context_tokens` 计算最终 working / episodic budget
+- 然后结合该模型的 `max_context_tokens` 计算最终单总池 budget
 
 #### 最小检查清单
 
@@ -507,155 +506,104 @@ Agent 行为控制：
 
 ### 5.8 `conversation_memory`
 
-interactive 多轮会话的分层记忆配置：
+仅作用于 `conversation.enabled = true` 的 scene（当前为 `interactive` / `wechat` / `prompt_mt`）。
+其他 scene 不读取该节配置。
 
-- `default`
-
-当前语义：
-- `default` 是所有模型共享的 memory policy 默认值。
-- 模型客观能力，例如 `max_context_tokens`，仍然只来自 `llm_models.json`；`conversation_memory` 不重复声明模型窗口大小。
-- 若某个模型需要特例 policy，配置在 `llm_models.runtime_hints.conversation_memory`，不再写在 `run.json`。
-
-可以把它理解成：
-
-- `llm_models.json` 决定模型“客观能做多少”
-- `conversation_memory` 决定多轮会话里“愿意拿多少上下文来放历史”
-
-`default` / `runtime_hints.conversation_memory` 内可配置的字段：
-
-- `working_memory_max_turns`
-- `working_memory_token_budget_ratio`
-- `working_memory_token_budget_floor`
-- `working_memory_token_budget_cap`
-- `episodic_memory_token_budget_ratio`
-- `episodic_memory_token_budget_floor`
-- `episodic_memory_token_budget_cap`
-- `compaction_trigger_turn_count`
-- `compaction_trigger_token_ratio`
-- `compaction_tail_preserve_turns`
-- `compaction_context_episode_window`
-- `compaction_scene_name`
-
-#### 5.7.1 working memory 和 episodic memory 是什么
-
-当前多轮会话上下文分成两层：
-
-- `working memory`
-  - 最近的高保真原始历史
-  - 主要服务“继续追问上一轮”这种局部连续性
-- `episodic memory`
-  - 更早历史的结构化阶段摘要
-  - 主要服务“别把更早的目标、约束、结论完全忘掉”
-
-当前轮送模时，Runtime 会把这两层和当前问题一起编译进 prompt：
-
-- 当前 scene 的 `system_prompt`
-- `[Conversation Memory]` 摘要块
-- 最近原始历史
-- 当前用户输入
-
-#### 5.7.2 关键字段是什么意思
-
-最重要的 4 个字段是：
-
-- `working_memory_token_budget_ratio`
-  - 先按当前模型 `max_context_tokens * ratio` 计算 working memory 预算
-  - 作用是让大上下文模型自然拿到更大的历史预算
-- `working_memory_token_budget_floor`
-  - working memory 的最小保底
-  - 防止小上下文模型或某些配置下，预算小到几乎什么都放不下
-- `working_memory_token_budget_cap`
-  - working memory 的最大封顶
-  - 防止大上下文模型把太多最近历史塞进 prompt，淹没当前问题
-- `episodic_memory_token_budget_ratio`
-  - 先按当前模型 `max_context_tokens * ratio` 计算 episode summaries 的预算
-- `episodic_memory_token_budget_floor`
-  - episodic memory 的最小保底
-- `episodic_memory_token_budget_cap`
-  - episodic memory 的最大封顶
-
-可以把 working memory 的预算理解成：
+#### 5.8.1 两层结构
 
 ```text
-working_budget = clamp(
-  max_context_tokens * working_memory_token_budget_ratio,
-  working_memory_token_budget_floor,
-  working_memory_token_budget_cap
+[Conversation Memory]
+├── pinned_state                                ← 永远全量、不计入 token 池
+└── 历史单总池（budget = clamp(window * ratio, floor, cap)）
+    ├── 最近 N 轮 raw turn                       ← recent_turns_floor 强制保留，不计入 budget
+    ├── 更老 raw turn（按预算从新到老回放）
+    └── episode summaries（按剩余预算从新到老填充）
+```
+
+- `pinned_state`：会话灵魂——`current_goal` / `confirmed_subjects` / `user_constraints` / `open_questions` 四个结构化字段。compaction 阶段由 LLM 增量产出 `pinned_state_patch`，单调演进、不参与池竞争。
+- 单总池：所有历史共享一份 budget，先扣 episode summaries（剩余 budget），再交给"更老 raw turn"。
+- `recent_turns_floor`：**下限**保底语义。budget 充足时随便回放更多轮；budget=0 时仍至少保最近 N 轮。极端单轮溢出时走 `_build_minimum_preserved_turn_view`：user_text 全保留、assistant 降级裁剪。
+
+#### 5.8.2 8 个配置字段
+
+| # | 字段 | 默认 | 与 `max_context_tokens` 关系 | 作用 |
+|---|---|---|---|---|
+| 1 | `memory_token_budget_ratio` | `0.10` | 池大小 = window * ratio（再被 floor/cap 截断） | 总池占模型窗口百分比 |
+| 2 | `memory_token_budget_floor` | `4000` | 无关（绝对值） | 总池下限保底 |
+| 3 | `memory_token_budget_cap` | `60000` | 无关（绝对值） | 总池上限封顶。1M 档算出 100K，被截到 60K |
+| 4 | `recent_turns_floor` | `2` | 无关 | 最近 N 轮 raw turn 强制保留（不计入 budget） |
+| 5 | `compaction_trigger_context_ratio` | `0.70` | 触发阈值 = window * ratio | 占窗口超此比例时触发压缩 |
+| 6 | `compaction_tail_preserve_turns` | `4` | 无关 | 压缩时保留最近 N 轮 raw 不压 |
+| 7 | `compaction_context_episode_window` | `2` | 无关 | 生成新 episode 时携带的最近 episode 数 |
+| 8 | `compaction_scene_name` | `"conversation_compaction"` | 无关 | 执行压缩使用的 scene |
+
+#### 5.8.3 总池预算公式
+
+```text
+budget = clamp(
+  max_context_tokens * memory_token_budget_ratio,
+  memory_token_budget_floor,
+  memory_token_budget_cap,
 )
 ```
 
-例如：
+跨档自动伸缩：
 
-- 模型 `max_context_tokens = 131072`
-- `working_memory_token_budget_ratio = 0.08`
-- 原始计算值约为 `10485`
-- 如果 `floor = 1500`、`cap = 20000`
-- 那最终 working budget 就是 `10485`
+| 模型窗口 | `window * 0.10` | clamp 后 |
+|---|---|---|
+| 1M | 100K | **60K**（cap 截断） |
+| 256K | 25.6K | **25.6K** |
+| 128K | 12.8K | **12.8K** |
+| 8K | 0.8K | **4K**（floor 兜底） |
 
-如果模型是 1M 上下文，而 ratio 算出来特别大，最终仍会被 `cap` 封顶。
+财报场景信条："长上下文优先留给财报材料、检索结果和当前章节上下文，memory 只建议小步上调"。1M 档 cap 控制在 60K 以内，把窗口让给财报材料。
 
-#### 5.7.3 其余字段的作用
+#### 5.8.4 Compaction 触发公式
 
-- `working_memory_max_turns`
-  - 最近原始历史按 turn 回放时的最大轮数上限
-  - 它和 token budget 一起起作用；先满足预算，再受 turn 数限制
-- `compaction_trigger_turn_count`
-  - 未压缩 raw turns 超过多少轮后，允许触发 episode compaction
-- `compaction_trigger_token_ratio`
-  - 未压缩 raw history 的估算体量，超过 working budget 的多少倍后触发 compaction
-- `compaction_tail_preserve_turns`
-  - 压缩时保留最近多少轮 raw turns 不压
-- `compaction_context_episode_window`
-  - 生成新 episode summary 时，带入多少个最近 episodes 作为邻近上下文
-- `compaction_scene_name`
-  - 执行结构化压缩时使用的专用 scene 名，当前默认 `conversation_compaction`
+```text
+window_used = system_prompt + pinned_state
+            + actual_episodic_in_prompt
+            + uncompressed_raw_turns + current_user_text
+should_compact = window_used > max_context_tokens * compaction_trigger_context_ratio
+```
 
-当前 working memory 策略：
-- 正常情况下按 turn 为单位，从最近历史向前回放。
-- 若最新一轮 turn 过长，不会整轮丢弃；Runtime 会保留完整 `user_text`，并对 `assistant` 内容做降级裁剪。
-- 裁剪顺序固定为：先丢历史工具摘要，再截断 `assistant` 文本前缀，并附加 `...<truncated>` 标记。
-- episodic budget 也按 `ratio/floor/cap` 公式计算，不再使用固定绝对值。
-- `compaction_*` 控制什么时候把更早的 raw turns 压成结构化 episode summary。
-- `compaction_scene_name` 指向 Runtime 使用的专用无工具压缩 scene，默认是 `conversation_compaction`。
+`actual_episodic_in_prompt` 复用 `_build_memory_block` 在当前 budget 下渲染时**实际会送进 prompt 的 episode token**（包括"最新 episode 即使超 budget 也保留一条"的兜底分支）。这样既避免把全量 `transcript.episodes` 计入触发公式带来的抖动，也避免无视兜底分支造成的真实 prompt 体积低估。
 
-#### 5.7.4 什么时候应该改这些值
+`schedule_compaction` 在 `persist_turn` 之后调用——当前轮 user_text 已写进 `transcript.turns` 最末位、自然出现在 `uncompressed_tokens` 中——本入口**不再接收** `user_text` 参数避免重复计数。开局尚未 persist 的 `prepare_transcript` 仍显式传 `user_text`。
 
-常见调参信号：
+财报场景默认 0.70，比通用代码 agent 的 0.75 略早触发——因为财报材料 + 工具结果占大头。
 
-- 如果你发现 follow-up 经常“忘记上一轮刚说过什么”
-  - 先检查 `working_memory_token_budget_cap` 是否过小
-  - 再检查是否给该模型配置了合适的 `runtime_hints.conversation_memory`
-- 如果你发现 prompt 被旧内容塞得太满、当前问题不聚焦
-  - 优先降低 `working_memory_token_budget_cap`
-  - 或适当降低 `working_memory_token_budget_ratio`
-- 如果你只是新增了一个大上下文模型
-  - 不需要在 `conversation_memory` 里重复填写它的上下文窗口
-  - 只需要按需要给它补一个 `runtime_hints.conversation_memory` policy
-  - 最佳实践不是按 `max_context_tokens` 线性放大 memory；长上下文优先留给财报材料、检索结果和当前章节上下文，memory 只建议小步上调 `working_memory_token_budget_cap`
+#### 5.8.5 调参信号
 
-#### 5.7.5 当前配置示意
+- 追问频繁忘上一轮：小步上调 `memory_token_budget_cap`（每次 +8K），或把 `recent_turns_floor` 调到 3。
+- 当前问题被旧内容淹没：下调 `memory_token_budget_cap`，或把 `compaction_trigger_context_ratio` 调到 0.50。
+- 频繁触发 compaction 拖慢响应：把 `compaction_trigger_context_ratio` 调到 0.80。
+- 单轮 user_text 极长导致追问断链：把 `recent_turns_floor` 调到 3（退化路径已由 `_build_minimum_preserved_turn_view` 兜底）。
 
-当前配置形状类似：
+#### 5.8.6 当前默认配置
+
+`run.json` 真源：
 
 ```json
 "conversation_memory": {
   "default": {
-    "working_memory_max_turns": 6,
-    "working_memory_token_budget_ratio": 0.08,
-    "working_memory_token_budget_floor": 1500,
-    "working_memory_token_budget_cap": 12000,
-    "episodic_memory_token_budget_ratio": 0.02,
-    "episodic_memory_token_budget_floor": 2000,
-    "episodic_memory_token_budget_cap": 12000
+    "memory_token_budget_ratio": 0.10,
+    "memory_token_budget_floor": 4000,
+    "memory_token_budget_cap": 60000,
+    "recent_turns_floor": 2,
+    "compaction_trigger_context_ratio": 0.70,
+    "compaction_tail_preserve_turns": 4,
+    "compaction_context_episode_window": 2,
+    "compaction_scene_name": "conversation_compaction"
   }
 }
 ```
 
-实际选择规则始终是：
+合并顺序：
 
-- 先读取 `default`
-- 再合并当前模型的 `runtime_hints.conversation_memory`
-- 然后再结合该模型在 `llm_models.json` 里的 `max_context_tokens` 算预算
+- 先读取 `run.json -> conversation_memory.default`
+- 再合并当前模型的 `llm_models.json -> runtime_hints.conversation_memory`（默认 19 个内置模型不再写覆盖；如有特殊需求可补 8 字段中的子集）
+- 结合该模型在 `llm_models.json` 的 `max_context_tokens` 计算实际 budget
 
 ## 6. `prompts/`
 

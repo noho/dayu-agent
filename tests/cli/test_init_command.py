@@ -11,21 +11,16 @@ from unittest.mock import patch
 import pytest
 
 from dayu.cli.commands.init import (
-    _build_conversation_memory_overrides,
-    _CONTEXT_TOKENS_LARGE_THRESHOLD,
     _CUSTOM_CATALOG_KEY,
     _CUSTOM_OPENAI_DEFAULT_MAX_CONTEXT_TOKENS,
     _CustomOpenAIConfig,
     _HF_MIRROR_URL,
     _INIT_ROLE_KEY,
-    _LARGE_CONTEXT_WORKING_MEMORY_CAP,
     _OLLAMA_CATALOG_KEY,
     _OLLAMA_DEFAULT_MAX_CONTEXT_TOKENS,
     _OLLAMA_DEFAULT_ENDPOINT,
     _OLLAMA_DEFAULT_WRITE_CHAPTER_LANE,
     _OllamaConfig,
-    _SMALL_CONTEXT_EPISODIC_MEMORY_CAP,
-    _SMALL_CONTEXT_EPISODIC_MEMORY_FLOOR,
     _build_ollama_catalog_entry,
     _set_write_chapter_lane,
     _PROVIDER_OPTION_CUSTOM_OPENAI,
@@ -732,7 +727,7 @@ class TestBuildOllamaCatalogEntry:
         runtime_hints = entry["runtime_hints"]
         assert isinstance(runtime_hints, dict)
         assert "temperature_profiles" in runtime_hints
-        assert "conversation_memory" in runtime_hints
+        assert "conversation_memory" not in runtime_hints
 
 
 class TestWriteOllamaCatalogEntries:
@@ -2364,43 +2359,6 @@ class TestInitPrewarm:
 
 
 # --------------------------------------------------------------------------- #
-#  _build_conversation_memory_overrides
-# --------------------------------------------------------------------------- #
-
-
-class TestBuildConversationMemoryOverrides:
-    """conversation_memory 动态构建测试。"""
-
-    def test_large_context_returns_working_memory_cap(self) -> None:
-        """max_context_tokens >= 100 万时返回 working_memory_token_budget_cap。"""
-        result = _build_conversation_memory_overrides(1_000_000)
-        assert result == {"working_memory_token_budget_cap": _LARGE_CONTEXT_WORKING_MEMORY_CAP}
-
-    def test_large_context_above_threshold(self) -> None:
-        """远超阈值时仍返回 working_memory_token_budget_cap。"""
-        result = _build_conversation_memory_overrides(2_000_000)
-        assert result == {"working_memory_token_budget_cap": _LARGE_CONTEXT_WORKING_MEMORY_CAP}
-
-    def test_small_context_returns_episodic_memory(self) -> None:
-        """max_context_tokens < 100 万时返回 episodic_memory 覆盖。"""
-        result = _build_conversation_memory_overrides(262144)
-        assert result == {
-            "episodic_memory_token_budget_floor": _SMALL_CONTEXT_EPISODIC_MEMORY_FLOOR,
-            "episodic_memory_token_budget_cap": _SMALL_CONTEXT_EPISODIC_MEMORY_CAP,
-        }
-
-    def test_threshold_boundary(self) -> None:
-        """恰好等于阈值时走大上下文分支。"""
-        result = _build_conversation_memory_overrides(_CONTEXT_TOKENS_LARGE_THRESHOLD)
-        assert "working_memory_token_budget_cap" in result
-
-    def test_just_below_threshold(self) -> None:
-        """阈值减 1 时走小上下文分支。"""
-        result = _build_conversation_memory_overrides(_CONTEXT_TOKENS_LARGE_THRESHOLD - 1)
-        assert "episodic_memory_token_budget_cap" in result
-
-
-# --------------------------------------------------------------------------- #
 #  _override_ollama_write_chapter_lane
 # --------------------------------------------------------------------------- #
 
@@ -2508,7 +2466,7 @@ class TestInitConversationMemoryAndLane:
     """init 流程中 conversation_memory 和 write_chapter lane 集成验证。"""
 
     def test_ollama_small_context_conversation_memory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Ollama 小上下文模型应写入 episodic_memory 覆盖。"""
+        """Ollama 小上下文模型 runtime_hints 不再写入 conversation_memory 覆盖。"""
         src = tmp_path / "pkg_config"
         src.mkdir()
         (src / "run.json").write_text(
@@ -2554,10 +2512,9 @@ class TestInitConversationMemoryAndLane:
         assert exit_code == 0
 
         llm_models = json.loads((base / "config" / "llm_models.json").read_text(encoding="utf-8"))
-        cm = llm_models[_OLLAMA_CATALOG_KEY]["runtime_hints"]["conversation_memory"]
-        assert cm["episodic_memory_token_budget_floor"] == _SMALL_CONTEXT_EPISODIC_MEMORY_FLOOR
-        assert cm["episodic_memory_token_budget_cap"] == _SMALL_CONTEXT_EPISODIC_MEMORY_CAP
-        assert "working_memory_token_budget_cap" not in cm
+        runtime_hints = llm_models[_OLLAMA_CATALOG_KEY]["runtime_hints"]
+        # default 一份打天下：runtime_hints 不再写入 conversation_memory 覆盖
+        assert "conversation_memory" not in runtime_hints
 
         # 验证 write_chapter lane 从 5 覆盖为 2
         run_data = json.loads((base / "config" / "run.json").read_text(encoding="utf-8"))
@@ -2566,7 +2523,7 @@ class TestInitConversationMemoryAndLane:
     def test_custom_openai_large_context_conversation_memory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Custom OpenAI 大上下文模型应写入 working_memory_token_budget_cap。"""
+        """Custom OpenAI 大上下文模型 runtime_hints 不再写入 conversation_memory 覆盖。"""
         src = tmp_path / "pkg_config"
         src.mkdir()
         (src / "run.json").write_text("{}", encoding="utf-8")
@@ -2610,6 +2567,6 @@ class TestInitConversationMemoryAndLane:
         assert exit_code == 0
 
         llm_models = json.loads((base / "config" / "llm_models.json").read_text(encoding="utf-8"))
-        cm = llm_models[_CUSTOM_CATALOG_KEY]["runtime_hints"]["conversation_memory"]
-        assert cm["working_memory_token_budget_cap"] == _LARGE_CONTEXT_WORKING_MEMORY_CAP
-        assert "episodic_memory_token_budget_cap" not in cm
+        runtime_hints = llm_models[_CUSTOM_CATALOG_KEY]["runtime_hints"]
+        # default 一份打天下：runtime_hints 不再写入 conversation_memory 覆盖
+        assert "conversation_memory" not in runtime_hints

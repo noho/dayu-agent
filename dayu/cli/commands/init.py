@@ -77,33 +77,6 @@ _OLLAMA_TEMPERATURE_PROFILES: dict[str, dict[str, float]] = {
     "infer": {"temperature": 0.1},
     "conversation_compaction": {"temperature": 0.1},
 }
-_CONTEXT_TOKENS_LARGE_THRESHOLD = 1_000_000
-_LARGE_CONTEXT_WORKING_MEMORY_CAP = 80000
-_SMALL_CONTEXT_EPISODIC_MEMORY_FLOOR = 6000
-_SMALL_CONTEXT_EPISODIC_MEMORY_CAP = 6000
-
-
-def _build_conversation_memory_overrides(max_context_tokens: int) -> dict[str, int]:
-    """根据 ``max_context_tokens`` 构建 ``conversation_memory`` 覆盖项。
-
-    大上下文模型（>= 100 万 tokens）侧重扩大工作记忆上限；
-    小上下文模型侧重收紧情景记忆以节省预算。
-
-    Args:
-        max_context_tokens: 模型的最大上下文 tokens 数。
-
-    Returns:
-        可直接写入 ``runtime_hints.conversation_memory`` 的覆盖字典。
-    """
-
-    if max_context_tokens >= _CONTEXT_TOKENS_LARGE_THRESHOLD:
-        return {"working_memory_token_budget_cap": _LARGE_CONTEXT_WORKING_MEMORY_CAP}
-    return {
-        "episodic_memory_token_budget_floor": _SMALL_CONTEXT_EPISODIC_MEMORY_FLOOR,
-        "episodic_memory_token_budget_cap": _SMALL_CONTEXT_EPISODIC_MEMORY_CAP,
-    }
-
-
 def _prompt_max_context_tokens(default: int) -> int:
     """交互式收集最大上下文 tokens 数。
 
@@ -1053,7 +1026,6 @@ def _build_custom_openai_catalog_entry(
     }
     runtime_hints = {
         "temperature_profiles": _CUSTOM_OPENAI_TEMPERATURE_PROFILES,
-        "conversation_memory": _build_conversation_memory_overrides(max_context_tokens),
     }
     return {
         "runner_type": "openai_compatible",
@@ -1184,7 +1156,6 @@ def _build_ollama_catalog_entry(
 
     runtime_hints: dict[str, object] = {
         "temperature_profiles": _OLLAMA_TEMPERATURE_PROFILES,
-        "conversation_memory": _build_conversation_memory_overrides(max_context_tokens),
     }
     return {
         "runner_type": "openai_compatible",

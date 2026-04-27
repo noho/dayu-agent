@@ -423,41 +423,25 @@ def _build_conversation_memory_settings_from_snapshot(
         return None
     defaults = ConversationMemorySettings()
     return ConversationMemorySettings(
-        working_memory_max_turns=_snapshot_int_or_default(
-            payload.get("working_memory_max_turns"),
-            default=defaults.working_memory_max_turns,
+        memory_token_budget_ratio=_snapshot_float_or_default(
+            payload.get("memory_token_budget_ratio"),
+            default=defaults.memory_token_budget_ratio,
         ),
-        working_memory_token_budget_ratio=_snapshot_float_or_default(
-            payload.get("working_memory_token_budget_ratio"),
-            default=defaults.working_memory_token_budget_ratio,
+        memory_token_budget_floor=_snapshot_int_or_default(
+            payload.get("memory_token_budget_floor"),
+            default=defaults.memory_token_budget_floor,
         ),
-        working_memory_token_budget_floor=_snapshot_int_or_default(
-            payload.get("working_memory_token_budget_floor"),
-            default=defaults.working_memory_token_budget_floor,
+        memory_token_budget_cap=_snapshot_int_or_default(
+            payload.get("memory_token_budget_cap"),
+            default=defaults.memory_token_budget_cap,
         ),
-        working_memory_token_budget_cap=_snapshot_int_or_default(
-            payload.get("working_memory_token_budget_cap"),
-            default=defaults.working_memory_token_budget_cap,
+        recent_turns_floor=_snapshot_int_or_default(
+            payload.get("recent_turns_floor"),
+            default=defaults.recent_turns_floor,
         ),
-        episodic_memory_token_budget_ratio=_snapshot_float_or_default(
-            payload.get("episodic_memory_token_budget_ratio"),
-            default=defaults.episodic_memory_token_budget_ratio,
-        ),
-        episodic_memory_token_budget_floor=_snapshot_int_or_default(
-            payload.get("episodic_memory_token_budget_floor"),
-            default=defaults.episodic_memory_token_budget_floor,
-        ),
-        episodic_memory_token_budget_cap=_snapshot_int_or_default(
-            payload.get("episodic_memory_token_budget_cap"),
-            default=defaults.episodic_memory_token_budget_cap,
-        ),
-        compaction_trigger_turn_count=_snapshot_int_or_default(
-            payload.get("compaction_trigger_turn_count"),
-            default=defaults.compaction_trigger_turn_count,
-        ),
-        compaction_trigger_token_ratio=_snapshot_float_or_default(
-            payload.get("compaction_trigger_token_ratio"),
-            default=defaults.compaction_trigger_token_ratio,
+        compaction_trigger_context_ratio=_snapshot_float_or_default(
+            payload.get("compaction_trigger_context_ratio"),
+            default=defaults.compaction_trigger_context_ratio,
         ),
         compaction_tail_preserve_turns=_snapshot_int_or_default(
             payload.get("compaction_tail_preserve_turns"),

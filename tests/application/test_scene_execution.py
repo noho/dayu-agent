@@ -1282,7 +1282,7 @@ def test_scene_preparer_helper_functions_cover_single_turn_and_execution_option_
             fins_tool_limits=FinsToolLimits(),
             web_tools_config=WebToolsConfig(provider="off"),
             trace_settings=TraceSettings(enabled=False, output_dir=tmp_path / "trace-accepted"),
-            conversation_memory_settings=ConversationMemorySettings(compaction_trigger_turn_count=6),
+            conversation_memory_settings=ConversationMemorySettings(recent_turns_floor=3),
         ),
         prompt_contributions={},
         user_message="hello",
@@ -1368,8 +1368,8 @@ def test_scene_preparer_conversation_session_state_persist_turn_saves_and_schedu
         persisted.extend([next_transcript, expected_revision])
         return next_transcript
 
-    def _schedule_compaction(*, session_id, prepared_scene, transcript):
-        scheduled.extend([session_id, prepared_scene, transcript])
+    def _schedule_compaction(*, session_id, prepared_scene, transcript, system_prompt):
+        scheduled.extend([session_id, prepared_scene, transcript, system_prompt])
 
     session_state = scene_preparer_module.ConversationSessionState(
         session_id="session-1",
@@ -1379,6 +1379,7 @@ def test_scene_preparer_conversation_session_state_persist_turn_saves_and_schedu
         memory_manager=cast(scene_preparer_module.DefaultConversationMemoryManager, SimpleNamespace(schedule_compaction=_schedule_compaction)),
         prepared_scene=prepared_scene,
         user_message="hello",
+        system_prompt="SYS",
     )
 
     session_state.persist_turn(
@@ -1452,7 +1453,7 @@ async def test_scene_preparer_prepare_restore_and_host_owned_state_helpers(
             fins_tool_limits=FinsToolLimits(),
             web_tools_config=WebToolsConfig(provider="off"),
             trace_settings=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
-            conversation_memory_settings=ConversationMemorySettings(compaction_trigger_turn_count=5),
+            conversation_memory_settings=ConversationMemorySettings(recent_turns_floor=2),
         ),
         prompt_contributions={},
         user_message="hello",
@@ -1495,7 +1496,7 @@ async def test_scene_preparer_prepare_restore_and_host_owned_state_helpers(
         ),
         toolset_configs=(ToolsetConfigSnapshot(toolset_name="doc", payload={"list_files_max": 9}),),
         trace_settings=TraceSettings(enabled=False, output_dir=tmp_path / "trace-restored"),
-        conversation_memory_settings=ConversationMemorySettings(compaction_trigger_turn_count=4),
+        conversation_memory_settings=ConversationMemorySettings(recent_turns_floor=4),
         trace_identity=scene_preparer_module.AgentTraceIdentity(
             agent_name="prompt_agent",
             agent_kind="scene_agent",

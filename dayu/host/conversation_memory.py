@@ -137,60 +137,35 @@ def _estimate_turn_tokens(turn: ConversationTurnRecord) -> int:
     return sum(_estimate_tokens(piece) for piece in pieces)
 
 
-def _resolve_working_memory_token_budget(
+def _resolve_memory_total_budget(
     *,
     settings: ConversationMemorySettings,
     max_context_tokens: int,
 ) -> int:
-    """解析 working memory 的 token 预算。
+    """解析单总池的 token 预算。
+
+    单总池供"更老 raw turn + episode summaries"共同消费；最近 N 轮 raw turn 由
+    ``recent_turns_floor`` 强制保留，不计入此预算。
 
     Args:
         settings: 分层记忆配置。
         max_context_tokens: 当前模型最大上下文 token。
 
     Returns:
-        working memory token 预算。
+        单总池 token 预算。
 
     Raises:
         无。
     """
 
     if max_context_tokens <= 0:
-        return settings.working_memory_token_budget_cap
-    computed = int(max_context_tokens * settings.working_memory_token_budget_ratio)
+        return settings.memory_token_budget_cap
+    computed = int(max_context_tokens * settings.memory_token_budget_ratio)
     bounded = max(
-        settings.working_memory_token_budget_floor,
-        min(settings.working_memory_token_budget_cap, computed),
+        settings.memory_token_budget_floor,
+        min(settings.memory_token_budget_cap, computed),
     )
     return max(1, min(max_context_tokens, bounded))
-
-
-def _resolve_episodic_memory_token_budget(
-    *,
-    settings: ConversationMemorySettings,
-    max_context_tokens: int,
-) -> int:
-    """解析 episodic memory 的 token 预算。
-
-    Args:
-        settings: 分层记忆配置。
-        max_context_tokens: 当前模型最大上下文 token。
-
-    Returns:
-        episodic memory token 预算。
-
-    Raises:
-        无。
-    """
-
-    if max_context_tokens <= 0:
-        return settings.episodic_memory_token_budget_cap
-    computed = int(max_context_tokens * settings.episodic_memory_token_budget_ratio)
-    bounded = max(
-        settings.episodic_memory_token_budget_floor,
-        min(settings.episodic_memory_token_budget_cap, computed),
-    )
-    return max(0, min(max_context_tokens, bounded))
 
 
 def _resolve_prepared_scene_max_context_tokens(
@@ -518,6 +493,7 @@ class WorkingMemoryPolicyProtocol(Protocol):
         transcript: ConversationTranscript,
         *,
         settings: ConversationMemorySettings,
+        available_token_budget: int,
         max_context_tokens: int,
     ) -> tuple[WorkingMemoryTurnView, ...]:
         """选择需要作为 working memory 回放的 raw turns。"""
@@ -572,6 +548,8 @@ class ConversationMemoryManagerProtocol(Protocol):
         session_id: str,
         prepared_scene: ConversationPreparedSceneProtocol,
         transcript: ConversationTranscript,
+        system_prompt: str,
+        user_text: str,
     ) -> ConversationTranscript:
         """在当前轮开始前补齐必要的同步压缩。"""
         ...
@@ -597,6 +575,7 @@ class ConversationMemoryManagerProtocol(Protocol):
         session_id: str,
         prepared_scene: ConversationPreparedSceneProtocol,
         transcript: ConversationTranscript,
+        system_prompt: str,
     ) -> None:
         """基于最新 transcript 调度后台压缩。"""
         ...
@@ -679,24 +658,35 @@ class NullConversationRetrievalIndex:
 
 
 class DefaultWorkingMemoryPolicy:
-    """基于预算的默认 working memory 策略。"""
+    """基于单总池预算的默认 working memory 策略。
+
+    回放策略：
+    - **强制保留** 最近 ``recent_turns_floor`` 轮 raw turn（不消耗 budget）；
+      若最新一轮单轮即超出预算，走 ``_build_minimum_preserved_turn_view`` 兜底。
+    - **按预算回放** 更老的 raw turn：从新到老消费 ``available_token_budget``，
+      预算耗尽即停（更早历史已由 compaction 压缩为 episode summary）。
+    """
 
     def select_turns(
         self,
         transcript: ConversationTranscript,
         *,
         settings: ConversationMemorySettings,
+        available_token_budget: int,
         max_context_tokens: int,
     ) -> tuple[WorkingMemoryTurnView, ...]:
-        """选择当前轮要回放的高保真 raw turns。
+        """选择当前轮要回放的 raw turns。
 
         Args:
             transcript: 当前 transcript。
             settings: 分层记忆配置。
-            max_context_tokens: 当前模型最大上下文 token。
+            available_token_budget: 单总池中分配给 raw turn 回放的剩余预算
+                （pinned_state 与 recent_turns_floor 不计入此值）。
+            max_context_tokens: 当前模型最大上下文 token；用于派生
+                ``recent_turns_floor`` 的单轮溢出兜底阈值。
 
         Returns:
-            选中的 working memory turn 视图。
+            选中的 working memory turn 视图，按时间从旧到新排列。
 
         Raises:
             无。
@@ -705,53 +695,89 @@ class DefaultWorkingMemoryPolicy:
         raw_tail = transcript.turns[transcript.compacted_turn_count :]
         if not raw_tail:
             return ()
-        token_budget = self._resolve_token_budget(settings=settings, max_context_tokens=max_context_tokens)
-        selected: list[WorkingMemoryTurnView] = []
-        used_tokens = 0
-        for turn in reversed(raw_tail):
-            if len(selected) >= settings.working_memory_max_turns:
-                break
-            full_turn_view = _build_full_working_turn_view(turn)
-            full_turn_tokens = _estimate_working_turn_view_tokens(full_turn_view)
-            if used_tokens + full_turn_tokens <= token_budget:
-                selected.append(full_turn_view)
-                used_tokens += full_turn_tokens
-                continue
-            if selected:
-                break
-            selected.append(
-                _build_minimum_preserved_turn_view(
-                    turn,
-                    token_budget=max(1, token_budget),
-                )
-            )
-            break
-        selected.reverse()
-        return tuple(selected)
 
-    def _resolve_token_budget(
+        recent_floor = max(0, settings.recent_turns_floor)
+        if recent_floor > 0:
+            forced_turns = raw_tail[-recent_floor:]
+            older_turns = raw_tail[:-recent_floor]
+        else:
+            forced_turns = ()
+            older_turns = raw_tail
+
+        forced_views = self._render_forced_turns(
+            forced_turns,
+            settings=settings,
+            max_context_tokens=max_context_tokens,
+            actual_forced_count=len(forced_turns),
+        )
+
+        extra_pool = max(0, available_token_budget)
+        extra_views: list[WorkingMemoryTurnView] = []
+        for turn in reversed(older_turns):
+            full_view = _build_full_working_turn_view(turn)
+            cost = _estimate_working_turn_view_tokens(full_view)
+            if cost > extra_pool:
+                break
+            extra_views.append(full_view)
+            extra_pool -= cost
+        extra_views.reverse()
+        return tuple([*extra_views, *forced_views])
+
+    def _render_forced_turns(
         self,
+        forced_turns: tuple[ConversationTurnRecord, ...],
         *,
         settings: ConversationMemorySettings,
         max_context_tokens: int,
-    ) -> int:
-        """解析当前轮 working memory 的 token 预算。
+        actual_forced_count: int,
+    ) -> tuple[WorkingMemoryTurnView, ...]:
+        """渲染强制保留的最近 N 轮 raw turn。
+
+        默认走完整视图（forced floor 不计入 budget）；只有当**单轮 token 量超过
+        模型当前窗口派生的兜底阈值** 这种极端情况才退到
+        ``_build_minimum_preserved_turn_view`` 兜底，避免上下文窗口被一轮极长输入
+        撑爆。阈值与 ``memory_token_budget_cap`` **解耦**：必须基于当前模型
+        ``max_context_tokens`` 推导，否则在小窗口模型上可能出现"单轮 < cap 但
+        > 当前窗口"被原样回放、撑爆 prompt 的失败模式。
+
+        阈值公式：``max_context_tokens / max(2, actual_forced_count + 1)``。
+        除数取**当前实际 forced 轮数**而不是 ``settings.recent_turns_floor``：新会话或
+        刚 compaction 后只剩 1-2 轮 raw turn 时，若仍按配置 floor=4/5 计算会把单轮上限
+        压得过低，触发不必要的 minimum_preserve 裁剪。语义上为"模型窗口给单轮
+        forced turn 的上限"，按实际轮数+1 平摊，使 forced 队列加 system/pinned/当前
+        user 共用窗口时单轮不会独吞。
 
         Args:
-            settings: 分层记忆配置。
-            max_context_tokens: 当前模型最大上下文 token。
+            forced_turns: 最近 N 轮强制保留的原始 turn。
+            settings: 分层记忆配置；提供 ``memory_token_budget_cap`` 作为窗口未知
+                时的兜底阈值。
+            max_context_tokens: 当前模型最大上下文 token。``<= 0`` 时回落
+                到 ``settings.memory_token_budget_cap`` 作为最后兜底。
+            actual_forced_count: 当前实际 forced turn 数量，用于派生溢出阈值。
 
         Returns:
-            token 预算。
+            渲染后的视图，按时间从旧到新。
 
         Raises:
             无。
         """
 
-        return _resolve_working_memory_token_budget(
-            settings=settings,
-            max_context_tokens=max_context_tokens,
-        )
+        if max_context_tokens > 0:
+            divisor = max(2, actual_forced_count + 1)
+            overflow_threshold = max(1, max_context_tokens // divisor)
+        else:
+            # 防御性兜底：模型窗口未知时回到 cap，保持旧行为不破坏。
+            overflow_threshold = max(1, settings.memory_token_budget_cap)
+        rendered: list[WorkingMemoryTurnView] = []
+        for turn in forced_turns:
+            full_view = _build_full_working_turn_view(turn)
+            if _estimate_working_turn_view_tokens(full_view) <= overflow_threshold:
+                rendered.append(full_view)
+            else:
+                rendered.append(
+                    _build_minimum_preserved_turn_view(turn, token_budget=overflow_threshold)
+                )
+        return tuple(rendered)
 
 
 class DefaultEpisodicMemoryCompressor:
@@ -1125,6 +1151,8 @@ class DefaultConversationMemoryManager:
         session_id: str,
         prepared_scene: ConversationPreparedSceneProtocol,
         transcript: ConversationTranscript,
+        system_prompt: str,
+        user_text: str,
     ) -> ConversationTranscript:
         """在当前轮开始前补齐必要的同步压缩。
 
@@ -1132,6 +1160,8 @@ class DefaultConversationMemoryManager:
             session_id: 会话 ID。
             prepared_scene: 当前轮静态 scene 计划。
             transcript: 当前已落盘 transcript。
+            system_prompt: 当前轮 system prompt，用于触发公式估算 token。
+            user_text: 当前轮用户输入，用于触发公式估算 token。
 
         Returns:
             已补齐同步压缩后的 transcript。
@@ -1144,11 +1174,15 @@ class DefaultConversationMemoryManager:
         current = transcript
         settings = prepared_scene.conversation_memory_settings
         max_context_tokens = _resolve_prepared_scene_max_context_tokens(prepared_scene)
+        system_prompt_tokens = _estimate_tokens(str(system_prompt or ""))
+        user_text_tokens = _estimate_tokens(str(user_text or ""))
         while True:
             candidate_turns = self._select_compaction_candidate(
                 transcript=current,
                 settings=settings,
                 max_context_tokens=max_context_tokens,
+                system_prompt_tokens=system_prompt_tokens,
+                user_text_tokens=user_text_tokens,
             )
             if not candidate_turns:
                 return current
@@ -1205,20 +1239,27 @@ class DefaultConversationMemoryManager:
 
         settings = prepared_scene.conversation_memory_settings
         max_context_tokens = _resolve_prepared_scene_max_context_tokens(prepared_scene)
+        total_budget = _resolve_memory_total_budget(
+            settings=settings,
+            max_context_tokens=max_context_tokens,
+        )
+        # 单总池消费顺序：先扣 episode summaries，再把剩余预算交给"更老 raw turn"。
+        # pinned_state / 最近 N 轮 raw turn 永远独立、不计入此预算。
+        memory_block, episodic_used_tokens = self._build_memory_block(
+            transcript=transcript,
+            total_budget=total_budget,
+        )
+        remaining_for_working = max(0, total_budget - episodic_used_tokens)
         raw_turns = self._working_memory_policy.select_turns(
             transcript,
             settings=settings,
+            available_token_budget=remaining_for_working,
             max_context_tokens=max_context_tokens,
         )
         messages: list[AgentMessage] = []
         normalized_system_prompt = str(system_prompt or "").strip()
         if normalized_system_prompt:
             messages.append(build_system_chat_message(normalized_system_prompt))
-        memory_block = self._build_memory_block(
-            transcript=transcript,
-            settings=settings,
-            max_context_tokens=max_context_tokens,
-        )
         if memory_block:
             messages.append(build_system_chat_message(memory_block))
         messages.extend(self._compile_raw_turns(raw_turns))
@@ -1246,13 +1287,20 @@ class DefaultConversationMemoryManager:
         session_id: str,
         prepared_scene: ConversationPreparedSceneProtocol,
         transcript: ConversationTranscript,
+        system_prompt: str,
     ) -> None:
         """基于最新 transcript 调度后台压缩。
+
+        本入口在 ``persist_turn`` 之后被调用，当前轮 ``user_text`` 已经写进
+        ``transcript.turns`` 最末位、自然出现在 ``uncompressed_tokens`` 中，
+        因此**不接收** ``user_text`` 参数避免重复计数。开局尚未 persist 的同步压缩
+        判定走 ``prepare_transcript``，由它显式传 ``user_text``。
 
         Args:
             session_id: 会话 ID。
             prepared_scene: 当前轮静态 scene 计划。
-            transcript: 最新 transcript。
+            transcript: 最新 transcript（已包含本轮 user/assistant）。
+            system_prompt: 当前轮 system prompt，用于触发公式估算 token。
 
         Returns:
             无。
@@ -1267,6 +1315,8 @@ class DefaultConversationMemoryManager:
             transcript=transcript,
             settings=settings,
             max_context_tokens=max_context_tokens,
+            system_prompt_tokens=_estimate_tokens(str(system_prompt or "")),
+            user_text_tokens=0,
         )
         self._retrieval_index.index_transcript(transcript)
         if not candidate_turns:
@@ -1306,18 +1356,21 @@ class DefaultConversationMemoryManager:
         self,
         *,
         transcript: ConversationTranscript,
-        settings: ConversationMemorySettings,
-        max_context_tokens: int,
-    ) -> str:
-        """构建 `[Conversation Memory]` system block。
+        total_budget: int,
+    ) -> tuple[str, int]:
+        """构建 ``[Conversation Memory]`` system block。
+
+        ``pinned_state`` 永远完整渲染、不消耗 ``total_budget``；``episode summaries``
+        从最新到最旧消费 ``total_budget``，预算耗尽即停。
 
         Args:
             transcript: 当前 transcript。
-            settings: 分层记忆配置。
-            max_context_tokens: 当前模型最大上下文 token。
+            total_budget: 单总池预算（pinned_state 与最近 N 轮 raw turn 不在此池）。
 
         Returns:
-            memory block；无内容时返回空字符串。
+            ``(memory_block, episodic_used_tokens)``：渲染后的 block；以及 episode
+            summaries 实际占用的 token 数（用于把剩余预算让给 raw turn 回放）。
+            block 无内容时返回 ``("", 0)``。
 
         Raises:
             无。
@@ -1327,25 +1380,29 @@ class DefaultConversationMemoryManager:
         pinned_block = _render_pinned_state_block(transcript.pinned_state)
         if pinned_block:
             pieces.append(pinned_block)
-        used_tokens = sum(_estimate_tokens(piece) for piece in pieces)
-        episodic_budget = _resolve_episodic_memory_token_budget(
-            settings=settings,
-            max_context_tokens=max_context_tokens,
-        )
+
+        episodic_used_tokens = 0
         episode_pieces: list[str] = []
+        budget_remaining = max(0, total_budget)
         for episode in reversed(transcript.episodes):
             rendered = _render_episode_summary(episode)
             rendered_tokens = _estimate_tokens(rendered)
-            if episode_pieces and used_tokens + rendered_tokens > episodic_budget:
+            if rendered_tokens > budget_remaining:
+                if not episode_pieces:
+                    # 单条 episode 即超预算时仍保留至少一条最新 episode，避免 episodic
+                    # 层完全失效；token 仍按真实占用记账供调用方核账。
+                    episode_pieces.append(rendered)
+                    episodic_used_tokens += rendered_tokens
                 break
             episode_pieces.append(rendered)
-            used_tokens += rendered_tokens
+            episodic_used_tokens += rendered_tokens
+            budget_remaining -= rendered_tokens
         if episode_pieces:
             episode_pieces.reverse()
             pieces.append("Episode Summaries:\n" + "\n\n".join(episode_pieces))
         if not pieces:
-            return ""
-        return "[Conversation Memory]\n" + "\n\n".join(pieces)
+            return "", 0
+        return "[Conversation Memory]\n" + "\n\n".join(pieces), episodic_used_tokens
 
     def _compile_raw_turns(self, turns: tuple[WorkingMemoryTurnView, ...]) -> list[AgentMessage]:
         """将 working memory raw turns 编译为消息列表。
@@ -1372,13 +1429,31 @@ class DefaultConversationMemoryManager:
         transcript: ConversationTranscript,
         settings: ConversationMemorySettings,
         max_context_tokens: int,
+        system_prompt_tokens: int = 0,
+        user_text_tokens: int = 0,
     ) -> tuple[ConversationTurnRecord, ...]:
         """选择本次可压缩的 raw turn 片段。
+
+        触发公式（占模型窗口百分比，跨档位自动伸缩）::
+
+            window_used = system_prompt + pinned_state
+                         + actual_episodic_in_prompt
+                         + uncompressed_raw_turns + current_user_text
+            should_compact = window_used > max_context_tokens
+                             * compaction_trigger_context_ratio
+
+        说明：``actual_episodic_in_prompt`` 通过复用 ``_build_memory_block`` 的渲染逻辑
+        在当前 ``total_budget`` 下计算"本轮会真正送进 prompt 的 episode token"，从而：
+        - 既避免把全量 ``transcript.episodes`` 计入触发公式带来的抖动（fix #2 原意）；
+        - 也避免无视 ``_build_memory_block`` 的"最新 episode 即使超 budget 也保留一条"
+          兜底分支造成的真实 prompt 体积低估（round2 review #1）。
 
         Args:
             transcript: 当前 transcript。
             settings: 分层记忆配置。
-            max_context_tokens: 当前模型最大上下文 token。
+            max_context_tokens: 当前模型最大上下文 token；``<= 0`` 时跳过 token 触发。
+            system_prompt_tokens: 当前轮 system prompt 估算 token 数。
+            user_text_tokens: 当前轮用户输入估算 token 数。
 
         Returns:
             待压缩 turn 元组；不满足阈值时返回空元组。
@@ -1390,45 +1465,39 @@ class DefaultConversationMemoryManager:
         uncompressed_turns = transcript.turns[transcript.compacted_turn_count :]
         if len(uncompressed_turns) <= settings.compaction_tail_preserve_turns:
             return ()
-        working_budget = self._resolve_working_budget(
+        if max_context_tokens <= 0:
+            # 模型窗口未知时无法判定占比，直接放弃 token 触发；防御性兜底。
+            return ()
+
+        pinned_tokens = _estimate_tokens(_render_pinned_state_block(transcript.pinned_state))
+        uncompressed_tokens = sum(_estimate_turn_tokens(turn) for turn in uncompressed_turns)
+
+        # 用 build_messages 同款逻辑估算本轮实际会送的 episode token：
+        # 复用 _build_memory_block，使触发判定与真实 prompt 体积保持一致。
+        total_budget = _resolve_memory_total_budget(
             settings=settings,
             max_context_tokens=max_context_tokens,
         )
-        uncompressed_tokens = sum(_estimate_turn_tokens(turn) for turn in uncompressed_turns)
-        should_compact = (
-            len(uncompressed_turns) > settings.compaction_trigger_turn_count
-            or uncompressed_tokens > int(working_budget * settings.compaction_trigger_token_ratio)
+        _, episodic_in_prompt_tokens = self._build_memory_block(
+            transcript=transcript,
+            total_budget=total_budget,
         )
-        if not should_compact:
+
+        window_used = (
+            max(0, system_prompt_tokens)
+            + pinned_tokens
+            + episodic_in_prompt_tokens
+            + uncompressed_tokens
+            + max(0, user_text_tokens)
+        )
+        threshold = int(max_context_tokens * settings.compaction_trigger_context_ratio)
+        if window_used <= threshold:
             return ()
+
         cutoff = len(uncompressed_turns) - settings.compaction_tail_preserve_turns
         if cutoff <= 0:
             return ()
         return tuple(uncompressed_turns[:cutoff])
-
-    def _resolve_working_budget(
-        self,
-        *,
-        settings: ConversationMemorySettings,
-        max_context_tokens: int,
-    ) -> int:
-        """解析 compaction 判定使用的 working memory 预算。
-
-        Args:
-            settings: 分层记忆配置。
-            max_context_tokens: 当前模型最大上下文 token。
-
-        Returns:
-            working memory 预算。
-
-        Raises:
-            无。
-        """
-
-        return _resolve_working_memory_token_budget(
-            settings=settings,
-            max_context_tokens=max_context_tokens,
-        )
 
     async def _run_compaction(
         self,

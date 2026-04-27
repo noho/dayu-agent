@@ -31,7 +31,7 @@ Host 对外承担九项稳定能力：
 | Timeout 控制 | 注册 run 截止时间，到点触发 cancel | Deadline watcher + 取消桥 |
 | Cancel 控制 | 双层语义：取消意图 vs 终态落库 | CancellationToken + CancellationBridge |
 | Resume | 按 pending turn lease 重发用户轮，受 max_attempts 门控 | CAS lease + attempt_count 门控 |
-| 多轮会话托管 | Pinned / Episodic / Working / Raw 四层记忆 | 同步裁剪 + 后台 compaction + 乐观锁 |
+| 多轮会话托管 | Pinned State + 单总池（最近 N 轮 raw + 老 raw + episodic summary）两层记忆 | 同步裁剪 + 后台 compaction + 乐观锁 |
 | Reply outbox | 对外回复的"至少一次 + 幂等 + 失败可重试" | 5 态状态机 + delivery_key 幂等 |
 | Agent replay | 在上一次执行的完整对话历史末尾追加一条 user 消息再跑一次 | 进程内 replay stash + opaque `ReplayHandle` + engine 层 `_tools_disabled` 复用 |
 
@@ -333,36 +333,43 @@ Host 暴露的事件只有两类：
 
 ---
 
-## 10. 多轮会话托管（分层记忆）
+## 10. 多轮会话托管（两层记忆）
 
-多轮会话的上下文由四层组成，层次从"永远保留"到"原始流水"：
+多轮会话的上下文由**两层结构**组成：`pinned_state` 独立保留、不参与 token 池竞争；其余历史共享一个**单总池**，按 budget 从新到老回放最近 raw turn 与 episode 摘要。
 
-| 层 | 语义 | 典型内容 |
-| --- | --- | --- |
-| Pinned State | 会话级固定信息，写入后只改不丢 | 用户画像、固化偏好、当前任务主线 |
-| Episodic Memory | 摘要化的历史片段 | 过往轮次的浓缩总结 |
-| Working Memory | 近期轮次的结构化视图 | 最近若干轮的可直接喂给 LLM 的表示 |
-| Raw Transcript | 原始事件流 | 审计/回放用的完整日志 |
+| 层 | 语义 | 是否计入 budget | 典型内容 |
+| --- | --- | --- | --- |
+| Pinned State | 会话级反幻觉锚点，写入后增量更新 | 否（独立路径） | `current_goal` / `confirmed_subjects` / `user_constraints` / `open_questions`，典型 < 200 tokens |
+| 单总池 | 历史回放预算池 | 是 | 最近 N 轮 raw turn（强制保留下限）+ 更老 raw turn（按预算回放）+ episode summaries（剩余预算填充） |
+| Raw Transcript | 原始事件流（独立物理存储） | — | 审计/回放用的完整日志，永不删除 |
+
+**预算公式**：
+```
+budget = clamp(max_context_tokens * memory_token_budget_ratio,
+               memory_token_budget_floor,
+               memory_token_budget_cap)
+```
+
+`recent_turns_floor` 是反退化下限——即使 budget 算下来为 0，也强制保留最近 N 轮 raw turn 不让追问彻底断链；它**不计入 budget**。极端单轮溢出由 `_build_minimum_preserved_turn_view` 兜底（user_text 全保、assistant 降级裁剪）。
 
 ### 10.1 Raw Transcript 的分区策略
 
 Raw transcript 是一个按时间递增的 turn 列表，通过会话级字段 **`compacted_turn_count`** 把列表划分成两个区：
 
-- **已压缩区**：下标 `< compacted_turn_count` 的 turn，语义上"已被摘要进 episodic memory"，**不再参与**后续 working memory 选择与消息拼装（防止 episode 摘要与原文双发，制造冗余与矛盾）。
-- **未压缩尾区**：下标 `>= compacted_turn_count` 的 turn，是 working memory 的候选池；同时也是下一次 compaction 的输入来源。
+- **已压缩区**：下标 `< compacted_turn_count` 的 turn，语义上"已被摘要进 episode summaries"，**不再参与**后续单总池消费（防止 episode 摘要与原文双发，制造冗余与矛盾）。
+- **未压缩尾区**：下标 `>= compacted_turn_count` 的 turn，是单总池中 raw turn 部分的候选池；同时也是下一次 compaction 的输入来源。
 
 `compacted_turn_count` 只由 compaction 成功写入时**单调推进**，杜绝"压缩后再回放原文"。
 
-### 10.2 Working Memory 选择策略
+### 10.2 单总池消费顺序
 
-Working memory 的构造过程是**从未压缩尾区的最新一轮向前回溯**，直到触发任一边界为止：
+单总池消费按**从新到老**优先级，对未压缩尾区与 episode summaries 联合裁切：
 
-- **轮数上限**：保证消息列表"人类可读规模"不膨胀；
-- **Token 预算**：保证最终消息列表在模型窗口与 Host 留白之内。
+1. **最近 N 轮 raw turn 强制保留**（`raw_tail[-recent_turns_floor:]`）：不计入 budget，单轮极长走 minimum_preserve 兜底，不丢追问连续性。
+2. **更老 raw turn 按 budget 从新到老回放**：每轮估算 token，能装下就加入并扣减 budget，装不下就 break（更早历史已被 compaction 压成 episode 摘要）。
+3. **Episode summaries 用剩余 budget 从新到老填充**：装不下就 break。
 
-两条边界**都要满足**（取先触发者），这是"双重预算"约束——单维度约束会在长 turn / 多轮小 turn 两种极端下任一失控。
-
-**最新一轮整轮超预算时的降级顺序**（稳定契约，保证"最新用户意图永远不丢"）：
+**最近一轮整轮超预算时的降级顺序**（稳定契约，保证"最新用户意图永远不丢"）：
 
 1. 保留 user_text；
 2. 保留完整的 assistant_final；
@@ -371,28 +378,36 @@ Working memory 的构造过程是**从未压缩尾区的最新一轮向前回溯
 
 降级顺序是契约：任何实现不得颠倒"先丢工具后截最终答复"的优先级。
 
+**单轮溢出阈值**：`max_context_tokens / max(2, actual_forced_count + 1)`。除数取**当前实际 forced 轮数**而非 `recent_turns_floor` 配置值——避免新会话/刚 compaction 后只剩 1-2 轮 raw turn 时，配置高 floor 把单轮上限错误压低。
+
 ### 10.3 Compaction 触发策略
 
-Compaction 何时发生由两个维度联合判定（策略级，具体阈值属实现调参）：
+触发判定**仅按"占模型窗口百分比"单维度**（轮数触发器已废）：
 
-- **未压缩轮数**超过策略阈值；**或**
-- **未压缩 token 量**超过 working memory 预算的若干倍。
+```
+window_used = system_prompt + pinned_state
+            + actual_episodic_in_prompt
+            + uncompressed_raw_turns + current_user_text
+should_compact = window_used > max_context_tokens * compaction_trigger_context_ratio
+```
 
-同时**始终保留尾部若干轮不参与压缩**，以保护当前对话的连续性与用户体感——最近几轮必须以原文形式继续回放，不能被摘要抹平。
+`actual_episodic_in_prompt` **复用 `_build_memory_block` 的真实裁切结果**，与渲染 prompt 的口径完全一致，避免触发器与渲染器漂移导致 thrashing 或漏触发。
+
+同时**始终保留 `compaction_tail_preserve_turns` 轮不参与压缩**，保护当前对话的连续性与用户体感。
 
 ### 10.4 Compaction 的输入/输出语义
 
 **输入**（给 LLM 的压缩上下文）语义上包括：
 
 - 固定的压缩任务指令；
-- 当前 pinned state（让 LLM 知道会话主线与稳定偏好）；
-- 最近若干已有 episode 摘要（维持"摘要风格的延续感"，避免每轮重写）；
+- 当前 pinned_state（让 LLM 知道会话主线与稳定偏好）；
+- `compaction_context_episode_window` 个最近已有 episode 摘要（维持"摘要风格的延续感"，避免每轮重写）；
 - 本次待压缩的 turns（来自未压缩区但保留尾部以外的那一段）。
 
-**输出**语义上包括两件事：
+**输出**两件事：
 
-- **`episode_summary`**：对本段对话的结构化摘要，追加进 episodic memory；
-- **`pinned_state_patch`**：对 pinned state 的**增量补丁**。合并语义（`apply_to`）是"只覆盖明确给出的字段、缺省字段沿用旧值"，保证 LLM 每次不需要重述整个 pinned state，也不会因为漏输出某字段而把旧值清空。
+- **`episode_summary`**：对本段对话的结构化摘要，追加进 episode summaries；包含 `confirmed_facts` 字段——财报场景反幻觉刚需，永远完整保留不参与 token 截断。
+- **`pinned_state_patch`**：对 pinned_state 的**增量补丁**。合并语义（`apply_to`）是"只覆盖明确给出的字段、缺省字段沿用旧值"——保证 LLM 每次不需要重述整个 pinned_state，也不会因为漏输出某字段而把旧值清空。
 
 "先得到结果、再按乐观锁写回"是语义分离点：得到 patch 不等于已落库。
 
@@ -401,8 +416,8 @@ Compaction 何时发生由两个维度联合判定（策略级，具体阈值属
 每轮发给 LLM 的消息列表按以下**固定顺序**拼接，顺序是契约：
 
 1. **System Prompt**：角色与任务描述；
-2. **Conversation Memory 段**：pinned state + episode 摘要，统一以一条 system 级消息承载，给模型"这是背景而不是对话"的信号；
-3. **Working Memory 段**：§10.2 选中的若干轮，按 user/assistant 原始交替回放；
+2. **Conversation Memory 段**：pinned_state + episode 摘要，统一以一条 system 级消息承载，给模型"这是背景而不是对话"的信号；
+3. **Working Memory 段**：§10.2 选中的若干轮 raw turn，按 user/assistant 原始交替回放；
 4. **当前轮 user message**：最新用户输入。
 
 这一顺序保证：背景信息在对话之前、历史对话保真回放、当前意图在最末尾（减少 LLM 忽略当前指令的概率）。
@@ -411,10 +426,10 @@ Compaction 何时发生由两个维度联合判定（策略级，具体阈值属
 
 Compaction 有两条触发路径，职责分离：
 
-- **同步 compaction**：**在本轮开始前**，如果未压缩区已越过硬阈值（消息列表若不压缩就会超预算），同步执行压缩，确保本轮能立即开跑。这条路径是"必做功"，以保证可用性。
-- **后台 compaction**：**在上一轮结束后**，如果越过软阈值，异步调度。用于"用户感觉不到延迟地缩小 raw 区"。
+- **同步 compaction**（`prepare_transcript`）：**在本轮开始前**，如果未压缩区已越过阈值（消息列表若不压缩就会超预算），同步执行压缩，确保本轮能立即开跑。这条路径**显式接收 `user_text`** 作为入参——本轮用户消息尚未持久化，必须显式传入参与 `window_used` 估算。
+- **后台 compaction**（`schedule_compaction`）：**在上一轮结束后**，越过阈值则异步调度。这条路径**不接收 `user_text`** 入参——调用时机在 `persist_turn` 之后，用户消息已写入 `transcript.turns` 末位，自然出现在 `uncompressed_raw_turns` 中，再传 `user_text` 会双计。
 
-两条路径共享同一套输入/输出语义（§10.4），差异只在调度时机。
+两条路径共享同一套输入/输出语义（§10.4），差异只在调度时机与是否显式传 `user_text`。
 
 **乐观锁并发冲突策略**：compaction 的写回以会话级 **revision** 作为乐观锁——读入时记录 revision，写回前比对；若不一致（说明期间已有其它 compactor/会话写入），**直接丢弃本次摘要结果，不覆盖**。这与"后来者胜"相反：在"继续跑"与"保持一致"之间选择一致。丢弃的代价是下次重算，可接受。
 
@@ -422,9 +437,47 @@ Compaction 有两条触发路径，职责分离：
 
 - **Pinned 永不被 compaction 挤掉**，只由显式 API 或 compaction 的 `pinned_state_patch` 改写；其它层都可以在预算压力下被重塑。
 - **Episode 只能追加**，不支持回改；若 episode 本身需要再浓缩（episode-of-episodes），属于演进方向，不在当前契约内。
+- **`confirmed_facts` 永远完整保留**，不参与 token 截断（财报场景反幻觉核心依赖）。
 - **Raw Transcript 永不被 compaction 物理删除**，只通过 `compacted_turn_count` 标记为"已摘要"；审计/回放总能拿到全量原文。
 
-具体的 token 预算数值、默认窗口大小、触发阈值倍数属于实现调参，不在本文档范围；以 `dayu/host/conversation_*.py` 与 `dayu/config/` 为准。
+### 10.8 默认配置与跨档自适应
+
+`default` 一份打天下，不分档配置；通过 `clamp(window * ratio, floor, cap)` 自动伸缩：
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `memory_token_budget_ratio` | `0.10` | 池大小占模型窗口比例；按当前 floor/cap 在 ~40K–600K 窗口范围内真实生效 |
+| `memory_token_budget_floor` | `4000` | 总池下限保底（短窗口模型用） |
+| `memory_token_budget_cap` | `60000` | 总池上限封顶（1M 档被截到此值） |
+| `recent_turns_floor` | `2` | 最近 N 轮强制保留下限，反退化兜底 |
+| `compaction_trigger_context_ratio` | `0.70` | 占模型窗口百分比触发阈值 |
+| `compaction_tail_preserve_turns` | `4` | 压缩时保留尾部不压的轮数 |
+| `compaction_context_episode_window` | `2` | 给 LLM 的近邻 episode 数 |
+| `compaction_scene_name` | `"conversation_compaction"` | 压缩用专用 scene |
+
+**各档实际 budget**：
+
+| 模型窗口 | `window * 0.10` | clamp 后 budget | 触发阈值 |
+| --- | --- | --- | --- |
+| 1M | 100K | **60K**（cap 截断） | 700K |
+| 256K | 25.6K | **25.6K**（区间内） | 179K |
+| 128K | 12.8K | **12.8K**（区间内） | 89.6K |
+| 32K | 3.2K | **4K**（floor 兜底） | 22.4K |
+
+#### 10.8.1 128K 档使用注意事项
+
+128K 档自适应**功能上完全成立**，但相比 256K/1M 档对"材料 headroom"更敏感：
+
+- **Compaction 阈值 89.6K**，扣除 system_prompt + pinned + 12.8K 总池后，留给"当前轮工具结果 + 财报材料"的有效空间约 **38K**——比 256K 档的 154K 小一个量级。
+- 若单轮工具一次取出多块 XBRL fact + 长财报段落 > 38K，会出现"每轮都触发 compaction"的抖动现象。
+- **调参方向**（按抖动现象选）：
+  - 抖动严重：`memory_token_budget_cap` 下调（如 8000）把池让给材料；或 `compaction_trigger_context_ratio` 上调（如 0.80）延后触发。
+  - 追问频繁忘上一轮：保持 cap，调高 `recent_turns_floor` 到 3。
+- **单轮溢出阈值 ≈ 128K / 3 ≈ 42K**（floor=2、actual_forced=2 时），财报追问中 user_text 几百字 + assistant 摘要几千字远低于此值，正常对话不会触发 minimum_preserve。
+- **不需要在 `llm_models.json` 写 `runtime_hints.conversation_memory` 覆盖**——`default` 已自适应；如确需档位特化，建议先按上述抖动信号调参，验证默认行为不够再考虑覆盖。
+- **当前 `dayu/config/llm_models.json` 仅注册 1M / 256K 档**，128K 档需通过 `dayu-cli init` 添加自定义模型进入；上线前建议跑一次 `interactive` 8+ 轮实测，观察 trace 里的 budget/compaction 日志确认行为符合预期。
+
+具体的 token 预算数值、触发阈值倍数定义在 `dayu/config/run.json`、`dayu/contracts/execution_options.py::ConversationMemorySettings` 与 `dayu/host/conversation_memory.py`，三处默认值通过单元测试 `test_default_conversation_memory_settings_match_runtime_default` 保持一致。详细字段说明见 [config/README.md §5.8](../config/README.md)。
 
 ---
 
@@ -618,7 +671,7 @@ Service 单测写"如何调 Host"时：
 5. `dayu/host/reply_outbox_store.py` — delivery 幂等与 stale 回退；
 6. `dayu/host/executor.py` / `host_execution.py` — 执行路径与 `should_delete_pending_turn_after_terminal_run` 真值表；
 7. `dayu/host/concurrency.py` — lane 合并与 `acquire_many`；
-8. `dayu/host/conversation_*.py` — 分层记忆与 compaction；
+8. `dayu/host/conversation_*.py` — 两层记忆与 compaction；
 9. `dayu/host/startup_preparation.py` — 配置规范化与默认值；
 10. `dayu/host/host_cleanup.py` — 启动恢复的编排。
 

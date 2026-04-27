@@ -190,6 +190,7 @@ class ConversationSessionState:
     memory_manager: DefaultConversationMemoryManager
     prepared_scene: PreparedSceneState
     user_message: str
+    system_prompt: str
 
     def persist_turn(
         self,
@@ -218,6 +219,7 @@ class ConversationSessionState:
             session_id=self.session_id,
             prepared_scene=self.prepared_scene,
             transcript=persisted,
+            system_prompt=self.system_prompt,
         )
 
 
@@ -403,6 +405,8 @@ class DefaultScenePreparer(ScenePreparationProtocol):
                 session_id=session_key,
                 prepared_scene=prepared_scene,
                 transcript=transcript,
+                system_prompt=system_prompt,
+                user_text=user_message,
             )
             messages = self._memory_manager.build_messages(
                 prepared_scene=prepared_scene,
@@ -418,6 +422,7 @@ class DefaultScenePreparer(ScenePreparationProtocol):
                 memory_manager=self._memory_manager,
                 prepared_scene=prepared_scene,
                 user_message=user_message,
+                system_prompt=system_prompt,
             )
         else:
             messages = _build_single_turn_messages(system_prompt=system_prompt, user_message=user_message)
@@ -475,6 +480,7 @@ class DefaultScenePreparer(ScenePreparationProtocol):
                 memory_manager=self._memory_manager,
                 prepared_scene=prepared_scene,
                 user_message=session_snapshot.user_message,
+                system_prompt=prepared_turn.system_prompt,
             )
         return AgentInput(
             system_prompt=prepared_turn.system_prompt,

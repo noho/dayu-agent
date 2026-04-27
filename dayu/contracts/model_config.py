@@ -76,17 +76,18 @@ class TemperatureProfileConfig(TypedDict):
 
 
 class ConversationMemoryRuntimeHints(TypedDict, total=False):
-    """模型 runtime hints 中允许覆盖的 conversation memory 字段。"""
+    """模型 runtime hints 中允许覆盖的 conversation memory 字段。
 
-    working_memory_max_turns: int
-    working_memory_token_budget_ratio: float
-    working_memory_token_budget_floor: int
-    working_memory_token_budget_cap: int
-    episodic_memory_token_budget_ratio: float
-    episodic_memory_token_budget_floor: int
-    episodic_memory_token_budget_cap: int
-    compaction_trigger_turn_count: int
-    compaction_trigger_token_ratio: float
+    单总池两层结构：``pinned_state`` 独立、不计入 token 池；其余历史共享一个总池，
+    `budget = clamp(window * memory_token_budget_ratio, memory_token_budget_floor,
+    memory_token_budget_cap)`，``recent_turns_floor`` 给出最近 N 轮强制保留下限。
+    """
+
+    memory_token_budget_ratio: float
+    memory_token_budget_floor: int
+    memory_token_budget_cap: int
+    recent_turns_floor: int
+    compaction_trigger_context_ratio: float
     compaction_tail_preserve_turns: int
     compaction_context_episode_window: int
     compaction_scene_name: str
