@@ -621,6 +621,19 @@ pip install -e ".[test,dev,browser,web]" -c constraints/lock-windows-x64-py311.t
 
 #### 发布步骤
 
+##### 交给Agent做准备工作
+```text
+我准备draft release一个 v0.1.3，帮我检查v0.1.2以来的PR。
+- 完善 @CHANGELOG.md  ，贡献者 mention。
+- 根据 @docs/github_main_workflow.md   【### 8. 发布 release tag（按需）】中的【##### 第 1 步：在功能分支里准备版本发布改动】，修改pyproject.toml 和 根目录 README.md
+- 修改 @docs/github_main_workflow.md  【### 8. 发布 release tag（按需）】中的 【##### 第 2 步：同步主线并打 tag】中的命令。
+- 修改 @docs/github_main_workflow.md  【### 8. 发布 release tag（按需）】中的 【##### 第 3 步：创建 GitHub Release】中的命令，写好title 和 notes  ，notes 里要有贡献者 mention。
+
+记住 Release Notes / CHANGELOG：写给用户，不是写给 Git的。
+
+仅修改本地文档，不许执行任何git/gh操作。
+```
+
 ##### 第 1 步：在功能分支里准备版本发布改动
 
 在功能分支中：
@@ -636,7 +649,7 @@ pip install -e ".[test,dev,browser,web]" -c constraints/lock-windows-x64-py311.t
 ```bash
 git switch main
 git pull
-git tag -a v0.1.3 -m "v0.1.3 — 提供离线安装；支持MiMo Plan海外；bug fix"
+git tag -a v0.1.3 -m "v0.1.3 — 离线安装支持四平台；支持 Ollama / 自定义模型；interactive 会话复用；写作流水线优化"
 git push github v0.1.3
 git push lan v0.1.3
 ```
@@ -647,7 +660,7 @@ git push lan v0.1.3
 
 ```bash
 gh release create v0.1.3 \
-  --title "v0.1.3 — 支持第三方模型；interactive支持session复用；修复了大部分上传财报问题（PDF转换问题尚不确定）；bug fix" \
+  --title "v0.1.3 — 离线安装支持四平台；支持 Ollama / 自定义模型；interactive 会话复用；写作流水线优化" \
   --notes "$(cat <<'EOF'
 ## 安装
 
@@ -665,16 +678,36 @@ pip install --upgrade https://github.com/noho/dayu-agent/releases/download/v0.1.
 
 从 [Releases](https://github.com/noho/dayu-agent/releases) 页面下载对应平台的离线安装包：
 
-- Mac ARM芯片：`dayu-agent-<version>-macos-arm64-offline.tar.gz`
-- Mac Intel芯片：`dayu-agent-<version>-macos-x64-offline.tar.gz`
-- Linux：`dayu-agent-<version>-linux-x64-offline.tar.gz`
-- Windows：`dayu-agent-<version>-windows-x64-offline.zip`
+- Mac ARM芯片：`dayu-agent-0.1.3-macos-arm64-offline.tar.gz`
+- Mac Intel芯片：`dayu-agent-0.1.3-macos-x64-offline.tar.gz`
+- Linux：`dayu-agent-0.1.3-linux-x64-offline.tar.gz`
+- Windows：`dayu-agent-0.1.3-windows-x64-offline.zip`
 
 ## 本次更新
 
-- 提供离线安装包，支持 4 个平台（macOS ARM64/x64、Linux x64、Windows x64）
-- 支持 MiMo Plan 海外（需运行 dayu-cli init --overwrite）
-- bug fix
+- 本次更新后需运行一次 `dayu-cli init --reset` ，已下载/上传的财报不会丢失，已生成的报告不会丢失。
+
+**新功能**
+
+- 离线安装包支持 4 个平台（macOS ARM64 / x64、Linux x64、Windows x64），新增 macOS Intel (x64)
+- `dayu-cli init` 支持本地 Ollama 模型
+- `dayu-cli init` 支持自定义 OpenAI 兼容 API（如 OpenRouter）
+- `prompt --label` / `interactive --label` 会话复用：相同 label 共享聊天记录
+- Agent 执行进度实时显示
+- `dayu-cli init --reset` 一键重置工作区配置
+- 埋入web支持，下个版本见。
+
+**模型升级**
+
+- 小米 MiMo 升级到 v2.5 Pro
+- DeepSeek 升级到 V4
+- 通义千问升级到 qwen3.6-plus
+
+**修复与改进**
+
+- 修复 write 流水线并发治理，消除本地模型下的 permit 超时
+- 修复 Windows 上传、docling 后端排序等平台兼容问题
+- SSE tool call 兼容 Gemini / Qwen 非标协议行为
 
 安装后可用命令：
 - `dayu-cli init` — 初始化配置

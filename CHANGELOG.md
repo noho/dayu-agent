@@ -8,31 +8,49 @@
 
 ## [Unreleased]
 
+-- 
+
+## [0.1.3] - 2026-04-27
+
 ### 注意
 
-- 本次更新后需运行一次 `dayu-cli init --reset` ，删除workspace/ 目录下的 .dayu/ config/ assets/ 目录，已下载/上传的财报不会丢失，已生成的报告不会丢失。
+- 本次更新后需运行一次 `dayu-cli init --reset` ，已下载/上传的财报不会丢失，已生成的报告不会丢失。
 
 ### 新增
 
-- 提供离线安装包，覆盖 `macOS ARM64`、`Linux x64`、`Windows x64` 三个平台。
-- `dayu-cli init`支持自定义OpenAI 兼容模型。
+- 提供离线安装包，覆盖 `macOS ARM64`、`macOS x64`、`Linux x64`、`Windows x64` 四个平台。
+- `dayu-cli init`支持本地 Ollama 上运行的模型。
+- `dayu-cli init`支持自定义 OpenAI 兼容模型（如 OpenRouter）。
+- Agent 执行进度感知：CLI 交互模式下实时显示当前执行的工具名和关键参数。(@dearbear ： 观察 agent 努力也是一种参与感)
 - prompt / interactive 的 --label 恢复语义
   - prompt 无 --label：保留 one-shot 语义，不支持恢复上下文。
-  - prompt --label <label>：每次相同`label`的prompt都共用相同聊天记录。
+  - prompt --label <label>：每次相同`label`的 prompt 都共用相同聊天记录。
   - interactive 无 --label：恢复上次相同聊天记录的交互式对话。
-  - interactive --label <label>：每次相同`label`的interactive都是相同聊天记录的交互式对话。
-- dayu-cli init 添加--reset，删除workspace/下 .dayu、config、assets目录。
-- 优化写作提高成功率。
+  - interactive --label <label>：每次相同`label`的 interactive 都是相同聊天记录的交互式对话。
+- `dayu-cli init` 添加 `--reset`，删除 workspace/ 下 `.dayu`、`config`、`assets` 目录。
+- SSE 协议错误 trace 诊断。
+- 优化写作流水线，提高成功率。
+- 埋入web支持，下个版本见。(@xingren23)
 
 ### 变更
 
-- 小米 `mimo` 模型更新到2.5 Pro。
-- `DeepSeek` 模型更新到V4。
-- `qwen` 模型更新到qwen3.6-plus。
+- 小米 `mimo` 模型更新到 v2.5 Pro。
+- `DeepSeek` 模型更新到 V4。
+- `qwen` 模型更新到 qwen3.6-plus。
 
 ### 修复
 
-- 若干缺陷修复。
+- 兼容 Gemini 和 Qwen 非标协议行为。(@dearbear)
+- 剥离本地小模型输出的 Markdown 代码围栏，修复 prompt/interactive 显示问题。
+- 修复 write 流水线并发治理：消除嵌套 lane 占用导致的 permit 超时。
+- 修复 Windows 非 ASCII 路径上传 bug 及 docling 后端排序问题。
+- 修复 Host 兜底清理 source_run 终态的 pending turn 长尾残留。
+- Host SQLite 写事务契约化，消除并发写入的 upgrade deadlock。
+
+### 贡献者
+
+感谢以下贡献者参与本次发布（按字母序）：
+@deanbear、@Leo Liu (noho)、@xingren23、@Zx55
 
 -- 
 
@@ -80,7 +98,8 @@
 - 财报电话会议音频转录后的问答区分未实现。
 - 定性分析模板对不同公司的差异化判断路径仍偏机械。
 
-[Unreleased]: https://github.com/noho/dayu-agent/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/noho/dayu-agent/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/noho/dayu-agent/releases/tag/v0.1.3
 [0.1.2]: https://github.com/noho/dayu-agent/releases/tag/v0.1.2
 [0.1.1]: https://github.com/noho/dayu-agent/releases/tag/v0.1.1
 [0.1.0]: https://github.com/noho/dayu-agent/releases/tag/v0.1.0

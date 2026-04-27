@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dayu-agent"
-version = "0.1.2"
+version = "0.1.3"
 description = "大愚 Agent：每个投资者的助理分析师"
 readme = "README.md"
 requires-python = ">=3.11"
