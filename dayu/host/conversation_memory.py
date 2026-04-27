@@ -19,6 +19,7 @@ from dayu.contracts.agent_types import (
 )
 from dayu.engine.events import EventType
 from dayu.log import Log
+from dayu.text import strip_markdown_fence
 from dayu.host._coercion import _coerce_string_tuple
 from dayu.host.conversation_store import (
     ConversationEpisodeSummary,
@@ -211,27 +212,6 @@ def _resolve_prepared_scene_max_context_tokens(
     if max_context_tokens > 0:
         return max_context_tokens
     return int(prepared_scene.model_config.get("max_context_tokens") or 0)
-
-
-def _strip_markdown_fence(text: str) -> str:
-    """剥离模型输出外层的 Markdown 代码块。
-
-    Args:
-        text: 原始输出文本。
-
-    Returns:
-        尝试剥离后的 JSON 文本。
-
-    Raises:
-        无。
-    """
-
-    stripped = str(text or "").strip()
-    if stripped.startswith("```") and stripped.endswith("```"):
-        lines = stripped.splitlines()
-        if len(lines) >= 3:
-            return "\n".join(lines[1:-1]).strip()
-    return stripped
 
 
 def _has_any_pinned_state(pinned_state: ConversationPinnedState) -> bool:
@@ -916,7 +896,7 @@ class DefaultEpisodicMemoryCompressor:
             无。
         """
 
-        normalized = _strip_markdown_fence(final_answer)
+        normalized = strip_markdown_fence(final_answer)
         try:
             payload = json.loads(normalized)
         except json.JSONDecodeError:

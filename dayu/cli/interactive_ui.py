@@ -18,6 +18,7 @@ from typing import Any
 import sys
 
 from dayu.contracts.events import AppEventType, extract_cancel_reason
+from dayu.text import strip_markdown_fence
 from dayu.execution.options import ExecutionOptions
 from dayu.log import Log
 from dayu.services.contracts import ChatResumeRequest, ChatTurnRequest, PromptRequest, SessionResolutionPolicy
@@ -168,6 +169,7 @@ class _RenderState:
     final_content: str = ""
     filtered: bool = False
     tool_calls_seen: int = 0
+    _pending_content_delta: str | None = None
 
 
 def _measure_display_width(text: str) -> int:
@@ -316,6 +318,35 @@ def _get_event_payload(event: object) -> object | None:
     return getattr(event, "data", None)
 
 
+def _handle_content_delta(state: _RenderState, text: str) -> None:
+    """处理内容增量：首个 delta 暂存检测围栏，围栏模式下持续缓冲。
+
+    首个内容 delta 若以 ````` `` 开头，进入缓冲模式：所有后续 delta
+    累积到 ``_pending_content_delta``，不在终端渲染，等待
+    ``FINAL_ANSWER`` 确认是否为围栏。若确认是围栏，丢弃缓冲并渲染
+    剥离后的内容；若非围栏，刷出全部缓冲内容。
+
+    Args:
+        state: 渲染状态。
+        text: 本次增量文本。
+
+    Raises:
+        无。
+    """
+
+    if not text:
+        return
+    if state._pending_content_delta is not None:
+        # 缓冲模式：累积 delta，不渲染
+        state._pending_content_delta += text
+        return
+    if not state.content_streamed and text.lstrip().startswith("```"):
+        # 首个内容 delta 且疑似围栏头，进入缓冲模式
+        state._pending_content_delta = text
+        return
+    _render_content_delta(state, text)
+
+
 def _render_stream_event(event: Any, state: _RenderState) -> None:
     """将单个事件渲染到终端。
 
@@ -331,14 +362,28 @@ def _render_stream_event(event: Any, state: _RenderState) -> None:
     payload = _get_event_payload(event)
 
     if event_type == AppEventType.CONTENT_DELTA.value:
-        _render_content_delta(state, str(payload or ""))
+        _handle_content_delta(state, str(payload or ""))
         return
 
     if event_type == AppEventType.FINAL_ANSWER.value:
-        state.final_content = str(payload.get("content", "")) if isinstance(payload, dict) else str(payload)
+        raw_content = str(payload.get("content", "")) if isinstance(payload, dict) else str(payload)
+        stripped = strip_markdown_fence(raw_content)
+        state.final_content = stripped
         state.filtered = bool(payload.get("filtered", False)) if isinstance(payload, dict) else False
-        if state.final_content and not state.content_streamed:
-            _render_content_delta(state, state.final_content)
+        if state._pending_content_delta is not None:
+            # 有暂存 delta（疑似围栏模式），根据完整内容判断
+            if raw_content.startswith("```"):
+                # 确认是围栏：丢弃缓冲，渲染剥离后的正文
+                state._pending_content_delta = None
+                state.content_streamed = False
+                if stripped:
+                    _render_content_delta(state, stripped)
+            else:
+                # 非围栏：刷出缓冲（已是完整内容），无需再渲染
+                _render_content_delta(state, state._pending_content_delta)
+                state._pending_content_delta = None
+        elif stripped and not state.content_streamed:
+            _render_content_delta(state, stripped)
         if state.filtered:
             _render_warning_or_error(state, "[filtered] 本轮输出触发内容过滤，结果可能不完整")
         return

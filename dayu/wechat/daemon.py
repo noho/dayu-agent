@@ -17,6 +17,7 @@ from threading import Lock
 from typing import Any, Callable, Protocol, TypeVar
 import webbrowser
 
+from dayu.text import strip_markdown_fence
 from dayu.execution.options import ExecutionOptions
 from dayu.log import Log
 from dayu.contracts.reply_outbox import ReplyOutboxState
@@ -405,7 +406,9 @@ class WeChatReplyBuilder:
             无。
         """
 
-        final_text = "" if self._cancelled else (self._final_answer or "".join(self._content_chunks))
+        final_text = "" if self._cancelled else strip_markdown_fence(
+            self._final_answer or "".join(self._content_chunks)
+        )
         return WeChatReply(
             text=final_text.strip(),
             source_run_id=self._source_run_id,
