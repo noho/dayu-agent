@@ -174,7 +174,7 @@ jobs:
 
   build-offline-macos-x64:
     name: build-offline macos-x64 (py3.11)
-    runs-on: macos-13
+    runs-on: [self-hosted, macOS, X64]
 
     steps:
       - name: Checkout

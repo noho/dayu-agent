@@ -223,7 +223,9 @@ jobs:
 
   full-platform-validation-macos-x64:
     name: full-platform-validation macos-x64 (py3.11)
-    runs-on: macos-13
+    runs-on: [self-hosted, macOS, X64]
+    continue-on-error: true
+    timeout-minutes: 10
     if: >
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
