@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import AsyncIterator, Protocol, runtime_checkable
 
 from dayu.contracts.events import AppEvent, PublishedRunEventProtocol
+from dayu.fins.domain.document_models import FilingSummary
 from dayu.services.contracts import (
     ChatPendingTurnView,
     ChatResumeRequest,
@@ -103,6 +104,19 @@ class FinsServiceProtocol(BaseServiceProtocol, Protocol):
         Returns:
             包含 `session_id` 与执行句柄的提交结果。
         """
+        ...
+
+
+    def list_filings(self, ticker: str) -> list[FilingSummary]:
+        """查询指定股票的已下载财报列表。
+
+        Args:
+            ticker: 股票代码。
+
+        Returns:
+            财报源文件摘要列表。
+        """
+
         ...
 
 

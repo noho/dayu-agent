@@ -597,6 +597,25 @@ class DocumentSummary:
 
 
 @dataclass(frozen=True)
+class FilingSummary:
+    """财报源文件摘要。
+
+    用于服务层向 UI 层暴露已下载财报文件的基本信息，包含文档标识、表单类型、
+    申报/报告日期、财年财期、主文件路径等展示所需字段。
+    """
+
+    document_id: str
+    form_type: Optional[str] = None
+    filing_date: Optional[str] = None
+    report_date: Optional[str] = None
+    fiscal_year: Optional[int] = None
+    fiscal_period: Optional[str] = None
+    is_deleted: bool = False
+    primary_file_name: Optional[str] = None
+    primary_file_path: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class FilingManifestItem:
     """`filings/filing_manifest.json` 项目。"""
 

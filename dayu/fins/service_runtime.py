@@ -58,7 +58,8 @@ from dayu.fins.cli_support import (
     _validate_upload_material_args as validate_upload_material_args,
 )
 from dayu.fins.ingestion.process_events import ProcessEvent
-from dayu.fins.domain.document_models import CompanyMeta
+from dayu.fins.domain.document_models import CompanyMeta, FilingSummary
+from dayu.fins.domain.enums import SourceKind
 from dayu.fins.ingestion.factory import (
     IngestionServiceFactory,
     build_ingestion_manager_key,
@@ -146,6 +147,18 @@ class FinsRuntimeProtocol(CompanyMetaProviderProtocol, Protocol):
 
     def get_ingestion_manager_key(self) -> str:
         """返回长事务 job 管理器 key。"""
+
+        ...
+
+    def list_source_filings(self, ticker: str) -> list[FilingSummary]:
+        """列出指定股票的已下载财报源文件摘要。
+
+        Args:
+            ticker: 股票代码。
+
+        Returns:
+            财报源文件摘要列表。
+        """
 
         ...
 
@@ -1322,6 +1335,57 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
         """返回长事务 job 管理器 key。"""
 
         return build_ingestion_manager_key(workspace_root=self.workspace_root)
+
+    def list_source_filings(self, ticker: str) -> list[FilingSummary]:
+        """列出指定股票的已下载财报源文件摘要。
+
+        Args:
+            ticker: 股票代码。
+
+        Returns:
+            财报源文件摘要列表；查询失败时返回空列表。
+
+        Raises:
+            无。
+        """
+
+        result: list[FilingSummary] = []
+        try:
+            document_ids = self.source_repository.list_source_document_ids(ticker, SourceKind.FILING)
+        except (OSError, ValueError):
+            return result
+
+        for doc_id in document_ids:
+            try:
+                meta = self.source_repository.get_source_meta(ticker, doc_id, SourceKind.FILING)
+                primary_file_name: Optional[str] = None
+                primary_file_path: Optional[str] = None
+                try:
+                    primary_source = self.source_repository.get_primary_source(
+                        ticker, doc_id, SourceKind.FILING
+                    )
+                    materialized_path = primary_source.materialize().resolve()
+                    primary_file_name = materialized_path.name or None
+                    primary_file_path = str(materialized_path)
+                except (OSError, ValueError):
+                    pass
+
+                result.append(FilingSummary(
+                    document_id=doc_id,
+                    form_type=meta.get("form_type"),
+                    filing_date=meta.get("filing_date"),
+                    report_date=meta.get("report_date"),
+                    fiscal_year=meta.get("fiscal_year") if isinstance(meta.get("fiscal_year"), int) else None,
+                    fiscal_period=meta.get("fiscal_period"),
+                    is_deleted=bool(meta.get("is_deleted", False)),
+                    primary_file_name=primary_file_name,
+                    primary_file_path=primary_file_path,
+                ))
+            except (OSError, ValueError, KeyError):
+                continue
+
+        result.sort(key=lambda x: x.filing_date or "", reverse=True)
+        return result
 
     def get_company_name(self, ticker: str) -> str:
         """返回公司名称。"""

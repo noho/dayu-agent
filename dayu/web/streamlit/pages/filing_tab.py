@@ -5,45 +5,56 @@
 
 from __future__ import annotations
 
-import asyncio
 import datetime
-from collections.abc import AsyncIterator
-from concurrent.futures import ThreadPoolExecutor
+import threading
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
+from queue import Empty, Queue
+from typing import TypedDict, cast
 
 import pandas as pd
 import streamlit as st
+from streamlit.delta_generator import DeltaGenerator
 
 from dayu.contracts.fins import (
     DownloadCommandPayload,
     DownloadProgressPayload,
     FinsCommand,
     FinsCommandName,
-    FinsEvent,
-    FinsEventType,
 )
-from dayu.fins.domain.enums import SourceKind
 from dayu.fins.score_sec_ci import FORM_PROFILES
-from dayu.fins.storage import FsSourceDocumentRepository
-from dayu.services.contracts import FinsSubmitRequest
+from dayu.services.contracts import FinsSubmission, FinsSubmitRequest
 from dayu.services.protocols import FinsServiceProtocol
-from dayu.web.streamlit.components.filing_download_progress import (
-    DOWNLOAD_STATUS_COMPLETED,
-    DOWNLOAD_STATUS_FAILED,
+from dayu.web.streamlit.pages.filing.download_progress import (
+    DownloadQueueEvent,
+    DownloadStatus,
     DownloadTaskState,
-    add_active_download,
-    build_download_logs_html,
-    get_ticker_active_download,
-    init_download_state,
-    mark_download_completed,
-    render_download_progress_area,
-    update_download_progress,
+    LogEntry,
+    run_download_stream_worker,
+    apply_download_completion,
+    apply_download_progress,
+    create_download_task,
 )
 from dayu.web.streamlit.components.watchlist import WatchlistItem
 
 _DATAFRAME_ROW_HEIGHT_PX = 35
 _DATAFRAME_HEADER_HEIGHT_PX = 38
+_DOWNLOAD_DEFAULT_FORM_TYPES: tuple[str, ...] = ("10-K", "10-Q")
+_DOWNLOAD_DEFAULT_LOOKBACK_YEARS = 3
+_DOWNLOAD_RUNTIME_STATE_KEY = "download_runtime_handles"
+_DOWNLOAD_EVENT_BATCH_LIMIT = 128
+_DOWNLOAD_POLL_INTERVAL_SECONDS = 1.0
+_STATUS_CONTAINER_MAX_LOG_ITEMS = 120
+_FragmentDecoratorFactory = Callable[
+    ...,
+    Callable[[Callable[[], None]], Callable[[], None]],
+]
+_DOWNLOAD_LOG_LEVEL_LABELS: dict[str, str] = {
+    "error": "ERROR",
+    "warning": "WARN",
+    "info": "INFO",
+}
 
 
 class _FilingInfo(TypedDict):
@@ -60,98 +71,392 @@ class _FilingInfo(TypedDict):
     status: str
 
 
-def _get_filing_list(workspace_root: Path, ticker: str) -> list[_FilingInfo]:
+@dataclass(frozen=True)
+class _DownloadFormValues:
+    """下载表单值对象。"""
+
+    form_types: tuple[str, ...]
+    start_date: datetime.date | None
+    end_date: datetime.date | None
+    overwrite: bool
+
+
+class _DownloadRuntimeState(TypedDict):
+    """下载任务运行时句柄。"""
+
+    worker: threading.Thread
+    event_queue: Queue[DownloadQueueEvent]
+    done: bool
+
+
+def init_download_state() -> None:
+    """初始化下载任务会话状态。"""
+
+    if "active_downloads" not in st.session_state:
+        st.session_state.active_downloads = {}
+
+
+def _clear_ticker_download_history(ticker: str) -> None:
+    """清理指定 ticker 的历史下载任务状态。"""
+
+    init_download_state()
+    active_downloads = cast(dict[str, DownloadTaskState], st.session_state.active_downloads)
+    stale_session_ids: list[str] = []
+    for existing_session_id, task in active_downloads.items():
+        if task.ticker == ticker:
+            stale_session_ids.append(existing_session_id)
+
+    for stale_session_id in stale_session_ids:
+        del st.session_state.active_downloads[stale_session_id]
+
+
+def add_active_download(session_id: str, ticker: str) -> DownloadTaskState:
+    """添加新的活跃下载任务。"""
+
+    init_download_state()
+    _clear_ticker_download_history(ticker)
+    task = create_download_task(session_id=session_id, ticker=ticker)
+    st.session_state.active_downloads[session_id] = task
+    return task
+
+
+def _load_download_task(session_id: str) -> DownloadTaskState | None:
+    """按会话 ID 读取下载任务状态。"""
+
+    init_download_state()
+    task = st.session_state.active_downloads.get(session_id)
+    if not isinstance(task, DownloadTaskState):
+        return None
+    return task
+
+
+def _save_download_task(task: DownloadTaskState) -> None:
+    """保存下载任务状态到会话存储。"""
+
+    init_download_state()
+    st.session_state.active_downloads[task.session_id] = task
+
+
+def update_download_progress(session_id: str, payload: DownloadProgressPayload) -> None:
+    """按进度事件更新下载任务状态。"""
+
+    task = _load_download_task(session_id)
+    if task is None:
+        return
+    apply_download_progress(task, payload)
+    _save_download_task(task)
+
+
+def mark_download_completed(session_id: str, success: bool = True, message: str = "") -> None:
+    """标记下载任务终态。"""
+
+    task = _load_download_task(session_id)
+    if task is None:
+        return
+    apply_download_completion(task, success=success, message=message)
+    _save_download_task(task)
+
+
+def _format_log_time(timestamp: str) -> str:
+    """格式化日志时间为时分秒。"""
+
+    if not timestamp:
+        return ""
+    try:
+        return datetime.datetime.fromisoformat(timestamp).strftime("%H:%M:%S")
+    except ValueError:
+        return timestamp
+
+
+def _build_download_log_lines(logs: list[LogEntry]) -> list[str]:
+    """构建下载日志的文本行。
+
+    参数:
+        logs: 下载任务日志列表。
+
+    返回值:
+        仅包含最近日志的文本行列表，每一行均已按 ``[时间] 级别 消息`` 格式化。
+
+    异常:
+        无。
+    """
+
+    recent_logs = logs[-_STATUS_CONTAINER_MAX_LOG_ITEMS:]
+    formatted_lines: list[str] = []
+    for log in recent_logs:
+        time_text = _format_log_time(log.get("timestamp", ""))
+        message_text = log.get("message", "")
+        level = log.get("level", "info")
+        level_text = _DOWNLOAD_LOG_LEVEL_LABELS.get(level, _DOWNLOAD_LOG_LEVEL_LABELS["info"])
+        if time_text:
+            formatted_lines.append(f"[{time_text}] {level_text} {message_text}")
+        else:
+            formatted_lines.append(f"{level_text} {message_text}")
+    return formatted_lines
+
+
+def _render_download_logs(status_container: DeltaGenerator, logs: list[LogEntry]) -> None:
+    """使用 Streamlit 原生组件渲染下载日志。
+
+    参数:
+        status_container: 下载状态卡片容器。
+        logs: 下载任务日志列表。
+
+    返回值:
+        无。
+
+    异常:
+        无。
+    """
+
+    status_container.caption("最近日志")
+    log_lines = _build_download_log_lines(logs)
+    if not log_lines:
+        status_container.caption("暂无日志")
+        return
+    status_container.code("\n".join(log_lines))
+
+
+def _get_download_runtime_state() -> dict[str, _DownloadRuntimeState]:
+    """获取下载运行时状态字典。"""
+
+    runtime_state = st.session_state.get(_DOWNLOAD_RUNTIME_STATE_KEY)
+    if isinstance(runtime_state, dict):
+        return cast(dict[str, _DownloadRuntimeState], runtime_state)
+    initialized_state: dict[str, _DownloadRuntimeState] = {}
+    st.session_state[_DOWNLOAD_RUNTIME_STATE_KEY] = initialized_state
+    return initialized_state
+
+
+def start_download_worker(submission: FinsSubmission) -> None:
+    """启动下载后台线程并登记运行时句柄。"""
+
+    runtime_state = _get_download_runtime_state()
+    event_queue: Queue[DownloadQueueEvent] = Queue()
+    worker = threading.Thread(
+        target=run_download_stream_worker,
+        args=(submission, event_queue),
+        daemon=True,
+    )
+    runtime_state[submission.session_id] = {
+        "worker": worker,
+        "event_queue": event_queue,
+        "done": False,
+    }
+    worker.start()
+
+
+def _dispatch_download_runtime_event(session_id: str, event: DownloadQueueEvent) -> None:
+    """把后台队列事件映射为前端会话状态更新。"""
+
+    if event.kind == "progress" and event.payload is not None:
+        update_download_progress(session_id, event.payload)
+        return
+    if event.kind == "result":
+        mark_download_completed(session_id, success=True, message=event.message or "下载完成")
+        return
+    if event.kind == "error":
+        mark_download_completed(session_id, success=False, message=event.message or "下载任务执行异常")
+
+
+def _finalize_download_runtime_entry(session_id: str, runtime: _DownloadRuntimeState) -> None:
+    """清理已结束下载任务的运行时句柄。"""
+
+    worker = runtime["worker"]
+    if worker.is_alive():
+        worker.join(timeout=0.1)
+    else:
+        worker.join()
+
+    task_state = st.session_state.active_downloads.get(session_id)
+    if not isinstance(task_state, DownloadTaskState):
+        return
+    if task_state.status not in (DownloadStatus.COMPLETED, DownloadStatus.FAILED):
+        mark_download_completed(
+            session_id,
+            success=False,
+            message="下载任务提前结束，请稍后重试",
+        )
+
+
+def poll_download_runtime_events() -> None:
+    """轮询后台队列并将事件落入会话状态。"""
+
+    runtime_state = _get_download_runtime_state()
+    for session_id in list(runtime_state.keys()):
+        runtime = runtime_state[session_id]
+        processed_count = 0
+        while processed_count < _DOWNLOAD_EVENT_BATCH_LIMIT:
+            try:
+                event = runtime["event_queue"].get_nowait()
+            except Empty:
+                break
+            processed_count += 1
+            if event.kind == "done":
+                runtime["done"] = True
+                continue
+            _dispatch_download_runtime_event(session_id, event)
+
+        worker = runtime["worker"]
+        should_cleanup = (runtime["done"] or (not worker.is_alive())) and runtime["event_queue"].empty()
+        if should_cleanup:
+            _finalize_download_runtime_entry(session_id, runtime)
+            del runtime_state[session_id]
+
+
+def _collect_ticker_download_tasks(ticker: str) -> list[DownloadTaskState]:
+    """收集当前股票的下载任务状态。"""
+
+    active_downloads = cast(dict[str, DownloadTaskState], st.session_state.active_downloads)
+    task_states: list[DownloadTaskState] = []
+    for task in active_downloads.values():
+        if task.ticker == ticker:
+            task_states.append(task)
+    task_states.sort(key=lambda item: item.started_at or "", reverse=True)
+    return task_states
+
+
+def _has_running_download_task(ticker: str) -> bool:
+    """判断当前股票是否存在运行中的下载任务。"""
+
+    task_states = _collect_ticker_download_tasks(ticker)
+    for task_state in task_states:
+        if task_state.status not in (DownloadStatus.COMPLETED, DownloadStatus.FAILED):
+            return True
+    return False
+
+
+def _get_latest_ticker_download_task(ticker: str) -> DownloadTaskState | None:
+    """获取当前股票最新的一条下载任务状态。"""
+
+    task_states = _collect_ticker_download_tasks(ticker)
+    if not task_states:
+        return None
+    return task_states[0]
+
+
+def _render_single_download_task(task_state: DownloadTaskState) -> None:
+    """渲染单个下载任务状态卡片。"""
+
+    label = "下载进行中..."
+    state = "running"
+    if task_state.status == DownloadStatus.COMPLETED:
+        label = "✅ 下载完成"
+        state = "complete"
+    elif task_state.status == DownloadStatus.FAILED:
+        label = "❌ 下载失败"
+        state = "error"
+
+    status_container = st.status(label, state=state, expanded=True)
+    status_container.progress(task_state.progress / 100.0)
+    _render_download_logs(status_container, task_state.logs)
+    if task_state.status == DownloadStatus.COMPLETED:
+        st.success(
+            f"已成功下载 {task_state.downloaded_filing_count} 个财报，"
+            f"{task_state.downloaded_count} 个文件"
+        )
+    if task_state.errors:
+        for error in task_state.errors:
+            st.warning(error)
+
+
+def _render_download_tasks_for_ticker(ticker: str) -> None:
+    """渲染当前股票的下载任务区域。"""
+
+    latest_task = _get_latest_ticker_download_task(ticker)
+    if latest_task is None:
+        return
+    st.markdown("### 下载进度")
+    _render_single_download_task(latest_task)
+
+
+def render_download_status_with_optional_polling(ticker: str) -> None:
+    """渲染下载状态并在支持 fragment 时启用自动轮询。"""
+
+    if not _has_running_download_task(ticker):
+        _render_download_tasks_for_ticker(ticker)
+        return
+
+    typed_fragment_factory = _resolve_fragment_factory()
+    if typed_fragment_factory is not None:
+
+        @typed_fragment_factory(run_every=_DOWNLOAD_POLL_INTERVAL_SECONDS)
+        def _download_status_fragment() -> None:
+            poll_download_runtime_events()
+            _render_download_tasks_for_ticker(ticker)
+
+        _download_status_fragment()
+        return
+
+    poll_download_runtime_events()
+    _render_download_tasks_for_ticker(ticker)
+
+
+def _resolve_fragment_factory() -> _FragmentDecoratorFactory | None:
+    """解析并返回 Streamlit fragment 装饰器工厂。"""
+
+    try:
+        fragment_factory = st.fragment
+    except AttributeError:
+        return None
+    if callable(fragment_factory):
+        return cast(_FragmentDecoratorFactory, fragment_factory)
+    return None
+
+
+def _get_filing_list(
+    workspace_root: Path,
+    ticker: str,
+    fins_service: FinsServiceProtocol | None,
+) -> list[_FilingInfo]:
     """获取指定股票的已下载财报列表。
 
     参数:
         workspace_root: 工作区根目录。
         ticker: 股票代码。
+        fins_service: 财报服务协议实例；为 None 时返回空列表。
 
     返回值:
         财报文件信息列表。
     """
 
+    if fins_service is None:
+        return []
+
     try:
-        # 使用 FsSourceDocumentRepository 获取文档列表
-        source_repo = FsSourceDocumentRepository(
-            workspace_root,
-            create_directories=False,
-        )
-
-        # 获取 filing 文档 ID 列表
-        document_ids = source_repo.list_source_document_ids(ticker, SourceKind.FILING)
-
-        filings = []
-        for doc_id in document_ids:
-            try:
-                # 读取文档元数据
-                meta = source_repo.get_source_meta(ticker, doc_id, SourceKind.FILING)
-                file_name, file_path = _resolve_primary_file_display(
-                    source_repo=source_repo,
-                    workspace_root=workspace_root,
-                    ticker=ticker,
-                    document_id=doc_id,
-                )
-
-                # 提取关键信息
-                filing_info: _FilingInfo = {
-                    "document_id": doc_id,
-                    "file_name": file_name,
-                    "file_path": file_path,
-                    "form_type": meta.get("form_type", "未知"),
-                    "filing_date": meta.get("filing_date", "未知"),
-                    "report_date": meta.get("report_date", "未知"),
-                    "fiscal_year": meta.get("fiscal_year", "未知"),
-                    "fiscal_period": meta.get("fiscal_period", "未知"),
-                    "status": "可用" if not meta.get("is_deleted", False) else "已删除",
-                }
-                filings.append(filing_info)
-            except (OSError, ValueError, KeyError):
-                # 读取单个文档失败时跳过，不阻塞整个列表
-                continue
-
-        # 按申报日期排序（最新的在前）
-        filings.sort(key=lambda x: x.get("filing_date", ""), reverse=True)
-        return filings
-
-    except (OSError, ValueError) as e:
+        summaries = fins_service.list_filings(ticker)
+    except (OSError, ValueError):
         st.error("读取财报列表失败，请确认工作区路径是否正确")
         return []
 
+    resolved_root = workspace_root.resolve()
+    filings: list[_FilingInfo] = []
+    for s in summaries:
+        # 计算主文件展示名称与相对路径
+        file_name = s.primary_file_name or "未知"
+        if s.primary_file_path:
+            try:
+                relative_path = Path(s.primary_file_path).relative_to(resolved_root)
+                file_path = str(relative_path)
+            except ValueError:
+                file_path = s.primary_file_path
+        else:
+            file_path = "未知"
 
-def _resolve_primary_file_display(
-    source_repo: FsSourceDocumentRepository,
-    workspace_root: Path,
-    ticker: str,
-    document_id: str,
-) -> tuple[str, str]:
-    """解析源文档主文件的展示名称、路径。
+        filing_info: _FilingInfo = {
+            "document_id": s.document_id,
+            "file_name": file_name,
+            "file_path": file_path,
+            "form_type": s.form_type or "未知",
+            "filing_date": s.filing_date or "未知",
+            "report_date": s.report_date or "未知",
+            "fiscal_year": str(s.fiscal_year) if s.fiscal_year is not None else "未知",
+            "fiscal_period": s.fiscal_period or "未知",
+            "status": "可用" if not s.is_deleted else "已删除",
+        }
+        filings.append(filing_info)
 
-    参数:
-        source_repo: 源文档仓储实例。
-        workspace_root: 工作区根目录。
-        ticker: 股票代码。
-        document_id: 文档 ID。
-
-    返回值:
-        二元组 `(文件名, 文件路径展示值)`。
-
-    异常:
-        无：解析失败时返回“未知”占位，不向调用方抛出异常。
-    """
-
-    try:
-        primary_source = source_repo.get_primary_source(ticker, document_id, SourceKind.FILING)
-        materialized_path = primary_source.materialize().resolve()
-        filename = materialized_path.name or "未知"
-        try:
-            relative_path = materialized_path.relative_to(workspace_root.resolve())
-            file_path = str(relative_path)
-        except ValueError:
-            file_path = str(materialized_path)
-        return filename, file_path
-    except (OSError, ValueError):
-        return "未知", "未知"
+    return filings
 
 
 def _render_filing_table(filings: list[_FilingInfo]) -> None:
@@ -171,14 +476,14 @@ def _render_filing_table(filings: list[_FilingInfo]) -> None:
     df_data = []
     for f in filings:
         df_data.append({
-            "文件名称": f.get("file_name", "未知"),
-            "文件路径": f.get("file_path", "未知"),
-            "表单类型": f.get("form_type", "未知"),
-            "申报日期": f.get("filing_date", "未知"),
-            "报告日期": f.get("report_date", "未知"),
-            "财年": f.get("fiscal_year", "未知"),
-            "财期": f.get("fiscal_period", "未知"),
-            "状态": f.get("status", "未知"),
+            "文件名称": f["file_name"],
+            "文件路径": f["file_path"],
+            "表单类型": f["form_type"],
+            "申报日期": f["filing_date"],
+            "报告日期": f["report_date"],
+            "财年": f["fiscal_year"],
+            "财期": f["fiscal_period"],
+            "状态": f["status"],
         })
 
     if df_data:
@@ -327,177 +632,168 @@ def _render_download_settings(
     _init_download_settings_state(selected_stock)
     ticker = selected_stock.ticker
 
-    # 检查是否有正在进行的下载任务
-    existing_task = get_ticker_active_download(ticker)
-    if existing_task:
-        # 如果有正在进行的任务，显示提示，不提供新的下载设置
-        st.info(f"📥 已有正在进行的下载任务（会话 ID: {existing_task.session_id}），请等待完成")
-        return
-
     if fins_service is None:
         st.warning("财报服务不可用，无法进行下载操作")
         return
 
     with st.container():
         st.markdown("**📥 下载财报设置**")
-
-        form_types = st.multiselect(
-            "选择要下载的财报表单类型",
-            options=FORM_PROFILES.keys(),
-            default=["10-K", "10-Q"],
-            help="选择需要下载的 SEC 表单类型",
-            key=f"download_form_types_{ticker}",
+        form_values = _render_download_form_fields(ticker)
+        _render_download_submit_button(
+            ticker=ticker,
+            form_values=form_values,
+            fins_service=fins_service,
         )
 
-        today = datetime.date.today()
-        three_years_ago = today.replace(year=today.year - 3)
 
-        col1, col2 = st.columns(2)
-        with col1:
-            start_date = st.date_input(
-                "开始日期",
-                value=three_years_ago,
-                help="可选，默认三年前，留空表示不限制开始日期",
-                key=f"download_start_date_{ticker}",
-            )
-        with col2:
-            end_date = st.date_input(
-                "结束日期",
-                value=today,
-                help="可选，默认今天，留空表示不限制结束日期",
-                key=f"download_end_date_{ticker}",
-            )
+def _render_download_form_fields(ticker: str) -> _DownloadFormValues:
+    """渲染下载设置表单字段并返回用户输入。
 
-        overwrite = st.checkbox(
-            "覆盖已有文件",
-            value=False,
-            help="如果文件已存在，是否重新下载",
-            key=f"download_overwrite_{ticker}",
+    参数:
+        ticker: 当前股票代码。
+
+    返回值:
+        下载表单值对象。
+
+    异常:
+        无。
+    """
+
+    selected_form_types = st.multiselect(
+        "选择要下载的财报表单类型",
+        options=FORM_PROFILES.keys(),
+        default=list(_DOWNLOAD_DEFAULT_FORM_TYPES),
+        help="选择需要下载的 SEC 表单类型",
+        key=f"download_form_types_{ticker}",
+    )
+
+    today = datetime.date.today()
+    default_start_date = today.replace(year=today.year - _DOWNLOAD_DEFAULT_LOOKBACK_YEARS)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input(
+            "开始日期",
+            value=default_start_date,
+            help="可选，默认三年前，留空表示不限制开始日期",
+            key=f"download_start_date_{ticker}",
+        )
+    with col2:
+        end_date = st.date_input(
+            "结束日期",
+            value=today,
+            help="可选，默认今天，留空表示不限制结束日期",
+            key=f"download_end_date_{ticker}",
         )
 
-        if st.button("开始下载", width="stretch", type="primary", key=f"download_start_btn_{ticker}"):
-            if not form_types:
-                st.error("请至少选择一种表单类型")
-            else:
-                start_date_str = start_date.isoformat() if start_date else None
-                end_date_str = end_date.isoformat() if end_date else None
+    overwrite = st.checkbox(
+        "覆盖已有文件",
+        value=False,
+        help="如果文件已存在，是否重新下载",
+        key=f"download_overwrite_{ticker}",
+    )
+    return _DownloadFormValues(
+        form_types=tuple(selected_form_types),
+        start_date=start_date,
+        end_date=end_date,
+        overwrite=overwrite,
+    )
 
-                submission = None
-                try:
-                    submission = fins_service.submit(
-                        FinsSubmitRequest(
-                            command=FinsCommand(
-                                name=FinsCommandName.DOWNLOAD,
-                                payload=DownloadCommandPayload(
-                                    ticker=ticker,
-                                    form_type=tuple(form_types),
-                                    start_date=start_date_str,
-                                    end_date=end_date_str,
-                                    overwrite=overwrite,
-                                ),
-                                stream=True,
-                            ),
-                        ),
-                    )
 
-                    # 添加到活跃下载任务，并隐藏下载设置
-                    add_active_download(submission.session_id, ticker)
+def _render_download_submit_button(
+    ticker: str,
+    form_values: _DownloadFormValues,
+    fins_service: FinsServiceProtocol,
+) -> None:
+    """渲染下载提交按钮并在点击后执行提交。
 
-                    # 创建状态容器用于实时更新
-                    status_container = st.status("开始下载财报...", expanded=True)
-                    progress_bar = status_container.progress(0.0)
-                    status_logs_placeholder = status_container.empty()
+    参数:
+        ticker: 当前股票代码。
+        form_values: 下载表单值对象。
+        fins_service: 财报服务实例。
 
-                    task_data = st.session_state.active_downloads.get(submission.session_id, {})
-                    current_task = DownloadTaskState.from_dict(task_data)
-                    status_logs_placeholder.markdown(
-                        build_download_logs_html(current_task.logs),
-                        unsafe_allow_html=True,
-                    )
+    返回值:
+        无。
 
-                    # 消费流式事件
-                    async def consume_stream():
-                        execution = submission.execution
-                        if not isinstance(execution, AsyncIterator):
-                            # 同步结果，直接标记完成
-                            mark_download_completed(
-                                submission.session_id,
-                                success=True,
-                                message="下载完成（同步模式）",
-                            )
-                            return
+    异常:
+        无。
+    """
 
-                        async for event in execution:
-                            if not isinstance(event, FinsEvent):
-                                continue
+    if not st.button("开始下载", width="stretch", type="primary", key=f"download_start_btn_{ticker}"):
+        return
+    if not form_values.form_types:
+        st.error("请至少选择一种表单类型")
+        return
+    _submit_download_task(ticker=ticker, form_values=form_values, fins_service=fins_service)
 
-                            if event.type == FinsEventType.PROGRESS:
-                                payload = event.payload
-                                if isinstance(payload, DownloadProgressPayload):
-                                    # 更新任务状态
-                                    update_download_progress(submission.session_id, payload)
-                                    # 获取最新状态
-                                    task_data = st.session_state.active_downloads.get(
-                                        submission.session_id, {}
-                                    )
-                                    current_task = DownloadTaskState.from_dict(task_data)
 
-                                    # 更新 UI
-                                    progress_bar.progress(current_task.progress / 100.0)
-                                    status_logs_placeholder.markdown(
-                                        build_download_logs_html(current_task.logs),
-                                        unsafe_allow_html=True,
-                                    )
+def _submit_download_task(
+    ticker: str,
+    form_values: _DownloadFormValues,
+    fins_service: FinsServiceProtocol,
+) -> None:
+    """提交下载任务并启动后台事件流 worker。
 
-                            elif event.type == FinsEventType.RESULT:
-                                # 最终结果，任务完成
-                                mark_download_completed(
-                                    submission.session_id, success=True, message="下载完成"
-                                )
-                                break
+    参数:
+        ticker: 当前股票代码。
+        form_values: 下载表单值对象。
+        fins_service: 财报服务实例。
 
-                    # 安全运行异步协程，兼容已有事件循环的运行环境
-                    try:
-                        asyncio.get_running_loop()
-                    except RuntimeError:
-                        asyncio.run(consume_stream())
-                    else:
-                        with ThreadPoolExecutor(max_workers=1) as pool:
-                            pool.submit(asyncio.run, consume_stream()).result()
+    返回值:
+        无。
 
-                    # 获取最终状态
-                    final_task_data = st.session_state.active_downloads.get(
-                        submission.session_id, {}
-                    )
-                    final_task = DownloadTaskState.from_dict(final_task_data)
-                    status_logs_placeholder.markdown(
-                        build_download_logs_html(final_task.logs),
-                        unsafe_allow_html=True,
-                    )
+    异常:
+        无。
+    """
 
-                    # 更新最终状态
-                    if final_task.status == DOWNLOAD_STATUS_COMPLETED:
-                        status_container.update(
-                            label="✅ 下载完成！", state="complete", expanded=True
-                        )
-                        st.success(f"已成功下载 {final_task.downloaded_filing_count} 个财报，{final_task.downloaded_count} 个文件")
+    submission: FinsSubmission | None = None
+    try:
+        submission = fins_service.submit(_build_download_submit_request(ticker, form_values))
+        add_active_download(submission.session_id, ticker)
+        start_download_worker(submission)
+        st.success("下载任务已提交，后台执行中。")
+        st.rerun()
+    except Exception:
+        st.error("下载任务失败，请稍后重试")
+        if submission is not None:
+            mark_download_completed(
+                submission.session_id,
+                success=False,
+                message="下载任务执行异常",
+            )
 
-                        # 显示错误汇总（如果有）
-                        if final_task.errors:
-                            st.warning(f"下载过程中出现 {len(final_task.errors)} 个错误")
 
-                    elif final_task.status == DOWNLOAD_STATUS_FAILED:
-                        status_container.update(label="❌ 下载失败", state="error", expanded=True)
-                        if final_task.errors:
-                            for error in final_task.errors:
-                                st.error(error)
+def _build_download_submit_request(ticker: str, form_values: _DownloadFormValues) -> FinsSubmitRequest:
+    """构建下载命令提交请求对象。
 
-                except Exception:
-                    st.error("下载任务失败，请稍后重试")
-                    if submission is not None:
-                        mark_download_completed(
-                            submission.session_id, success=False, message="下载任务执行异常"
-                        )
+    参数:
+        ticker: 当前股票代码。
+        form_values: 下载表单值对象。
+
+    返回值:
+        可直接提交的下载请求对象。
+
+    异常:
+        无。
+    """
+
+    start_date_str = form_values.start_date.isoformat() if form_values.start_date else None
+    end_date_str = form_values.end_date.isoformat() if form_values.end_date else None
+    return FinsSubmitRequest(
+        command=FinsCommand(
+            name=FinsCommandName.DOWNLOAD,
+            payload=DownloadCommandPayload(
+                ticker=ticker,
+                form_type=form_values.form_types,
+                start_date=start_date_str,
+                end_date=end_date_str,
+                overwrite=form_values.overwrite,
+            ),
+            stream=True,
+        ),
+    )
+
+
 
 def render_filing_tab(
     selected_stock: WatchlistItem,
@@ -521,6 +817,7 @@ def render_filing_tab(
     # 初始化下载状态
     init_download_state()
     _init_download_settings_state(selected_stock)
+    poll_download_runtime_events()
 
     title_column, actions_column = st.columns([4, 1], gap="small", vertical_alignment="center")
     with title_column:
@@ -529,15 +826,13 @@ def render_filing_tab(
         if fins_service is not None:
             _render_filing_header_actions(selected_stock)
 
-    # 展示活跃下载任务进度（如果有）
-    render_download_progress_area(selected_stock.ticker)
-
     # 下载设置区域（展开/收起）
     if _should_show_download_settings_for_ticker(selected_stock.ticker):
         _render_download_settings(selected_stock, fins_service)
+    render_download_status_with_optional_polling(selected_stock.ticker)
 
     # 获取已下载财报列表
-    filings = _get_filing_list(workspace_root, selected_stock.ticker)
+    filings = _get_filing_list(workspace_root, selected_stock.ticker, fins_service)
 
     st.markdown("---")
 
@@ -546,5 +841,5 @@ def render_filing_tab(
         _render_filing_table(filings)
     else:
         if not _should_show_download_settings_for_ticker(selected_stock.ticker):
-            
             st.info("暂无财报，请点击「下载财报」按钮获取")
+

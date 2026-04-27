@@ -7,6 +7,7 @@ from typing import AsyncIterator, Callable
 
 from dayu.contracts.fins import FinsCommand, FinsEvent, FinsEventType, FinsResult
 from dayu.contracts.session import SessionRecord, SessionSource
+from dayu.fins.domain.document_models import FilingSummary
 from dayu.fins.service_runtime import FinsRuntimeProtocol
 from dayu.contracts.host_execution import HostedRunContext, HostedRunSpec
 from dayu.host.protocols import HostedExecutionGatewayProtocol
@@ -156,6 +157,21 @@ class FinsService(FinsServiceProtocol):
         if not isinstance(result, FinsResult):
             raise TypeError(f"同步执行应返回 FinsResult，实际得到 {type(result).__name__}")
         return result
+
+    def list_filings(self, ticker: str) -> list[FilingSummary]:
+        """查询指定股票的已下载财报列表。
+
+        Args:
+            ticker: 股票代码。
+
+        Returns:
+            财报源文件摘要列表。
+
+        Raises:
+            无。
+        """
+
+        return self.fins_runtime.list_source_filings(ticker)
 
     async def _execute_command_stream(
         self,

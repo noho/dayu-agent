@@ -29,6 +29,7 @@ from dayu.contracts.fins import (
     UploadMaterialCommandPayload,
 )
 from dayu.contracts.session import SessionSource
+from dayu.fins.domain.document_models import FilingSummary
 from dayu.fins.service_runtime import DefaultFinsRuntime
 from dayu.host.host import Host
 from dayu.host.host_execution import HostedRunContext, HostedRunSpec
@@ -80,6 +81,12 @@ class _FakeFinsRuntime:
 
         normalized = ticker.strip().upper()
         return {"ticker": normalized, "company_name": normalized}
+
+    def list_source_filings(self, ticker: str) -> list[FilingSummary]:
+        """返回测试用财报摘要列表。"""
+
+        del ticker
+        return []
 
     def execute(
         self,
@@ -211,6 +218,67 @@ class _CancelledStreamExecutor:
             yield event
 
 
+
+@pytest.mark.unit
+def test_list_filings_delegates_to_runtime() -> None:
+    """验证 list_filings 会透传到 runtime.list_source_filings。"""
+
+    class _RecordingFinsRuntime(_FakeFinsRuntime):
+        """记录 list_source_filings 调用。"""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.received_ticker: str | None = None
+
+        def list_source_filings(self, ticker: str) -> list[FilingSummary]:
+            self.received_ticker = ticker
+            return [
+                FilingSummary(
+                    document_id="fil_0001",
+                    form_type="10-K",
+                    filing_date="2024-01-31",
+                    report_date="2023-12-31",
+                    fiscal_year=2023,
+                    fiscal_period="FY",
+                    is_deleted=False,
+                    primary_file_name="primary.pdf",
+                    primary_file_path="/ws/AAPL/filings/fil_0001/primary.pdf",
+                ),
+            ]
+
+    host = Host(
+        executor=StubHostExecutor(),  # type: ignore[arg-type]
+        session_registry=StubSessionRegistry(),  # type: ignore[arg-type]
+        run_registry=object(),  # type: ignore[arg-type]
+    )
+    runtime = _RecordingFinsRuntime()
+    service = FinsService(
+        host=host,
+        fins_runtime=runtime,
+    )
+    result = service.list_filings("AAPL")
+
+    assert runtime.received_ticker == "AAPL"
+    assert len(result) == 1
+    assert result[0].document_id == "fil_0001"
+    assert result[0].form_type == "10-K"
+
+
+@pytest.mark.unit
+def test_list_filings_empty_ticker_returns_empty() -> None:
+    """验证 list_filings 对空 ticker 返回空列表。"""
+
+    host = Host(
+        executor=StubHostExecutor(),  # type: ignore[arg-type]
+        session_registry=StubSessionRegistry(),  # type: ignore[arg-type]
+        run_registry=object(),  # type: ignore[arg-type]
+    )
+    service = FinsService(
+        host=host,
+        fins_runtime=_FakeFinsRuntime(),
+    )
+    result = service.list_filings("")
+    assert result == []
 @pytest.mark.unit
 def test_execute_sync_download() -> None:
     """验证同步路径会透传到 runtime。"""
