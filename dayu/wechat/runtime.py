@@ -211,6 +211,26 @@ class NoOpChatService:
         del scene_name
         raise RuntimeError("login 模式不应调用 ChatService")
 
+    def cleanup_stale_pending_turns(
+        self,
+        *,
+        session_id: str | None = None,
+    ) -> list[str]:
+        """login 命令不需要清理 pending turn。
+
+        Args:
+            session_id: 未使用。
+
+        Returns:
+            空列表。
+
+        Raises:
+            无。
+        """
+
+        del session_id
+        return []
+
 
 class NoOpReplyDeliveryService:
     """仅供 login 命令使用的占位 ReplyDeliveryService。"""

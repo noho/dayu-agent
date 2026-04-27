@@ -153,6 +153,26 @@ class ChatService(ChatServiceProtocol):
             )
         ]
 
+    def cleanup_stale_pending_turns(
+        self,
+        *,
+        session_id: str | None = None,
+    ) -> list[str]:
+        """清理关联 run 已终态、且按调和规则应删除的 pending turn。
+
+        Args:
+            session_id: 若提供，仅扫描该 session 下的 pending turn；
+                为 ``None`` 时全量扫描。
+
+        Returns:
+            被清理的 pending_turn_id 列表。
+
+        Raises:
+            无。
+        """
+
+        return self.host.cleanup_stale_pending_turns(session_id=session_id)
+
     def _session_coordinator(self) -> ServiceSessionCoordinator:
         """构造当前服务使用的会话协调器。"""
 

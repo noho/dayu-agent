@@ -128,7 +128,7 @@ def run_interactive_command(args: argparse.Namespace) -> int:
                 f"label 对应的旧对话已关闭，现将基于同名 label 创建新对话: {label}",
                 module=MODULE,
             )
-        Log.info("进入交互模式... 按 Ctrl+D 发送 prompt... 按 Enter 换行... 按两次 Ctrl+D 退出...", module=MODULE)
+        Log.info("进入交互模式，按Ctrl+D发送prompt / 按Ctrl+C中断prompt / 按Enter换行 / 按两次Ctrl+D退出", module=MODULE)
         if label is not None:
             Log.info(
                 (

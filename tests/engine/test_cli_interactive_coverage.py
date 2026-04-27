@@ -1070,6 +1070,16 @@ def _build_event_session(*event_sequences: list[StreamEvent], fail_with: Excepti
             del session_id, scene_name
             return []
 
+        def cleanup_stale_pending_turns(
+            self,
+            *,
+            session_id: str | None = None,
+        ) -> list[str]:
+            """返回空的清理结果。"""
+
+            del session_id
+            return []
+
     _FakeSession.call_log = call_log
     _FakeSession.request_log = request_log
     return _FakeSession
@@ -2271,3 +2281,97 @@ def test_prompt_registers_run_id_with_observer_for_cooperative_cancel(
     assert result == 0
     assert observer.registered == ["run-prompt-1"]
     assert observer.cleared == ["run-prompt-1"]
+
+
+@pytest.mark.unit
+def test_interactive_cleans_up_pending_turn_on_keyboard_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证 Ctrl+C 中断后 interactive 调用 cleanup_stale_pending_turns 清理残留 pending turn。
+
+    Args:
+        monkeypatch: pytest monkeypatch 工具。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    cleanup_calls = 0
+    cleanup_session_ids: list[str | None] = []
+
+    class _Session:
+        """测试用聊天会话，记录 cleanup 调用次数。"""
+
+        async def submit_turn(self, request: ChatTurnRequest) -> ChatTurnSubmission:
+            async def _stream() -> AsyncIterator[AppEvent]:
+                yield AppEvent(
+                    type=AppEventType.FINAL_ANSWER,
+                    payload={"content": "ok", "degraded": False},
+                    meta={},
+                )
+
+            return ChatTurnSubmission(
+                session_id=request.session_id or "test-session",
+                event_stream=_stream(),
+            )
+
+        def cleanup_stale_pending_turns(
+            self,
+            *,
+            session_id: str | None = None,
+        ) -> list[str]:
+            nonlocal cleanup_calls
+            cleanup_calls += 1
+            cleanup_session_ids.append(session_id)
+            return []
+
+        def list_resumable_pending_turns(
+            self,
+            *,
+            session_id: str | None = None,
+            scene_name: str | None = None,
+        ) -> list[ChatPendingTurnView]:
+            return []
+
+    call_count = 0
+    original_run_chat_turn_stream = app_interactive._run_chat_turn_stream
+
+    def _mock_run_chat_turn_stream(*args: Any, **kwargs: Any) -> tuple[str, str]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise KeyboardInterrupt()
+        return original_run_chat_turn_stream(*args, **kwargs)
+
+    monkeypatch.setattr(app_interactive, "_run_chat_turn_stream", _mock_run_chat_turn_stream)
+    monkeypatch.setattr(app_interactive.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(builtins, "print", lambda *args, **kwargs: None)
+
+    class DummyKeyBindings:
+        def add(self, *_args: Any, **_kwargs: Any) -> Any:
+            def _decorator(func: Any) -> Any:
+                return func
+            return _decorator
+
+    prompts = iter(["第一轮问题", "第二轮问题", None, None])
+
+    class DummySession:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def prompt(self, _text: str) -> str | None:
+            return next(prompts)
+
+    monkeypatch.setitem(sys.modules, "prompt_toolkit", SimpleNamespace(PromptSession=DummySession))
+    monkeypatch.setitem(sys.modules, "prompt_toolkit.key_binding", SimpleNamespace(KeyBindings=DummyKeyBindings))
+
+    app_interactive.interactive(cast(Any, _Session()), session_id="test-session")
+
+    assert cleanup_calls == 1, f"cleanup_stale_pending_turns 应被调用 1 次，实际 {cleanup_calls} 次"
+    assert cleanup_session_ids == ["test-session"], (
+        f"cleanup_stale_pending_turns 应收到 session_id='test-session'，实际 {cleanup_session_ids}"
+    )
+    assert call_count == 2, f"_run_chat_turn_stream 应被调用 2 次（第一次中断，第二次成功），实际 {call_count} 次"

@@ -922,9 +922,11 @@ def interactive(
             )
         except KeyboardInterrupt:
             # 信号路径已通过 ProcessShutdownCoordinator 触发协作式取消，
-            # 这里只负责把控制权交还 REPL；事件流中的 CANCELLED 事件已由
-            # _consume_chat_turn_stream 处理，run_id 也已 clear。
+            # 但 KeyboardInterrupt 同步中断了 asyncio.run()，executor 的
+            # except CancelledError cleanup 不会执行，pending turn 会残留。
+            # 在此主动清理，确保下一轮对话可以正常发起。
             print("\n[interrupted]")
+            agent_session.cleanup_stale_pending_turns(session_id=session_id)
             continue
         except ValueError as exc:
             Log.error(str(exc), module=MODULE)

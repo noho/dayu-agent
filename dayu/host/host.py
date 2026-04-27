@@ -967,16 +967,21 @@ class Host:
             )
         return stale_ids
 
-    def cleanup_stale_pending_turns(self) -> list[str]:
+    def cleanup_stale_pending_turns(
+        self,
+        *,
+        session_id: str | None = None,
+    ) -> list[str]:
         """清理关联 run 已终态、且按调和规则应删除的 pending turn。
 
         进程崩溃或启动调和路径上，``_reconcile_pending_turn_after_terminal_run``
         可能未完成调用；而 Host 的 orphan run cleanup 只收敛 run 本身，
         pending turn 会残留至下一次 resume 流程发现。本方法在启动/维护阶段
-        主动扫描所有 pending turn，按终态 run 调和规则做兜底清理。
+        主动扫描 pending turn，按终态 run 调和规则做兜底清理。
 
         Args:
-            无。
+            session_id: 若提供，仅扫描该 session 下的 pending turn；
+                为 ``None`` 时全量扫描。
 
         Returns:
             被清理的 pending_turn_id 列表。
@@ -986,7 +991,7 @@ class Host:
         """
 
         try:
-            records = self._pending_turn_store.list_pending_turns()
+            records = self._pending_turn_store.list_pending_turns(session_id=session_id)
         except Exception as exc:  # pragma: no cover - 防御 DB 异常
             Log.warn(f"Host 扫描 pending turn 失败: {exc}", module=MODULE)
             return []

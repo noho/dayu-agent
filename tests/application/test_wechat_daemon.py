@@ -172,6 +172,16 @@ class _FakeChatService:
         del session_id, scene_name
         return []
 
+    def cleanup_stale_pending_turns(
+        self,
+        *,
+        session_id: str | None = None,
+    ) -> list[str]:
+        """测试桩不需要清理 pending turn。"""
+
+        del session_id
+        return []
+
 
 def _filtered_flag(metadata: Mapping[str, object]) -> bool | None:
     """安全读取交付上下文中的 filtered 标记。"""
