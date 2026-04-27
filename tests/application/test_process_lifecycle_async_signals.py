@@ -41,17 +41,18 @@ def test_install_async_signal_handlers_calls_full_sequence_then_on_signal() -> N
         captured["cancelled_snapshot"] = list(host.cancelled_runs)
         captured["shutdown_calls"] = host.shutdown_calls
 
-    async def _scenario() -> None:
+    async def _scenario() -> list[signal.Signals]:
         loop = asyncio.get_running_loop()
         with install_async_signal_handlers(loop, coordinator, on_signal=_on_signal) as installed:
-            assert installed
+            if not installed:
+                return installed
             # 直接调度 SIGINT handler 触发同步流程。
             loop.call_soon(loop._signal_handlers[signal.SIGINT]._run)  # type: ignore[attr-defined]
             await asyncio.sleep(0)
+            return list(installed)
 
-    try:
-        asyncio.run(_scenario())
-    except (NotImplementedError, RuntimeError):
+    installed_signals = asyncio.run(_scenario())
+    if not installed_signals:
         pytest.skip("当前平台不支持 add_signal_handler")
 
     assert captured.get("name") == "SIGINT"
@@ -72,12 +73,10 @@ def test_install_async_signal_handlers_returns_installed_signals_and_unregisters
         with install_async_signal_handlers(
             loop, coordinator, on_signal=lambda _name, _code: None
         ) as installed:
-            captured = list(installed)
-        return captured
+            return list(installed)
 
-    try:
-        installed_signals = asyncio.run(_scenario())
-    except (NotImplementedError, RuntimeError):
+    installed_signals = asyncio.run(_scenario())
+    if not installed_signals:
         pytest.skip("当前平台不支持 add_signal_handler")
 
     assert signal.SIGINT in installed_signals or signal.SIGTERM in installed_signals
