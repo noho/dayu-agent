@@ -7,11 +7,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from dayu.contracts.run import RunCancelReason, RunState
 from dayu.host.host import Host
+from dayu.host.host_store import HostStore
 from dayu.host.reply_outbox_store import InMemoryReplyOutboxStore
+from dayu.host.run_registry import SQLiteRunRegistry
 from tests.application.conftest import (
     StubHostExecutor,
     StubRunRegistry,
@@ -71,3 +75,29 @@ def test_shutdown_skips_runs_already_in_terminal_state() -> None:
     final_record = registry.get_run(record.run_id)
     assert final_record is not None
     assert final_record.state == RunState.SUCCEEDED
+
+
+@pytest.mark.unit
+def test_mark_cancelled_is_idempotent(tmp_path: Path) -> None:
+    """``mark_cancelled`` 对已处于 CANCELLED 状态的 run 应幂等返回。
+
+    回归覆盖：executor 取消路径与 signal handler shutdown 路径竞态时，
+    两条路径都可能对同一个 run 调 ``mark_cancelled``；
+    若非幂等，第二次调用会触发「cancelled -> cancelled」非法状态转换。
+    """
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    registry = SQLiteRunRegistry(host_store)
+
+    record = registry.register_run(service_type="write")
+    registry.start_run(record.run_id)
+
+    # 第一次 mark_cancelled：RUNNING -> CANCELLED，应成功。
+    first = registry.mark_cancelled(record.run_id, cancel_reason=RunCancelReason.USER_CANCELLED)
+    assert first.state == RunState.CANCELLED
+
+    # 第二次 mark_cancelled：CANCELLED -> CANCELLED，应幂等返回而非抛 ValueError。
+    second = registry.mark_cancelled(record.run_id, cancel_reason=RunCancelReason.USER_CANCELLED)
+    assert second.state == RunState.CANCELLED
+    assert second.run_id == record.run_id
