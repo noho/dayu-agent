@@ -263,19 +263,27 @@ push 后 PR 自动更新，CI 重新跑。最终 merge 时用 **Squash and merge
    - `full-platform-validation macos-x64`
 
 4. `workflow_dispatch`
-   - 默认只跑：
+   - 始终跑：
      - `pr-required min-compat`
      - `pr-required lock-smoke`
    - `run_extended_integration=true`
      - 补跑 `extended integration`
-   - `run_full_matrix=true`
-     - 补跑：
-       - `full-platform-validation linux-x64`
-       - `full-platform-validation windows-x64`
-       - `full-platform-validation macos-arm64`
-   - `include_macos_x64=true`
-     - 在 `run_full_matrix=true` 基础上额外补跑：
-       - `full-platform-validation macos-x64`
+   - `platforms`（多选，不选则全部运行）
+     - `linux-x64` → `full-platform-validation linux-x64`
+     - `windows-x64` → `full-platform-validation windows-x64`
+     - `macos-arm64` → `full-platform-validation macos-arm64`
+     - `macos-x64` → `full-platform-validation macos-x64`
+   - 手动触发示例：
+     ```bash
+     # 只跑 macOS x64
+     gh workflow run ci-mainline.yml -f platforms=macos-x64
+
+     # 跑多个平台
+     gh workflow run ci-mainline.yml -f platforms=macos-x64 -f platforms=linux-x64
+
+     # 不选 platforms → 全部运行
+     gh workflow run ci-mainline.yml
+     ```
 
 5. `release`
    - `Release Offline Bundles`

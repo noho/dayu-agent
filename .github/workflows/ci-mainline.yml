@@ -10,16 +10,16 @@ on:
         required: false
         default: false
         type: boolean
-      run_full_matrix:
-        description: "是否运行完整平台验证"
+      platforms:
+        description: "选择要运行的平台验证（不选则全部运行）"
         required: false
-        default: false
-        type: boolean
-      include_macos_x64:
-        description: "完整平台验证时是否额外运行 macos-x64"
-        required: false
-        default: false
-        type: boolean
+        type: choice
+        multiple: true
+        options:
+          - linux-x64
+          - windows-x64
+          - macos-arm64
+          - macos-x64
   schedule:
     - cron: "0 2 * * *"
 
@@ -119,7 +119,7 @@ jobs:
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' &&
-        inputs.run_full_matrix == true)
+        (contains(inputs.platforms, 'linux-x64') || inputs.platforms == ''))
 
     steps:
       - name: Checkout
@@ -155,7 +155,7 @@ jobs:
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' &&
-        inputs.run_full_matrix == true)
+        (contains(inputs.platforms, 'windows-x64') || inputs.platforms == ''))
 
     steps:
       - name: Checkout
@@ -192,7 +192,7 @@ jobs:
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' &&
-        inputs.run_full_matrix == true)
+        (contains(inputs.platforms, 'macos-arm64') || inputs.platforms == ''))
 
     steps:
       - name: Checkout
@@ -230,8 +230,7 @@ jobs:
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' &&
-        inputs.run_full_matrix == true &&
-        inputs.include_macos_x64 == true)
+        (contains(inputs.platforms, 'macos-x64') || inputs.platforms == ''))
 
     steps:
       - name: Checkout
