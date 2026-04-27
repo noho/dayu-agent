@@ -887,7 +887,7 @@ def interactive(
             show_thinking=show_thinking,
         )
     except KeyboardInterrupt:
-        print("\n[interrupted]")
+        print("\n用户取消")
 
     while True:
         try:
@@ -925,7 +925,7 @@ def interactive(
             # 但 KeyboardInterrupt 同步中断了 asyncio.run()，executor 的
             # except CancelledError cleanup 不会执行，pending turn 会残留。
             # 在此主动清理，确保下一轮对话可以正常发起。
-            print("\n[interrupted]")
+            print("\n用户取消")
             agent_session.cleanup_stale_pending_turns(session_id=session_id)
             continue
         except ValueError as exc:
@@ -973,7 +973,7 @@ def prompt(
             run_lifecycle_observer=run_lifecycle_observer,
         )
     except KeyboardInterrupt:
-        print("\n[interrupted]")
+        print("\n用户取消")
         return EXIT_CODE_SIGINT
     except ValueError as exc:
         Log.error(str(exc), module=MODULE)
@@ -1030,7 +1030,7 @@ def conversation_prompt(
         )
         _print_label_hint_box(label)
     except KeyboardInterrupt:
-        print("\n[interrupted]")
+        print("\n用户取消")
         return EXIT_CODE_SIGINT
     except ValueError as exc:
         Log.error(str(exc), module=MODULE)

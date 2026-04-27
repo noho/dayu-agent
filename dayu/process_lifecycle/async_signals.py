@@ -1,8 +1,9 @@
 """async daemon 的优雅退出 signal handler。
 
 使用 ``loop.add_signal_handler`` 在 asyncio 事件循环里注册 SIGINT/SIGTERM 处理器：
-- 收到信号后先协作式取消 active run、再强收敛 owner run，最后回调 ``on_signal``
-  让调用方决定如何打断主任务（通常是 ``run_task.cancel()``）。
+- 收到信号后调 ``coordinator.settle_active_runs`` 同步收敛已登记的 run
+  （cancel + 推终态 + 清理 pending turn），最后回调 ``on_signal`` 让调用方决定
+  如何打断主任务（通常是 ``run_task.cancel()``）。
 - 上下文退出时移除 handler，保证多次进入循环互不影响。
 """
 
@@ -64,11 +65,11 @@ def install_async_signal_handlers(
     installed: list[signal.Signals] = []
 
     def _handler(os_signal: signal.Signals) -> None:
-        """signal handler：协作式取消 + 强收敛 + 通知 daemon 退出。"""
+        """signal handler：settle 当前活跃 run + 通知 daemon 退出。"""
 
         name = os_signal.name
         trigger = f"signal:{name}"
-        coordinator.run_full_shutdown_sequence(trigger=trigger)
+        coordinator.settle_active_runs(trigger=trigger)
         try:
             on_signal(name, map_signal_to_exit_code(name))
         except Exception as exc:

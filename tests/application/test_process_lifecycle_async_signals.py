@@ -11,22 +11,23 @@ from dayu.process_lifecycle import ProcessShutdownCoordinator, install_async_sig
 
 
 class _FakeHost:
+    """实现 ``cancel_run_and_settle`` 的伪 Host。"""
+
     def __init__(self) -> None:
-        self.cancelled_runs: list[str] = []
-        self.shutdown_calls: int = 0
+        self.settled_runs: list[str] = []
+        self.owner_active_run_ids: list[str] = []
 
-    def cancel_run(self, run_id: str) -> bool:
-        self.cancelled_runs.append(run_id)
-        return True
+    def cancel_run_and_settle(self, run_id: str) -> object:
+        self.settled_runs.append(run_id)
+        return None
 
-    def shutdown_active_runs_for_owner(self) -> list[str]:
-        self.shutdown_calls += 1
-        return []
+    def list_active_run_ids_for_current_owner(self) -> list[str]:
+        return list(self.owner_active_run_ids)
 
 
 @pytest.mark.unit
-def test_install_async_signal_handlers_calls_full_sequence_then_on_signal() -> None:
-    """asyncio handler 执行顺序：协作式取消 → 强收敛 → on_signal 回调。"""
+def test_install_async_signal_handlers_settles_then_calls_on_signal() -> None:
+    """asyncio handler 执行顺序：settle_active_runs → on_signal 回调。"""
 
     host = _FakeHost()
     coordinator = ProcessShutdownCoordinator(host=host)
@@ -37,16 +38,13 @@ def test_install_async_signal_handlers_calls_full_sequence_then_on_signal() -> N
     def _on_signal(name: str, exit_code: int) -> None:
         captured["name"] = name
         captured["exit_code"] = exit_code
-        # 此时强收敛与协作式取消都已执行。
-        captured["cancelled_snapshot"] = list(host.cancelled_runs)
-        captured["shutdown_calls"] = host.shutdown_calls
+        captured["settled_snapshot"] = list(host.settled_runs)
 
     async def _scenario() -> list[signal.Signals]:
         loop = asyncio.get_running_loop()
         with install_async_signal_handlers(loop, coordinator, on_signal=_on_signal) as installed:
             if not installed:
                 return installed
-            # 直接调度 SIGINT handler 触发同步流程。
             loop.call_soon(loop._signal_handlers[signal.SIGINT]._run)  # type: ignore[attr-defined]
             await asyncio.sleep(0)
             return list(installed)
@@ -57,8 +55,7 @@ def test_install_async_signal_handlers_calls_full_sequence_then_on_signal() -> N
 
     assert captured.get("name") == "SIGINT"
     assert captured.get("exit_code") == 130
-    assert captured.get("cancelled_snapshot") == ["run-1"]
-    assert captured.get("shutdown_calls") == 1
+    assert captured.get("settled_snapshot") == ["run-1"]
 
 
 @pytest.mark.unit

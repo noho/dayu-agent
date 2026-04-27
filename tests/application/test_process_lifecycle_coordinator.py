@@ -8,26 +8,21 @@ from dayu.process_lifecycle import ProcessShutdownCoordinator
 
 
 class _FakeHost:
-    """同时实现 cancel_run 与 shutdown_active_runs_for_owner 的伪 Host。"""
+    """实现 ``cancel_run_and_settle`` 的伪 Host。"""
 
     def __init__(self) -> None:
-        self.cancelled_runs: list[str] = []
-        self.shutdown_calls: int = 0
-        self.shutdown_returns: list[str] = []
-        self.cancel_raises: dict[str, Exception] = {}
-        self.shutdown_raises: Exception | None = None
+        self.settled_runs: list[str] = []
+        self.settle_raises: dict[str, Exception] = {}
+        self.owner_active_run_ids: list[str] = []
 
-    def cancel_run(self, run_id: str) -> bool:
-        if run_id in self.cancel_raises:
-            raise self.cancel_raises[run_id]
-        self.cancelled_runs.append(run_id)
-        return True
+    def cancel_run_and_settle(self, run_id: str) -> object:
+        if run_id in self.settle_raises:
+            raise self.settle_raises[run_id]
+        self.settled_runs.append(run_id)
+        return None
 
-    def shutdown_active_runs_for_owner(self) -> list[str]:
-        self.shutdown_calls += 1
-        if self.shutdown_raises is not None:
-            raise self.shutdown_raises
-        return list(self.shutdown_returns)
+    def list_active_run_ids_for_current_owner(self) -> list[str]:
+        return list(self.owner_active_run_ids)
 
 
 @pytest.mark.unit
@@ -48,63 +43,111 @@ def test_register_and_clear_active_run_is_idempotent() -> None:
 
 
 @pytest.mark.unit
-def test_cancel_active_runs_invokes_host_for_each_registered_run() -> None:
-    """cancel_active_runs 会调用 host.cancel_run；异常仅记录日志。"""
+def test_settle_active_runs_invokes_settle_hook_for_each_registered_run() -> None:
+    """settle_active_runs 对每个已登记 run 调 cancel_run_and_settle。"""
 
     host = _FakeHost()
-    host.cancel_raises["run-bad"] = RuntimeError("boom")
+    coordinator = ProcessShutdownCoordinator(host=host)
+    coordinator.register_active_run("run-1")
+    coordinator.register_active_run("run-2")
+
+    settled = coordinator.settle_active_runs(trigger="test")
+
+    assert settled == ["run-1", "run-2"]
+    assert host.settled_runs == ["run-1", "run-2"]
+
+
+@pytest.mark.unit
+def test_settle_active_runs_swallows_hook_exception() -> None:
+    """单个 run 的 settle 异常不影响其他 run，也不向外抛。"""
+
+    host = _FakeHost()
+    host.settle_raises["run-bad"] = RuntimeError("boom")
     coordinator = ProcessShutdownCoordinator(host=host)
     coordinator.register_active_run("run-1")
     coordinator.register_active_run("run-bad")
     coordinator.register_active_run("run-2")
 
-    cancelled = coordinator.cancel_active_runs(trigger="test")
+    settled = coordinator.settle_active_runs(trigger="test")
 
-    assert cancelled == ["run-1", "run-2"]
-    assert host.cancelled_runs == ["run-1", "run-2"]
+    assert settled == ["run-1", "run-2"]
+    assert host.settled_runs == ["run-1", "run-2"]
 
 
 @pytest.mark.unit
-def test_shutdown_owner_runs_is_idempotent() -> None:
-    """重复调用 shutdown_owner_runs 只会真正生效一次。"""
+def test_settle_active_runs_is_safe_on_empty_state() -> None:
+    """无登记时 settle 直接返回空列表。"""
 
     host = _FakeHost()
-    host.shutdown_returns = ["run-1"]
     coordinator = ProcessShutdownCoordinator(host=host)
 
-    first = coordinator.shutdown_owner_runs(trigger="first")
-    second = coordinator.shutdown_owner_runs(trigger="second")
-
-    assert first == ["run-1"]
-    assert second == []
-    assert host.shutdown_calls == 1
+    assert coordinator.settle_active_runs(trigger="empty") == []
+    assert host.settled_runs == []
 
 
 @pytest.mark.unit
-def test_run_full_shutdown_sequence_runs_cancel_then_shutdown() -> None:
-    """完整退出流程先协作式取消再强收敛。"""
+def test_settle_active_runs_can_be_called_multiple_times() -> None:
+    """多次调用 settle 安全；底层 host.cancel_run_and_settle 自身幂等。"""
 
     host = _FakeHost()
-    host.shutdown_returns = ["run-2"]
     coordinator = ProcessShutdownCoordinator(host=host)
     coordinator.register_active_run("run-1")
 
-    cancelled, owner_cancelled = coordinator.run_full_shutdown_sequence(trigger="signal:SIGINT")
+    first = coordinator.settle_active_runs(trigger="first")
+    second = coordinator.settle_active_runs(trigger="second")
 
-    assert cancelled == ["run-1"]
-    assert owner_cancelled == ["run-2"]
-    assert host.cancelled_runs == ["run-1"]
-    assert host.shutdown_calls == 1
+    assert first == ["run-1"]
+    assert second == ["run-1"]
+    assert host.settled_runs == ["run-1", "run-1"]
 
 
 @pytest.mark.unit
-def test_shutdown_owner_runs_swallows_host_exception() -> None:
-    """host.shutdown_active_runs_for_owner 异常不向外抛。"""
+def test_settle_active_runs_falls_back_to_owner_active_runs() -> None:
+    """observer 未登记时，owner-pid 兜底扫描必须命中并 settle。
+
+    覆盖：fins 直接调 host.run_operation_*、interactive/prompt 在事件流首帧
+    ``meta["run_id"]`` 之前的窗口期；这两类场景下 ``_active_runs`` 为空，
+    必须由 ``Host.list_active_run_ids_for_current_owner()`` 兜底。
+    """
 
     host = _FakeHost()
-    host.shutdown_raises = RuntimeError("boom")
+    host.owner_active_run_ids = ["run-orphan-1", "run-orphan-2"]
     coordinator = ProcessShutdownCoordinator(host=host)
 
-    assert coordinator.shutdown_owner_runs(trigger="x") == []
-    # 即使首次失败也仍然算作已触发，避免循环重试。
-    assert coordinator.shutdown_owner_runs(trigger="y") == []
+    settled = coordinator.settle_active_runs(trigger="signal:SIGINT")
+
+    assert settled == ["run-orphan-1", "run-orphan-2"]
+    assert host.settled_runs == ["run-orphan-1", "run-orphan-2"]
+
+
+@pytest.mark.unit
+def test_settle_active_runs_merges_observer_and_owner_lists_without_duplication() -> None:
+    """observer 登记 + owner 兜底合并去重，observer 路径优先保留顺序。"""
+
+    host = _FakeHost()
+    host.owner_active_run_ids = ["run-observer", "run-orphan"]
+    coordinator = ProcessShutdownCoordinator(host=host)
+    coordinator.register_active_run("run-observer")
+
+    settled = coordinator.settle_active_runs(trigger="signal:SIGINT")
+
+    assert settled == ["run-observer", "run-orphan"]
+    assert host.settled_runs == ["run-observer", "run-orphan"]
+
+
+@pytest.mark.unit
+def test_settle_active_runs_swallows_owner_scan_failure() -> None:
+    """owner 兜底扫描抛异常时，已登记 run 仍要继续 settle。"""
+
+    class _ScanFailureHost(_FakeHost):
+        def list_active_run_ids_for_current_owner(self) -> list[str]:
+            raise RuntimeError("registry unreachable")
+
+    host = _ScanFailureHost()
+    coordinator = ProcessShutdownCoordinator(host=host)
+    coordinator.register_active_run("run-observer")
+
+    settled = coordinator.settle_active_runs(trigger="signal:SIGINT")
+
+    assert settled == ["run-observer"]
+    assert host.settled_runs == ["run-observer"]

@@ -15,9 +15,9 @@ from dayu.process_lifecycle.exit_codes import EXIT_CODE_SIGINT
 def test_main_returns_exit_code_sigint_on_keyboard_interrupt() -> None:
     """非交互式命令触发 KeyboardInterrupt 时，``main`` 应收口并返回退出码 130。
 
-    信号 handler 在 ``run_full_shutdown_sequence`` 后 raise KeyboardInterrupt，
-    非交互式命令（fins / download / write）的调用栈不捕获该异常，
-    ``main`` 顶层统一收口避免 traceback 泄漏到 stderr。
+    sync 信号 handler 在 ``settle_active_runs`` 后 raise KeyboardInterrupt 或
+    SystemExit；该测试覆盖在信号 handler 注册之前 KeyboardInterrupt 已抛到
+    顶层、由 ``main`` 顶层兜底返回 EXIT_CODE_SIGINT 的边缘场景。
     """
 
     def _fake_parse() -> argparse.Namespace:

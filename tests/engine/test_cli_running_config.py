@@ -2628,6 +2628,15 @@ def test_prepare_cli_host_dependencies_runs_unified_startup_recovery(
 ) -> None:
     """CLI Host 依赖装配应委托 Service 共享启动 API。"""
 
+    class _FakeHost:
+        """满足 CLI shutdown coordinator 最小协议的 Host 桩。"""
+
+        def cancel_run_and_settle(self, run_id: str) -> object:
+            return run_id
+
+        def list_active_run_ids_for_current_owner(self) -> list[str]:
+            return []
+
     workspace_config = WorkspaceConfig(
         workspace_dir=tmp_path,
         output_dir=tmp_path / "output",
@@ -2637,7 +2646,7 @@ def test_prepare_cli_host_dependencies_runs_unified_startup_recovery(
     fake_default_execution_options = cast(ResolvedExecutionOptions, object())
     fake_scene_preparer = cast(SceneExecutionAcceptancePreparer, object())
     fake_fins_runtime = cast(DefaultFinsRuntime, object())
-    fake_host = cast(Host, object())
+    fake_host = cast(Host, _FakeHost())
     captured_call: dict[str, object] = {}
 
     monkeypatch.setattr(
@@ -2657,6 +2666,7 @@ def test_prepare_cli_host_dependencies_runs_unified_startup_recovery(
     prepared = _prepare_cli_host_dependencies(
         workspace_config=workspace_config,
         execution_options=None,
+        interactive=False,
     )
 
     assert prepared == (

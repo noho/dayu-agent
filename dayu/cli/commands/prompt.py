@@ -97,6 +97,7 @@ def _run_one_shot_prompt_command(
     ) = _prepare_cli_host_dependencies(
         workspace_config=paths_config,
         execution_options=execution_options,
+        interactive=False,
     )
     service = _build_prompt_service(
         host=host,
@@ -163,6 +164,7 @@ def _run_labeled_prompt_command(
             ) = _prepare_cli_host_dependencies(
                 workspace_config=paths_config,
                 execution_options=execution_options,
+                interactive=False,
             )
             service = _build_chat_service(
                 host=host,

@@ -91,6 +91,7 @@ def run_interactive_command(args: argparse.Namespace) -> int:
         ) = _prepare_cli_host_dependencies(
             workspace_config=paths_config,
             execution_options=execution_options,
+            interactive=True,
         )
         service = _build_chat_service(
             host=host,

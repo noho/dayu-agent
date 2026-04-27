@@ -463,22 +463,24 @@ Host 启动时按固定顺序执行：
 
 顺序是契约：先把"谁还活着"定死（run 吸收），再依此判定其它子系统里谁可以动（permit / outbox / pending turn）。
 
-运行期另有 `shutdown_active_runs_for_owner`：由 `dayu.process_lifecycle` 协调器在 SIGINT/SIGTERM/SIGHUP/atexit 钩子里调用，把本进程持有的 active run 落到 `UNSETTLED`，尽量减少需要下次启动 orphan 扫描才发现的遗留。
+运行期另有 `cancel_run_and_settle(run_id)`：由 `dayu.process_lifecycle` 协调器在 SIGINT/SIGTERM/SIGHUP/atexit 钩子里调用，把指定 active run 同步推到 `CANCELLED` 终态并清理关联 pending turn，避免 sync CLI Ctrl+C 后 run 卡 `running`、pending turn 卡 `prepared_by_host` 阻塞下一轮 prompt。
 
 ### 12.1 进程级优雅退出契约
 
-`dayu.process_lifecycle.ProcessShutdownCoordinator` 是 sync CLI、async daemon、atexit 钩子共用的真源，负责把 Host 的两条退出能力按固定顺序串成一个闭环：
-
-1. **协作式取消** —— `cancel_active_runs()` 遍历当前进程登记的 active run，调用 `Host.cancel_run(run_id)`；`cancellation_bridge` 轮询 SQLite cancel intent 触发 `HostedRunContext.cancellation_token`，让 write/interactive 在下个 checkpoint 协作退出。
-2. **强收敛** —— `shutdown_owner_runs()` 调 `Host.shutdown_active_runs_for_owner()` 把仍未自然退出的 run 落到 `UNSETTLED`，幂等，重复调用只执行一次。
-3. **进程退出** —— sync handler 抛 `KeyboardInterrupt`；async handler 触发 daemon 自行 `task.cancel()` + `aclose()`。
+`dayu.process_lifecycle.ProcessShutdownCoordinator` 是 sync CLI、async daemon、atexit 钩子共用的真源，对外只暴露一个动作 `settle_active_runs(*, trigger)`：先取 observer 通过 `register_active_run` 登记的 run，再合并 `Host.list_active_run_ids_for_current_owner()` 兜底扫描当前 owner_pid 持有的活跃 run（覆盖 `fins` 直接同步执行、interactive/prompt 首事件前窗口等未登记路径），去重后逐个调 `Host.cancel_run_and_settle(run_id)`（同步 cancel + mark_cancelled + cleanup_stale_pending_turns，全部幂等）。该原子操作让退出路径从"协作式取消 + 强收敛"两步幂等补丁简化为一次同步收敛，同时保留 owner 级兜底能力。
 
 | 触发源 | 覆盖端 | 入口 |
 |---|---|---|
-| SIGINT / `KeyboardInterrupt` | sync CLI（`dayu interactive` / `dayu write` 等） | `install_sync_signal_handlers` |
-| SIGTERM / SIGHUP / atexit | 所有 sync CLI 入口 | `register_process_shutdown_hook` |
+| SIGINT / SIGTERM / SIGHUP / atexit | sync CLI（`dayu interactive` / `dayu prompt` / `dayu write` / `dayu fins` / `dayu download` / `dayu conv`） | `register_process_shutdown_hook(coordinator, *, interactive)` |
 | SIGINT / SIGTERM | async daemon（`dayu wechat run`） | `install_async_signal_handlers` |
 | SIGKILL / 断电 | 不可拦截 | 由下次启动 `cleanup_orphan_runs` 收敛（稳定例外） |
+
+`register_process_shutdown_hook` 由 `_prepare_cli_host_dependencies` 在装配阶段一次性注册，按命令类型参数化 SIGINT 行为：
+
+- `interactive=True`：SIGINT 触发 `settle_active_runs` 后抛 `KeyboardInterrupt`（不还原 `SIG_DFL`，REPL 多次 Ctrl+C 都能命中自定义 handler，第二次只取消新 run）。
+- `interactive=False`：SIGINT 触发 `settle_active_runs` 后抛 `SystemExit(EXIT_CODE_SIGINT)` 直接退出，不依赖业务层 try/except 兜底。
+- SIGTERM/SIGHUP：一律 settle + 还原 `SIG_DFL` + `SystemExit(map_signal_to_exit_code(name))`。
+- atexit：`settle_active_runs(trigger="atexit")` 兜底覆盖未走信号路径的退出。
 
 退出码由 `dayu.process_lifecycle.exit_codes` 统一：`EXIT_CODE_SIGINT=130`、`EXIT_CODE_SIGTERM=0`，禁止散落魔法数。
 

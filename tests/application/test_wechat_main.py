@@ -288,10 +288,10 @@ def test_run_daemon_with_graceful_shutdown_maps_signal_to_exit_code(
             captured["closed"] = True
 
     class _FakeHost:
-        def cancel_run(self, _run_id: str) -> bool:
-            return False
+        def cancel_run_and_settle(self, _run_id: str) -> object:
+            return None
 
-        def shutdown_active_runs_for_owner(self) -> list[str]:
+        def list_active_run_ids_for_current_owner(self) -> list[str]:
             return []
 
     import contextlib as _contextlib

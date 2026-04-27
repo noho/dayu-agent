@@ -114,6 +114,7 @@ def run_write_command(args: argparse.Namespace) -> int:
     ) = _prepare_cli_host_dependencies(
         workspace_config=paths_config,
         execution_options=execution_options,
+        interactive=False,
     )
     running_config = RunningConfig.from_resolved(default_execution_options)
     write_cli_config = setup_write_config(args, paths_config, running_config)

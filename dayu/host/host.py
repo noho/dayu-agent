@@ -15,7 +15,7 @@ from dayu.contracts.events import PublishedRunEventProtocol
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.contracts.infrastructure import ModelCatalogProtocol, WorkspaceResourcesProtocol
 from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, ReplyOutboxSubmitRequest
-from dayu.contracts.run import ACTIVE_STATES, RunCancelReason, RunRecord, RunState
+from dayu.contracts.run import RunCancelReason, RunRecord, RunState
 from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 from dayu.execution.options import ResolvedExecutionOptions
 from dayu.engine.tool_registry import ToolRegistry
@@ -709,7 +709,11 @@ class Host:
         self._executor.discard_replay_state(handle)
 
     def cancel_run(self, run_id: str) -> RunRecord:
-        """请求取消指定 run。
+        """请求取消指定 run（异步语义）。
+
+        仅写入 ``cancel_requested_at``，让 cancel-bridge / executor 在协作边界感知，
+        不会推进 run 状态。需要"请求取消并立即推进到 CANCELLED 终态"的同步语义时，
+        使用 ``cancel_run_and_settle``。
 
         Args:
             run_id: 目标 run_id。
@@ -727,6 +731,54 @@ class Host:
             raise KeyError(f"run 不存在: {run_id}")
         Log.debug(f"Host 请求取消 run: run_id={run_id}", module=MODULE)
         return run
+
+    def cancel_run_and_settle(self, run_id: str) -> RunRecord:
+        """同步取消 run 并推进到 CANCELLED 终态，同时清理关联 pending turn。
+
+        sync CLI 在 SIGINT/SIGTERM/atexit 路径上调用：``KeyboardInterrupt`` 会同步
+        打断 ``asyncio.run()``，event loop 立即终止，cancel-bridge / executor 收尾
+        路径没机会跑完；若仅调 ``cancel_run`` 写 ``cancel_requested_at``，run 会
+        卡在 ``running``、关联 pending turn 卡在 ``prepared_by_host``，下一轮新
+        prompt 会命中"活跃 pending turn 不能写入不同 user_text"。本方法做同步
+        合成保证 run 与 pending turn 都收敛到稳定状态。
+
+        步骤：
+            1. ``request_cancel`` 写 ``cancel_requested_at``（跨进程可见）；
+            2. ``mark_cancelled`` 同步推到 CANCELLED（已幂等，重复调用安全）；
+            3. ``cleanup_stale_pending_turns(session_id=run.session_id)`` 复用
+               既有调和规则清理同 session 的 stale pending turn。
+
+        Args:
+            run_id: 目标 run_id。
+
+        Returns:
+            收敛后的 RunRecord。
+
+        Raises:
+            KeyError: run 不存在时抛出。
+        """
+
+        self._run_registry.request_cancel(
+            run_id,
+            cancel_reason=RunCancelReason.USER_CANCELLED,
+        )
+        latest = self._run_registry.get_run(run_id)
+        if latest is None:
+            raise KeyError(f"run 不存在: {run_id}")
+        if latest.state == RunState.CANCELLED:
+            settled = latest
+        else:
+            settled = self._run_registry.mark_cancelled(
+                run_id,
+                cancel_reason=RunCancelReason.USER_CANCELLED,
+            )
+        if settled.session_id is not None:
+            self.cleanup_stale_pending_turns(session_id=settled.session_id)
+        Log.debug(
+            f"Host 同步取消并收敛 run: run_id={run_id}, session_id={settled.session_id or ''}",
+            module=MODULE,
+        )
+        return settled
 
     def cancel_session(self, session_id: str) -> tuple[SessionRecord, list[str]]:
         """关闭 session 并取消其下所有活跃 run。
@@ -822,6 +874,33 @@ class Host:
 
         return self._run_registry.list_active_runs()
 
+    def list_active_run_ids_for_current_owner(self) -> list[str]:
+        """列出当前进程持有的全部活跃 run_id。
+
+        sync CLI 在 SIGINT/SIGTERM/atexit 路径上需要兜底覆盖那些尚未通过事件流
+        登记到 ``ProcessShutdownCoordinator`` 的 run，例如：
+        - ``FinsService`` 直接调 ``run_operation_sync`` / ``run_operation_stream``，
+          没有 observer 登记路径；
+        - interactive / prompt 在事件流首帧 ``meta["run_id"]`` 之前，run 已经被
+          ``HostExecutor.run_agent_stream`` ``register_run + start_run`` 但尚未
+          被 observer 登记。
+
+        Args:
+            无。
+
+        Returns:
+            owner_pid 等于当前进程 PID 的活跃 run_id 列表。
+
+        Raises:
+            无。
+        """
+
+        owner_pid = os.getpid()
+        return [
+            record.run_id
+            for record in self._run_registry.list_active_runs_for_owner(owner_pid)
+        ]
+
     def cancel_session_runs(self, session_id: str) -> list[str]:
         """取消指定 session 下全部活跃 run。
 
@@ -865,61 +944,6 @@ class Host:
         if orphan_ids:
             Log.info(f"Host 清理 orphan runs: run_ids={','.join(orphan_ids)}", module=MODULE)
         return orphan_ids
-
-    def shutdown_active_runs_for_owner(self) -> list[str]:
-        """把当前进程拥有的全部活跃 run 主动收敛为 CANCELLED。
-
-        用于 CLI / daemon 进程收到 SIGTERM / atexit 时 best-effort 收口，
-        避免留下活跃 run 被后续启动 cleanup 误判为 UNSETTLED orphan。
-
-        Args:
-            无。
-
-        Returns:
-            被收敛的 run_id 列表。
-
-        Raises:
-            无。失败仅 Log.warn。
-        """
-
-        try:
-            active_runs = self._run_registry.list_active_runs_for_owner(os.getpid())
-        except Exception as exc:  # pragma: no cover - 防御 DB 异常
-            Log.warn(f"Host 收集 owner 活跃 run 失败: {exc}", module=MODULE)
-            return []
-
-        cancelled_ids: list[str] = []
-        for run in active_runs:
-            try:
-                # request_cancel 返回 False 有两种语义：
-                # 1) run 已被收敛为终态（state ∉ ACTIVE_STATES）；
-                # 2) run 仍 ACTIVE 但 cancel_requested_at 已被先前调用写入。
-                # 仅(1)能跳过 mark_cancelled；(2)仍需主动收敛，否则 owner 进程退出后
-                # 该 run 会被下次启动 cleanup 误判为 UNSETTLED orphan。
-                # 因此用 get_run 复核当前实际 state，而不是依赖 request_cancel 返回值。
-                self._run_registry.request_cancel(
-                    run.run_id,
-                    cancel_reason=RunCancelReason.USER_CANCELLED,
-                )
-                latest = self._run_registry.get_run(run.run_id)
-                if latest is None or latest.state not in ACTIVE_STATES:
-                    continue
-                self._run_registry.mark_cancelled(
-                    run.run_id,
-                    cancel_reason=RunCancelReason.USER_CANCELLED,
-                )
-                cancelled_ids.append(run.run_id)
-            except Exception as exc:
-                Log.warn(
-                    f"Host 收敛 owner 活跃 run 失败: run_id={run.run_id}, error={exc}",
-                    module=MODULE,
-                )
-        if cancelled_ids:
-            Log.debug(
-                f"Host 进程退出前收敛活跃 runs: count={len(cancelled_ids)}, run_ids={','.join(cancelled_ids)}",
-                module=MODULE,
-            )
-        return cancelled_ids
 
     def cleanup_stale_permits(self) -> list[str]:
         """清理 owner_pid 已死亡的并发 permit。

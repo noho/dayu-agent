@@ -70,11 +70,9 @@ def main() -> int:
         return 0
     except KeyboardInterrupt:
         # 信号 handler（sync_signals._handler）在收到 SIGINT 时先执行
-        # `coordinator.run_full_shutdown_sequence`（cooperative cancel + 强收敛），
-        # 再 raise KeyboardInterrupt 打断阻塞调用（asyncio.run /
-        # concurrent.futures.wait）。
-        # 非交互式命令（fins / download / write）的调用栈不捕获
-        # KeyboardInterrupt，这里统一收口，避免 traceback 泄漏到 stderr。
-        # 交互式命令（interactive / prompt）已在各自 REPL 循环内捕获
-        # KeyboardInterrupt，不会逃逸到这里。
+        # `coordinator.settle_active_runs(trigger="signal:SIGINT")`
+        # 同步收敛活跃 run，再决定抛 KeyboardInterrupt（interactive）还是
+        # SystemExit(EXIT_CODE_SIGINT)（非 interactive）。本兜底覆盖
+        # signal handler 注册之前抛出的 KeyboardInterrupt 边缘场景，
+        # 以及 interactive 之外仍可能逃逸到 main 的 KeyboardInterrupt。
         return EXIT_CODE_SIGINT

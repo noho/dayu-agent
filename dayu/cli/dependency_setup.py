@@ -473,6 +473,7 @@ def _prepare_cli_host_dependencies(
     *,
     workspace_config: WorkspaceConfig,
     execution_options: ExecutionOptions | None,
+    interactive: bool,
 ) -> tuple[
     WorkspaceResources,
     ResolvedExecutionOptions,
@@ -485,6 +486,9 @@ def _prepare_cli_host_dependencies(
     Args:
         workspace_config: 工作区路径配置。
         execution_options: 请求级执行选项。
+        interactive: 当前命令是否 interactive。决定 SIGINT 在 signal handler 中的语义：
+            ``True`` 抛 ``KeyboardInterrupt`` 让 REPL 继续；
+            ``False`` 抛 ``SystemExit(EXIT_CODE_SIGINT)`` 让短命命令直接退出。
 
     Returns:
         `(
@@ -507,7 +511,7 @@ def _prepare_cli_host_dependencies(
         log_module=MODULE,
     )
     coordinator = _ensure_cli_shutdown_coordinator(prepared.host)
-    register_process_shutdown_hook(coordinator)
+    register_process_shutdown_hook(coordinator, interactive=interactive)
     return (
         prepared.workspace,
         prepared.default_execution_options,
@@ -674,6 +678,7 @@ def _build_fins_ops_service(args: argparse.Namespace) -> FinsService:
     ) = _prepare_cli_host_dependencies(
         workspace_config=workspace_config,
         execution_options=None,
+        interactive=False,
     )
     return FinsService(
         host=host,
