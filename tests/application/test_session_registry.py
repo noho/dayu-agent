@@ -233,9 +233,7 @@ def test_session_registry_emits_lifecycle_logs(tmp_path: Path, monkeypatch: pyte
     store.initialize_schema()
     registry = SQLiteSessionRegistry(store)
     debug_mock = Mock()
-    info_mock = Mock()
     monkeypatch.setattr(Log, "debug", debug_mock)
-    monkeypatch.setattr(Log, "info", info_mock)
 
     registry.create_session(SessionSource.CLI, session_id="s1", scene_name="interactive")
     registry.ensure_session("s1", SessionSource.CLI)
@@ -243,9 +241,8 @@ def test_session_registry_emits_lifecycle_logs(tmp_path: Path, monkeypatch: pyte
     registry.close_session("s1")
 
     debug_messages = [call.args[0] for call in debug_mock.call_args_list]
-    info_messages = [call.args[0] for call in info_mock.call_args_list]
 
     assert any("创建 session" in message for message in debug_messages)
     assert any("ensure session" in message for message in debug_messages)
     assert any("刷新 session 活跃时间" in message for message in debug_messages)
-    assert any("关闭 session" in message for message in info_messages)
+    assert any("关闭 session" in message for message in debug_messages)

@@ -50,9 +50,7 @@ def test_host_emits_logs_for_session_and_run_actions(monkeypatch: pytest.MonkeyP
 
     host = _build_host()
     debug_mock = Mock()
-    info_mock = Mock()
     monkeypatch.setattr(Log, "debug", debug_mock)
-    monkeypatch.setattr(Log, "info", info_mock)
 
     host.create_session(SessionSource.CLI, session_id="session_1", scene_name="interactive")
     host.ensure_session("session_1", SessionSource.CLI, scene_name="interactive")
@@ -61,9 +59,8 @@ def test_host_emits_logs_for_session_and_run_actions(monkeypatch: pytest.MonkeyP
     host.cancel_run(run.run_id)
 
     debug_messages = [call.args[0] for call in debug_mock.call_args_list]
-    info_messages = [call.args[0] for call in info_mock.call_args_list]
 
     assert any("Host 创建 session" in message for message in debug_messages)
     assert any("Host ensure session" in message for message in debug_messages)
     assert any("Host 启动 agent sync wait" in message for message in debug_messages)
-    assert any("Host 请求取消 run" in message for message in info_messages)
+    assert any("Host 请求取消 run" in message for message in debug_messages)

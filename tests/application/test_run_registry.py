@@ -348,9 +348,7 @@ def test_run_registry_emits_lifecycle_logs(tmp_path: Path, monkeypatch: pytest.M
     store.initialize_schema()
     registry = SQLiteRunRegistry(store)
     debug_mock = Mock()
-    info_mock = Mock()
     monkeypatch.setattr(Log, "debug", debug_mock)
-    monkeypatch.setattr(Log, "info", info_mock)
 
     run = registry.register_run(service_type="chat_turn", session_id="s1", scene_name="wechat")
     registry.start_run(run.run_id)
@@ -358,7 +356,6 @@ def test_run_registry_emits_lifecycle_logs(tmp_path: Path, monkeypatch: pytest.M
     registry.mark_cancelled(run.run_id, cancel_reason=RunCancelReason.TIMEOUT)
 
     debug_messages = [call.args[0] for call in debug_mock.call_args_list]
-    info_messages = [call.args[0] for call in info_mock.call_args_list]
 
     assert any("注册 run" in message and "owner_pid=" in message and "db_path=" in message for message in debug_messages)
     assert any(
@@ -369,7 +366,7 @@ def test_run_registry_emits_lifecycle_logs(tmp_path: Path, monkeypatch: pytest.M
         "run 状态迁移" in message and "to_state=cancelled" in message and "db_path=" in message
         for message in debug_messages
     )
-    assert any("登记 run 取消请求" in message for message in info_messages)
+    assert any("登记 run 取消请求" in message for message in debug_messages)
 
 
 class TestCleanupOrphanRuns:
