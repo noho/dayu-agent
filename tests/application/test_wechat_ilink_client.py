@@ -328,3 +328,37 @@ def test_request_json_rethrows_timeout_when_no_fallback() -> None:
             await client.aclose()
 
     asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_request_json_logs_debug_when_timeout_fallback_hits(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """验证 timeout_fallback 命中时会留下可观测的 debug 日志，便于排查长轮询超时。"""
+
+    async def _handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timeout")
+
+    async def _run() -> None:
+        client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+        api = IlinkApiClient(client=client)
+        try:
+            with caplog.at_level("DEBUG", logger="WECHAT.ILINK_CLIENT"):
+                payload = await api._request_json(
+                    method="POST",
+                    path="/ilink/bot/getupdates",
+                    auth_required=False,
+                    timeout_fallback={"ret": 0, "msgs": [], "get_updates_buf": ""},
+                )
+            assert payload == {"ret": 0, "msgs": [], "get_updates_buf": ""}
+            messages = [record.getMessage() for record in caplog.records]
+            assert any(
+                "iLink 请求超时命中 fallback" in msg
+                and "method=POST" in msg
+                and "path=/ilink/bot/getupdates" in msg
+                for msg in messages
+            ), messages
+        finally:
+            await client.aclose()
+
+    asyncio.run(_run())

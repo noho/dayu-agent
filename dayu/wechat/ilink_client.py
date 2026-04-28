@@ -22,11 +22,15 @@ from typing import Any, Mapping
 
 import httpx
 
+from dayu.log import Log
+
 DEFAULT_ILINK_BASE_URL = "https://ilinkai.weixin.qq.com"
 DEFAULT_BOT_TYPE = 3
 DEFAULT_CHANNEL_VERSION = "1.0.2"
 TYPING_STATUS_TYPING = 1
 TYPING_STATUS_CANCEL = 2
+
+MODULE = "WECHAT.ILINK_CLIENT"
 
 
 def build_x_wechat_uin_header() -> str:
@@ -521,6 +525,14 @@ class IlinkApiClient:
             )
         except httpx.TimeoutException:
             if timeout_fallback is not None:
+                # 长轮询的"读超时"是预期路径（服务端无新消息时主动断开），
+                # 但短请求超时可能是异常事件。这里用 debug 级日志记录，
+                # 既能在排查时看到 fallback 命中，也不污染正常运行的日志流。
+                Log.debug(
+                    f"iLink 请求超时命中 fallback: method={method} path={path} "
+                    f"read_timeout_sec={read_timeout_sec}",
+                    module=MODULE,
+                )
                 return dict(timeout_fallback)
             raise
         except httpx.HTTPError as exc:

@@ -146,13 +146,23 @@ def _write_text_atomic(target: Path, content: str) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     file_descriptor, temp_path_str = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
     temp_path = Path(temp_path_str)
+    fd_owned = True
     try:
+        # 把 fd 交给 fdopen 包装；一旦 with 接管，fd 由文件对象在 close 时关闭。
         with os.fdopen(file_descriptor, "w", encoding="utf-8") as temp_file:
+            fd_owned = False
             temp_file.write(content)
             temp_file.flush()
             os.fsync(temp_file.fileno())
         os.replace(temp_path, target)
     except Exception:
+        # fdopen 自身抛出（如内部参数校验失败）时，fd 不会被 with 接管，必须显式关闭，
+        # 否则会泄漏底层文件描述符；正常路径下 fd_owned 在 with 进入后即被置 False。
+        if fd_owned:
+            try:
+                os.close(file_descriptor)
+            except OSError:
+                pass
         if temp_path.exists():
             temp_path.unlink(missing_ok=True)
         raise

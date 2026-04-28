@@ -184,3 +184,32 @@ def test_state_store_private_helpers_cover_url_base64_and_extension_detection() 
     assert state_store_module._guess_binary_extension(b"\xff\xd8\xffrest") == ".jpg"
     assert state_store_module._guess_binary_extension(b"   <svg viewBox='0 0 1 1'>") == ".svg"
     assert state_store_module._guess_binary_extension(b"unknown") == ".bin"
+
+@pytest.mark.unit
+def test_write_text_atomic_closes_fd_when_fdopen_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """验证 ``_write_text_atomic`` 在 fdopen 失败时也会关闭底层 fd，避免泄漏。"""
+
+    import os as os_mod
+
+    closed_fds: list[int] = []
+    original_close = os_mod.close
+
+    def _capturing_close(fd: int) -> None:
+        closed_fds.append(fd)
+        original_close(fd)
+
+    def _failing_fdopen(*_args: object, **_kwargs: object) -> object:
+        raise OSError("simulated fdopen failure")
+
+    monkeypatch.setattr(state_store_module.os, "fdopen", _failing_fdopen)
+    monkeypatch.setattr(state_store_module.os, "close", _capturing_close)
+
+    target = tmp_path / "ledger.json"
+    with pytest.raises(OSError, match="simulated fdopen failure"):
+        state_store_module._write_text_atomic(target, "{}")
+
+    assert closed_fds, "fd 应在 fdopen 失败路径下被显式关闭"
+    # 临时文件应已被清理
+    assert not list(tmp_path.glob(f".{target.name}.*.tmp"))

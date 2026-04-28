@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 import pytest
 
@@ -10,6 +10,7 @@ from dayu.engine.processors.source import Source
 from dayu.engine.tool_registry import ToolRegistry
 from dayu.fins.domain.document_models import CompanyMeta, SourceHandle
 from dayu.fins.domain.enums import SourceKind
+from dayu.fins.ingestion.service import FinsIngestionService
 from dayu.fins.tools import (
     FinsToolLimits,
     register_fins_ingestion_tools,
@@ -17,6 +18,16 @@ from dayu.fins.tools import (
 from tests.fins.legacy_repository_adapters import (
     register_fins_read_tools_with_legacy_repository as register_fins_read_tools,
 )
+
+
+def _stub_ingestion_service_factory() -> Callable[[str], FinsIngestionService]:
+    """返回一个仅用于注册路径的占位 ingestion service factory。
+
+    register_fins_ingestion_tools 在注册阶段不会触发 factory，因此可以用
+    返回 None 的 lambda 充当占位；通过 ``cast`` 跨过严格类型检查。
+    """
+
+    return cast(Callable[[str], FinsIngestionService], lambda _ticker: None)
 
 
 class DummySource:
@@ -356,7 +367,7 @@ def test_register_fins_ingestion_tools_registers_all_job_tool_names() -> None:
     registry = ToolRegistry()
     register_fins_ingestion_tools(
         registry,
-        service_factory=lambda _ticker: None,
+        service_factory=_stub_ingestion_service_factory(),
         manager_key="test-key",
     )
 
@@ -379,7 +390,7 @@ def test_ingestion_tool_schema_descriptions_follow_workflow() -> None:
     registry = ToolRegistry()
     register_fins_ingestion_tools(
         registry,
-        service_factory=lambda _ticker: None,
+        service_factory=_stub_ingestion_service_factory(),
         manager_key="test-key",
     )
 
