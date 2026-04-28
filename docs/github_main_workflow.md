@@ -701,9 +701,13 @@ pip install --upgrade https://github.com/noho/dayu-agent/releases/download/v0.1.
 - `dayu-cli init` 支持本地 Ollama 模型
 - `dayu-cli init` 支持自定义 OpenAI 兼容 API（如 OpenRouter）
 - `prompt --label` / `interactive --label` 会话复用：相同 label 共享聊天记录
-- Agent 执行进度实时显示
+- Agent 执行进度感知：CLI 交互模式下实时显示当前执行的工具名和关键参数。(@deanbear ： 观察 agent 努力也是一种参与感)
 - `dayu-cli init --reset` 一键重置工作区配置
 - 埋入web支持，下个版本见。
+
+**系统优化**
+
+- 针对财报分析优化的全新多轮会话记忆子系统
 
 **模型升级**
 
@@ -722,6 +726,9 @@ pip install --upgrade https://github.com/noho/dayu-agent/releases/download/v0.1.
 - `dayu-cli` — 财报分析 CLI
 - `dayu-wechat` — WeChat 服务
 - `dayu-render` — 报告渲染
+
+感谢以下贡献者参与本次发布（按字母序）：
+@deanbear、@Leo Liu (noho)、@xingren23、@Zx55
 EOF
 )"
 ```
