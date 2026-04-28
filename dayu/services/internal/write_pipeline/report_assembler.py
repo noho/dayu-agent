@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from dayu.log import Log
 from dayu.services.internal.write_pipeline.audit_formatting import _strip_evidence_section
 from dayu.services.contracts import WriteRunConfig
 from dayu.services.internal.write_pipeline.models import ChapterResult
@@ -13,6 +14,7 @@ from dayu.services.internal.write_pipeline.template_parser import TemplateLayout
 
 _OVERVIEW_CHAPTER_TITLE = "投资要点概览"
 _SOURCE_CHAPTER_TITLE = "来源清单"
+MODULE = "APP.WRITE_PIPELINE.ASSEMBLER"
 
 
 class ReportAssembler:
@@ -75,6 +77,16 @@ class ReportAssembler:
                 continue
             result = chapter_results.get(chapter.title)
             if result is None or not result.content:
+                if result is None:
+                    Log.warning(
+                        f"章节缺失结果，回退 skeleton: title={chapter.title}",
+                        module=MODULE,
+                    )
+                else:
+                    Log.warning(
+                        f"章节正文为空，回退 skeleton: title={chapter.title} status={result.status}",
+                        module=MODULE,
+                    )
                 ordered_chapters.append(chapter.skeleton)
             elif chapter.title == _OVERVIEW_CHAPTER_TITLE:
                 ordered_chapters.append(_strip_evidence_section(result.content))
