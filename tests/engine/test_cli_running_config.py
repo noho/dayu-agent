@@ -3945,7 +3945,11 @@ def test_main_prompt_path_propagates_scene_manifest_prompt_assets_and_llm_model_
 
 @pytest.mark.unit
 def test_main_non_interactive_path_returns_zero(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """验证 `main` 在非 interactive 模式直接返回 0。
+    """验证 `main` 收到未识别命令时通过 AssertionError 暴露契约破坏。
+
+    argparse subparsers 已声明 ``required=True``，``args.command`` 不应为 ``None``；
+    若 mock 强行让 ``command=None``，``main`` 现在通过 AssertionError 显式 fail-fast，
+    避免静默走"返回 0"的死代码路径。
 
     Args:
         monkeypatch: pytest monkeypatch 对象。
@@ -3958,27 +3962,12 @@ def test_main_non_interactive_path_returns_zero(monkeypatch: pytest.MonkeyPatch,
         AssertionError: 断言失败时抛出。
     """
 
-    workspace_config = WorkspaceConfig(
-        workspace_dir=tmp_path,
-        output_dir=tmp_path / "output",
-        config_loader=ConfigLoader(ConfigFileResolver(tmp_path / "config")),
-        prompt_asset_store=FilePromptAssetStore(ConfigFileResolver(tmp_path / "config")),
-        ticker=None,
-        has_local_filings=False,
-    )
-    running_config = RunningConfig(
-        runner_running_config=AsyncOpenAIRunnerRunningConfig(),
-        agent_running_config=AgentRunningConfig(),
-        doc_tool_limits=DocToolLimits(),
-        fins_tool_limits=FinsToolLimits(),
-        web_tools_config=WebToolsConfig(provider="auto"),
-        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
-    )
-    model_name = ModelName(model_name="mimo-v2.5-pro")
+    _ = tmp_path
     args = Namespace(command=None, log_level=None, debug=False, verbose=False, info=False, quiet=False)
 
     monkeypatch.setattr("dayu.cli.main.parse_arguments", partial(_return_value, args))
-    assert main() == 0
+    with pytest.raises(AssertionError, match="未识别的 CLI 命令"):
+        main()
 
 
 @pytest.mark.unit

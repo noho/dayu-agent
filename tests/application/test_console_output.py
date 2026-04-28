@@ -132,7 +132,11 @@ def test_cli_main_configures_console_output_before_parsing(
         lambda: argparse.Namespace(command=""),
     )
 
-    assert cli_main_module.main() == 0
+    # `command=""` 是 mock 注入的非法值（argparse 实际声明 ``required=True``），
+    # 现在的 main 会通过 AssertionError fail-fast。本用例只验证"先配置标准流再解析参数"
+    # 的顺序约束，因此预期 AssertionError，但断言 configure 已先于 parse 完成。
+    with pytest.raises(AssertionError, match="未识别的 CLI 命令"):
+        cli_main_module.main()
     assert observed == ["configured"]
 
 
