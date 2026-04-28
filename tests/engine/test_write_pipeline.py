@@ -4826,6 +4826,185 @@ def test_persist_manifest_merges_existing_results(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+def test_load_or_create_manifest_purges_stale_artifacts_when_signature_changes(
+    tmp_path: Path,
+) -> None:
+    """验证 manifest 签名变更时会清空 chapters/ 与 sources_dedup.json。"""
+
+    runner = _build_runner(tmp_path)
+    runner._write_config.resume = True
+
+    chapters_dir = runner._store._chapters_dir
+    chapters_dir.mkdir(parents=True, exist_ok=True)
+    stale_chapter_md = chapters_dir / "01_stale.md"
+    stale_chapter_md.write_text("stale", encoding="utf-8")
+    stale_phase_dir = chapters_dir / "01_stale"
+    stale_phase_dir.mkdir(parents=True, exist_ok=True)
+    (stale_phase_dir / "phase.md").write_text("phase", encoding="utf-8")
+
+    output_dir = runner._store._output_dir
+    sources_path = output_dir / "sources_dedup.json"
+    sources_path.write_text("[]", encoding="utf-8")
+
+    existing_manifest = RunManifest(
+        version="write_manifest_v1",
+        signature="old-sig",
+        config=runner._write_config,
+        chapter_results={},
+    )
+    _write_manifest(runner._manifest_path, existing_manifest)
+
+    runner._store._load_or_create_manifest("new-sig")
+
+    assert not stale_chapter_md.exists()
+    assert not stale_phase_dir.exists()
+    assert not sources_path.exists()
+
+
+@pytest.mark.unit
+def test_purge_chapter_artifacts_removes_final_md_and_phase_dir(tmp_path: Path) -> None:
+    """验证单章重写清理同时删除最终正文与阶段产物子目录。"""
+
+    runner = _build_runner(tmp_path)
+    task = ChapterTask(
+        index=2,
+        title="经营表现与核心驱动",
+        skeleton="## 经营表现与核心驱动",
+    )
+    chapter_path = runner._store._chapter_file_path(task.index, task.title)
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("old final", encoding="utf-8")
+    phase_dir = chapter_path.parent / chapter_path.stem
+    phase_dir.mkdir(parents=True, exist_ok=True)
+    (phase_dir / "initial_write.md").write_text("draft", encoding="utf-8")
+
+    runner._store.purge_chapter_artifacts(task)
+
+    assert not chapter_path.exists()
+    assert not phase_dir.exists()
+
+
+@pytest.mark.unit
+def test_run_middle_tasks_in_parallel_purges_artifacts_for_each_rerun_task(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证全文模式下并行批次中每个被重跑的章节都会先清理旧阶段产物。"""
+
+    runner = _build_runner(tmp_path)
+    monkeypatch.setattr(runner, "_resolve_middle_worker_limit", lambda: 2)
+
+    middle_tasks = [
+        ChapterTask(index=1, title="A", skeleton="## A"),
+        ChapterTask(index=2, title="B", skeleton="## B"),
+    ]
+
+    purged_titles: list[str] = []
+    original_purge = runner._store.purge_chapter_artifacts
+
+    def _record_purge(task: ChapterTask) -> None:
+        purged_titles.append(task.title)
+        original_purge(task)
+
+    monkeypatch.setattr(runner._store, "purge_chapter_artifacts", _record_purge)
+
+    def _run_worker(*, task: ChapterTask, company_name: str) -> ChapterResult:
+        del company_name
+        return ChapterResult(
+            index=task.index,
+            title=task.title,
+            status="passed",
+            content=f"## {task.title}\n正文",
+            audit_passed=True,
+        )
+
+    monkeypatch.setattr(runner, "_run_middle_task_worker", _run_worker)
+
+    manifest = RunManifest(
+        version="write_manifest_v1",
+        signature="sig",
+        config=_build_test_write_config(tmp_path),
+        chapter_results={},
+    )
+    runner._run_middle_tasks_in_parallel(
+        middle_tasks=middle_tasks,
+        chapter_results={},
+        manifest=manifest,
+        company_name="TestCo",
+    )
+    assert sorted(purged_titles) == ["A", "B"]
+
+
+@pytest.mark.unit
+def test_run_middle_tasks_in_parallel_purges_only_audit_failed_resume_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证 resume=True 时已通过 audit 的章节不会被清理，未通过的会被清理后重跑。"""
+
+    runner = _build_runner(tmp_path)
+    monkeypatch.setattr(runner, "_resolve_middle_worker_limit", lambda: 2)
+
+    middle_tasks = [
+        ChapterTask(index=1, title="A", skeleton="## A"),
+        ChapterTask(index=2, title="B", skeleton="## B"),
+    ]
+    chapter_results: dict[str, ChapterResult] = {
+        "A": ChapterResult(
+            index=1,
+            title="A",
+            status="passed",
+            content="## A\n旧正文",
+            audit_passed=True,
+        ),
+        "B": ChapterResult(
+            index=2,
+            title="B",
+            status="failed",
+            content="## B\n旧正文",
+            audit_passed=False,
+        ),
+    }
+
+    purged_titles: list[str] = []
+    original_purge = runner._store.purge_chapter_artifacts
+
+    def _record_purge(task: ChapterTask) -> None:
+        purged_titles.append(task.title)
+        original_purge(task)
+
+    monkeypatch.setattr(runner._store, "purge_chapter_artifacts", _record_purge)
+
+    monkeypatch.setattr(runner, "_should_skip_with_resume", lambda r: r is not None and r.audit_passed)
+
+    def _run_worker(*, task: ChapterTask, company_name: str) -> ChapterResult:
+        del company_name
+        return ChapterResult(
+            index=task.index,
+            title=task.title,
+            status="passed",
+            content=f"## {task.title}\n新正文",
+            audit_passed=True,
+        )
+
+    monkeypatch.setattr(runner, "_run_middle_task_worker", _run_worker)
+
+    manifest = RunManifest(
+        version="write_manifest_v1",
+        signature="sig",
+        config=_build_test_write_config(tmp_path),
+        chapter_results={},
+    )
+    runner._run_middle_tasks_in_parallel(
+        middle_tasks=middle_tasks,
+        chapter_results=chapter_results,
+        manifest=manifest,
+        company_name="TestCo",
+    )
+    assert purged_titles == ["B"]
+
+
+@pytest.mark.unit
 def test_read_manifest_from_dir_uses_manifest_lock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """验证打印报告路径读取 manifest 时也会包裹文件锁。"""
 
