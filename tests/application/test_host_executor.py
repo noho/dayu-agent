@@ -309,6 +309,128 @@ def test_run_stream_marks_failed_when_acquire_many_raises_after_start_run() -> N
 
 
 @pytest.mark.unit
+def test_start_run_marks_failed_when_deadline_watcher_start_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bridge 已启动但 deadline watcher 启动失败时，run 必须收敛为 FAILED 且资源被停止。"""
+
+    from tests.application.conftest import StubRunRegistry
+
+    class _TrackingBridge:
+        """记录 start/stop 调用的取消桥桩。"""
+
+        instances: list["_TrackingBridge"] = []
+
+        def __init__(
+            self,
+            run_registry: object,
+            run_id: str,
+            token: executor_module.CancellationToken,
+            poll_interval: float = 0.5,
+        ) -> None:
+            del run_registry, run_id, token, poll_interval
+            self.started = False
+            self.stopped = False
+            _TrackingBridge.instances.append(self)
+
+        def start(self) -> None:
+            """记录已启动。"""
+
+            self.started = True
+
+        def stop(self) -> None:
+            """记录已停止。"""
+
+            self.stopped = True
+
+    class _FailingDeadlineWatcher:
+        """启动时抛异常的 deadline watcher 桩。"""
+
+        instances: list["_FailingDeadlineWatcher"] = []
+
+        def __init__(
+            self,
+            run_registry: object,
+            run_id: str,
+            token: executor_module.CancellationToken,
+            timeout_ms: int | None,
+        ) -> None:
+            del run_registry, run_id, token, timeout_ms
+            self.stop_calls = 0
+            _FailingDeadlineWatcher.instances.append(self)
+
+        def start(self) -> None:
+            """模拟 watcher 启动失败。"""
+
+            raise RuntimeError("deadline watcher boom")
+
+        def stop(self) -> None:
+            """记录 stop 调用。"""
+
+            self.stop_calls += 1
+
+    run_registry = StubRunRegistry()
+    run = run_registry.register_run(session_id="s1", service_type="prompt")
+    executor = DefaultHostExecutor(run_registry=run_registry)
+    spec = HostedRunSpec(operation_name="prompt", session_id="s1")
+
+    monkeypatch.setattr(executor_module, "CancellationBridge", _TrackingBridge)
+    monkeypatch.setattr(executor_module, "RunDeadlineWatcher", _FailingDeadlineWatcher)
+
+    with pytest.raises(RuntimeError, match="deadline watcher boom"):
+        executor._start_run(spec=spec, run_id=run.run_id, include_agent_lane=False)
+
+    final_run = run_registry.get_run(run.run_id)
+    assert final_run is not None
+    assert final_run.state == RunState.FAILED
+    assert final_run.completed_at is not None
+    assert run_registry.list_active_runs() == []
+    assert len(_TrackingBridge.instances) == 1
+    assert _TrackingBridge.instances[0].started is True
+    assert _TrackingBridge.instances[0].stopped is True
+    assert len(_FailingDeadlineWatcher.instances) == 1
+    assert _FailingDeadlineWatcher.instances[0].stop_calls == 1
+
+
+@pytest.mark.unit
+def test_start_run_short_circuits_when_cancel_already_requested() -> None:
+    """启动前已存在取消意图时，不应推 RUNNING，也不应申请 permit。"""
+
+    from tests.application.conftest import StubRunRegistry
+
+    run_registry = StubRunRegistry()
+    governor = _StubGovernor()
+    executor = DefaultHostExecutor(
+        run_registry=run_registry,
+        concurrency_governor=governor,  # type: ignore[arg-type]
+        event_bus=_StubEventBus(),  # type: ignore[arg-type]
+    )
+    spec = HostedRunSpec(
+        operation_name="write_pipeline",
+        session_id="s1",
+        business_concurrency_lane="write_chapter",
+    )
+    run = run_registry.register_run(
+        session_id="s1",
+        service_type="write_pipeline",
+        scene_name=spec.scene_name,
+    )
+    requested = run_registry.request_cancel(run.run_id, cancel_reason=RunCancelReason.USER_CANCELLED)
+    assert requested is True
+
+    with pytest.raises(CancelledError, match="启动前收到取消请求"):
+        executor._start_run(spec=spec, run_id=run.run_id, include_agent_lane=True)
+
+    final_run = run_registry.get_run(run.run_id)
+    assert final_run is not None
+    assert final_run.state == RunState.CANCELLED
+    assert final_run.cancel_reason == RunCancelReason.USER_CANCELLED
+    assert final_run.started_at is None
+    assert governor.acquired == []
+    assert governor.released == []
+
+
+@pytest.mark.unit
 def test_run_sync_marks_cancelled_and_uses_on_cancel() -> None:
     """同步执行取消时应标记 run 并走 on_cancel。"""
 
@@ -1720,6 +1842,7 @@ def test_host_executor_helper_functions_cover_deadline_and_summary_edges() -> No
     assert run_spec.scene_name == "interactive"
     long_summary = executor_module._summarize_tool_result({"ok": True, "value": {"body": "x" * 5000}})
     assert "<truncated" in long_summary
+    assert len(long_summary) <= executor_module._MAX_TOOL_RESULT_SUMMARY_CHARS
 
 
 @pytest.mark.unit

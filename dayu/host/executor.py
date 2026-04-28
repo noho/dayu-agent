@@ -56,6 +56,7 @@ TStreamEvent = TypeVar("TStreamEvent", bound=PublishedRunEventProtocol)
 TSyncResult = TypeVar("TSyncResult")
 MODULE = "HOST.EXECUTOR"
 _DEFAULT_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS = 300.0
+_MAX_TOOL_RESULT_SUMMARY_CHARS = 2000
 _CONCURRENCY_POLICY_MODE_HOST_DEFAULT: Literal["host_default"] = "host_default"
 _CONCURRENCY_POLICY_MODE_TIMEOUT: Literal["timeout"] = "timeout"
 _CONCURRENCY_POLICY_MODE_UNBOUNDED: Literal["unbounded"] = "unbounded"
@@ -1316,15 +1317,17 @@ class DefaultHostExecutor(HostExecutorProtocol):
         """
 
         token = CancellationToken()
+        if self.run_registry.is_cancel_requested(run_id):
+            token.cancel()
+            self._finalize_cancelled(run_id)
+            raise CancelledError("run 已在启动前收到取消请求")
         bridge = CancellationBridge(self.run_registry, run_id, token)
-        bridge.start()
         deadline_watcher = RunDeadlineWatcher(
             self.run_registry,
             run_id,
             token,
             spec.timeout_ms,
         )
-        deadline_watcher.start()
         # bridge / deadline_watcher 已经启动后台线程或 Timer，若后续步骤抛
         # 异常而调用方拿不到句柄，将造成守护线程持续轮询 SQLite 与 Timer
         # 持续到进程退出。这里在剩余初始化阶段统一兜底，确保异常时立刻
@@ -1337,6 +1340,8 @@ class DefaultHostExecutor(HostExecutorProtocol):
         try:
             self.run_registry.start_run(run_id)
             run_started = True
+            bridge.start()
+            deadline_watcher.start()
             permits: list[ConcurrencyPermit] = []
             if self.concurrency_governor is not None:
                 lanes = _required_lanes_for_spec(spec, include_agent_lane=include_agent_lane)
@@ -1993,10 +1998,10 @@ def _summarize_tool_result(result: Any) -> str:
 
     projected = project_for_llm(result)
     serialized = json.dumps(projected, ensure_ascii=False, sort_keys=True)
-    if len(serialized) <= 2000:
+    if len(serialized) <= _MAX_TOOL_RESULT_SUMMARY_CHARS:
         return serialized
-    suffix = f"...<truncated {len(serialized) - 2000} chars>"
-    keep = max(0, 2000 - len(suffix))
+    suffix = f"...<truncated {len(serialized) - _MAX_TOOL_RESULT_SUMMARY_CHARS} chars>"
+    keep = max(0, _MAX_TOOL_RESULT_SUMMARY_CHARS - len(suffix))
     return serialized[:keep] + suffix
 
 
