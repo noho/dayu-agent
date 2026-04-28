@@ -1131,7 +1131,7 @@ class TestCompactMessagesSystemUserGap:
         assert result[1] == {"role": "user", "content": "goal"}
         # 摘要应包含 assistant prelude 的统计
         summary_msg = result[2]
-        assert _message_role(summary_msg) == "user"
+        assert _message_role(summary_msg) == "system"
         assert "[Context Compaction Summary]" in _message_content(summary_msg)
         # "prelude" 本身在摘要统计中应被计为 1 个 assistant
         assert "assistant=" in _message_content(summary_msg)

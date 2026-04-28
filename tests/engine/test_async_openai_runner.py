@@ -325,6 +325,40 @@ class TestAsyncOpenAIRunnerProcessNonStream:
         assert EventType.TOOL_CALLS_BATCH_DONE in event_types
         assert EventType.DONE in event_types
 
+    async def test_process_non_stream_reasoning_content_in_metadata(self):
+        """测试非流式 reasoning_content 会透传到 content_complete metadata。"""
+
+        runner = AsyncOpenAIRunner(
+            endpoint_url="https://api.example.com",
+            model="deepseek-reasoner",
+            headers={},
+        )
+
+        result = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "结论",
+                        "reasoning_content": "思考过程",
+                    }
+                }
+            ]
+        }
+
+        events = []
+        trace_meta = {"run_id": "run_test", "iteration_id": "run_test_iteration", "request_id": "test_request"}
+        async for event in runner._process_non_stream(result, "test_request", trace_meta):
+            events.append(event)
+
+        reasoning_events = [event for event in events if event.type == EventType.REASONING_DELTA]
+        assert len(reasoning_events) == 1
+        assert reasoning_events[0].data == "思考过程"
+        content_complete_events = [event for event in events if event.type == EventType.CONTENT_COMPLETE]
+        assert len(content_complete_events) == 1
+        assert content_complete_events[0].data == "结论"
+        assert content_complete_events[0].metadata.get("reasoning_content") == "思考过程"
+
     async def test_process_tool_call_response_with_dict_arguments(self):
         """测试工具调用参数为对象时可被兼容处理。"""
         runner = AsyncOpenAIRunner(

@@ -487,6 +487,7 @@ class DummyToolTraceRecorder:
             {
                 "iteration_id": iteration_id,
                 "iteration_index": iteration_index,
+                "termination_reason": termination_reason,
             }
         )
 
@@ -1052,9 +1053,9 @@ class TestAsyncAgentRun:
 
         third_iteration_messages = runner.calls[2]["messages"]
         assert any(
-            msg.get("role") == "user" and "same tool (tool)" in msg.get("content", "")
+            msg.get("role") == "system" and "same tool (tool)" in msg.get("content", "")
             for msg in third_iteration_messages
-        ), f"Expected duplicate hint with 'same tool (tool)' in messages: {[m.get('content','')[:80] for m in third_iteration_messages if m.get('role')=='user']}"
+        ), f"Expected duplicate hint with 'same tool (tool)' in messages: {[m.get('content','')[:80] for m in third_iteration_messages if m.get('role')=='system']}"
 
     async def test_duplicate_tool_call_with_information_gain_not_early_exit(self):
         """测试重复调用若结果有信息增量，不触发重复调用提前退出。"""
@@ -1776,6 +1777,10 @@ class TestAsyncAgentStreaming:
         assert recorder.results[0]["payload"]["result"]["ok"] is True
         assert recorder.final_responses[0]["content"] == "done"
         assert recorder.final_responses[0]["degraded"] is False
+        assert [item["termination_reason"] for item in recorder.finished_iterations] == [
+            "tool_calls_continued",
+            "final_answer",
+        ]
         # 回归 finding 086：record_final_response 必须把 filtered / finish_reason
         # 透传给 trace recorder，否则导出的 JSONL 中相关字段恒为默认值。
         assert recorder.final_responses[0]["filtered"] is False
@@ -1824,6 +1829,7 @@ class TestAsyncAgentStreaming:
 
         assert result.success is False
         assert len(recorder.finished_iterations) == 1
+        assert recorder.finished_iterations[0]["termination_reason"] == "error"
         assert len(recorder.final_responses) == 0
         assert recorder.closed is True
 

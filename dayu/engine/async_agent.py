@@ -102,6 +102,16 @@ DEFAULT_COMPACTION_SUMMARY_INSTRUCTION = (
     "Continue reasoning based on recent context. "
     "Avoid repeating tool calls that have already been completed."
 )
+_TERMINATION_REASON_CONTEXT_OVERFLOW_RETRIED = "context_overflow_retried"
+_TERMINATION_REASON_CONTEXT_OVERFLOW_EXHAUSTED = "context_overflow_exhausted"
+_TERMINATION_REASON_TOOL_CALLS_MISSING = "tool_calls_missing"
+_TERMINATION_REASON_TOOL_CALLS_CONTINUED = "tool_calls_continued"
+_TERMINATION_REASON_TOOL_CALLS_BATCH_MISSING = "tool_calls_batch_missing"
+_TERMINATION_REASON_TOOL_CALL_EARLY_EXIT = "tool_call_early_exit"
+_TERMINATION_REASON_CONTINUATION = "continuation"
+_TERMINATION_REASON_FINAL_ANSWER = "final_answer"
+_TERMINATION_REASON_MAX_ITERATIONS = "max_iterations"
+_TERMINATION_REASON_ERROR = "error"
 
 # 压缩中保留的最近 message 条数（system 和首条 user 单独保留）
 _COMPACT_RECENT_KEEP = 6
@@ -910,7 +920,15 @@ class AsyncAgent:
                     yield self._annotate_event(event, run_id=run_id, iteration_id=iteration_id)
                     if not error_data.get("recoverable", False):
                         if trace_recorder is not None:
-                            trace_recorder.finish_iteration(iteration_id=iteration_id, iteration_index=iteration)
+                            trace_recorder.finish_iteration(
+                                iteration_id=iteration_id,
+                                iteration_index=iteration,
+                                termination_reason=(
+                                    _TERMINATION_REASON_CONTEXT_OVERFLOW_EXHAUSTED
+                                    if overflow_exhausted
+                                    else str(err_type).strip() or _TERMINATION_REASON_ERROR
+                                ),
+                            )
                         return
                 
                 else:
@@ -920,7 +938,11 @@ class AsyncAgent:
             # context_overflow 压缩后重试：不计入迭代次数（但 iteration_counter 已递增，保证下一轮 iteration_id 唯一）
             if context_overflow_handled:
                 if trace_recorder is not None:
-                    trace_recorder.finish_iteration(iteration_id=iteration_id, iteration_index=iteration_counter)
+                    trace_recorder.finish_iteration(
+                        iteration_id=iteration_id,
+                        iteration_index=iteration_counter,
+                        termination_reason=_TERMINATION_REASON_CONTEXT_OVERFLOW_RETRIED,
+                    )
                 iteration -= 1
                 continue
 
@@ -941,7 +963,11 @@ class AsyncAgent:
                     )
                     yield self._annotate_event(error, run_id=run_id, iteration_id=iteration_id)
                     if trace_recorder is not None:
-                        trace_recorder.finish_iteration(iteration_id=iteration_id, iteration_index=iteration)
+                        trace_recorder.finish_iteration(
+                            iteration_id=iteration_id,
+                            iteration_index=iteration,
+                            termination_reason=_TERMINATION_REASON_TOOL_CALLS_MISSING,
+                        )
                     return
 
                 if any(is_tool_success(tc.get("result")) for tc in ordered_tool_calls):
@@ -1027,7 +1053,7 @@ class AsyncAgent:
                     )
                     yield self._annotate_event(duplicate_warning, run_id=run_id, iteration_id=iteration_id)
                     messages.append(
-                        build_user_chat_message(
+                        build_system_chat_message(
                             self._build_duplicate_tool_hint_prompt(duplicate_hint_tool_name)
                         )
                     )
@@ -1054,12 +1080,26 @@ class AsyncAgent:
                         )
                         yield self._annotate_event(error, run_id=run_id, iteration_id=iteration_id)
                         if trace_recorder is not None:
-                            trace_recorder.finish_iteration(iteration_id=iteration_id, iteration_index=iteration)
+                            trace_recorder.finish_iteration(
+                                iteration_id=iteration_id,
+                                iteration_index=iteration,
+                                termination_reason=(
+                                    early_exit_error_type
+                                    or _TERMINATION_REASON_TOOL_CALL_EARLY_EXIT
+                                ),
+                            )
                         return
 
                     if self.fallback_mode == "force_answer":
                         if trace_recorder is not None:
-                            trace_recorder.finish_iteration(iteration_id=iteration_id, iteration_index=iteration)
+                            trace_recorder.finish_iteration(
+                                iteration_id=iteration_id,
+                                iteration_index=iteration,
+                                termination_reason=(
+                                    early_exit_error_type
+                                    or _TERMINATION_REASON_TOOL_CALL_EARLY_EXIT
+                                ),
+                            )
                         async for fallback_event in self._run_force_answer(
                             messages,
                             stream=stream,
@@ -1075,7 +1115,11 @@ class AsyncAgent:
                         return
 
                 if trace_recorder is not None:
-                    trace_recorder.finish_iteration(iteration_id=iteration_id, iteration_index=iteration)
+                    trace_recorder.finish_iteration(
+                        iteration_id=iteration_id,
+                        iteration_index=iteration,
+                        termination_reason=_TERMINATION_REASON_TOOL_CALLS_CONTINUED,
+                    )
                 continue
 
             if tool_calls_data and not tool_calls_batch_done_seen:
@@ -1087,7 +1131,11 @@ class AsyncAgent:
                 )
                 yield self._annotate_event(error, run_id=run_id, iteration_id=iteration_id)
                 if trace_recorder is not None:
-                    trace_recorder.finish_iteration(iteration_id=iteration_id, iteration_index=iteration)
+                    trace_recorder.finish_iteration(
+                        iteration_id=iteration_id,
+                        iteration_index=iteration,
+                        termination_reason=_TERMINATION_REASON_TOOL_CALLS_BATCH_MISSING,
+                    )
                 return
 
             if (content_complete_seen or done_event_seen) and not tool_calls_data:
@@ -1146,7 +1194,11 @@ class AsyncAgent:
                             )
                             Log.warn(f"[{iteration_id}] {cont_compact_msg}", module=MODULE)
                     if trace_recorder is not None:
-                        trace_recorder.finish_iteration(iteration_id=iteration_id, iteration_index=iteration)
+                        trace_recorder.finish_iteration(
+                            iteration_id=iteration_id,
+                            iteration_index=iteration,
+                            termination_reason=_TERMINATION_REASON_CONTINUATION,
+                        )
                     continue  # 回到 while 循环进行下一轮
 
                 # 拼接所有轮次的内容（续写场景下 accumulated_content_parts 含前序内容）
@@ -1175,7 +1227,11 @@ class AsyncAgent:
                     )
                 yield self._annotate_event(final_event, run_id=run_id, iteration_id=iteration_id)
                 if trace_recorder is not None:
-                    trace_recorder.finish_iteration(iteration_id=iteration_id, iteration_index=iteration)
+                    trace_recorder.finish_iteration(
+                        iteration_id=iteration_id,
+                        iteration_index=iteration,
+                        termination_reason=_TERMINATION_REASON_FINAL_ANSWER,
+                    )
                 return
             
         if iteration >= self.running_config.max_iterations:
@@ -1191,12 +1247,20 @@ class AsyncAgent:
                 )
                 yield self._annotate_event(error, run_id=run_id, iteration_id=iteration_id)
                 if trace_recorder is not None:
-                    trace_recorder.finish_iteration(iteration_id=iteration_id, iteration_index=iteration)
+                    trace_recorder.finish_iteration(
+                        iteration_id=iteration_id,
+                        iteration_index=iteration,
+                        termination_reason=_TERMINATION_REASON_MAX_ITERATIONS,
+                    )
                 return
 
             if self.fallback_mode == "force_answer":
                 if trace_recorder is not None:
-                    trace_recorder.finish_iteration(iteration_id=iteration_id, iteration_index=iteration)
+                    trace_recorder.finish_iteration(
+                        iteration_id=iteration_id,
+                        iteration_index=iteration,
+                        termination_reason=_TERMINATION_REASON_MAX_ITERATIONS,
+                    )
                 async for fallback_event in self._run_force_answer(
                     messages,
                     stream=stream,
@@ -1587,7 +1651,7 @@ def _compact_messages(
             header=summary_header,
             instruction=summary_instruction,
         )
-        result.append(build_user_chat_message(summary))
+        result.append(build_system_chat_message(summary))
 
     # 保留最近 recent_keep 条消息
     result.extend(messages[recent_start:])
