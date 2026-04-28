@@ -371,7 +371,18 @@ class TestCompactMessages:
             {
                 "role": "tool",
                 "tool_call_id": "call_1",
-                "content": json.dumps({"ok": True, "value": {"ticker": "AAPL", "revenue": "100"}}),
+                "content": json.dumps(
+                    {
+                        "ok": True,
+                        "value": {
+                            "ticker": "AAPL",
+                            "revenue": "81.8B",
+                            "gross_margin": "46.3%",
+                            "segments": ["iPhone", "Services", "Mac"],
+                            "guidance": {"eps": "1.40", "fcf": "25B"},
+                        },
+                    }
+                ),
             },
             {
                 "role": "tool",
@@ -384,7 +395,10 @@ class TestCompactMessages:
 
         assert "Tool result highlights:" in summary
         assert "search_document: ok=true" in summary
-        assert '"ticker": "AAPL"' in summary
+        assert "ticker=AAPL" in summary
+        assert "revenue=81.8B" in summary
+        assert "gross_margin=46.3%" in summary
+        assert "segments=iPhone, Services, Mac" in summary
         assert "fetch_web_page: ok=false, error=403 blocked" in summary
 
     def test_compact_messages_with_gap_between_system_and_first_user(self) -> None:
@@ -1233,21 +1247,22 @@ async def test_continuation_compaction_emits_warning() -> None:
 # ========== 预测性工具结果截断测试 ==========
 
 
-class TestEstimateCharsToTokens:
-    """ToolResultBudgetCapper.estimate_chars_to_tokens 单元测试。"""
+class TestEstimateTextToTokens:
+    """ToolResultBudgetCapper.estimate_text_to_tokens 单元测试。"""
 
-    def test_basic_conversion(self) -> None:
-        """1000 chars ≈ 250 tokens（按 4 chars/token）。"""
-        assert ToolResultBudgetCapper.estimate_chars_to_tokens(1000) == 250
+    def test_half_width_text_is_estimated_conservatively(self) -> None:
+        """半角文本按更保守口径估算 token。"""
+        assert ToolResultBudgetCapper.estimate_text_to_tokens("abcd") == 2
+        assert ToolResultBudgetCapper.estimate_text_to_tokens("a" * 1000) == 500
 
     def test_zero(self) -> None:
-        """0 chars → 0 tokens。"""
-        assert ToolResultBudgetCapper.estimate_chars_to_tokens(0) == 0
+        """空文本 → 0 tokens。"""
+        assert ToolResultBudgetCapper.estimate_text_to_tokens("") == 0
 
-    def test_small_remainder(self) -> None:
-        """不足一个 token 的字符数向下取整。"""
-        assert ToolResultBudgetCapper.estimate_chars_to_tokens(3) == 0
-        assert ToolResultBudgetCapper.estimate_chars_to_tokens(4) == 1
+    def test_wide_chars_are_estimated_more_conservatively(self) -> None:
+        """宽字符文本应比旧的 chars//4 估算更保守。"""
+        assert ToolResultBudgetCapper.estimate_text_to_tokens("中文测试") == 4
+        assert ToolResultBudgetCapper.estimate_text_to_tokens("ab中文c") == 4
 
 
 class TestTruncateToolResultStr:
@@ -1323,7 +1338,7 @@ class TestCapToolResultsForBudget:
             max_context_tokens=100000,
             soft_limit_ratio=0.75,  # soft = 75000 tokens
         )
-        # available = 75000 - 60000 - 500 = 14500 tokens → 58000 chars
+        # available = 75000 - 60000 - 500 = 14500 tokens
         state.current_prompt_tokens = 60000
         state.latest_completion_tokens = 500
         small_a = "a" * 100
@@ -1339,12 +1354,12 @@ class TestCapToolResultsForBudget:
         # 小结果完整保留
         assert result[1][1] == small_a
         assert result[2][1] == small_b
-        # 大结果获得剩余预算（58000 - 100 - 500 = 57400），远多于均分的 58000/3 ≈ 19333
+        # 大结果获得剩余预算，明显多于简单均分。
         large_kept = result[0][1]
         assert "CONTEXT_BUDGET_TRUNCATED" in large_kept
-        # 截断后保留字符数应接近 57400（大于均分值 19333）
+        # 新估算口径下，保留字符数仍应显著大于均分保留。
         kept_chars = int(large_kept.split("kept=")[1].split(" ")[0])
-        assert kept_chars > 50000, f"大结果应获得远多于均分的预算，实际 {kept_chars}"
+        assert kept_chars > 20000, f"大结果应获得远多于均分的预算，实际 {kept_chars}"
 
     def test_empty_results_not_capped(self) -> None:
         """空结果不受影响。"""
@@ -1378,6 +1393,22 @@ class TestCapToolResultsForBudget:
         # 截断后保留至少 4000 chars（_MIN_RESULT_CHARS）
         # 加上 CONTEXT_BUDGET_TRUNCATED 注释
         assert result[0][1].startswith("z" * 4000)
+
+    def test_chinese_result_is_capped_under_same_budget(self) -> None:
+        """中文结果在相同预算下会按更保守口径触发截断。"""
+        state = ContextBudgetState(
+            max_context_tokens=100000,
+            soft_limit_ratio=0.75,
+        )
+        state.current_prompt_tokens = 74000
+        state.latest_completion_tokens = 0
+        chinese_result = "中" * 3000
+        pairs: list[tuple[dict[str, object], str]] = [({"id": "c1"}, chinese_result)]
+
+        result, capped = ToolResultBudgetCapper.cap_results_for_budget(pairs, state)
+
+        assert capped
+        assert "CONTEXT_BUDGET_TRUNCATED" in result[0][1]
 
 
 # ========== run_and_wait WARNING 收集测试 ==========

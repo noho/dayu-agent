@@ -116,8 +116,11 @@ _TERMINATION_REASON_ERROR = "error"
 # 压缩中保留的最近 message 条数（system 和首条 user 单独保留）
 _COMPACT_RECENT_KEEP = 6
 _COMPACTION_TOOL_RESULT_MAX_LINES = 4
-_COMPACTION_VALUE_SUMMARY_MAX_CHARS = 160
+_COMPACTION_VALUE_SUMMARY_MAX_CHARS = 320
 _COMPACTION_ERROR_SUMMARY_MAX_CHARS = 120
+_COMPACTION_VALUE_SUMMARY_MAX_ITEMS = 6
+_COMPACTION_SEQUENCE_SUMMARY_MAX_ITEMS = 4
+_COMPACTION_INLINE_VALUE_MAX_CHARS = 80
 
 
 def _extract_sse_protocol_error_trace_payload(
@@ -340,7 +343,10 @@ def _compute_predictive_budget_stats(
     """
 
     total_result_chars = sum(len(s) for _, s in serialized_pairs)
-    estimated_injection_tokens = ToolResultBudgetCapper.estimate_chars_to_tokens(total_result_chars)
+    estimated_injection_tokens = sum(
+        ToolResultBudgetCapper.estimate_text_to_tokens(result_str)
+        for _, result_str in serialized_pairs
+    )
     projected_tokens = (
         budget_state.current_prompt_tokens
         + budget_state.latest_completion_tokens
@@ -1850,6 +1856,168 @@ def _build_compaction_tool_status_parts(parsed_payload: object) -> list[str]:
     return status_parts
 
 
+def _truncate_compaction_summary_text(text: str, max_chars: int) -> str:
+    """将摘要文本裁剪到给定长度。
+
+    Args:
+        text: 原始摘要文本。
+        max_chars: 最大允许字符数。
+
+    Returns:
+        截断后的摘要文本。
+
+    Raises:
+        无。
+    """
+
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3] + "..."
+
+
+def _normalize_compaction_scalar_text(value: object) -> str | None:
+    """把标量值规范化为单行文本。
+
+    Args:
+        value: 待规范化的标量值。
+
+    Returns:
+        规范化后的单行文本；若为空则返回 `None`。
+
+    Raises:
+        无。
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = " ".join(value.split())
+    else:
+        serialized = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        normalized = " ".join(serialized.split())
+    return normalized or None
+
+
+def _summarize_compaction_mapping(
+    value: dict[object, object],
+    *,
+    max_chars: int,
+    depth: int,
+) -> str | None:
+    """为字典值构建更保真的紧凑摘要。
+
+    Args:
+        value: 待摘要的字典。
+        max_chars: 最大允许字符数。
+        depth: 当前递归深度。
+
+    Returns:
+        结构化摘要文本；无法提炼时返回 `None`。
+
+    Raises:
+        无。
+    """
+
+    fragments: list[str] = []
+    total_items = len(value)
+    for raw_key, raw_value in value.items():
+        key_text = str(raw_key).strip()
+        if not key_text:
+            continue
+        value_text = _summarize_compaction_value(
+            raw_value,
+            max_chars=_COMPACTION_INLINE_VALUE_MAX_CHARS,
+            depth=depth + 1,
+        )
+        if value_text is None:
+            continue
+        fragments.append(f"{key_text}={value_text}")
+        if len(fragments) >= _COMPACTION_VALUE_SUMMARY_MAX_ITEMS:
+            break
+    if not fragments:
+        fallback_text = _normalize_compaction_scalar_text(value)
+        if fallback_text is None:
+            return None
+        return _truncate_compaction_summary_text(fallback_text, max_chars)
+    summary = "; ".join(fragments)
+    if total_items > len(fragments):
+        summary = f"{summary}; ... ({total_items} keys)"
+    return _truncate_compaction_summary_text(summary, max_chars)
+
+
+def _summarize_compaction_sequence(
+    value: list[object] | tuple[object, ...],
+    *,
+    max_chars: int,
+    depth: int,
+) -> str | None:
+    """为序列值构建更保真的紧凑摘要。
+
+    Args:
+        value: 待摘要的序列。
+        max_chars: 最大允许字符数。
+        depth: 当前递归深度。
+
+    Returns:
+        紧凑摘要文本；无法提炼时返回 `None`。
+
+    Raises:
+        无。
+    """
+
+    item_summaries: list[str] = []
+    for item in value[:_COMPACTION_SEQUENCE_SUMMARY_MAX_ITEMS]:
+        item_summary = _summarize_compaction_value(
+            item,
+            max_chars=_COMPACTION_INLINE_VALUE_MAX_CHARS,
+            depth=depth + 1,
+        )
+        if item_summary is None:
+            continue
+        item_summaries.append(item_summary)
+    if not item_summaries:
+        fallback_text = _normalize_compaction_scalar_text(value)
+        if fallback_text is None:
+            return None
+        return _truncate_compaction_summary_text(fallback_text, max_chars)
+    summary = ", ".join(item_summaries)
+    if len(value) > len(item_summaries):
+        summary = f"{summary}, ... ({len(value)} items)"
+    return _truncate_compaction_summary_text(summary, max_chars)
+
+
+def _summarize_compaction_value(
+    value: object,
+    *,
+    max_chars: int,
+    depth: int,
+) -> str | None:
+    """按值类型生成保真的工具结果摘要。
+
+    Args:
+        value: 待摘要的值。
+        max_chars: 最大允许字符数。
+        depth: 当前递归深度。
+
+    Returns:
+        紧凑摘要文本；若值为空则返回 `None`。
+
+    Raises:
+        无。
+    """
+
+    if value is None:
+        return None
+    if depth <= 1 and isinstance(value, dict):
+        return _summarize_compaction_mapping(value, max_chars=max_chars, depth=depth)
+    if depth <= 1 and isinstance(value, (list, tuple)):
+        return _summarize_compaction_sequence(value, max_chars=max_chars, depth=depth)
+    normalized = _normalize_compaction_scalar_text(value)
+    if normalized is None:
+        return None
+    return _truncate_compaction_summary_text(normalized, max_chars)
+
+
 def _summarize_compaction_scalar_value(
     value: object,
     *,
@@ -1868,18 +2036,7 @@ def _summarize_compaction_scalar_value(
         无。
     """
 
-    if value is None:
-        return None
-    if isinstance(value, str):
-        normalized = " ".join(value.split())
-    else:
-        serialized = json.dumps(value, ensure_ascii=False, sort_keys=True)
-        normalized = " ".join(serialized.split())
-    if not normalized:
-        return None
-    if len(normalized) <= max_chars:
-        return normalized
-    return normalized[: max_chars - 3] + "..."
+    return _summarize_compaction_value(value, max_chars=max_chars, depth=0)
 
 
 class AgentResult:

@@ -258,8 +258,10 @@ PrepareIteration
 预算治理当前由 `AsyncAgent` 编排，并由 `dayu.engine.context_budget` 承载其中的预算原语，主要包括：
 - 软上限触发的主动压缩
 - 硬上限触发的压缩重试
-- 工具结果预测性截断（只作用于“已序列化、待注入下一轮消息”的工具结果，不替代 ToolRegistry 的 schema 驱动截断）
+- 工具结果预测性截断（只作用于“已序列化、待注入下一轮消息”的工具结果，不替代 ToolRegistry 的 schema 驱动截断；当前采用宽字符感知的保守 token 估算，避免中文/财报文本被明显低估）
 - 截断续写
+
+压缩摘要不会尝试保留完整历史，而是保留 system、首条 user、最近 tail，并把中段工具结果压成结构化 highlights；对 `dict/list` 结果优先保留顶层字段语义，而不是简单截 JSON 前缀。
 
 预算参数的最终真源在 `AgentCreateArgs`，不是 Runner 自己去读模型配置文件。
 
