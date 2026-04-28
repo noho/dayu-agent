@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from dayu.log import Log
 from dayu.contracts.tool_configs import FinsToolLimits
 from dayu.engine.tool_contracts import ToolTruncateSpec
 from dayu.engine.tool_registry import ToolRegistry
 from dayu.engine.tools.base import tool
+from dayu.fins.ingestion.service import FinsIngestionService
 
 from .ingestion_tools import register_ingestion_tools
 from .result_types import (
@@ -105,7 +106,7 @@ def register_fins_read_tools(
 def register_fins_ingestion_tools(
     registry: ToolRegistry,
     *,
-    service_factory: Any,
+    service_factory: Callable[[str], FinsIngestionService],
     manager_key: str,
     timeout_budget: float | None = None,
 ) -> int:

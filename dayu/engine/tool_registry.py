@@ -62,7 +62,7 @@ class ToolRegistry:
     内部组合了 ArgumentValidator（参数校验）和 TruncationManager（截断分页）。
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """
         初始化工具注册表
 
@@ -74,7 +74,7 @@ class ToolRegistry:
                 Path("output/logs/app.log")
             ])
         """
-        self.tools: Dict[str, Callable] = {}
+        self.tools: Dict[str, Callable[..., object]] = {}
         self.schemas: Dict[str, Dict[str, Any]] = {}
         self.tool_schemas: Dict[str, ToolSchema] = {}
         self.tool_descriptors: Dict[str, ToolDescriptor] = {}
@@ -117,7 +117,7 @@ class ToolRegistry:
     def register(
         self,
         name: str,
-        func: Callable,
+        func: Callable[..., object],
         schema: Any,
     ) -> None:
         """
@@ -235,7 +235,7 @@ class ToolRegistry:
                 "schema.function.parameters.additionalProperties 必须是布尔值",
             )
     
-    def get_schemas(self) -> list:
+    def get_schemas(self) -> list[dict[str, Any]]:
         """获取所有工具的 schema 列表（用于传递给 LLM）"""
         return list(self.schemas.values())
     
