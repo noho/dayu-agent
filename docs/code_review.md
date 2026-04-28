@@ -11,7 +11,7 @@
 - 写入 workspace/code-review-mmdd-HHMM.md （月份日期-小时分钟）。
 - 每发现一项编号后写入一项。输出格式：
 ```text
-### 编号-未修复-[修复风险（低/中/高）]-finding简述
+### 编号-未修复-[严重程度（低/中/高/严重）]-finding简述
 - **入口/函数**: 问题发生在什么执行入口或什么函数
 - **文件(行号)**: 具体位置
 - **输入场景**: 什么输入会触发问题
@@ -21,9 +21,10 @@
 - **直接证据**: 具体判断条件、参数传递路径、返回值或状态更新位置（行号）
 - **影响**: 错误 answer / 错误状态 / 静默失效 / 不可恢复 / 仅局部行为错误
 - **建议改法和验证点**
+- **修复风险（低/中/高**
 - **严重程度（低/中/高/严重）**
 ```
-- review结束给出按严重程度排序等完整列表。
+- review结束给出按修复风险排序等完整列表。
 
 ## 审查要求（极其严格）
 
@@ -428,19 +429,168 @@
   - 若发现执行问题，优先沿 `UI -> Service -> Contract preparation -> Host -> scene preparation -> Agent` 检查责任归属。
   - 只有在证据直接显示 Agent 本身错误时，才把 root cause 定位到 Agent；禁止因为现象出现在 Agent 输出上，就跳过 Host / Service 直接归因给模型或 prompt。
 
-### 6. 金融逻辑分层
+### 6. 多轮会话记忆子系统
+
+本节专门审查 `dayu/host/conversation_*.py` 实现的两层记忆模型（`pinned_state` 独立 + 单总池）、compaction 调度与跨档自适应。设计意图与不变量见 `docs/conversation_memory_optimization.md`、`dayu/host/README.md §10`。
+
+#### 6.1 两层结构边界是否清晰
+
+- **pinned_state 是否独立路径渲染、不计入 token budget**：检查 `_render_pinned_state_block` 输出是否在 `[Conversation Memory]` 系统块开头独立渲染；检查 `_resolve_memory_total_budget` / `build_messages` 链路上是否有任何分支错误地把 `pinned_state` 体积加进单总池消费。
+- **单总池消费顺序是否符合契约**（`forced raw → 老 raw → episode summaries`）：
+  - 强制保留段：`raw_tail[-recent_turns_floor:]` **不计入 budget**；
+  - 更老 raw turn：按 `extra_pool` 从新到老回放，装不下即 break；
+  - episode summaries：用剩余 `extra_pool` 从新到老填充，装不下即 break。
+- **Raw Transcript 是否物理保留**：检查 compaction 写回路径是否仅推进 `compacted_turn_count` 而**不删除** `transcript.turns` 内容；审计/回放是否仍可拿到全量原文。
+- 判定标准：若任一路径让 `pinned_state` 进入 budget 竞争、改变三段消费顺序、或物理删除 raw turn → 报告。
+
+#### 6.2 预算与触发公式是否与渲染口径一致
+
+- **预算公式**：`budget = clamp(max_context_tokens * memory_token_budget_ratio, memory_token_budget_floor, memory_token_budget_cap)`。检查 `_resolve_memory_total_budget` 的实现：
+  - 是否使用了真实的 `prepared_scene` 解析后的 `max_context_tokens`，而非 hardcoded 默认值；
+  - clamp 顺序是否为 `max(floor, min(cap, window*ratio))`；
+  - 当 `max_context_tokens <= 0` / 缺失时是否有明确兜底。
+- **触发公式**：`window_used = system_prompt + pinned + actual_episodic_in_prompt + uncompressed_raw_turns + user_text`。检查 `_select_compaction_candidate`：
+  - `actual_episodic_in_prompt` 是否**复用 `_build_memory_block` 的真实裁切结果**，而不是"求和所有 episodes"或"完全排除 episodes"两种废弃口径；
+  - 触发器与渲染器是否使用**同一份 budget**（不能各自 clamp 一次造成漂移）。
+- 判定标准：触发公式与 prompt 实际渲染口径出现任一项不一致（episode 算法、user_text 是否计入、pinned 是否计入、budget 数值不同）→ 报告。
+
+#### 6.3 双路径语义分离（`prepare_transcript` vs `schedule_compaction`）
+
+两条 compaction 触发入口语义必须严格分离：
+
+| 路径 | 时机 | `user_text` 形参 | 原因 |
+|---|---|---|---|
+| `prepare_transcript` | persist 之前（pre-persist） | **必须显式传入** | 当前轮用户消息尚未写入 transcript，需进入 `window_used` 估算 |
+| `schedule_compaction` | persist 之后（post-persist） | **不接收** | 用户消息已落入 `transcript.turns` 末位，再传会与 `uncompressed_raw_turns` 双计 |
+
+- 检查所有调用点（`scene_preparer.py::ConversationSessionState.persist_turn` / `prepare_transcript`）是否严格遵守上表；
+- 检查 `_select_compaction_candidate` 内部是否会把 `user_text_tokens` 重复加入 `window_used`（应仅在 `prepare_transcript` 链路上传入，且 `schedule_compaction` 链路必须传 0）；
+- 检查 `ConversationMemoryManagerProtocol` 接口定义是否在签名层面强制分离（`schedule_compaction` 不应有 `user_text` 形参，仅靠注释或运行时检查不够）。
+- 判定标准：任一调用点把 `user_text` 在 post-persist 路径再传一次、或接口允许 `schedule_compaction` 接 `user_text` → 报告。
+
+#### 6.4 单轮溢出阈值与 forced 轮数派生
+
+- **阈值公式**：`max_context_tokens / max(2, actual_forced_count + 1)`。检查 `_render_forced_turns`：
+  - 除数是否取**当前实际 forced 轮数 `actual_forced_count`**，而**不是** `settings.recent_turns_floor` 配置值；
+  - 当 `max_context_tokens <= 0` 时是否回落到 `settings.memory_token_budget_cap` 作为最后兜底；
+  - 阈值不应**直接等于** `memory_token_budget_cap`（与窗口解耦的反模式）。
+- **溢出降级顺序契约**（`_build_minimum_preserved_turn_view`，稳定不可颠倒）：
+  1. 保留 `user_text`（最新用户意图永不丢）；
+  2. 保留完整 `assistant_final`；
+  3. 丢弃 tool 调用/结果摘要；
+  4. 仍超预算 → 对 `assistant_final` 做末尾截断 + 显式 `...<truncated>` 标记。
+- 判定标准：若除数取配置 floor 而非实际轮数（导致新会话 1-2 轮时阈值被错误压低）、或降级顺序颠倒（先截最终回复后丢工具）→ 报告。
+
+#### 6.5 `recent_turns_floor` 语义是否为下限保底
+
+- 关键反转：`recent_turns_floor` 是**下限保底**（"至少保 N 轮"），不是上限封顶（"最多放 N 轮"）。
+- 检查 `select_turns` 是否存在任何分支把 `recent_turns_floor` 当上限使用（如 `min(recent_turns_floor, ...)`、轮数硬截断）；
+- 检查"老 raw turn 按 budget 回放"循环是否有错误的轮数上限阻断；budget 充足时应自然回放 15+ 轮、不被任何 floor 截断；
+- 检查 forced 段在 `budget=0`、`cap=0`、配置全错时仍能保最近 N 轮（反退化路径）。
+- 判定标准：若任一代码路径让 `recent_turns_floor` 表现为上限语义 → 报告。
+
+#### 6.6 pinned_state 演进与 compaction LLM 输出处理
+
+- **`ConversationPinnedStatePatch.apply_to` 字段级合并语义**：检查 patch 字段为 `None` 是否**仅表示"本次不动"**，而**非"清空"**（否则 LLM 漏输出某字段会导致旧值丢失）；空字符串/空数组与 `None` 的语义区分是否一致。
+- **`confirmed_facts` 是否永远完整保留**：检查 `_render_episode_summary` 与单总池裁切链路，episode summary 内的 `confirmed_facts` 字段不应参与 token 截断（财报反幻觉核心依赖）。
+- **compaction LLM 输出解析**：检查 `_parse_result` 对非法/缺字段/JSON 错误的输出是否**安全降级**（丢弃本次 patch、不污染 pinned_state），而不是把空值或异常态写回；
+- **`compacted_turn_count` 单调推进**：检查 compaction 写回是否**仅在 LLM 成功输出且乐观锁通过时**才推进；失败/取消/冲突路径下 `compacted_turn_count` 不应被推进。
+- 判定标准：patch 合并把缺省字段当清空、`confirmed_facts` 被裁切、LLM 异常输出污染 pinned_state、或 `compacted_turn_count` 在失败路径被推进 → 报告。
+
+#### 6.7 同步/异步 compaction 调度与乐观锁
+
+- **同步 compaction**（`prepare_transcript`）：本轮开始前，越过阈值则同步执行——确保本轮立即可跑。
+- **后台 compaction**（`schedule_compaction`）：本轮结束后异步调度——不阻塞用户感知。
+- **乐观锁写回**：以会话级 `revision` 为锁，写回前比对——若不一致**直接丢弃本次摘要结果，不覆盖**（"保持一致" > "后来者胜"）。
+- 检查项：
+  - 是否存在同时多个 `ConversationCompactionCoordinator` 实例对同一 session 写回不走乐观锁的路径；
+  - 后台 compaction task 取消/Host 重启时是否有半提交残留（部分写入 `episodes`、未推 `compacted_turn_count`）；
+  - 同步与后台路径是否共享同一套 `_select_compaction_candidate` / `_build_user_payload` 实现，避免双份代码漂移；
+  - compaction scene 调用失败/超时时是否会反复触发自身（无界自调度）。
+- 判定标准：乐观锁缺失/绕过、半提交、双份调度逻辑漂移、或失败后无界重试 → 报告。
+
+#### 6.8 跨档自适应（default 一份打天下）
+
+- **不分档配置原则**：`dayu/config/run.json` 的 `conversation_memory.default` 通过 `clamp(window * ratio, floor, cap)` 自动伸缩，**不应**为 1M / 256K / 128K / 32K 档分别写覆盖。
+- 检查项：
+  - `dayu/config/llm_models.json` 各 model entry 是否仍残留 `runtime_hints.conversation_memory` 块（设计已要求全删 19 处）；
+  - `dayu/cli/commands/init.py` 是否仍残留 `_build_conversation_memory_overrides` 函数或调用点（设计已要求删除整个函数）；
+  - 各档实际 budget 是否符合预期（1M=60K cap 截断 / 256K=25.6K 区间 / 128K=12.8K 区间 / 32K=4K floor 兜底）；
+  - 三处默认值（`run.json` / `ConversationMemorySettings` dataclass / `options.py` 校验）是否一致——若漂移，下次 plan 落地的字段语义会被静默错读。
+- **128K 档 headroom 风险**：检查文档/代码中是否提示——128K 档 compaction 阈值 89.6K 扣除单总池后留给"工具结果 + 财报材料"的有效空间约 38K，单轮材料过大会触发 compaction 抖动；调参方向应先调 `cap` / `compaction_trigger_context_ratio` 而非引入档位特化覆盖。
+- 判定标准：runtime_hints 残留、init 写覆盖残留、三处默认值漂移、或对 128K 档行为缺少有效说明 → 报告。
+
+#### 6.9 移除字段硬切换是否彻底
+
+`docs/conversation_memory_optimization.md §"移除字段（硬切换）"` 列出的旧字段必须**全部清空**：
+
+- `working_memory_max_turns`
+- `working_memory_token_budget_ratio` / `_floor` / `_cap`
+- `episodic_memory_token_budget_ratio` / `_floor` / `_cap`
+- `compaction_trigger_turn_count`
+- `compaction_trigger_token_ratio`
+
+检查项：
+- `grep -rn` 上述字段名在 `dayu/`、`tests/`、`docs/`、`workspace/config/` 应**返回空**；
+- `agent_execution_serialization.py` 的快照反序列化是否**显式拒绝**包含旧字段的快照（而非静默忽略）；
+- `ConversationMemorySettings` dataclass 是否仍保留任何旧字段作为"过渡兼容"（项目硬约束禁止兼容性代码）；
+- 配置 schema 校验（`options.py` 校验段）是否覆盖 4 个新字段：`memory_token_budget_*`（ratio ∈ [0,1] 有限数 / floor>0 / cap≥floor）、`recent_turns_floor≥0`、`compaction_trigger_context_ratio ∈ (0,1]`。
+- 判定标准：任一旧字段在生产代码或 schema 中残留、或新字段校验缺失 → 报告。
+
+#### 6.10 `conversation.enabled` 边界是否被尊重
+
+- 多轮记忆子系统**仅作用于 `conversation.enabled = true` 的 scene**（`interactive / wechat / prompt_mt`）；其它 scene（如 `prompt_st` 单轮）不应触发 transcript / compaction / pinned_state 装配。
+- 检查项：
+  - `scene_preparer.py::ConversationSessionState` 构造是否仅在 `conversation.enabled=true` 路径上执行；
+  - `prepare_transcript` / `schedule_compaction` 调用是否在 `conversation.enabled=false` scene 上被静默跳过（而非误触发空 transcript）；
+  - manifest 关闭多轮的 scene 走 `prompt --label` / `interactive --label` 入口时，CLI 是否直接拒绝执行（不静默退化成伪多轮）。
+- 判定标准：单轮 scene 误触发 conversation memory 装配、或多轮 scene 被本地覆写关闭后仍走 conversation 路径 → 报告。
+
+#### 6.11 估算函数与 token 口径是否一致
+
+- 涉及 token 估算的函数：`_estimate_tokens` / `_estimate_turn_tokens` / `_estimate_working_turn_view_tokens`。
+- 检查项：
+  - 三者是否使用**同一种估算方法**（不应一个按字符数除常数、另一个按 tokenizer 真实切分，造成 budget 计算不可比）；
+  - `_build_full_working_turn_view` 与 `_build_minimum_preserved_turn_view` 输出是否使用同一估算函数纳入 budget；
+  - episode summary 与 raw turn 估算是否口径一致（不能 raw 按 token 估、episode 按字符估）。
+- 判定标准：estimate 路径不一致导致 budget 在不同分支下数值漂移 → 报告。
+
+#### 6.12 测试是否覆盖关键不变量
+
+- 必须存在的回归测试（参见 `tests/engine/test_conversation_memory.py`）：
+  - `test_pinned_state_not_counted_in_budget`：pinned 不消耗 budget；
+  - `test_recent_turns_floor_forced_preserved`：单轮溢出预算时仍保留最近 N 轮；
+  - `test_recent_turns_floor_minimum_preserve_on_extreme_turn`：单轮 user_text 巨长时走 minimum_preserve；
+  - `test_total_pool_priority_recent_then_episodes`:总池消费顺序 working > episodic；
+  - `test_compaction_triggered_by_window_ratio`:占模型窗口 ratio 触发；
+  - `test_short_window_model_uses_floor`:小窗口模型走 floor；
+  - `test_forced_turn_overflow_threshold_decoupled_from_cap`:阈值与 cap 解耦；
+  - `test_forced_turn_overflow_threshold_uses_actual_forced_count`:除数取实际 forced 轮数；
+  - `test_compaction_trigger_does_not_count_episodes`:episodes 仅按 `_build_memory_block` 真实裁切结果计入；
+  - `test_schedule_compaction_passes_system_prompt_token_estimate`:`user_text_tokens == 0` 在 post-persist 路径；
+  - `test_default_conversation_memory_settings_match_runtime_default`:三处默认值一致性。
+- 检查覆盖率应 ≥ 80%（项目硬约束）。
+- 判定标准：上述任一回归测试缺失、或被改写后失去原有保护语义 → 报告。
+
+#### 6.13 产出要求
+
+- 每条问题需指出：违反的不变量（例如"`pinned_state` 不计入 budget"）、具体代码位置、可复现输入、对运行时的影响（错误压缩 / 上下文漏失 / 双计 / 阈值死代码）。
+- 不要把"调参建议"当作问题报告——除非默认值与设计文档/三处一致性测试明确冲突。
+- 引用设计意图时统一指向 `docs/conversation_memory_optimization.md` 与 `dayu/host/README.md §10`，避免与实现细节互相反推。
+
+### 7. 金融逻辑分层
 - 金融逻辑（SEC Item 编号解析、财务指标判断、filing 结构规则等）是否只出现在 `fins` 中。
 - `engine` 中是否混入了金融逻辑。
 - 金融逻辑中是否有规则硬编码（如公司名、固定 ticker）。
 - 同一 Form 的主路由 processor 与 fallback processor 之间是否存在互相 import。
 - 重点审查processor 提取数据的逻辑是否有bug。
 
-### 7. 运行参数传递
+### 8. 运行参数传递
 - config参数是否最终传到Host / Agent。
 - prompt asserts是否最终传到Agent。
 - CLI 参数 是否作为override 最高优先级最终传到Host / Agent。
 
-### 8. 代码质量
+### 9. 代码质量
 - 是否有硬编码 magic string / magic number（出现在生产路径中的）；工具 schema例外，工具 schema必须把字符串写在schema内，禁止使用常量定义。
 - 调用函数，被调用函数的签名是否和调用方期望的一致。
 - 函数是否使用object、any、json等无法进行严格类型检查的参数类型和返回值。
@@ -454,7 +604,7 @@
 - 是否pyright无错误。
 - 是否符合 AGENTS.md 的代码结构要求（函数扁平化、无嵌套类、docstring 等）。
 
-### 9. 性能（静态分析，无需 profiling）
+### 10. 性能（静态分析，无需 profiling）
 仅标记通过代码阅读即可判断的明显性能问题，不做猜测性优化建议。关注以下模式：
 - **循环内重复计算**：循环体内每次调用开销大的函数（如正则编译、文件 I/O、重复 JSON 解析），应提到循环外。
 - **低效数据结构**：用 `list` 做成员查找（`x in list`）而应用 `set`；用字符串拼接替代 `join`。
