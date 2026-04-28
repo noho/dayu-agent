@@ -755,3 +755,160 @@ def test_run_registry_implements_runtime_protocol(tmp_path: Path) -> None:
     from dayu.host.protocols import RunRegistryProtocol
 
     assert isinstance(registry, RunRegistryProtocol)
+
+
+@pytest.mark.unit
+def test_inmemory_release_resume_lease_warns_on_missing_pre_resume_state(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """pre_resume_state 为 NULL 时应输出告警并按 ACCEPTED_BY_HOST 降级回退。"""
+
+    store = InMemoryPendingConversationTurnStore()
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题一",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.ACCEPTED_BY_HOST,
+    )
+    # 模拟 pre_resume_state 字段损坏：手动写入 RESUMING 但不附带 pre_resume_state。
+    record = store._records[created.pending_turn_id]
+    store._records[created.pending_turn_id] = type(record)(
+        pending_turn_id=record.pending_turn_id,
+        session_id=record.session_id,
+        scene_name=record.scene_name,
+        user_text=record.user_text,
+        source_run_id=record.source_run_id,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        resumable=record.resumable,
+        state=PendingConversationTurnState.RESUMING,
+        resume_source_json=record.resume_source_json,
+        resume_attempt_count=record.resume_attempt_count,
+        last_resume_error_message=record.last_resume_error_message,
+        pre_resume_state=None,
+        metadata=record.metadata,
+    )
+
+    with caplog.at_level("WARNING"):
+        released = store.release_resume_lease(created.pending_turn_id)
+    assert released is not None
+    assert released.state is PendingConversationTurnState.ACCEPTED_BY_HOST
+    assert any("pre_resume_state 缺失" in r.message for r in caplog.records), (
+        "pre_resume_state 缺失时应输出告警"
+    )
+
+
+@pytest.mark.unit
+def test_inmemory_record_resume_failure_warns_on_missing_pre_resume_state(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """RESUMING 但 pre_resume_state 为 NULL 时，record_resume_failure 应告警并降级回退。"""
+
+    store = InMemoryPendingConversationTurnStore()
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题二",
+        source_run_id="run_2",
+        resumable=True,
+        state=PendingConversationTurnState.ACCEPTED_BY_HOST,
+    )
+    record = store._records[created.pending_turn_id]
+    store._records[created.pending_turn_id] = type(record)(
+        pending_turn_id=record.pending_turn_id,
+        session_id=record.session_id,
+        scene_name=record.scene_name,
+        user_text=record.user_text,
+        source_run_id=record.source_run_id,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        resumable=record.resumable,
+        state=PendingConversationTurnState.RESUMING,
+        resume_source_json=record.resume_source_json,
+        resume_attempt_count=record.resume_attempt_count,
+        last_resume_error_message=record.last_resume_error_message,
+        pre_resume_state=None,
+        metadata=record.metadata,
+    )
+
+    with caplog.at_level("WARNING"):
+        failed = store.record_resume_failure(created.pending_turn_id, error_message="boom")
+    assert failed.state is PendingConversationTurnState.ACCEPTED_BY_HOST
+    assert failed.last_resume_error_message == "boom"
+    assert any("pre_resume_state 缺失" in r.message for r in caplog.records), (
+        "pre_resume_state 缺失时应输出告警"
+    )
+
+
+@pytest.mark.unit
+def test_sqlite_release_resume_lease_warns_on_missing_pre_resume_state(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """SQLite 版 release_resume_lease 在 pre_resume_state 为 NULL 时应告警并降级回退。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLitePendingConversationTurnStore(host_store)
+
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题一",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.ACCEPTED_BY_HOST,
+    )
+    # 直接通过底层连接把 state 改成 RESUMING 同时把 pre_resume_state 置 NULL，
+    # 模拟数据损坏或 acquire 路径异常导致的字段缺失。
+    conn = host_store.get_connection()
+    conn.execute(
+        "UPDATE pending_conversation_turns SET state = ?, pre_resume_state = NULL WHERE pending_turn_id = ?",
+        (PendingConversationTurnState.RESUMING.value, created.pending_turn_id),
+    )
+    conn.commit()
+
+    with caplog.at_level("WARNING"):
+        released = store.release_resume_lease(created.pending_turn_id)
+    assert released is not None
+    assert released.state is PendingConversationTurnState.ACCEPTED_BY_HOST
+    assert any("pre_resume_state 缺失" in r.message for r in caplog.records), (
+        "pre_resume_state 缺失时应输出告警"
+    )
+
+
+@pytest.mark.unit
+def test_sqlite_record_resume_failure_warns_on_missing_pre_resume_state(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """SQLite 版 record_resume_failure 在 pre_resume_state 为 NULL 时应告警并降级回退。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLitePendingConversationTurnStore(host_store)
+
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题二",
+        source_run_id="run_2",
+        resumable=True,
+        state=PendingConversationTurnState.ACCEPTED_BY_HOST,
+    )
+    conn = host_store.get_connection()
+    conn.execute(
+        "UPDATE pending_conversation_turns SET state = ?, pre_resume_state = NULL WHERE pending_turn_id = ?",
+        (PendingConversationTurnState.RESUMING.value, created.pending_turn_id),
+    )
+    conn.commit()
+
+    with caplog.at_level("WARNING"):
+        failed = store.record_resume_failure(created.pending_turn_id, error_message="boom")
+    assert failed.state is PendingConversationTurnState.ACCEPTED_BY_HOST
+    assert failed.last_resume_error_message == "boom"
+    assert any("pre_resume_state 缺失" in r.message for r in caplog.records), (
+        "pre_resume_state 缺失时应输出告警"
+    )

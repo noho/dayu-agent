@@ -10,7 +10,10 @@ from typing import cast
 
 import pytest
 
-from dayu.host.cancellation_bridge import CancellationBridge
+from dayu.host.cancellation_bridge import (
+    CancellationBridge,
+    _MAX_CONSECUTIVE_POLL_FAILURES,
+)
 from dayu.host.protocols import RunRegistryProtocol
 from dayu.contracts.run import RunRecord, RunState
 from dayu.contracts.cancellation import CancellationToken
@@ -202,4 +205,85 @@ class TestCancellationBridgePolling:
 
         # 最终检测到取消请求
         assert token.is_cancelled()
+        bridge.stop()
+
+    @pytest.mark.unit
+    def test_stops_after_consecutive_failures_reach_threshold(self) -> None:
+        """持续异常达到阈值后退出轮询，不再无限重试。"""
+
+        class _AlwaysFailingRegistry:
+            """每次查询都抛异常的 registry。"""
+
+            def __init__(self) -> None:
+                self.call_count = 0
+
+            def get_run(self, run_id: str) -> RunRecord | None:
+                self.call_count += 1
+                _ = run_id
+                raise RuntimeError("db error")
+
+        registry = _AlwaysFailingRegistry()
+        token = CancellationToken()
+        bridge = CancellationBridge(
+            run_registry=cast(RunRegistryProtocol, registry),
+            run_id="run_test",
+            token=token,
+            poll_interval=0.01,
+        )
+        bridge.start()
+        # 等待轮询线程退出
+        thread = bridge._thread
+        assert thread is not None
+        thread.join(timeout=2.0)
+        assert not thread.is_alive(), "持续失败达阈值后应退出轮询"
+        # token 不应被取消（无法判定取消请求时不应误判取消）
+        assert not token.is_cancelled()
+        # 调用次数应在阈值附近（允许少量偏差，但远小于无限循环）
+        assert registry.call_count >= _MAX_CONSECUTIVE_POLL_FAILURES
+        assert registry.call_count <= _MAX_CONSECUTIVE_POLL_FAILURES + 2
+        bridge.stop()
+
+    @pytest.mark.unit
+    def test_failure_counter_resets_on_success(self) -> None:
+        """偶发异常后能成功一次查询，失败计数应清零，不会过早退出。"""
+
+        class _IntermittentRegistry:
+            """前若干次查询失败，之后稳定成功。"""
+
+            def __init__(self, fail_times: int) -> None:
+                self._fail_times = fail_times
+                self.call_count = 0
+
+            def get_run(self, run_id: str) -> RunRecord | None:
+                self.call_count += 1
+                if self.call_count <= self._fail_times:
+                    raise RuntimeError("transient error")
+                return RunRecord(
+                    run_id=run_id,
+                    session_id=None,
+                    service_type="test",
+                    scene_name=None,
+                    state=RunState.RUNNING,
+                    created_at=datetime.now(timezone.utc),
+                    cancel_requested_at=None,
+                    owner_pid=1,
+                )
+
+        # 失败次数小于阈值，且后续始终成功；轮询线程应保持运行。
+        fail_times = max(1, _MAX_CONSECUTIVE_POLL_FAILURES - 2)
+        registry = _IntermittentRegistry(fail_times=fail_times)
+        token = CancellationToken()
+        bridge = CancellationBridge(
+            run_registry=cast(RunRegistryProtocol, registry),
+            run_id="run_test",
+            token=token,
+            poll_interval=0.01,
+        )
+        bridge.start()
+        # 给足时间让失败次数累计后再清零，并继续多轮成功轮询。
+        time.sleep(0.3)
+        thread = bridge._thread
+        assert thread is not None
+        assert thread.is_alive(), "失败计数清零后轮询线程应继续运行"
+        assert not token.is_cancelled()
         bridge.stop()

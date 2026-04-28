@@ -8,11 +8,18 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING
 
-from dayu.contracts.run import TERMINAL_STATES, RunState
+from dayu.contracts.run import TERMINAL_STATES
 from dayu.contracts.cancellation import CancellationToken
+from dayu.log import Log
 
 if TYPE_CHECKING:
     from dayu.host.protocols import RunRegistryProtocol
+
+
+_MODULE = "HOST.CANCELLATION_BRIDGE"
+
+# 连续轮询失败次数达到该阈值后停止轮询，避免在持续性异常下空转消耗资源。
+_MAX_CONSECUTIVE_POLL_FAILURES = 10
 
 
 class CancellationBridge:
@@ -79,6 +86,7 @@ class CancellationBridge:
     def _poll_loop(self) -> None:
         """后台轮询循环。"""
 
+        consecutive_failures = 0
         while not self._stop_event.is_set():
             try:
                 run = self._run_registry.get_run(self._run_id)
@@ -91,9 +99,26 @@ class CancellationBridge:
                 if run.state in TERMINAL_STATES:
                     # run 已完成（SUCCEEDED/FAILED），无需继续轮询
                     break
-            except Exception:  # noqa: BLE001
-                # 查询失败不中断轮询，下次重试
-                pass
+                consecutive_failures = 0
+            except Exception as exc:  # noqa: BLE001
+                # 查询失败不立即中断轮询，但累计失败次数；持续失败到阈值后退出，
+                # 避免在系统性异常下空转消耗资源。
+                consecutive_failures += 1
+                Log.warn(
+                    "CancellationBridge 轮询失败: "
+                    f"run_id={self._run_id}, "
+                    f"consecutive_failures={consecutive_failures}, "
+                    f"error={exc}",
+                    module=_MODULE,
+                )
+                if consecutive_failures >= _MAX_CONSECUTIVE_POLL_FAILURES:
+                    Log.error(
+                        "CancellationBridge 连续轮询失败已达阈值，停止轮询: "
+                        f"run_id={self._run_id}, "
+                        f"max_consecutive_failures={_MAX_CONSECUTIVE_POLL_FAILURES}",
+                        module=_MODULE,
+                    )
+                    break
             self._stop_event.wait(timeout=self._poll_interval)
 
 

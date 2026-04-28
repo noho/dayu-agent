@@ -421,6 +421,13 @@ class InMemoryPendingConversationTurnStore:
             return None
         if existing.state is not PendingConversationTurnState.RESUMING:
             return existing
+        if existing.pre_resume_state is None:
+            Log.warn(
+                "pending turn pre_resume_state 缺失，按 ACCEPTED_BY_HOST 降级回退: "
+                f"pending_turn_id={existing.pending_turn_id}, "
+                f"session_id={existing.session_id}",
+                module=MODULE,
+            )
         restored_state = existing.pre_resume_state or PendingConversationTurnState.ACCEPTED_BY_HOST
         updated = PendingConversationTurn(
             pending_turn_id=existing.pending_turn_id,
@@ -521,6 +528,13 @@ class InMemoryPendingConversationTurnStore:
         )
         # 失败路径一并回退 RESUMING lease；非 RESUMING 则仅写错误消息。
         if existing.state is PendingConversationTurnState.RESUMING:
+            if existing.pre_resume_state is None:
+                Log.warn(
+                    "pending turn pre_resume_state 缺失，按 ACCEPTED_BY_HOST 降级回退: "
+                    f"pending_turn_id={existing.pending_turn_id}, "
+                    f"session_id={existing.session_id}",
+                    module=MODULE,
+                )
             restored_state = existing.pre_resume_state or PendingConversationTurnState.ACCEPTED_BY_HOST
             new_pre_resume_state: PendingConversationTurnState | None = None
         else:
@@ -978,6 +992,13 @@ class SQLitePendingConversationTurnStore:
                 early_row = row
             else:
                 pre_resume_state_raw = row["pre_resume_state"] if "pre_resume_state" in row.keys() else None
+                if not pre_resume_state_raw:
+                    Log.warn(
+                        "pending turn pre_resume_state 缺失，按 ACCEPTED_BY_HOST 降级回退: "
+                        f"pending_turn_id={normalized_pending_turn_id}, "
+                        f"session_id={str(row['session_id'])}",
+                        module=MODULE,
+                    )
                 restored_state_value = (
                     str(pre_resume_state_raw)
                     if pre_resume_state_raw
@@ -1123,6 +1144,13 @@ class SQLitePendingConversationTurnStore:
                 current_state = str(row["state"])
                 if current_state == PendingConversationTurnState.RESUMING.value:
                     pre_resume_state_raw = row["pre_resume_state"] if "pre_resume_state" in row.keys() else None
+                    if not pre_resume_state_raw:
+                        Log.warn(
+                            "pending turn pre_resume_state 缺失，按 ACCEPTED_BY_HOST 降级回退: "
+                            f"pending_turn_id={normalized_pending_turn_id}, "
+                            f"session_id={str(row['session_id'])}",
+                            module=MODULE,
+                        )
                     restored_state_value = (
                         str(pre_resume_state_raw)
                         if pre_resume_state_raw
