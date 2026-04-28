@@ -67,7 +67,10 @@ def main() -> int:
             from dayu.cli.commands.write import run_write_command
 
             return run_write_command(args)
-        return 0
+        # argparse subparsers 已声明 dest="command", required=True，未匹配
+        # 任何已注册命令时会在 parse_arguments() 阶段直接退出，因此本处
+        # 不再出现"未命中分支"的运行时分支。
+        raise AssertionError(f"未识别的 CLI 命令: {args.command!r}")
     except KeyboardInterrupt:
         # 信号 handler（sync_signals._handler）在收到 SIGINT 时先执行
         # `coordinator.settle_active_runs(trigger="signal:SIGINT")`

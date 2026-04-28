@@ -12,6 +12,7 @@ from dayu.contracts.events import AppEvent
 from dayu.contracts.session import SessionSource
 from dayu.host.protocols import ConversationalExecutionGatewayProtocol, PendingTurnSummary
 from dayu.contracts.execution_metadata import normalize_execution_delivery_context
+from dayu.prompting.scene_definition import PromptManifestError
 from dayu.services.concurrency_lanes import resolve_contract_concurrency_lane
 from dayu.services.contract_preparation import prepare_execution_contract
 from dayu.services.contracts import (
@@ -211,6 +212,8 @@ class ChatService(ChatServiceProtocol):
             accepted_scene = self.scene_execution_acceptance_preparer.prepare(scene_name, request.execution_options)
         except FileNotFoundError as exc:
             raise ValueError(f"scene 不存在: {scene_name}") from exc
+        except PromptManifestError as exc:
+            raise ValueError(f"scene manifest 配置损坏: scene={scene_name}, 详情={exc}") from exc
         return _PreparedChatTurnContext(
             scene_name=scene_name,
             user_message=user_message,

@@ -50,6 +50,7 @@ from dayu.host.prepared_turn import (
 )
 from dayu.log import Log
 from dayu.prompting.scene_definition import (
+    PromptManifestError,
     SceneConversationDefinition,
     SceneDefinition,
     SceneModelDefinition,
@@ -1111,3 +1112,81 @@ def test_submit_turn_session_locks_do_not_accumulate_after_consumption() -> None
     # 驱动 GC，让 WeakValueDictionary 清理无强引用的锁条目。
     gc.collect()
     assert len(service._session_locks) == 0
+
+
+@pytest.mark.unit
+def test_submit_turn_translates_prompt_manifest_error_to_value_error() -> None:
+    """scene manifest 损坏时应抛出含"manifest 配置损坏"语义的 ValueError。"""
+
+    class _BrokenManifestPreparer(_FakeSceneExecutionAcceptancePreparer):
+        """模拟 manifest 加载失败时抛出 PromptManifestError 的 preparer。"""
+
+        def prepare(
+            self,
+            scene_name: str,
+            execution_options: ExecutionOptions | None = None,
+        ) -> AcceptedSceneExecution:
+            raise PromptManifestError("fragment.order 不允许重复")
+
+    resolver = _BrokenManifestPreparer()
+    session_registry = StubSessionRegistry()
+    session_registry.create_session(source=SessionSource.CLI, session_id="s1")
+    host = Host(
+        executor=StubHostExecutor(),  # type: ignore[arg-type]
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=StubRunRegistry(),  # type: ignore[arg-type]
+        pending_turn_store=StubPendingTurnStore(),  # type: ignore[arg-type]
+    )
+    service = ChatService(
+        host=host,
+        scene_execution_acceptance_preparer=cast(SceneExecutionAcceptancePreparer, resolver),
+        company_name_resolver=lambda ticker: f"{ticker}-NAME",
+        session_source=SessionSource.API,
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(ValueError, match="manifest 配置损坏"):
+            await service.submit_turn(
+                ChatTurnRequest(session_id="s1", user_text="hello", ticker="AAPL"),
+            )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.unit
+def test_submit_turn_translates_missing_scene_to_value_error() -> None:
+    """scene 不存在时应抛出含"scene 不存在"语义的 ValueError。"""
+
+    class _MissingScenePreparer(_FakeSceneExecutionAcceptancePreparer):
+        """模拟 scene 文件缺失时抛出 FileNotFoundError 的 preparer。"""
+
+        def prepare(
+            self,
+            scene_name: str,
+            execution_options: ExecutionOptions | None = None,
+        ) -> AcceptedSceneExecution:
+            raise FileNotFoundError(scene_name)
+
+    resolver = _MissingScenePreparer()
+    session_registry = StubSessionRegistry()
+    session_registry.create_session(source=SessionSource.CLI, session_id="s1")
+    host = Host(
+        executor=StubHostExecutor(),  # type: ignore[arg-type]
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=StubRunRegistry(),  # type: ignore[arg-type]
+        pending_turn_store=StubPendingTurnStore(),  # type: ignore[arg-type]
+    )
+    service = ChatService(
+        host=host,
+        scene_execution_acceptance_preparer=cast(SceneExecutionAcceptancePreparer, resolver),
+        company_name_resolver=lambda ticker: f"{ticker}-NAME",
+        session_source=SessionSource.API,
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(ValueError, match="scene 不存在"):
+            await service.submit_turn(
+                ChatTurnRequest(session_id="s1", user_text="hello", ticker="AAPL"),
+            )
+
+    asyncio.run(scenario())
