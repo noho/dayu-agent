@@ -439,6 +439,10 @@ class WritePipelineRunner:
                 existing_result = chapter_results.get(task.title)
                 if self._should_skip_with_resume(existing_result):
                     Log.info(f"[单章模式] 显式指定章节，强制重跑: {task.title}", module=MODULE)
+                # 单章重跑必须先清空旧产物，否则后续 fallback 路径
+                # 会读到陈旧的最终正文/中间稿，污染本次重写结果。
+                self._store.purge_chapter_artifacts(task)
+                chapter_results.pop(task.title, None)
                 try:
                     result = self._run_single_chapter(
                         task=task,
@@ -529,6 +533,9 @@ class WritePipelineRunner:
                         Log.info(f"跳过已完成章节: {_DECISION_CHAPTER_TITLE}", module=MODULE)
                         decision_result = existing_decision
                 if decision_result is None:
+                    # 统一原则：章节即将重写时清空旧阶段产物，避免读到陈旧最终正文/中间稿。
+                    self._store.purge_chapter_artifacts(decision_task)
+                    chapter_results.pop(_DECISION_CHAPTER_TITLE, None)
                     self._check_cancellation()
                     try:
                         decision_result = self._run_single_chapter(
@@ -573,10 +580,17 @@ class WritePipelineRunner:
             item_rules=chapters_by_title[_OVERVIEW_CHAPTER_TITLE].item_rules,
         )
         existing_overview = chapter_results.get(_OVERVIEW_CHAPTER_TITLE)
+        if chapter_filter == _OVERVIEW_CHAPTER_TITLE:
+            if self._should_skip_with_resume(existing_overview):
+                Log.info(f"[单章模式] 显式指定章节，强制重跑: {_OVERVIEW_CHAPTER_TITLE}", module=MODULE)
+            existing_overview = None
         if self._should_skip_with_resume(existing_overview):
             Log.info(f"跳过已完成章节: {_OVERVIEW_CHAPTER_TITLE}", module=MODULE)
             overview_result = existing_overview
         else:
+            # 统一原则：章节即将重写时清空旧阶段产物，避免读到陈旧最终正文/中间稿。
+            self._store.purge_chapter_artifacts(overview_task)
+            chapter_results.pop(_OVERVIEW_CHAPTER_TITLE, None)
             overview_dependency_tasks = _build_overview_dependency_tasks(layout)
             if chapter_filter == _OVERVIEW_CHAPTER_TITLE and not self._write_config.force:
                 resolved_overview_results, precheck_errors = self._resolve_overview_single_chapter_prerequisites(
@@ -734,6 +748,9 @@ class WritePipelineRunner:
             if self._should_skip_with_resume(existing_result):
                 Log.info(f"跳过已完成章节: {task.title}", module=MODULE)
                 continue
+            # 统一原则：章节即将重写时清空旧阶段产物，避免读到陈旧最终正文/中间稿。
+            self._store.purge_chapter_artifacts(task)
+            chapter_results.pop(task.title, None)
             pending_tasks.append(task)
         if not pending_tasks:
             return chapter_results

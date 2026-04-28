@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import tempfile
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -374,6 +375,25 @@ class ArtifactStore:
 
         self._persist_chapter_artifacts(result)
 
+    def purge_chapter_artifacts(self, task: ChapterTask) -> None:
+        """清除指定章节的全部历史产物（最终正文 + 阶段产物 + 章节子目录）。
+
+        触发时机：
+        - 单章重写（``cli write --chapter``）显式重跑某章前，先把旧产物删除，
+          避免后续 fallback 路径读到陈旧的最终正文或中间稿。
+
+        Args:
+            task: 待清理章节任务。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        self._purge_chapter_artifacts(task)
+
     def load_latest_failed_chapter_content(self, task: ChapterTask) -> str:
         """公开加载章节失败时的最新中间稿。"""
 
@@ -620,6 +640,7 @@ class ArtifactStore:
             if current.signature == signature:
                 return current
             Log.warn("检测到 manifest 签名变更，将重新开始从头写作", module=MODULE)
+            self._purge_stale_run_artifacts()
 
         return RunManifest(
             version="write_manifest_v1",
@@ -628,6 +649,84 @@ class ArtifactStore:
             chapter_results={},
             company_facets=None,
         )
+
+    def _purge_stale_run_artifacts(self) -> None:
+        """清空 chapters/ 目录下的全部历史产物以及 sources_dedup.json。
+
+        当 manifest 签名变更时，旧的章节正文/中间稿/sources 落盘文件不再与
+        新的运行匹配，必须主动清理；否则单章 fallback 与决策章节恢复路径
+        会读到陈旧文件，污染本次报告。
+
+        清理失败被降级为 warning 日志，不阻塞主流程：清理是恢复保证，
+        即便残留也由后续覆盖写入或人工介入处置。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        try:
+            if self._chapters_dir.exists():
+                for entry in self._chapters_dir.iterdir():
+                    if entry.is_dir():
+                        shutil.rmtree(entry)
+                    else:
+                        entry.unlink(missing_ok=True)
+                Log.info(
+                    f"已清理 chapters 目录下陈旧产物: {self._chapters_dir}",
+                    module=MODULE,
+                )
+        except OSError as exc:
+            Log.warning(
+                f"清理 chapters 目录失败，可能残留陈旧文件: dir={self._chapters_dir} error={exc}",
+                module=MODULE,
+            )
+        sources_path = self._output_dir / "sources_dedup.json"
+        try:
+            if sources_path.exists():
+                sources_path.unlink()
+                Log.info(f"已清理陈旧 sources_dedup.json: {sources_path}", module=MODULE)
+        except OSError as exc:
+            Log.warning(
+                f"清理 sources_dedup.json 失败: path={sources_path} error={exc}",
+                module=MODULE,
+            )
+
+    def _purge_chapter_artifacts(self, task: ChapterTask) -> None:
+        """清除指定章节的最终正文与阶段产物子目录。
+
+        Args:
+            task: 待清理章节任务。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        chapter_path = self._chapter_file_path(task.index, task.title)
+        try:
+            chapter_path.unlink(missing_ok=True)
+        except OSError as exc:
+            Log.warning(
+                f"清理章节最终正文失败: path={chapter_path} error={exc}",
+                module=MODULE,
+            )
+        chapter_dir = chapter_path.parent / chapter_path.stem
+        if chapter_dir.exists():
+            try:
+                shutil.rmtree(chapter_dir)
+            except OSError as exc:
+                Log.warning(
+                    f"清理章节阶段产物目录失败: dir={chapter_dir} error={exc}",
+                    module=MODULE,
+                )
 
     def _persist_manifest(self, *, manifest: RunManifest, chapter_results: dict[str, ChapterResult]) -> None:
         """持久化运行清单。
