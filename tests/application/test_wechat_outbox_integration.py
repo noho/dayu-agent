@@ -16,7 +16,7 @@ from dayu.host.reply_outbox_store import InMemoryReplyOutboxStore
 from dayu.services.contracts import ChatPendingTurnView, ChatResumeRequest, ChatTurnRequest, ChatTurnSubmission
 from dayu.services.reply_delivery_service import ReplyDeliveryService
 from dayu.wechat.daemon import WeChatDaemon
-from dayu.wechat.ilink_client import IlinkApiError, QRCodeLoginStatus, QRCodeLoginTicket
+from dayu.wechat.ilink_client import QRCodeLoginStatus, QRCodeLoginTicket
 from dayu.wechat.state_store import FileWeChatStateStore, WeChatDaemonState, build_wechat_session_id
 from tests.application.conftest import StubHostExecutor, StubRunRegistry, StubSessionRegistry
 
@@ -241,7 +241,7 @@ def test_wechat_process_once_marks_retryable_failure_when_delivery_errors(tmp_pa
         updates_payloads=[
             {"ret": 0, "msgs": [_build_text_message(text="问题", context_token="ctx-2")], "get_updates_buf": "cursor-2"}
         ],
-        fail_send=IlinkApiError("temporary failure", status_code=500),
+        fail_send=ConnectionError("temporary failure"),
     )
     daemon = WeChatDaemon(
         chat_service=chat_service,

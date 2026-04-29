@@ -543,6 +543,8 @@ def _normalize_url_for_http(url: str) -> str:
     parsed = urlparse(url)
     if not parsed.scheme or not parsed.netloc:
         raise ValueError(f"无效 URL: {url}")
+    if parsed.scheme.lower() not in _ALLOWED_SCHEMES:
+        raise ValueError(f"不允许的 URL scheme: {parsed.scheme} (url={url})")
 
     hostname = parsed.hostname or ""
     if not hostname:

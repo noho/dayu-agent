@@ -417,7 +417,7 @@ class _BusinessFailingIlinkClient(_FakeIlinkClient):
 
 
 class _TransientFailingIlinkClient(_FakeIlinkClient):
-    """发送文本时持续返回可重试错误。"""
+    """发送文本时持续抛出可重试的网络错误（非 IlinkApiError，模拟连接异常）。"""
 
     async def send_text_message(
         self,
@@ -433,7 +433,7 @@ class _TransientFailingIlinkClient(_FakeIlinkClient):
             text=text,
             group_id=group_id,
         )
-        raise IlinkApiError("iLink HTTP 错误: 503", status_code=503, payload={"ret": 0})
+        raise ConnectionError("transient network failure")
 
 
 class _ThreadRecordingStateStore(FileWeChatStateStore):
@@ -2009,30 +2009,46 @@ def test_rebuild_wechat_delivery_context_with_group() -> None:
 
 
 @pytest.mark.unit
-def test_is_retryable_delivery_error_non_ilink_error() -> None:
-    """非 IlinkApiError 的异常始终可重试。"""
+def test_is_retryable_delivery_error_non_ilink_runtime_error() -> None:
+    """非 IlinkApiError 的运行时异常（含网络错误）保留可重试兜底。"""
 
     assert _is_retryable_delivery_error(RuntimeError("network")) is True
+    assert _is_retryable_delivery_error(ConnectionError("conn refused")) is True
+    assert _is_retryable_delivery_error(TimeoutError("timeout")) is True
 
 
 @pytest.mark.unit
-def test_is_retryable_delivery_error_business_ret_code() -> None:
-    """IlinkApiError 有 business_ret_code 时不可重试。"""
+def test_is_retryable_delivery_error_programming_errors_not_retryable() -> None:
+    """编程类错误重试无法恢复，必须判为不可重试。"""
+
+    for exc in (
+        TypeError("bad type"),
+        AttributeError("missing attr"),
+        ValueError("bad value"),
+        KeyError("missing key"),
+        NotImplementedError("todo"),
+    ):
+        assert _is_retryable_delivery_error(exc) is False
+
+
+@pytest.mark.unit
+def test_is_retryable_delivery_error_ilink_business_ret_code() -> None:
+    """IlinkApiError 携带 business_ret_code 时不可重试。"""
 
     exc = IlinkApiError("biz fail", status_code=200, business_ret_code=-1)
     assert _is_retryable_delivery_error(exc) is False
 
 
 @pytest.mark.unit
-def test_is_retryable_delivery_error_no_status_code() -> None:
-    """IlinkApiError 无 status_code 时可重试。"""
+def test_is_retryable_delivery_error_ilink_without_status_code() -> None:
+    """IlinkApiError 即使无 status_code 也属于"已收到 iLink 响应"，不可重试。"""
 
     exc = IlinkApiError("unknown")
-    assert _is_retryable_delivery_error(exc) is True
+    assert _is_retryable_delivery_error(exc) is False
 
 
 @pytest.mark.unit
-def test_is_retryable_delivery_error_4xx_not_retryable() -> None:
+def test_is_retryable_delivery_error_ilink_4xx_not_retryable() -> None:
     """4xx 状态码的 IlinkApiError 不可重试。"""
 
     exc = IlinkApiError("bad request", status_code=400)
@@ -2040,11 +2056,11 @@ def test_is_retryable_delivery_error_4xx_not_retryable() -> None:
 
 
 @pytest.mark.unit
-def test_is_retryable_delivery_error_5xx_retryable() -> None:
-    """5xx 状态码的 IlinkApiError 可重试。"""
+def test_is_retryable_delivery_error_ilink_5xx_not_retryable() -> None:
+    """iLink 已返回 5xx 响应也按业务约定不可重试（避免重复推送）。"""
 
     exc = IlinkApiError("server error", status_code=500)
-    assert _is_retryable_delivery_error(exc) is True
+    assert _is_retryable_delivery_error(exc) is False
 
 
 @pytest.mark.unit
@@ -2612,3 +2628,46 @@ def test_ensure_authenticated_no_bot_token_after_confirm(tmp_path: Path) -> None
 
     with pytest.raises(RuntimeError, match="bot_token"):
         asyncio.run(daemon.ensure_authenticated(force_relogin=True))
+
+
+@pytest.mark.unit
+def test_process_once_isolates_group_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """当某个 chat_key 群组的处理协程抛异常时，其他群组应继续完成。"""
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    store.save(WeChatDaemonState(bot_token="token-1", base_url="https://ilink.example"))
+    service = _FakeChatService(
+        scripted_turns=[
+            _ScriptedTurn(events=(AppEvent(type=AppEventType.FINAL_ANSWER, payload={"content": "答1"}, meta={}),)),
+        ]
+    )
+    client = _FakeIlinkClient(
+        updates_payloads=[
+            {
+                "ret": 0,
+                "msgs": [
+                    _build_text_message(text="ok", context_token="ctx-ok", from_user_id="user-ok@im.wechat"),
+                    _build_text_message(text="boom", context_token="ctx-boom", from_user_id="user-boom@im.wechat"),
+                ],
+                "get_updates_buf": "cursor-1",
+            },
+        ]
+    )
+    daemon = _build_daemon(chat_service=service, state_store=store, client=client)
+
+    real_handle = daemon._handle_inbound_message_group
+
+    async def _selective_handler(messages: list, state: WeChatDaemonState) -> int:
+        if messages and messages[0].get("from_user_id") == "user-boom@im.wechat":
+            raise RuntimeError("group failure")
+        return await real_handle(messages, state)
+
+    monkeypatch.setattr(daemon, "_handle_inbound_message_group", _selective_handler)
+
+    processed = asyncio.run(daemon.process_once())
+
+    # 仅成功的 chat_key 计入；失败的 chat_key 不影响 cursor 推进
+    assert processed == 1
+    assert store.load().get_updates_buf == "cursor-1"

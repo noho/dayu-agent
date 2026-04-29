@@ -41,6 +41,7 @@ from dayu.engine.tools.web_tools import (
     _fetch_and_convert_content,
     _is_safe_public_url,
     _is_sec_host,
+    _normalize_url_for_http,
     _normalize_whitespace,
     _prepare_call_session,
     _resolve_timeout_budget,
@@ -4671,3 +4672,23 @@ def test_detect_bot_challenge_catches_antibot() -> None:
 
     assert result.challenge_detected is True
     assert any("antibot" in s for s in result.challenge_signals)
+
+
+def test_normalize_url_for_http_rejects_non_http_scheme() -> None:
+    """_normalize_url_for_http 应拒绝非 http(s) scheme，作为统一入口收敛 SSRF/本地文件风险。"""
+
+    for bad in (
+        "file:///etc/passwd",
+        "javascript:alert(1)",
+        "ftp://example.com/x",
+        "data:text/plain,hello",
+    ):
+        with pytest.raises(ValueError):
+            _normalize_url_for_http(bad)
+
+
+def test_normalize_url_for_http_accepts_http_and_https() -> None:
+    """合法 http(s) URL 应正常归一化。"""
+
+    assert _normalize_url_for_http("http://example.com/a").startswith("http://example.com/")
+    assert _normalize_url_for_http("https://example.com/b?q=1").startswith("https://example.com/")

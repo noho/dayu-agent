@@ -26,7 +26,7 @@ Review 要求：
 - 重点关注：逻辑错误、边界条件、回归风险、类型问题、异常处理、测试遗漏、与现有架构约束不一致的地方
 输出：
 - review结束后给出review意见
-- 对修复报告中对findings逐条给出review结论
+- 对修复报告中的findings逐条给出review结论
 - 全部findings review完毕后给出是否可commit的结论
 等我给你另外一个Agent对 findings 的修复报告再开始工作。
 

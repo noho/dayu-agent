@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from concurrent.futures import Future as ConcurrentFuture, ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -283,16 +284,37 @@ def _rebuild_wechat_delivery_context(
     )
 
 
-def _is_retryable_delivery_error(exc: Exception) -> bool:
-    """判断发送失败是否允许后续重试。"""
+_NON_RETRYABLE_DELIVERY_PROGRAMMING_ERRORS: tuple[type[BaseException], ...] = (
+    TypeError,
+    AttributeError,
+    ValueError,
+    KeyError,
+    NotImplementedError,
+)
 
-    if not isinstance(exc, IlinkApiError):
-        return True
-    if exc.business_ret_code is not None:
+
+def _is_retryable_delivery_error(exc: Exception) -> bool:
+    """判断发送失败是否允许后续重试。
+
+    判定规则：
+    - `IlinkApiError`：iLink 已返回错误响应，按业务约定一律不可重试。
+    - 编程类错误（`TypeError`/`AttributeError`/`ValueError`/`KeyError`/
+      `NotImplementedError`）：重试无法恢复，直接判为不可重试。
+    - 其它异常（网络、超时、未知运行时错误）：保留可重试兜底。
+
+    Args:
+        exc: 发送链路上抛出的异常实例。
+
+    Returns:
+        允许后续重试返回 ``True``；否则返回 ``False``。
+
+    Raises:
+        无。
+    """
+
+    if isinstance(exc, IlinkApiError):
         return False
-    if exc.status_code is None:
-        return True
-    if 400 <= exc.status_code < 500:
+    if isinstance(exc, _NON_RETRYABLE_DELIVERY_PROGRAMMING_ERRORS):
         return False
     return True
 
@@ -1035,13 +1057,27 @@ class WeChatDaemon:
         if not isinstance(messages, list):
             messages = []
         structured_messages = [message for message in messages if isinstance(message, dict)]
-        processed_counts = await asyncio.gather(
+        group_results = await asyncio.gather(
             *(
                 self._handle_inbound_message_group(message_group, state)
                 for message_group in _group_inbound_messages_by_chat_key(structured_messages)
-            )
+            ),
+            return_exceptions=True,
         )
-        processed_count = sum(processed_counts)
+        processed_count = 0
+        for group_result in group_results:
+            if isinstance(group_result, BaseException):
+                tb_text = "".join(
+                    traceback.format_exception(
+                        type(group_result), group_result, group_result.__traceback__
+                    )
+                )
+                Log.error(
+                    f"处理 chat_key 群组失败，本组按 0 条计入: {group_result!r}\n{tb_text}",
+                    module=MODULE,
+                )
+                continue
+            processed_count += group_result
         next_cursor = payload.get("get_updates_buf")
         if isinstance(next_cursor, str) and next_cursor:
             state.get_updates_buf = next_cursor
