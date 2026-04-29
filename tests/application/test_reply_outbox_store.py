@@ -13,6 +13,7 @@ from dayu.host.host_store import HostStore
 from dayu.host.protocols import ReplyOutboxStoreProtocol
 from dayu.host.reply_outbox_store import (
     InMemoryReplyOutboxStore,
+    MIN_STALE_AGE,
     SQLiteReplyOutboxStore,
     STALE_IN_PROGRESS_ERROR_MESSAGE,
 )
@@ -498,6 +499,61 @@ def test_cleanup_stale_in_progress_skips_fresh_records(tmp_path: Path) -> None:
     store.claim_reply(submitted.delivery_id)
 
     stale = store.cleanup_stale_in_progress_deliveries(max_age=timedelta(hours=1))
+    assert stale == []
+    refreshed = store.get_reply(submitted.delivery_id)
+    assert refreshed is not None
+    assert refreshed.state == ReplyOutboxState.DELIVERY_IN_PROGRESS
+
+
+@pytest.mark.unit
+def test_inmemory_cleanup_rejects_max_age_below_min() -> None:
+    """InMemory 实现拒绝小于 ``MIN_STALE_AGE`` 的 max_age，避免与 mark_delivered 竞态。"""
+
+    store = InMemoryReplyOutboxStore()
+    submitted = store.submit_reply(_build_submit_request())
+    store.claim_reply(submitted.delivery_id)
+    too_small = MIN_STALE_AGE - timedelta(seconds=1)
+    with pytest.raises(ValueError, match="max_age 不能小于"):
+        store.cleanup_stale_in_progress_deliveries(max_age=too_small)
+    refreshed = store.get_reply(submitted.delivery_id)
+    assert refreshed is not None
+    # 拒绝后状态保持 IN_PROGRESS，未被错误回退
+    assert refreshed.state == ReplyOutboxState.DELIVERY_IN_PROGRESS
+
+
+@pytest.mark.unit
+def test_sqlite_cleanup_rejects_max_age_below_min(tmp_path: Path) -> None:
+    """SQLite 实现拒绝小于 ``MIN_STALE_AGE`` 的 max_age，避免误回退。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLiteReplyOutboxStore(host_store)
+    submitted = store.submit_reply(_build_submit_request())
+    store.claim_reply(submitted.delivery_id)
+    too_small = MIN_STALE_AGE - timedelta(seconds=1)
+    with pytest.raises(ValueError, match="max_age 不能小于"):
+        store.cleanup_stale_in_progress_deliveries(max_age=too_small)
+    refreshed = store.get_reply(submitted.delivery_id)
+    assert refreshed is not None
+    assert refreshed.state == ReplyOutboxState.DELIVERY_IN_PROGRESS
+
+
+@pytest.mark.unit
+def test_sqlite_cleanup_at_min_stale_age_does_not_revert_fresh_record(tmp_path: Path) -> None:
+    """``max_age = MIN_STALE_AGE`` 时，刚 claim 的 record 不会被错误回退。
+
+    防回归点：早期实现允许调用方传入很小的 max_age，刚 claim 的 record
+    会与 mark_delivered 在 ``state='delivery_in_progress'`` 上竞态。本测
+    试断言下界恰好为 ``MIN_STALE_AGE`` 时该 record 仍处于 IN_PROGRESS。
+    """
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLiteReplyOutboxStore(host_store)
+    submitted = store.submit_reply(_build_submit_request())
+    store.claim_reply(submitted.delivery_id)
+
+    stale = store.cleanup_stale_in_progress_deliveries(max_age=MIN_STALE_AGE)
     assert stale == []
     refreshed = store.get_reply(submitted.delivery_id)
     assert refreshed is not None

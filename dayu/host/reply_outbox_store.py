@@ -33,8 +33,38 @@ MODULE = "HOST.REPLY_OUTBOX_STORE"
 
 STALE_IN_PROGRESS_ERROR_MESSAGE = "stale in_progress recovery"
 
+# stale cleanup 的 max_age 下界。低于该值时正在执行交付的 record（刚 claim、
+# 尚未 mark_delivered）会与 cleanup 的 CAS（``state='delivery_in_progress'``）
+# 在同一时间窗内竞争，导致已成功交付被错误地回退为 FAILED_RETRYABLE，引发
+# 重复投递或交付丢失。下界由 store 自身强制，避免调用方因配置错误踩到 race
+# window。如确需更小的窗口，需要先把 mark_delivered 与 cleanup 之间的隔离
+# 机制（例如 fence token / leased ownership）补齐再放开下界。
+MIN_STALE_AGE = timedelta(minutes=5)
+
 
 from dayu.host._datetime_utils import now_utc as _now_utc, parse_dt as _parse_dt, serialize_dt as _serialize_dt
+
+
+def _validate_stale_max_age(max_age: timedelta) -> None:
+    """校验 stale cleanup 的 max_age 不低于 ``MIN_STALE_AGE``。
+
+    Args:
+        max_age: 调用方传入的 stale 阈值。
+
+    Returns:
+        无。
+
+    Raises:
+        ValueError: 当 ``max_age`` 小于 ``MIN_STALE_AGE`` 时抛出，强制调用方
+            为正在执行交付的 record 留出足够的非竞态窗口。
+    """
+
+    if max_age < MIN_STALE_AGE:
+        raise ValueError(
+            "cleanup_stale_in_progress_deliveries 的 max_age 不能小于 "
+            f"{MIN_STALE_AGE}; 当前传入={max_age}; "
+            "下界用于隔离 mark_delivered CAS 与 stale cleanup CAS 的竞态窗口"
+        )
 
 
 def _normalize_text(value: str, *, field_name: str) -> str:
@@ -394,15 +424,18 @@ class InMemoryReplyOutboxStore:
         """把超过 max_age 的 DELIVERY_IN_PROGRESS 回退为 FAILED_RETRYABLE。
 
         Args:
-            max_age: 超过多久未收到终态的 IN_PROGRESS 视为 stale。
+            max_age: 超过多久未收到终态的 IN_PROGRESS 视为 stale；
+                必须 ``>= MIN_STALE_AGE``，避免与 ``mark_delivered`` CAS
+                竞态导致已成功交付被回退。
 
         Returns:
             被回退的 delivery_id 列表。
 
         Raises:
-            无。
+            ValueError: ``max_age < MIN_STALE_AGE`` 时抛出。
         """
 
+        _validate_stale_max_age(max_age)
         cutoff = _now_utc() - max_age
         stale_ids: list[str] = []
         for delivery_id, record in list(self._records.items()):
@@ -817,15 +850,18 @@ class SQLiteReplyOutboxStore:
         """把超过 max_age 的 DELIVERY_IN_PROGRESS 回退为 FAILED_RETRYABLE。
 
         Args:
-            max_age: 超过多久未收到终态的 IN_PROGRESS 视为 stale。
+            max_age: 超过多久未收到终态的 IN_PROGRESS 视为 stale；
+                必须 ``>= MIN_STALE_AGE``，避免与 ``mark_delivered`` CAS
+                竞态导致已成功交付被回退。
 
         Returns:
             被回退的 delivery_id 列表。
 
         Raises:
-            无。
+            ValueError: ``max_age < MIN_STALE_AGE`` 时抛出。
         """
 
+        _validate_stale_max_age(max_age)
         cutoff = _serialize_dt(_now_utc() - max_age)
         now_ts = _serialize_dt(_now_utc())
         conn = self._host_store.get_connection()
