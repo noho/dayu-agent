@@ -436,7 +436,18 @@ def _build_minimum_preserved_turn_view(
 
 @dataclass(frozen=True)
 class ConversationPinnedStatePatch:
-    """pinned state 的增量 patch。"""
+    """pinned state 的增量 patch。
+
+    每个字段三态语义（稳定契约）：
+
+    - ``None``：本次不修改该字段，保留 ``base`` 中的旧值。
+    - 空值（``""`` 或 ``()``）：显式清空该字段。
+    - 非空值：覆盖该字段为新值。
+
+    `_parse_result` 通过 ``key in patch_dict`` 区分"LLM 未输出该字段"
+    （映射为 ``None``）与"LLM 显式输出空值"（映射为 ``""`` / ``()``）。
+    LLM 提示词需保证：仅在确实要清空时输出空值，否则省略键。
+    """
 
     current_goal: str | None = None
     confirmed_subjects: tuple[str, ...] | None = None
@@ -445,6 +456,9 @@ class ConversationPinnedStatePatch:
 
     def apply_to(self, base: ConversationPinnedState) -> ConversationPinnedState:
         """将 patch 应用到现有 pinned state。
+
+        按字段三态语义（见类 docstring）逐项合并：``None`` 保留旧值，
+        其它值（含空字符串、空 tuple）一律覆盖。
 
         Args:
             base: 旧状态。
@@ -910,6 +924,11 @@ class DefaultEpisodicMemoryCompressor:
         turns: tuple[ConversationTurnRecord, ...],
     ) -> ConversationCompactionResult | None:
         """解析压缩 scene 返回的 JSON。
+
+        ``pinned_state_patch`` 各字段按 ``ConversationPinnedStatePatch`` 三态契约解析：
+        通过 ``"key" in patch_dict`` 区分"LLM 未输出该字段"（映射为 ``None``，
+        语义=不动）与"LLM 显式输出空值"（映射为 ``""`` 或 ``()``，语义=清空）。
+        非空值原样转换后覆盖。
 
         Args:
             final_answer: 模型最终回答文本。

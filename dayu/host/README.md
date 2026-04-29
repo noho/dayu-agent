@@ -366,8 +366,10 @@ Raw transcript 是一个按时间递增的 turn 列表，通过会话级字段 *
 单总池消费按**从新到老**优先级，对未压缩尾区与 episode summaries 联合裁切：
 
 1. **最近 N 轮 raw turn 强制保留**（`raw_tail[-recent_turns_floor:]`）：不计入 budget，单轮极长走 minimum_preserve 兜底，不丢追问连续性。
-2. **更老 raw turn 按 budget 从新到老回放**：每轮估算 token，能装下就加入并扣减 budget，装不下就 break（更早历史已被 compaction 压成 episode 摘要）。
-3. **Episode summaries 用剩余 budget 从新到老填充**：装不下就 break。
+2. **Episode summaries 按 budget 从新到老填充**：每条估算 token，能装下就加入并扣减 budget，装不下就 break。
+3. **更老 raw turn 用剩余 budget 从新到老回放**：每轮估算 token，能装下就加入并扣减剩余 budget，装不下就 break（更早历史已被 compaction 压成 episode 摘要）。
+
+> 顺序设计意图：episode summaries 是"老 turn 的结构化摘要"，单位 token 信息密度显著高于 raw turn 长尾；先把预算分给 episodes 能在压缩后稳定保住历史覆盖，再用剩余预算尽可能回放原文细节。
 
 **最近一轮整轮超预算时的降级顺序**（稳定契约，保证"最新用户意图永远不丢"）：
 
