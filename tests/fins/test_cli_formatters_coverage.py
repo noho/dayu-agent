@@ -7,6 +7,7 @@ from typing import cast
 from dayu.contracts.fins import (
     DownloadFailedFile,
     DownloadFilingResultItem,
+    DownloadFilingResultStatus,
     DownloadResultData,
     DownloadSummary,
     FinsCommandName,
@@ -179,7 +180,7 @@ def test_download_and_upload_filings_from_formatters() -> None:
             filings=(
                 DownloadFilingResultItem(
                     document_id="x",
-                    status="failed",
+                    status=DownloadFilingResultStatus.FAILED,
                     failed_files=(DownloadFailedFile(reason_message="network down"),),
                     reason_code="file_download_failed",
                 ),

@@ -54,6 +54,34 @@ class FinsProgressEventName(StrEnum):
     PIPELINE_COMPLETED = "pipeline_completed"
 
 
+class DownloadFilingResultStatus(StrEnum):
+    """单个财报下载结果状态。"""
+
+    DOWNLOADED = "downloaded"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+    @classmethod
+    def from_raw(cls, raw_status: str) -> DownloadFilingResultStatus:
+        """将原始状态字符串解析为下载结果状态枚举。
+
+        参数:
+            raw_status: 外部输入的状态字符串，允许包含大小写和首尾空白。
+
+        返回值:
+            DownloadFilingResultStatus: 标准化后的下载结果状态。
+
+        异常:
+            ValueError: 当输入无法映射到已定义状态时抛出。
+        """
+
+        normalized_status = raw_status.strip().lower()
+        try:
+            return cls(normalized_status)
+        except ValueError as exception:
+            raise ValueError(f"未知下载结果状态: {raw_status}") from exception
+
+
 @dataclass(frozen=True)
 class DownloadCommandPayload:
     """`download` 命令载荷。
@@ -226,7 +254,7 @@ class DownloadFilingResultItem:
     """单个 filing 下载结果。"""
 
     document_id: str
-    status: str
+    status: DownloadFilingResultStatus
     form_type: str | None = None
     filing_date: str | None = None
     report_date: str | None = None
@@ -601,6 +629,7 @@ __all__ = [
     "DownloadCompanyInfo",
     "DownloadFailedFile",
     "DownloadFilingResultItem",
+    "DownloadFilingResultStatus",
     "DownloadFilterWindow",
     "DownloadFilters",
     "DownloadProgressPayload",

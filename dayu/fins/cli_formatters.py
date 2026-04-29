@@ -24,6 +24,7 @@ from dayu.fins._converters import int_or_zero, optional_int
 from dayu.contracts.fins import (
     DownloadFailedFile,
     DownloadFilingResultItem,
+    DownloadFilingResultStatus,
     DownloadResultData,
     DownloadSummary,
     FinsCommandName,
@@ -331,7 +332,7 @@ def _coerce_download_result(result: DownloadResultData | dict[str, Any]) -> Down
         filing_items.append(
             DownloadFilingResultItem(
                 document_id=str(item.get("document_id", "")).strip(),
-                status=str(item.get("status", "")).strip(),
+                status=DownloadFilingResultStatus.from_raw(str(item.get("status", ""))),
                 form_type=_first_non_empty_text(item.get("form_type")),
                 filing_date=_first_non_empty_text(item.get("filing_date")),
                 report_date=_first_non_empty_text(item.get("report_date")),
@@ -374,9 +375,9 @@ def _format_download_result(result: DownloadResultData) -> str:
     Returns:
         面向终端阅读的多行文本。
     """
-    downloaded_items = [item for item in result.filings if item.status == "downloaded"]
-    skipped_items = [item for item in result.filings if item.status == "skipped"]
-    failed_items = [item for item in result.filings if item.status == "failed"]
+    downloaded_items = [item for item in result.filings if item.status == DownloadFilingResultStatus.DOWNLOADED]
+    skipped_items = [item for item in result.filings if item.status == DownloadFilingResultStatus.SKIPPED]
+    failed_items = [item for item in result.filings if item.status == DownloadFilingResultStatus.FAILED]
     lines = [
         "下载结果",
         f"- ticker: {result.ticker}",

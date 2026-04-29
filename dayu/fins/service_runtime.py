@@ -15,6 +15,7 @@ from dayu.contracts.fins import (
     DownloadCompanyInfo,
     DownloadFailedFile,
     DownloadFilingResultItem,
+    DownloadFilingResultStatus,
     DownloadFilterWindow,
     DownloadFilters,
     DownloadProgressPayload,
@@ -844,7 +845,7 @@ def _build_download_filing_result_item(payload: dict[str, Any]) -> DownloadFilin
 
     return DownloadFilingResultItem(
         document_id=str(payload.get("document_id", "")).strip(),
-        status=str(payload.get("status", "")).strip(),
+        status=DownloadFilingResultStatus.from_raw(str(payload.get("status", ""))),
         form_type=_optional_text(payload.get("form_type")),
         filing_date=_optional_text(payload.get("filing_date")),
         report_date=_optional_text(payload.get("report_date")),

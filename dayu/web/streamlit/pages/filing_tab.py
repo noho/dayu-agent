@@ -11,13 +11,7 @@ import streamlit as st
 from dayu.services.protocols import FinsServiceProtocol
 from dayu.web.streamlit.components.watchlist import WatchlistItem
 from dayu.web.streamlit.pages.filing.download_panel import (
-    _init_download_settings_state,
-    _render_download_settings,
-    _render_filing_header_actions,
-    _should_show_download_settings_for_ticker,
-    init_download_state,
-    poll_download_runtime_events,
-    render_download_status_with_optional_polling,
+    render_download_section,
 )
 
 _DATAFRAME_ROW_HEIGHT_PX = 35
@@ -171,20 +165,7 @@ def render_filing_tab(
         无。
     """
 
-    init_download_state()
-    _init_download_settings_state(selected_stock)
-    poll_download_runtime_events()
-
-    title_column, actions_column = st.columns([4, 1], gap="small", vertical_alignment="center")
-    with title_column:
-        st.subheader(f"{selected_stock.company_name} ({selected_stock.ticker}) - 财报管理")
-    with actions_column:
-        if fins_service is not None:
-            _render_filing_header_actions(selected_stock)
-
-    if _should_show_download_settings_for_ticker(selected_stock.ticker):
-        _render_download_settings(selected_stock, fins_service)
-    render_download_status_with_optional_polling(selected_stock.ticker)
+    show_download_settings = render_download_section(selected_stock, fins_service)
 
     try:
         filings = _get_filing_list(workspace_root, selected_stock.ticker, fins_service)
@@ -197,5 +178,5 @@ def render_filing_tab(
     if filings:
         _render_filing_table(filings)
     else:
-        if not _should_show_download_settings_for_ticker(selected_stock.ticker):
+        if not show_download_settings:
             st.info("暂无财报，请点击「下载财报」按钮获取")

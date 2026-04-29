@@ -16,6 +16,7 @@ from typing import Literal, TypedDict
 
 from dayu.contracts.fins import (
     DownloadFilingResultItem,
+    DownloadFilingResultStatus,
     DownloadProgressPayload,
     FinsEvent,
     FinsEventType,
@@ -31,10 +32,6 @@ class DownloadStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
-
-
-_FILING_RESULT_SKIPPED = "skipped"
-_FILING_RESULT_FAILED = "failed"
 
 
 @dataclass(frozen=True)
@@ -231,13 +228,13 @@ def _build_filing_completed_message(
     if filing_result is None:
         return f"完成下载 {resolved_form_type}", "info"
 
-    status = filing_result.status.strip().lower()
+    status = filing_result.status
     reason_text = filing_result.reason_message or filing_result.skip_reason or filing_result.reason_code or reason
-    if status == _FILING_RESULT_SKIPPED:
+    if status == DownloadFilingResultStatus.SKIPPED:
         if reason_text:
             return f"跳过下载 {resolved_form_type}: {reason_text}", "warning"
         return f"跳过下载 {resolved_form_type}", "warning"
-    if status == _FILING_RESULT_FAILED:
+    if status == DownloadFilingResultStatus.FAILED:
         if reason_text:
             return f"下载失败 {resolved_form_type}: {reason_text}", "error"
         return f"下载失败 {resolved_form_type}", "error"

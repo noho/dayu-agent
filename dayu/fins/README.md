@@ -116,6 +116,7 @@ direct operation 的公共命令/事件/结果契约定义在 [../contracts/fins
 当前 direct operation 还需要守住一条稳定契约边界：
 - `FinsCommand` / `FinsResult` / `FinsEvent` 只保留 envelope 角色，内部载荷必须是按命令和事件类型拆开的强类型 dataclass；UI、Service、Runtime 不得重新把这些跨层对象退化回 `Dict[str, Any]` 的公共 god-bag。
 - `FinsEvent` 在 `type=RESULT` 分支必须复用与 `FinsResult` 相同的结果 dataclass 校验，不允许把 progress payload 作为 result event 透传到跨层边界。
+- `DownloadFilingResultItem.status` 的跨层真源是 `DownloadFilingResultStatus` 枚举；UI 与 runtime 只能依赖该枚举语义，禁止再以裸字符串拼接 `downloaded/skipped/failed` 分支。
 
 ### 3.2 FinsService
 

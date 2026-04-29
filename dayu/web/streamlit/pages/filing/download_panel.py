@@ -513,6 +513,41 @@ def _render_download_submit_button(
     _submit_download_task(ticker=ticker, form_values=form_values, fins_service=fins_service)
 
 
+def render_download_section(
+    selected_stock: WatchlistItem,
+    fins_service: FinsServiceProtocol | None,
+) -> bool:
+    """渲染下载区并返回下载设置是否可见。
+
+    参数:
+        selected_stock: 当前选中的自选股。
+        fins_service: 财报服务协议实例；为 None 时仅展示不可用提示。
+
+    返回值:
+        bool: 当前 ticker 的下载设置区是否处于展开状态。
+
+    异常:
+        无。
+    """
+
+    init_download_state()
+    _init_download_settings_state(selected_stock)
+    poll_download_runtime_events()
+
+    title_column, actions_column = st.columns([4, 1], gap="small", vertical_alignment="center")
+    with title_column:
+        st.subheader(f"{selected_stock.company_name} ({selected_stock.ticker}) - 财报管理")
+    with actions_column:
+        if fins_service is not None:
+            _render_filing_header_actions(selected_stock)
+
+    show_download_settings = _should_show_download_settings_for_ticker(selected_stock.ticker)
+    if show_download_settings:
+        _render_download_settings(selected_stock, fins_service)
+    render_download_status_with_optional_polling(selected_stock.ticker)
+    return show_download_settings
+
+
 def _submit_download_task(
     ticker: str,
     form_values: _DownloadFormValues,
