@@ -518,7 +518,9 @@ Host 启动时按固定顺序执行：
 
 顺序是契约：先把"谁还活着"定死（run 吸收），再依此判定其它子系统里谁可以动（permit / outbox / pending turn）。
 
-运行期另有 `cancel_run_and_settle(run_id)`：由 `dayu.process_lifecycle` 协调器在 SIGINT/SIGTERM/SIGHUP/atexit 钩子里调用，把指定 active run 同步推到 `CANCELLED` 终态并清理关联 pending turn，避免 sync CLI Ctrl+C 后 run 卡 `running`、pending turn 卡 `prepared_by_host` 阻塞下一轮 prompt。
+运行期另有 `cancel_run_and_settle(run_id)`：由 `dayu.process_lifecycle` 协调器在 SIGINT/SIGTERM/SIGHUP/atexit 钩子里调用，把指定 active run 同步推到 `CANCELLED` 终态、清理关联 pending turn，并通知默认 executor 释放该 run 占用的 `(bridge, deadline_watcher, permits)`，避免 sync CLI Ctrl+C 后 run 卡 `running`、pending turn 卡 `prepared_by_host` 阻塞下一轮 prompt，同时避免 permit 泄漏与守护线程残留。
+
+> **资源释放契约**：`KeyboardInterrupt` 同步打断 `asyncio.run()` 时，executor 内 `_finish_run` 所在 `finally` 没有机会执行。`DefaultHostExecutor` 内置以 `run_id` 为键的资源注册表，`_finish_run`（异步终态）与 `release_resources_for_run`（SIGINT 同步路径）通过 atomic-pop 二选一释放，保证至多一次真实释放，资源对象自身已幂等的 `stop()` / governor.release 不会被双重触发。
 
 ### 12.1 进程级优雅退出契约
 

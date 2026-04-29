@@ -774,6 +774,14 @@ class Host:
             )
         if settled.session_id is not None:
             self.cleanup_stale_pending_turns(session_id=settled.session_id)
+        # SIGINT 同步路径上 KeyboardInterrupt 已打断 asyncio.run()，executor 内
+        # ``_finish_run`` 所在 finally 没机会执行；由 Host 主动通知默认 executor
+        # 通过资源注册表 atomic-pop 释放 (bridge, deadline_watcher, permits)，
+        # 避免 permit 泄漏与守护线程残留。executor 内已与 ``_finish_run`` 互相
+        # 幂等，多调一次安全。Service 测试 stub 没有该方法且不应有，因此用
+        # ``isinstance`` 限定到默认实现，不污染 ``HostExecutorProtocol`` 稳定面。
+        if isinstance(self._executor, DefaultHostExecutor):
+            self._executor.release_resources_for_run(run_id)
         Log.debug(
             f"Host 同步取消并收敛 run: run_id={run_id}, session_id={settled.session_id or ''}",
             module=MODULE,

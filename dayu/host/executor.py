@@ -357,6 +357,23 @@ class _ReplayState:
     run_id: str
 
 
+@dataclass(frozen=True)
+class _RunResources:
+    """绑定到单个 run 的宿主资源三元组。
+
+    由 ``DefaultHostExecutor._start_run`` 创建并登记入资源注册表，
+    由 ``_finish_run``（异步路径终态）或 ``release_resources_for_run``
+    （SIGINT/SIGTERM 同步路径）通过 atomic-pop 二选一释放。
+
+    所有字段均为不可变引用，资源对象自身的 ``stop`` / governor.release 已经
+    幂等，不需要在此再加状态标记。
+    """
+
+    bridge: CancellationBridge
+    deadline_watcher: RunDeadlineWatcher
+    permits: list[ConcurrencyPermit]
+
+
 @dataclass
 class DefaultHostExecutor(HostExecutorProtocol):
     """默认宿主执行器。"""
@@ -368,6 +385,8 @@ class DefaultHostExecutor(HostExecutorProtocol):
     scene_preparation: ScenePreparationProtocol | None = None
     _replay_stash: dict[str, _ReplayState] = field(default_factory=dict, init=False, repr=False)
     _replay_stash_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _run_resources: dict[str, _RunResources] = field(default_factory=dict, init=False, repr=False)
+    _run_resources_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     async def run_operation_stream(
         self,
@@ -415,7 +434,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             )
             raise
         finally:
-            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits)
+            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits, run_id=run.run_id)
 
     def run_operation_sync(
         self,
@@ -459,7 +478,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             )
             raise
         finally:
-            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits)
+            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits, run_id=run.run_id)
 
     async def run_agent_stream(
         self,
@@ -617,7 +636,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 return
             raise
         finally:
-            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits)
+            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits, run_id=run.run_id)
 
     async def run_prepared_turn_stream(
         self,
@@ -717,7 +736,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 return
             raise
         finally:
-            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits)
+            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits, run_id=run.run_id)
 
     def _register_accepted_pending_turn(
         self,
@@ -1043,7 +1062,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 )
                 raise
         finally:
-            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits)
+            self._finish_run(bridge=bridge, deadline_watcher=deadline_watcher, permits=permits, run_id=run.run_id)
         if cancelled_payload is not None:
             raise _build_cancelled_error(cancelled_payload)
         result = AppResult(
@@ -1380,7 +1399,41 @@ class DefaultHostExecutor(HostExecutorProtocol):
             with suppress(Exception):
                 bridge.stop()
             raise
+        with self._run_resources_lock:
+            self._run_resources[run_id] = _RunResources(
+                bridge=bridge,
+                deadline_watcher=deadline_watcher,
+                permits=list(permits),
+            )
         return HostedRunContext(run_id=run_id, cancellation_token=token), bridge, deadline_watcher, permits
+
+    def _release_resources(self, *, resources: _RunResources, log_origin: str, run_id: str) -> None:
+        """释放单组 run 资源（permits / deadline_watcher / bridge）。
+
+        资源对象自身的 ``stop`` / governor.release 已经幂等，本方法只负责
+        遍历释放并记录失败日志，不做"已停止"标记。
+
+        Args:
+            resources: 待释放的资源三元组。
+            log_origin: 失败日志中的调用源标识（``"finish_run"`` /
+                ``"sigint_release"``），便于事后区分两条释放路径。
+            run_id: 当前 run_id，仅用于日志输出。
+
+        Raises:
+            无。permit 释放失败仅记日志。
+        """
+
+        if self.concurrency_governor is not None:
+            for acquired in reversed(resources.permits):
+                try:
+                    self.concurrency_governor.release(acquired)
+                except Exception:  # noqa: BLE001
+                    Log.warn(
+                        f"permit 释放失败: origin={log_origin}, run_id={run_id}, lane={acquired.lane}",
+                        module=MODULE,
+                    )
+        resources.deadline_watcher.stop()
+        resources.bridge.stop()
 
     def _finish_run(
         self,
@@ -1388,20 +1441,53 @@ class DefaultHostExecutor(HostExecutorProtocol):
         bridge: CancellationBridge,
         deadline_watcher: RunDeadlineWatcher,
         permits: list[ConcurrencyPermit],
+        run_id: str,
     ) -> None:
-        """释放宿主级资源。"""
+        """释放宿主级资源（atomic-pop，多入口幂等）。
 
-        if self.concurrency_governor is not None:
-            for acquired in reversed(permits):
-                try:
-                    self.concurrency_governor.release(acquired)
-                except Exception:  # noqa: BLE001
-                    Log.warn(
-                        f"permit 释放失败: lane={acquired.lane}",
-                        module=MODULE,
-                    )
-        deadline_watcher.stop()
-        bridge.stop()
+        与 ``release_resources_for_run`` 共用资源注册表：注册表
+        ``pop`` 谁谁释放——SIGINT/SIGTERM 同步路径若已抢先 pop 释放，
+        本方法变成 no-op，避免双重释放。
+
+        Args:
+            bridge: 当前栈上的取消桥句柄；仅在注册表 pop 命中时使用。
+            deadline_watcher: 当前栈上的 deadline watcher 句柄；同上。
+            permits: 当前栈上的 permit 列表；同上。
+            run_id: 当前 run_id，定位注册表条目。
+
+        Raises:
+            无。
+        """
+
+        del bridge, deadline_watcher, permits  # 实际释放对象以注册表中 pop 出的为准
+        with self._run_resources_lock:
+            resources = self._run_resources.pop(run_id, None)
+        if resources is None:
+            return
+        self._release_resources(resources=resources, log_origin="finish_run", run_id=run_id)
+
+    def release_resources_for_run(self, run_id: str) -> None:
+        """SIGINT/SIGTERM 同步路径上释放指定 run 的宿主资源（atomic-pop，幂等）。
+
+        ``KeyboardInterrupt`` 同步打断 ``asyncio.run()`` 时，``_finish_run``
+        所在的 ``finally`` 不会执行；Host 在 ``cancel_run_and_settle``
+        路径上调用本方法，主动从资源注册表 pop 出 ``(bridge, watcher,
+        permits)`` 并释放，避免 permit 泄漏与守护线程残留。
+
+        与 ``_finish_run`` 共用注册表：atomic-pop 保证至多一次真实释放。
+
+        Args:
+            run_id: 目标 run_id；未在注册表中静默 no-op。
+
+        Raises:
+            无。permit 释放失败仅记日志。
+        """
+
+        with self._run_resources_lock:
+            resources = self._run_resources.pop(run_id, None)
+        if resources is None:
+            return
+        self._release_resources(resources=resources, log_origin="sigint_release", run_id=run_id)
 
     def _publish_event(self, run_id: str, event: PublishedRunEventProtocol) -> None:
         """向事件总线发布事件。
