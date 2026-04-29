@@ -8,6 +8,7 @@ import pytest
 
 from dayu.contracts.fins import (
     DownloadFilingResultItem,
+    DownloadFilingResultStatus,
     DownloadProgressPayload,
     DownloadResultData,
     FinsCommandName,
@@ -224,7 +225,7 @@ def test_apply_filing_completed_success() -> None:
     """FILING_COMPLETED 成功时应递增 filing 计数并更新进度。"""
     filing_result = DownloadFilingResultItem(
         document_id="doc-1",
-        status="downloaded",
+        status=DownloadFilingResultStatus.DOWNLOADED,
         downloaded_files=3,
     )
     task = DownloadTaskState(session_id="s1", ticker="AAPL", total_count=10)
@@ -245,7 +246,7 @@ def test_apply_filing_completed_skipped() -> None:
     """FILING_COMPLETED 跳过时应记录警告日志。"""
     filing_result = DownloadFilingResultItem(
         document_id="doc-1",
-        status="skipped",
+        status=DownloadFilingResultStatus.SKIPPED,
         reason_message="已存在",
     )
     task = DownloadTaskState(session_id="s1", ticker="AAPL")
@@ -266,7 +267,7 @@ def test_apply_filing_completed_failed() -> None:
     """FILING_COMPLETED 失败时应记录错误日志。"""
     filing_result = DownloadFilingResultItem(
         document_id="doc-1",
-        status="failed",
+        status=DownloadFilingResultStatus.FAILED,
         reason_message="网络错误",
     )
     task = DownloadTaskState(session_id="s1", ticker="AAPL")
