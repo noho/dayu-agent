@@ -387,7 +387,7 @@
   - 检查历史消息裁剪、摘要、system prompt 注入、tool trace 回填是否保持多轮语义连续，不丢失继续执行所需的最小信息。
   - 判定标准：上下文裁剪后导致宿主记录仍声称“可继续”，但 Agent 实际已失去继续所需事实 → 报告。
 
-### 5. “宿主强约束下的 LLM in the loop” 编写最佳实践
+### 5.A “宿主强约束下的 LLM in the loop” 编写最佳实践
 - **5.1 宿主是否真正拥有执行生命周期**
   - 检查 run 的创建、开始、取消、超时、完成、失败、恢复是否由 Host 显式拥有，而不是散落在 UI、Service 或 Agent 中。
   - 判定标准：存在非 Host 模块直接决定 run 生命周期推进、终止或恢复 → 报告。
@@ -428,6 +428,53 @@
 - **5.10 review 时的判断优先级**
   - 若发现执行问题，优先沿 `UI -> Service -> Contract preparation -> Host -> scene preparation -> Agent` 检查责任归属。
   - 只有在证据直接显示 Agent 本身错误时，才把 root cause 定位到 Agent；禁止因为现象出现在 Agent 输出上，就跳过 Host / Service 直接归因给模型或 prompt。
+
+### 5.B 跨进程并发一致性专项审查
+
+仅关注**多进程同时操作同一 workspace 下 HostStore SQLite** 的场景。当前已知部署形态：
+dayu-cli write / dayu-cli interactive / dayu-wechat service start / 未来 web daemon 共享同一
+workspace 的 sqlite 文件，互相之间没有进程间锁。
+
+==== 必查项（逐条产出结论 + 直接证据）====
+
+- 1. HostStore SQLite 多进程底座
+   - 读 dayu/host/host_store.py，确认是否启用 WAL（journal_mode=WAL）、是否设 busy_timeout、是否
+     在所有写路径用 BEGIN IMMEDIATE / write_transaction。
+   - 输出：是否能承载多进程并发写。如否，列出具体缺失 PRAGMA / 事务边界。
+
+- 2. 所有 `WHERE state=...` 形态的 CAS
+   - grep `UPDATE.*WHERE.*state` 整个 dayu/host/ 与 dayu/services/。
+   - 对每一处 CAS：判断"先读后写"还是"原子 UPDATE"；判断同状态下是否存在第二个 writer 也用同样
+     CAS 抢占。
+   - 输出：每一处的 (file:line, 是否原子, 第二 writer 是谁, 是否需要 fence token)。
+
+- 3. owner_pid / heartbeat 判活逻辑
+   - grep `owner_pid|owner_process|claimer_pid|heartbeat` 与 process_lifecycle/。
+   - 重点核对：是否仅靠 pid 判活（pid 复用风险）；是否带 start_time / boot_id 复合 key；
+     stale 扫描的时间阈值由谁强制下界。
+   - 输出：是否有 pid 复用导致误判活的窗口；如有，给出复合 key 建议。
+
+- 4. pending_conversation_turn 跨进程 resume race
+   - 读 dayu/host/pending_turn_store.py（或同名实现）的 resume 路径。
+   - 核对 resume 是"先读 state='resumable' 再 UPDATE"还是"单条 CAS UPDATE WHERE state='resumable'"。
+   - 输出：是否存在两进程同时 resume 同一 pending turn 各自成功的可能。
+
+- 5. reply_outbox.submit_reply 并发 same delivery_key + 不同 payload
+   - 读 dayu/host/reply_outbox_store.py 的 SQLite submit_reply 路径（INSERT OR IGNORE +
+     _ensure_submit_request_matches）。
+   - 核对调用方（web/wechat/cli）拿到 ValueError 后是否有合理兜底；是否会被静默吞掉。
+   - 输出：异常路径是否有真实业务漏洞。
+
+- 6. cancel_run_and_settle / settle_active_runs 跨进程接管
+   - 读 dayu/host/host.py 与 dayu/process_lifecycle/。
+   - 核对：A 进程崩溃后 B 进程触发 settle 时，对 A 仍持有的 run 状态如何判定；是否会把 A 没崩、
+     只是事件流首帧前的 run 误标为终态。
+   - 输出：窗口期是否真被 PR 92 关闭，还是仍有 corner case。
+
+- 7. Workspace migrations 跨进程同时启动
+   - 读 dayu/cli/init/ 或 workspace_migrations 的入口。
+   - 核对：两个 dayu-cli 同时 init 同一 workspace 是否会撞 schema 写入。
+   - 输出：是否需要 init lock / advisory lock。
 
 ### 6. 多轮会话记忆子系统
 
