@@ -14,17 +14,20 @@ from dayu.services.contracts import ChatPendingTurnView, ChatResumeRequest
 class _FakeChatService:
     """测试用可恢复聊天服务。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, expected_scene_name: str = "interactive") -> None:
         self.resume_requests: list[ChatResumeRequest] = []
+        self._expected_scene_name = expected_scene_name
+        self.list_scene_names: list[str | None] = []
 
     def list_resumable_pending_turns(self, *, session_id: str | None = None, scene_name: str | None = None) -> list[ChatPendingTurnView]:
         assert session_id == "interactive-session"
-        assert scene_name == "interactive"
+        assert scene_name == self._expected_scene_name
+        self.list_scene_names.append(scene_name)
         return [
             ChatPendingTurnView(
                 pending_turn_id="pending-1",
                 session_id="interactive-session",
-                scene_name="interactive",
+                scene_name=self._expected_scene_name,
                 user_text="未完成问题",
                 source_run_id="run-old",
                 resumable=True,
@@ -70,6 +73,9 @@ class _AutoCleaningRejectingChatService(_FakeChatService):
         scene_name: str | None = None,
     ) -> list[ChatPendingTurnView]:
         if self._cleared:
+            assert session_id == "interactive-session"
+            assert scene_name == self._expected_scene_name
+            self.list_scene_names.append(scene_name)
             return []
         return super().list_resumable_pending_turns(session_id=session_id, scene_name=scene_name)
 
@@ -102,20 +108,30 @@ def test_interactive_startup_resumes_pending_turn(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.unit
-def test_interactive_startup_keeps_pending_turn_when_resume_is_rejected() -> None:
-    """Host gate 拒绝恢复时，interactive 只应停止恢复，不做额外收口。"""
+def test_interactive_startup_continues_when_resume_fails_but_pending_turn_still_resumable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Host gate 拒绝恢复但 pending turn 仍可恢复时，interactive 应给出错误提示并继续进入 REPL。"""
 
     service = _RejectingChatService()
+    rendered: list[str] = []
+    monkeypatch.setattr(
+        "dayu.cli.interactive_ui._render_warning_or_error",
+        lambda current_state, message: rendered.append(message),
+    )
 
-    with pytest.raises(ValueError, match="不可恢复"):
-        _resume_interactive_pending_turn_if_needed(
-            service,  # type: ignore[arg-type]
-            session_id="interactive-session",
-            show_thinking=False,
-        )
+    # 不应抛异常，REPL 启动流程能继续
+    _resume_interactive_pending_turn_if_needed(
+        service,  # type: ignore[arg-type]
+        session_id="interactive-session",
+        show_thinking=False,
+    )
 
     assert [request.pending_turn_id for request in service.resume_requests] == ["pending-1"]
     assert [request.session_id for request in service.resume_requests] == ["interactive-session"]
+    assert rendered == [
+        "[error] 上一轮 pending turn 恢复失败，会话继续可用，可在下一轮输入后重试"
+    ]
 
 
 @pytest.mark.unit
@@ -139,6 +155,35 @@ def test_interactive_startup_allows_session_when_failed_pending_turn_has_been_cl
 
     assert [request.pending_turn_id for request in service.resume_requests] == ["pending-1"]
     assert rendered == ["[warning] 上一轮 pending turn 恢复失败，但记录已被清理；当前会话继续可用"]
+
+
+@pytest.mark.unit
+def test_interactive_startup_propagates_custom_scene_name_when_resume_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """非默认 scene 的 interactive resume 失败但仍 resumable 时，二次探测必须沿用调用方传入的 scene_name。"""
+
+    service = _RejectingChatService(expected_scene_name="custom-scene")
+    rendered: list[str] = []
+    monkeypatch.setattr(
+        "dayu.cli.interactive_ui._render_warning_or_error",
+        lambda current_state, message: rendered.append(message),
+    )
+
+    _resume_interactive_pending_turn_if_needed(
+        service,  # type: ignore[arg-type]
+        session_id="interactive-session",
+        scene_name="custom-scene",
+        show_thinking=False,
+    )
+
+    # 关键：list_resumable_pending_turns 必须以 custom-scene 调用两次
+    # （首次启动探测 + 失败后二次确认），否则会误判 pending turn 已清理
+    assert service.list_scene_names == ["custom-scene", "custom-scene"]
+    assert [request.pending_turn_id for request in service.resume_requests] == ["pending-1"]
+    assert rendered == [
+        "[error] 上一轮 pending turn 恢复失败，会话继续可用，可在下一轮输入后重试"
+    ]
 
 
 @pytest.mark.unit

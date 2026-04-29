@@ -609,6 +609,11 @@ def _resume_interactive_pending_turn_if_needed(
 ) -> None:
     """在进入 REPL 前恢复当前 interactive session 的 pending turn。
 
+    设计意图：
+    - 恢复链路上的任何失败都不应阻止 REPL 启动；下一轮新输入仍可触发 pending turn 的
+      二次恢复或被 Host 自动清理。本函数把"恢复失败 → 用户友好提示 → 静默放过"统一
+      在此处收口，调用方只需处理 ``KeyboardInterrupt``。
+
     Args:
         session: interactive 使用的 ChatService 协议实现。
         session_id: 当前 interactive 绑定的 Host session ID；为空时直接跳过恢复。
@@ -619,7 +624,7 @@ def _resume_interactive_pending_turn_if_needed(
         无。
 
     Raises:
-        Exception: 当 pending turn 仍然存在且恢复失败时，继续向上抛出原始异常。
+        KeyboardInterrupt: 用户在恢复阶段按 Ctrl-C 时由调用方处理，本函数不拦截。
     """
 
     if session_id is None:
@@ -650,14 +655,15 @@ def _resume_interactive_pending_turn_if_needed(
         try:
             asyncio.run(_resume_and_consume())
         except Exception as exc:
-            if not has_resumable_pending_turn(
+            still_resumable = has_resumable_pending_turn(
                 session,
                 session_id=pending_turn.session_id,
-                scene_name="interactive",
+                scene_name=scene_name,
                 pending_turn_id=pending_turn.pending_turn_id,
-            ):
-                Log.warning(
-                    "interactive pending turn 恢复失败，但记录已被 Host 清理，继续进入会话"
+            )
+            if still_resumable:
+                Log.error(
+                    "interactive pending turn 恢复失败，pending turn 仍可恢复，跳过本次恢复继续进入会话"
                     f" session_id={pending_turn.session_id}"
                     f" pending_turn_id={pending_turn.pending_turn_id}"
                     f" error={exc}",
@@ -665,10 +671,21 @@ def _resume_interactive_pending_turn_if_needed(
                 )
                 _render_warning_or_error(
                     state,
-                    "[warning] 上一轮 pending turn 恢复失败，但记录已被清理；当前会话继续可用",
+                    "[error] 上一轮 pending turn 恢复失败，会话继续可用，可在下一轮输入后重试",
                 )
                 return
-            raise
+            Log.warning(
+                "interactive pending turn 恢复失败，但记录已被 Host 清理，继续进入会话"
+                f" session_id={pending_turn.session_id}"
+                f" pending_turn_id={pending_turn.pending_turn_id}"
+                f" error={exc}",
+                module=MODULE,
+            )
+            _render_warning_or_error(
+                state,
+                "[warning] 上一轮 pending turn 恢复失败，但记录已被清理；当前会话继续可用",
+            )
+            return
     finally:
         status_line.stop()
         state.status_line = None
