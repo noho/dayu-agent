@@ -189,10 +189,11 @@ class ChapterAuditCoordinator:
                 execution_state.process_state["fix_reason"] = "programmatic_audit_failed"
             else:
                 Log.warn(
-                    f"修复后程序审计仍失败，中止当前重试循环: title={task.title!r}, retry={execution_state.retry_count}",
+                    f"修复后程序审计仍失败，将按 audit_decision 自带策略({programmatic_fail.repair_contract.repair_strategy})继续重试: "
+                    f"title={task.title!r}, retry={execution_state.retry_count}",
                     module=MODULE,
                 )
-                execution_state.stop_rewrite_loop = True
+                execution_state.process_state["post_repair_programmatic_fail"] = True
             append_audit_process_state(
                 execution_state.process_state,
                 phase=phase,
