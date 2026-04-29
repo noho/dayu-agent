@@ -12,7 +12,7 @@ import pytest
 from dayu.fins.processors import bs_ten_k_processor as module
 from dayu.fins.processors import ten_k_form_common
 from dayu.fins.processors.sec_form_section_common import _VirtualSection
-from dayu.fins.processors.ten_k_processor import _build_ten_k_markers
+from dayu.fins.processors.ten_k_form_common import _build_ten_k_markers
 
 
 class _SourceStub:
