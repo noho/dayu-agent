@@ -184,28 +184,20 @@ def _dispatch_download_runtime_event(session_id: str, event: DownloadQueueEvent)
             raise ValueError(f"未知下载运行时事件类型: {event.kind}")
     
 
-
-def _assert_main_thread(caller_name: str) -> None:
-    """断言当前调用发生在 Streamlit 主线程。
+def _finalize_download_runtime_entry(session_id: str, runtime: DownloadRuntimeState) -> bool:
+    """清理已结束下载任务的运行时句柄。
 
     参数:
-        caller_name: 当前调用者名称，用于构造错误提示。
+        session_id: 下载任务会话 ID。
+        runtime: 下载运行时状态句柄。
 
     返回值:
-        无。
+        bool: 清理完成返回 True；worker 仍未结束返回 False，调用方应在下一轮轮询中重试。
 
-    异常:
-        RuntimeError: 当前线程不是主线程时抛出，避免并发读写 ``st.session_state``。
+    约束:
+        必须在 Streamlit 脚本线程调用（直接读写 ``st.session_state``），
+        当前唯一调用方 ``poll_download_runtime_events`` 始终满足此条件。
     """
-
-    if threading.current_thread() is not threading.main_thread():
-        raise RuntimeError(f"{caller_name} 必须在主线程调用")
-
-
-def _finalize_download_runtime_entry(session_id: str, runtime: DownloadRuntimeState) -> bool:
-    """清理已结束下载任务的运行时句柄。"""
-
-    _assert_main_thread("_finalize_download_runtime_entry")
 
     worker = runtime["worker"]
     if worker.is_alive():
@@ -505,7 +497,9 @@ def _render_download_submit_button(
 ) -> None:
     """渲染下载提交按钮并在点击后执行提交。"""
 
-    if not st.button("开始下载", width="stretch", type="primary", key=f"download_start_btn_{ticker}"):
+    has_running = _has_running_download_task(ticker)
+    button_label = "正在下载..." if has_running else "开始下载"
+    if not st.button(button_label, width="stretch", type="primary", disabled=has_running, key=f"download_start_btn_{ticker}"):
         return
     if not form_values.form_types:
         st.error("请至少选择一种表单类型")
