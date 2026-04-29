@@ -62,9 +62,12 @@ def _get_filing_list(
     for s in summaries:
         file_name = s.primary_file_name or "未知"
         if s.primary_file_path:
+            # 两端同步 resolve，避免在 Windows 上一端带盘符、一端不带导致
+            # relative_to 误判 drive 不匹配；输出固定 POSIX 风格，跨平台稳定。
             try:
-                relative_path = Path(s.primary_file_path).relative_to(resolved_root)
-                file_path = str(relative_path)
+                resolved_file = Path(s.primary_file_path).resolve()
+                relative_path = resolved_file.relative_to(resolved_root)
+                file_path = relative_path.as_posix()
             except ValueError:
                 file_path = s.primary_file_path
         else:
