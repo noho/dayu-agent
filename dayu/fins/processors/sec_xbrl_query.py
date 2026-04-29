@@ -56,6 +56,27 @@ _DECIMALS_SCALE_MAP: dict[int, str] = {
     0: "units",
 }
 
+# 用于 units/scale 推断的主营收入概念候选（按 US-GAAP 实务命中优先级排序）。
+# - ``Revenues``：US-GAAP 2018+ 主流命名。
+# - ``Revenue``：部分 IFRS-aligned filer 与子集成器使用。
+# - ``SalesRevenueNet`` / ``SalesRevenueGoodsNet``：旧规与细分场景。
+_REVENUE_CONCEPT_CANDIDATES: tuple[str, ...] = (
+    "Revenues",
+    "Revenue",
+    "SalesRevenueNet",
+    "SalesRevenueGoodsNet",
+)
+
+# ISO 4217 主要货币代码（覆盖 SEC 主要外国发行人语种），用于从 units
+# 字符串中识别货币代码。未命中时返回 ``None``，避免把诸如 ``"shares"``
+# 之类的非货币单位误当作货币代码传给下游。
+_KNOWN_CURRENCY_CODES: frozenset[str] = frozenset(
+    {
+        "USD", "EUR", "GBP", "JPY", "CNY", "HKD", "TWD", "KRW", "INR",
+        "CAD", "AUD", "CHF", "BRL", "MXN", "SGD", "ZAR",
+    }
+)
+
 
 def _normalize_optional_string(value: Any) -> Optional[str]:
     """将任意值转为可选字符串，额外处理 pandas NaN/NaT。
@@ -667,6 +688,9 @@ def _infer_text_content_type(value: str) -> str:
 def _infer_units_from_xbrl_query(xbrl: XBRL) -> Optional[str]:
     """从 XBRL 查询推断单位。
 
+    依次尝试 ``_REVENUE_CONCEPT_CANDIDATES`` 中的概念，命中即返回该 fact
+    的 ``unit`` / ``unit_ref``，扩展对 IFRS-aligned 与旧规命名 filer 的覆盖。
+
     Args:
         xbrl: XBRL 对象。
 
@@ -674,48 +698,55 @@ def _infer_units_from_xbrl_query(xbrl: XBRL) -> Optional[str]:
         单位字符串或 `None`。
 
     Raises:
-        RuntimeError: 推断失败时抛出。
+        无。
     """
 
-    try:
-        rows = xbrl.query().by_concept("Revenue").execute()
-    except Exception:
-        return None
-    for row in rows:
-        if not isinstance(row, dict):
+    for concept in _REVENUE_CONCEPT_CANDIDATES:
+        try:
+            rows = xbrl.query().by_concept(concept).execute()
+        except Exception:
             continue
-        unit = row.get("unit") or row.get("unit_ref")
-        if unit:
-            return str(unit).upper()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            unit = row.get("unit") or row.get("unit_ref")
+            if unit:
+                return str(unit).upper()
     return None
 
 
 def _infer_currency_from_units(units: Optional[str]) -> Optional[str]:
-    """从单位推断货币类型。
+    """从单位字符串中识别 ISO 4217 货币代码。
+
+    在 ``_KNOWN_CURRENCY_CODES`` 范围内做子串匹配，命中即返回标准代码；
+    未命中返回 ``None``，避免把诸如 ``"shares"`` 这类非货币单位误当作货币
+    代码传给下游。
 
     Args:
         units: 单位字符串。
 
     Returns:
-        货币代码或 `None`。
+        ISO 4217 货币代码或 ``None``。
 
     Raises:
-        RuntimeError: 推断失败时抛出。
+        无。
     """
 
     if not units:
         return None
     upper_units = units.upper()
-    if "USD" in upper_units:
-        return "USD"
-    return units
+    for code in _KNOWN_CURRENCY_CODES:
+        if code in upper_units:
+            return code
+    return None
 
 
 def _infer_scale_from_xbrl_query(xbrl: XBRL) -> Optional[str]:
     """从 XBRL Revenue facts 的 decimals 属性推断数值 scale。
 
-    查询思路：取 Revenue 概念的第一条 fact 的 ``decimals`` 字段，
-    按映射表推断 scale（如 ``-6`` → ``millions``）。
+    依次尝试 ``_REVENUE_CONCEPT_CANDIDATES``，取首条命中 fact 的 ``decimals``
+    字段并按映射表推断 scale（如 ``-6`` → ``millions``）。SEC 实务中单 filing
+    内不同报表 scale 一致，因此使用单一概念探测即可。
 
     Args:
         xbrl: XBRL 对象。
@@ -724,37 +755,38 @@ def _infer_scale_from_xbrl_query(xbrl: XBRL) -> Optional[str]:
         scale 描述字符串或 ``None``。
 
     Raises:
-        RuntimeError: 推断失败时抛出。
+        无。
     """
 
-    try:
-        rows = xbrl.query().by_concept("Revenue").execute()
-    except Exception:
-        return None
-    for row in rows:
-        if not isinstance(row, dict):
+    for concept in _REVENUE_CONCEPT_CANDIDATES:
+        try:
+            rows = xbrl.query().by_concept(concept).execute()
+        except Exception:
             continue
-        raw_decimals = row.get("decimals")
-        if raw_decimals is None:
-            continue
-        # 解析 decimals 值
-        if isinstance(raw_decimals, str):
-            stripped = raw_decimals.strip().upper()
-            if stripped == "INF":
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            raw_decimals = row.get("decimals")
+            if raw_decimals is None:
+                continue
+            # 解析 decimals 值
+            if isinstance(raw_decimals, str):
+                stripped = raw_decimals.strip().upper()
+                if stripped == "INF":
+                    return "units"
+                try:
+                    decimals_int = int(stripped)
+                except ValueError:
+                    continue
+            else:
+                try:
+                    decimals_int = int(raw_decimals)
+                except (TypeError, ValueError):
+                    continue
+            # 查映射表
+            exact = _DECIMALS_SCALE_MAP.get(decimals_int)
+            if exact is not None:
+                return exact
+            if decimals_int > 0:
                 return "units"
-            try:
-                decimals_int = int(stripped)
-            except ValueError:
-                continue
-        else:
-            try:
-                decimals_int = int(raw_decimals)
-            except (TypeError, ValueError):
-                continue
-        # 查映射表
-        exact = _DECIMALS_SCALE_MAP.get(decimals_int)
-        if exact is not None:
-            return exact
-        if decimals_int > 0:
-            return "units"
     return None

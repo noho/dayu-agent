@@ -2504,6 +2504,128 @@ def test_query_facts_rows_filters_textblock_and_requires_exact_local_name() -> N
 
 
 @pytest.mark.unit
+def test_infer_currency_from_units_recognizes_non_usd_compound_units() -> None:
+    """验证非 USD 复合单位也能识别为对应 ISO 4217 货币代码。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    assert sec_processor._infer_currency_from_units("shares per CNY") == "CNY"
+    assert sec_processor._infer_currency_from_units("EUR per share") == "EUR"
+    assert sec_processor._infer_currency_from_units("HKD") == "HKD"
+
+
+@pytest.mark.unit
+def test_infer_currency_from_units_returns_none_for_non_currency_units() -> None:
+    """验证非货币单位不会被误识别为货币代码。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    assert sec_processor._infer_currency_from_units("shares") is None
+    assert sec_processor._infer_currency_from_units("pure") is None
+    assert sec_processor._infer_currency_from_units("XYZ") is None
+
+
+@pytest.mark.unit
+def test_infer_units_from_xbrl_query_falls_back_through_revenue_candidates() -> None:
+    """验证 units 推断在首选概念无命中时回落到下一个候选概念。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    class _ConceptAwareXbrlQueryProvider:
+        """按概念名返回不同 rows 的 XBRL 桩。"""
+
+        def __init__(self, rows_by_concept: dict[str, list[Any]]) -> None:
+            self._rows_by_concept = rows_by_concept
+            self._last_concept: Optional[str] = None
+
+        def query(self) -> "_ConceptAwareXbrlQueryProvider":
+            return self
+
+        def by_concept(self, concept: str) -> "_ConceptAwareXbrlQueryProvider":
+            self._last_concept = concept
+            return self
+
+        def execute(self) -> list[Any]:
+            assert self._last_concept is not None
+            return self._rows_by_concept.get(self._last_concept, [])
+
+    # ``Revenues`` 无命中、``Revenue`` 也无命中、``SalesRevenueNet`` 命中。
+    provider = _ConceptAwareXbrlQueryProvider(
+        rows_by_concept={
+            "Revenues": [],
+            "Revenue": [],
+            "SalesRevenueNet": [{"unit": "cny"}],
+        }
+    )
+    units = sec_processor._infer_units_from_xbrl_query(_as_xbrl(provider))
+    assert units == "CNY"
+
+
+@pytest.mark.unit
+def test_infer_scale_from_xbrl_query_falls_back_through_revenue_candidates() -> None:
+    """验证 scale 推断在首选概念无 decimals 时回落到下一个候选概念。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    class _ConceptAwareXbrlQueryProvider:
+        def __init__(self, rows_by_concept: dict[str, list[Any]]) -> None:
+            self._rows_by_concept = rows_by_concept
+            self._last_concept: Optional[str] = None
+
+        def query(self) -> "_ConceptAwareXbrlQueryProvider":
+            return self
+
+        def by_concept(self, concept: str) -> "_ConceptAwareXbrlQueryProvider":
+            self._last_concept = concept
+            return self
+
+        def execute(self) -> list[Any]:
+            assert self._last_concept is not None
+            return self._rows_by_concept.get(self._last_concept, [])
+
+    provider = _ConceptAwareXbrlQueryProvider(
+        rows_by_concept={
+            "Revenues": [],
+            "Revenue": [{"decimals": "-6"}],
+        }
+    )
+    scale = sec_processor._infer_scale_from_xbrl_query(_as_xbrl(provider))
+    assert scale == "millions"
+
+
+@pytest.mark.unit
 def test_dataframe_to_records_handles_nan_and_whitespace() -> None:
     """验证 DataFrame 转 records 时的空值与空白标准化。
 
