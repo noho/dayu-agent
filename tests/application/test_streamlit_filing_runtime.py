@@ -151,3 +151,18 @@ def test_poll_download_runtime_events_join_timeout_keeps_runtime(
     assert "session-c" in runtime_state
     assert never_ending_worker.join_timeouts == [0.1]
     assert task.status == DownloadStatus.RUNNING
+
+
+@pytest.mark.unit
+def test_dispatch_download_runtime_event_unknown_kind_raises(
+    fake_filing_st: _FakeStreamlit,
+) -> None:
+    """未知队列事件类型必须显式抛错，避免静默丢失。"""
+
+    _set_active_download_task(fake_filing_st, session_id="session-d", ticker="TSLA")
+
+    with pytest.raises(ValueError, match="未知下载运行时事件类型"):
+        panel_module._dispatch_download_runtime_event(
+            "session-d",
+            DownloadQueueEvent(kind="unexpected"),  # type: ignore[arg-type]
+        )
