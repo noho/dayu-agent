@@ -20,7 +20,7 @@ from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 from dayu.execution.options import ResolvedExecutionOptions
 from dayu.engine.tool_registry import ToolRegistry
 from dayu.host.concurrency import SQLiteConcurrencyGovernor
-from dayu.host.conversation_store import ConversationStore, FileConversationStore
+from dayu.host.conversation_store import ConversationStore, ConversationTranscript, FileConversationStore
 from dayu.host.executor import DefaultHostExecutor, should_delete_pending_turn_after_terminal_run
 from dayu.host.host_execution import HostExecutorProtocol, HostedRunContext, HostedRunSpec
 from dayu.host._datetime_utils import now_utc as _now_utc
@@ -474,9 +474,35 @@ class Host:
                 user_text=turn.user_text,
                 assistant_text=turn.assistant_final,
                 created_at=turn.created_at,
+                reasoning_text=turn.assistant_reasoning,
             )
             for turn in recent_turns
         ]
+
+    def clear_conversation_session(self, session_id: str) -> bool:
+        """清空指定 session 的 conversation transcript。
+
+        通过写入空 transcript 实现清空，不删除底层文件。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            成功清空返回 ``True``，无 store 返回 ``False``。
+
+        Raises:
+            无。
+        """
+
+        if self._conversation_store is None:
+            return False
+        
+        transcript = self._conversation_store.load(session_id)
+        if transcript is None or not transcript.turns:
+            return False
+        next_transcript = ConversationTranscript.create_empty(session_id)
+        self._conversation_store.save(next_transcript, expected_revision=transcript.revision)
+        return True
 
     def run_operation_stream(
         self,

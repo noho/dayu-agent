@@ -179,6 +179,7 @@ def _to_session_turn_excerpt_view(
     user_text: str,
     assistant_text: str,
     created_at: str,
+    reasoning_text: str = "",
 ) -> SessionTurnExcerptView:
     """把 Host conversation 单轮摘录转换为管理视图。
 
@@ -186,6 +187,7 @@ def _to_session_turn_excerpt_view(
         user_text: 用户输入文本。
         assistant_text: 助手最终回答文本。
         created_at: 该轮创建时间。
+        reasoning_text: 思考过程文本。
 
     Returns:
         通用单轮对话摘录视图。
@@ -198,6 +200,7 @@ def _to_session_turn_excerpt_view(
         user_text=user_text,
         assistant_text=assistant_text,
         created_at=created_at,
+        reasoning_text=reasoning_text,
     )
 
 
@@ -376,6 +379,7 @@ class HostAdminService(HostAdminServiceProtocol):
                 user_text=excerpt.user_text,
                 assistant_text=excerpt.assistant_text,
                 created_at=excerpt.created_at,
+                reasoning_text=excerpt.reasoning_text,
             )
             for excerpt in excerpts
         ]

@@ -13,7 +13,13 @@ from dayu.contracts.events import AppEvent, AppEventType
 from dayu.contracts.reply_outbox import ReplyOutboxState
 from dayu.host.host import Host
 from dayu.host.reply_outbox_store import InMemoryReplyOutboxStore
-from dayu.services.contracts import ChatPendingTurnView, ChatResumeRequest, ChatTurnRequest, ChatTurnSubmission
+from dayu.services.contracts import (
+    ChatPendingTurnView,
+    ChatResumeRequest,
+    ChatTurnRequest,
+    ChatTurnSubmission,
+    SessionTurnExcerptView,
+)
 from dayu.services.reply_delivery_service import ReplyDeliveryService
 from dayu.wechat.daemon import WeChatDaemon
 from dayu.wechat.ilink_client import QRCodeLoginStatus, QRCodeLoginTicket
@@ -81,6 +87,22 @@ class _FakeChatService:
         del session_id
         return []
 
+    def list_session_recent_turns(
+        self,
+        session_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[SessionTurnExcerptView]:
+        """当前测试默认不返回会话历史。"""
+
+        del session_id, limit
+        return []
+
+    def clear_session(self, session_id: str) -> bool:
+        """当前测试默认允许清空会话。"""
+
+        del session_id
+        return True
 
 class _FakeIlinkClient:
     """测试用 iLink client。"""

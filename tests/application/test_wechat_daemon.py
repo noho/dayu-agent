@@ -30,6 +30,7 @@ from dayu.services.contracts import (
     ChatTurnRequest,
     ChatTurnSubmission,
     ReplyDeliverySubmitRequest,
+    SessionTurnExcerptView,
 )
 from dayu.wechat.daemon import (
     _AsyncWeChatStateStoreAdapter,
@@ -182,6 +183,22 @@ class _FakeChatService:
         del session_id
         return []
 
+    def list_session_recent_turns(
+        self,
+        session_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[SessionTurnExcerptView]:
+        """基础测试桩默认不返回会话历史。"""
+
+        del session_id, limit
+        return []
+
+    def clear_session(self, session_id: str) -> bool:
+        """基础测试桩默认允许清空会话。"""
+
+        del session_id
+        return True
 
 def _filtered_flag(metadata: Mapping[str, object]) -> bool | None:
     """安全读取交付上下文中的 filtered 标记。"""

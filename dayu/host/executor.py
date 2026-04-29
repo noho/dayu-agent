@@ -1232,6 +1232,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
         """
 
         final_content = ""
+        final_reasoning_parts: list[str] = []
         degraded = False
         filtered = False
         warnings: list[str] = []
@@ -1264,6 +1265,10 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 warnings.append(_extract_event_message(stream_event.data))
             elif stream_event.type == EventType.ERROR:
                 errors.append(_extract_event_message(stream_event.data))
+            elif stream_event.type == EventType.REASONING_DELTA:
+                chunk = _extract_event_message(stream_event.data)
+                if chunk:
+                    final_reasoning_parts.append(chunk)
             elif stream_event.type == EventType.FINAL_ANSWER and isinstance(stream_event.data, dict):
                 final_content = str(stream_event.data.get("content") or "")
                 degraded = bool(stream_event.data.get("degraded", False))
@@ -1282,6 +1287,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
         if agent_input.session_state is not None:
             agent_input.session_state.persist_turn(
                 final_content=final_content,
+                final_reasoning="".join(final_reasoning_parts),
                 degraded=degraded or filtered,
                 tool_uses=tuple(tool_uses),
                 warnings=tuple(filter(None, warnings)),

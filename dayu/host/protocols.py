@@ -756,6 +756,7 @@ class ConversationSessionTurnExcerpt:
     user_text: str
     assistant_text: str
     created_at: str
+    reasoning_text: str = ""
 
 
 @runtime_checkable
@@ -996,6 +997,19 @@ class ConversationalExecutionGatewayProtocol(
 ):
     """聊天类 Service 使用的宿主执行网关协议。"""
 
+    def list_conversation_session_turn_excerpts(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+    ) -> list[ConversationSessionTurnExcerpt]:
+        """读取指定 session 的最近 conversation 单轮摘录。"""
+        ...
+
+    def clear_conversation_session(self, session_id: str) -> bool:
+        """清空指定 session 的 conversation transcript。"""
+        ...
+
 
 @runtime_checkable
 class ReplyDeliveryGatewayProtocol(
@@ -1031,6 +1045,17 @@ class HostAdminOperationsProtocol(
         limit: int,
     ) -> list[ConversationSessionTurnExcerpt]:
         """读取指定 session 的最近 conversation 单轮摘录。"""
+        ...
+
+    def clear_conversation_session(self, session_id: str) -> bool:
+        """清空指定 session 的 conversation transcript。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            成功清空返回 ``True``，transcript 不存在返回 ``False``。
+        """
         ...
 
 

@@ -218,6 +218,7 @@ class ConversationTurnRecord:
     scene_name: str
     user_text: str
     assistant_final: str
+    assistant_reasoning: str = ""
     assistant_degraded: bool = False
     tool_uses: tuple[ConversationToolUseSummary, ...] = field(default_factory=tuple)
     warnings: tuple[str, ...] = field(default_factory=tuple)
@@ -488,6 +489,7 @@ def _parse_turn_list(raw: object) -> tuple[ConversationTurnRecord, ...]:
                 scene_name=str(item.get("scene_name") or "").strip(),
                 user_text=str(item.get("user_text") or ""),
                 assistant_final=str(item.get("assistant_final") or ""),
+                assistant_reasoning=str(item.get("assistant_reasoning") or ""),
                 assistant_degraded=bool(item.get("assistant_degraded", False)),
                 tool_uses=tuple(tool_uses),
                 warnings=tuple(str(message) for message in (item.get("warnings") or [])),

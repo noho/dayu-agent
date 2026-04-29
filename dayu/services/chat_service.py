@@ -20,6 +20,7 @@ from dayu.services.contracts import (
     ChatResumeRequest,
     ChatTurnRequest,
     ChatTurnSubmission,
+    SessionTurnExcerptView,
 )
 from dayu.services.internal.session_coordinator import ServiceSessionCoordinator
 from dayu.services.prompt_contributions import (
@@ -174,6 +175,51 @@ class ChatService(ChatServiceProtocol):
         """
 
         return self.host.cleanup_stale_pending_turns(session_id=session_id)
+
+    def list_session_recent_turns(
+        self,
+        session_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[SessionTurnExcerptView]:
+        """列出指定会话最近对话轮次。
+
+        Args:
+            session_id: 会话 ID。
+            limit: 最多返回的轮次数量。
+
+        Returns:
+            最近对话轮次，按时间从旧到新排列；会话不存在时返回空列表。
+        
+        Raises:
+            无。
+        """
+
+        excerpts = self.host.list_conversation_session_turn_excerpts(session_id, limit=limit)
+        return [
+            SessionTurnExcerptView(
+                user_text=e.user_text,
+                assistant_text=e.assistant_text,
+                created_at=e.created_at,
+                reasoning_text=e.reasoning_text,
+            )
+            for e in excerpts
+        ]
+
+    def clear_session(self, session_id: str) -> bool:
+        """清空指定会话的对话历史。
+
+        Args:
+            session_id: 会话 ID。
+
+        Returns:
+            成功清空返回 ``True``，否则返回 ``False``。
+
+        Raises:
+            无。
+        """
+
+        return self.host.clear_conversation_session(session_id)
 
     def _session_coordinator(self) -> ServiceSessionCoordinator:
         """构造当前服务使用的会话协调器。"""

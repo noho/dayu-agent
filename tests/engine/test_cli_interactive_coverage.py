@@ -1080,6 +1080,22 @@ def _build_event_session(*event_sequences: list[StreamEvent], fail_with: Excepti
             del session_id
             return []
 
+        def list_session_recent_turns(
+            self,
+            session_id: str,
+            *,
+            limit: int = 100,
+        ) -> list[SessionTurnExcerptView]:
+            """返回空的会话历史摘录列表。"""
+
+            del session_id, limit
+            return []
+
+        def clear_session(self, session_id: str) -> bool:
+            """返回会话清空成功。"""
+
+            del session_id
+            return True
     _FakeSession.call_log = call_log
     _FakeSession.request_log = request_log
     return _FakeSession

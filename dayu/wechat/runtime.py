@@ -23,6 +23,7 @@ from dayu.services.contracts import (
     ReplyDeliveryFailureRequest,
     ReplyDeliverySubmitRequest,
     ReplyDeliveryView,
+    SessionTurnExcerptView,
 )
 from dayu.services.reply_delivery_service import ReplyDeliveryService
 from dayu.services.startup_preparation import PreparedHostRuntimeDependencies
@@ -231,6 +232,45 @@ class NoOpChatService:
 
         del session_id
         return []
+
+    def list_session_recent_turns(
+        self,
+        session_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[SessionTurnExcerptView]:
+        """login 命令不应调用会话历史读取逻辑。
+
+        Args:
+            session_id: 会话 ID。
+            limit: 读取轮次数上限。
+
+        Returns:
+            无。
+
+        Raises:
+            RuntimeError: 始终抛出，提示 login 路径不应消费会话历史能力。
+        """
+
+        del session_id
+        del limit
+        raise RuntimeError("login 模式不应调用 ChatService")
+
+    def clear_session(self, session_id: str) -> bool:
+        """login 命令不应调用会话清空逻辑。
+
+        Args:
+            session_id: 会话 ID。
+
+        Returns:
+            无。
+
+        Raises:
+            RuntimeError: 始终抛出，提示 login 路径不应消费清空会话能力。
+        """
+
+        del session_id
+        raise RuntimeError("login 模式不应调用 ChatService")
 
 
 class NoOpReplyDeliveryService:

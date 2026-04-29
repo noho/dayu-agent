@@ -165,6 +165,7 @@ class ConversationTurnPersistenceProtocol(Protocol):
         self,
         *,
         final_content: str,
+        final_reasoning: str = "",
         degraded: bool,
         tool_uses: tuple[object, ...],
         warnings: tuple[str, ...],

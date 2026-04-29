@@ -79,6 +79,34 @@ class ChatServiceProtocol(BaseServiceProtocol, Protocol):
         """
         ...
 
+    def list_session_recent_turns(
+        self,
+        session_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[SessionTurnExcerptView]:
+        """列出指定会话最近对话轮次。
+
+        Args:
+            session_id: 会话 ID。
+            limit: 最多返回的轮次数量。
+
+        Returns:
+            最近对话轮次，按时间从旧到新排列；会话不存在时返回空列表。
+        """
+        ...
+
+    def clear_session(self, session_id: str) -> bool:
+        """清空指定会话的对话历史。
+
+        Args:
+            session_id: 会话 ID。
+
+        Returns:
+            成功清空返回 ``True``，否则返回 ``False``。
+        """
+        ...
+
 
 @runtime_checkable
 class PromptServiceProtocol(BaseServiceProtocol, Protocol):

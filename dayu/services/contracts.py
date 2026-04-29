@@ -295,7 +295,7 @@ class SessionTurnExcerptView:
     user_text: str
     assistant_text: str
     created_at: str
-
+    reasoning_text: str = ""
 
 @dataclass(frozen=True)
 class RunAdminView:
