@@ -169,14 +169,20 @@ def start_download_worker(submission: FinsSubmission) -> None:
 def _dispatch_download_runtime_event(session_id: str, event: DownloadQueueEvent) -> None:
     """把后台队列事件映射为前端会话状态更新。"""
 
-    if event.kind == "progress" and event.payload is not None:
-        update_download_progress(session_id, event.payload)
-        return
-    if event.kind == "result":
-        mark_download_completed(session_id, success=True, message=event.message or "下载完成")
-        return
-    if event.kind == "error":
-        mark_download_completed(session_id, success=False, message=event.message or "下载任务执行异常")
+    match event.kind:
+        case "progress":
+            if event.payload is not None:
+                update_download_progress(session_id, event.payload)
+        case "result":
+            mark_download_completed(session_id, success=True, message=event.message or "下载完成")
+        case "error":
+            mark_download_completed(session_id, success=False, message=event.message or "下载任务执行异常")
+        case "done":
+            # done 事件由 poll_download_runtime_events 调用方消费并驱动清理。
+            return
+        case _:
+            raise ValueError(f"未知下载运行时事件类型: {event.kind}")
+    
 
 
 def _assert_main_thread(caller_name: str) -> None:
