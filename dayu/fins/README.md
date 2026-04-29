@@ -102,6 +102,7 @@ direct operation 的公共命令/事件/结果契约定义在 [../contracts/fins
 - `get_tool_service()`
 - `build_ingestion_service_factory()`
 - `get_ingestion_manager_key()`
+- `list_source_filings(ticker)`
 - `get_company_name(ticker)`
 - `get_company_meta_summary(ticker)`
 
@@ -109,6 +110,7 @@ direct operation 的公共命令/事件/结果契约定义在 [../contracts/fins
 - `execute(command)` 用于 direct operation
 - `get_tool_service()` 用于 Agent augmentation 的读工具注入
 - `build_ingestion_service_factory()` / `get_ingestion_manager_key()` 用于长事务工具注入
+- `list_source_filings(ticker)` 返回 `list[FilingSummary]`，用于上层读取 source 财报摘要（不承载 UI 渲染副作用）
 - 公司信息接口用于 Service 辅助查询
 
 当前 direct operation 还需要守住一条稳定契约边界：

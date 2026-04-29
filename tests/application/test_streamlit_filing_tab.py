@@ -12,18 +12,19 @@ import pytest
 
 from dayu.contracts.fins import (
     DownloadCommandPayload,
-    FinsCommand,
     FinsCommandName,
 )
 from dayu.fins.domain.document_models import FilingSummary
 from dayu.services.contracts import FinsSubmitRequest
-from dayu.web.streamlit.pages.filing.download_progress import LogEntry
-from dayu.web.streamlit.pages.filing_tab import (
+from dayu.web.streamlit.pages.filing.download_panel import (
     _DownloadFormValues,
     _build_download_log_lines,
     _build_download_submit_request,
-    _calculate_dataframe_height,
     _format_log_time,
+)
+from dayu.web.streamlit.pages.filing.download_progress import LogEntry
+from dayu.web.streamlit.pages.filing_tab import (
+    _calculate_dataframe_height,
     _get_filing_list,
 )
 
@@ -389,13 +390,11 @@ def test_get_filing_list_none_service_returns_empty() -> None:
 
 @pytest.mark.unit
 def test_get_filing_list_service_raises_oserror() -> None:
-    """service 抛出 OSError 时应显示错误提示并返回空列表。"""
+    """service 抛出 OSError 时，_get_filing_list 应保持纯查询并上抛异常。"""
 
     class _ErrorService:
         def list_filings(self, ticker: str) -> list[FilingSummary]:
             raise OSError("磁盘错误")
 
-    # _get_filing_list 内部调用 st.error，由于我们不在此测试 Streamlit，
-    # 验证逻辑是在异常路径下不抛出、返回空列表
-    result = _get_filing_list(Path("/workspace"), "AAPL", _ErrorService())  # type: ignore[arg-type]
-    assert result == []
+    with pytest.raises(OSError, match="磁盘错误"):
+        _get_filing_list(Path("/workspace"), "AAPL", _ErrorService())  # type: ignore[arg-type]

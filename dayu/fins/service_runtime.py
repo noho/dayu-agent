@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Optional, Protocol, runtime_checkable
 from threading import Lock
 
+from dayu.log import Log
 from dayu.fins._converters import int_or_zero, optional_int
 from dayu.contracts.fins import (
     DownloadCommandPayload,
@@ -85,6 +86,8 @@ from dayu.fins.storage import (
 )
 from dayu.fins.storage._fs_repository_factory import build_fs_repository_set
 from dayu.fins.tools.service import FinsToolService
+
+_LOG_MODULE = "FINS.RUNTIME"
 
 
 @runtime_checkable
@@ -1343,21 +1346,29 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
             ticker: 股票代码。
 
         Returns:
-            财报源文件摘要列表；查询失败时返回空列表。
+            财报源文件摘要列表。
 
         Raises:
-            无。
+            OSError: 列举源文档 ID 或读取单文档数据时底层存储异常。
+            ValueError: 存储数据损坏或格式不合法时抛出。
         """
 
         result: list[FilingSummary] = []
         try:
             document_ids = self.source_repository.list_source_document_ids(ticker, SourceKind.FILING)
         except (OSError, ValueError):
-            return result
+            Log.error(
+                f"列出财报源文档 ID 失败: ticker={ticker}",
+                exc_info=True,
+                module=_LOG_MODULE,
+            )
+            raise
 
+        skipped_document_count = 0
         for doc_id in document_ids:
             try:
                 meta = self.source_repository.get_source_meta(ticker, doc_id, SourceKind.FILING)
+                fiscal_year_raw = meta.get("fiscal_year")
                 primary_file_name: Optional[str] = None
                 primary_file_path: Optional[str] = None
                 try:
@@ -1368,22 +1379,36 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
                     primary_file_name = materialized_path.name or None
                     primary_file_path = str(materialized_path)
                 except (OSError, ValueError):
-                    pass
+                    Log.warning(
+                        f"读取财报主文件失败，降级返回元信息: ticker={ticker}, document_id={doc_id}",
+                        module=_LOG_MODULE,
+                    )
 
                 result.append(FilingSummary(
                     document_id=doc_id,
                     form_type=meta.get("form_type"),
                     filing_date=meta.get("filing_date"),
                     report_date=meta.get("report_date"),
-                    fiscal_year=meta.get("fiscal_year") if isinstance(meta.get("fiscal_year"), int) else None,
+                    fiscal_year=fiscal_year_raw if isinstance(fiscal_year_raw, int) else None,
                     fiscal_period=meta.get("fiscal_period"),
                     is_deleted=bool(meta.get("is_deleted", False)),
                     primary_file_name=primary_file_name,
                     primary_file_path=primary_file_path,
                 ))
-            except (OSError, ValueError, KeyError):
+            except (OSError, ValueError):
+                skipped_document_count += 1
+                Log.warning(
+                    f"读取单条财报元信息失败，已跳过: ticker={ticker}, document_id={doc_id}",
+                    module=_LOG_MODULE,
+                )
                 continue
 
+        if skipped_document_count > 0:
+            Log.warning(
+                "财报列表存在降级结果: "
+                f"ticker={ticker}, total={len(document_ids)}, skipped={skipped_document_count}",
+                module=_LOG_MODULE,
+            )
         result.sort(key=lambda x: x.filing_date or "", reverse=True)
         return result
 
