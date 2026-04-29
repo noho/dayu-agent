@@ -2166,7 +2166,10 @@ def _strip_trailing_footnote(text: str) -> str:
 
     cleaned = re.sub(r"(?<=\d)\[(?:\d+|[a-zA-Z])\]\s*$", "", text).strip()
     cleaned = re.sub(r"(?<=\d)\((?:\d+|[a-zA-Z])\)\s*$", "", cleaned).strip()
-    cleaned = re.sub(r"(?<=\d)[a-zA-Z]\s*$", "", cleaned).strip()
+    # 仅剥离裸尾小写单字母脚注（SEC 财报续序脚注约定为 a/b/c…）；
+    # 保留大写单字母后缀（M/K/B/T magnitude、Q/K form 标识等），由 _STRICT_NUMERIC_TEXT_PATTERN
+    # 在 _normalize_numeric_text 内主动判 None，避免数量级被静默丢失。
+    cleaned = re.sub(r"(?<=\d)[a-z]\s*$", "", cleaned).strip()
     return cleaned
 
 

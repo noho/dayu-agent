@@ -581,12 +581,18 @@ def _extract_concept_local_name(concept: str) -> str:
         RuntimeError: 无。
     """
 
-    normalized = concept.replace("_", ":").strip()
-    if not normalized:
+    stripped = concept.strip()
+    if not stripped:
         return ""
-    if ":" in normalized:
-        return normalized.split(":")[-1].strip()
-    return normalized
+    # 约定：XBRL fact 行里下划线形式的 concept 由 edgartools 等库把唯一的
+    # namespace 分隔符 `:` 替换成 `_`，本地名内部仍可含 `_`（自定义 taxonomy 常见）。
+    # 因此首个分隔符之后的全部都属本地名，必须用限次 split 而不是 `[-1]`/全文 replace，
+    # 否则形如 `company_Custom_Metric` 会被错误截短为 `Metric`。
+    if ":" in stripped:
+        return stripped.split(":", 1)[1].strip()
+    if "_" in stripped:
+        return stripped.split("_", 1)[1].strip()
+    return stripped
 
 
 def _normalize_concept_match_key(value: str) -> str:

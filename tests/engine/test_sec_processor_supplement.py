@@ -4291,17 +4291,27 @@ def test_table_classification_numeric_and_quality_helpers() -> None:
     assert sec_table_extraction._normalize_numeric_cell_text("1.234,56") == "1234.56"
     assert sec_table_extraction._normalize_numeric_cell_text("1,234.56") == "1234.56"
 
-    # 回归守护：脚注剥离规则只能匹配单字母脚注（如 "1,234a"），
-    # 必须保留多字母单位/缩写后缀（bps / mm 等），否则会把语义上的非纯数字单元
-    # 误规范化为数字，污染下游表格解析。详见 medium 文件 finding 025。
-    # 注意：单字母规则下 "10Q" 仍会被吃为 "10"，是当前已知盲点（finding 025 升级到 medium 处理）。
+    # 回归守护：脚注剥离规则只能匹配单小写字母脚注（SEC 续序脚注约定 a/b/c…），
+    # 多字母（bps/mm 等）以及任何大写单字母（M/K/B/T magnitude、Q/K form 标识）必须保留，
+    # 否则会把语义上的非纯数字单元误规范化为数字，污染下游表格解析。详见 medium #54。
     assert sec_table_extraction._strip_trailing_footnote("1,234a") == "1,234"
     assert sec_table_extraction._strip_trailing_footnote("10bps") == "10bps"
     assert sec_table_extraction._strip_trailing_footnote("10mm") == "10mm"
     assert sec_table_extraction._strip_trailing_footnote("123ab") == "123ab"
+    # 大写 magnitude / form 后缀必须保留：
+    assert sec_table_extraction._strip_trailing_footnote("1,234M") == "1,234M"
+    assert sec_table_extraction._strip_trailing_footnote("567K") == "567K"
+    assert sec_table_extraction._strip_trailing_footnote("890B") == "890B"
+    assert sec_table_extraction._strip_trailing_footnote("10T") == "10T"
+    assert sec_table_extraction._strip_trailing_footnote("10Q") == "10Q"
     assert sec_table_extraction._normalize_numeric_cell_text("10bps") is None
     assert sec_table_extraction._normalize_numeric_cell_text("10mm") is None
     assert sec_table_extraction._normalize_numeric_cell_text("123ab") is None
+    # 保留大写后缀后，严格数字校验主动返回 None，由上游决定是否丢弃 / 保留单位语义：
+    assert sec_table_extraction._normalize_numeric_cell_text("1,234M") is None
+    assert sec_table_extraction._normalize_numeric_cell_text("567K") is None
+    assert sec_table_extraction._normalize_numeric_cell_text("890B") is None
+    assert sec_table_extraction._normalize_numeric_cell_text("10Q") is None
 
     assert sec_table_extraction._looks_like_default_headers(["", " "]) is True
     assert sec_table_extraction._looks_like_default_headers(["1", "2", "3"]) is True
@@ -4537,3 +4547,64 @@ class TestExtractTextFromRawHtml:
         )
         result = sec_dom_helpers._extract_text_from_raw_html(html)
         assert "Content after declaration" in result
+
+
+class TestExtractConceptLocalName:
+    """覆盖 ``_extract_concept_local_name`` 在 ``namespace:local`` 与
+    ``namespace_local`` 两种形式下的本地名提取，重点验证本地名内部含 ``_``
+    时不会被错误截短（#55 回归）。"""
+
+    def test_colon_namespace_returns_full_local_name(self) -> None:
+        """`namespace:local` 形式应返回冒号后的完整本地名。"""
+        assert (
+            sec_xbrl_query._extract_concept_local_name("us-gaap:Revenues")
+            == "Revenues"
+        )
+
+    def test_underscore_namespace_returns_full_local_name(self) -> None:
+        """`namespace_local` 形式应返回首个下划线后的完整本地名。"""
+        assert (
+            sec_xbrl_query._extract_concept_local_name("us-gaap_Revenues")
+            == "Revenues"
+        )
+
+    def test_underscore_in_local_name_is_preserved(self) -> None:
+        """本地名内部含 `_` 时不得被错误截短（#55 关键回归）。"""
+        assert (
+            sec_xbrl_query._extract_concept_local_name("company_Custom_Metric")
+            == "Custom_Metric"
+        )
+
+    def test_colon_with_underscore_in_local_name(self) -> None:
+        """冒号分隔 + 本地名内含 `_` 时应保留全部本地名。"""
+        assert (
+            sec_xbrl_query._extract_concept_local_name("company:Custom_Metric")
+            == "Custom_Metric"
+        )
+
+    def test_no_separator_returns_input(self) -> None:
+        """无分隔符时直接返回原值。"""
+        assert sec_xbrl_query._extract_concept_local_name("Revenues") == "Revenues"
+
+    def test_empty_string_returns_empty(self) -> None:
+        """空字符串应返回空。"""
+        assert sec_xbrl_query._extract_concept_local_name("") == ""
+
+    def test_normalize_concept_match_key_preserves_underscore(self) -> None:
+        """`_normalize_concept_match_key` 必须基于完整本地名构造键，
+        含 `_` 的本地名不能被截短。"""
+        assert (
+            sec_xbrl_query._normalize_concept_match_key("company_Custom_Metric")
+            == "custom_metric"
+        )
+
+    def test_matches_concept_exact_local_name_handles_underscore_namespace(
+        self,
+    ) -> None:
+        """`namespace:local` 与 `namespace_local` 表示同一 concept 时应判等。"""
+        assert (
+            sec_xbrl_query._matches_concept_exact_local_name(
+                "company_Custom_Metric", "company:Custom_Metric"
+            )
+            is True
+        )
