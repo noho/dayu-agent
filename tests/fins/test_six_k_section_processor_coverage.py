@@ -2728,6 +2728,49 @@ def test_parse_ocr_numeric_token_empty_after_clean() -> None:
 
 
 @pytest.mark.unit
+def test_parse_ocr_numeric_token_handles_currency_in_parenthesized_negative() -> None:
+    """验证 OCR 括号负数含货币符号时正确解析为负数浮点。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _parse_ocr_numeric_token
+
+    assert _parse_ocr_numeric_token("($1,234)") == -1234.0
+    assert _parse_ocr_numeric_token("(€1,234)") == -1234.0
+    assert _parse_ocr_numeric_token("$500") == 500.0
+    assert _parse_ocr_numeric_token("£12,345.6") == 12345.6
+
+
+@pytest.mark.unit
+def test_parse_ocr_numeric_token_returns_none_on_unparseable() -> None:
+    """验证无法解析为浮点的 token 返回 None 而不抛 ValueError。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    from dayu.fins.processors.six_k_form_common import _parse_ocr_numeric_token
+
+    assert _parse_ocr_numeric_token("abc") is None
+    assert _parse_ocr_numeric_token("(abc)") is None
+    assert _parse_ocr_numeric_token("-") is None
+
+
+@pytest.mark.unit
 def test_extract_fiscal_period_from_ocr_match_fy() -> None:
     """验证 OCR 期间 match 提取 FY period（12M → FY）。
 

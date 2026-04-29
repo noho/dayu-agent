@@ -1642,10 +1642,10 @@ def _parse_ocr_numeric_token(token: str) -> Optional[float]:
         token: 原始数值 token。
 
     Returns:
-        浮点数；横线占位返回 `None`。
+        浮点数；横线占位、空 token 或无法解析为浮点时返回 `None`。
 
     Raises:
-        RuntimeError: 转换失败时抛出。
+        无。
     """
 
     normalized_token = str(token or "").strip()
@@ -1653,9 +1653,15 @@ def _parse_ocr_numeric_token(token: str) -> Optional[float]:
         return None
     is_negative = normalized_token.startswith("(") and normalized_token.endswith(")")
     cleaned = normalized_token.strip("()").replace(",", "")
+    # OCR 文本中括号负数可能含货币符号（如 "($1,234)"），剥离括号后货币符号仍残留，
+    # 必须再次清理，否则 ``float`` 会抛 ``ValueError`` 中断整条 OCR 解析链路。
+    cleaned = re.sub(r"[$€£¥₩₹]", "", cleaned).strip()
     if not cleaned:
         return None
-    value = float(cleaned)
+    try:
+        value = float(cleaned)
+    except ValueError:
+        return None
     return -value if is_negative else value
 
 

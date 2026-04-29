@@ -1384,6 +1384,13 @@ def _resolve_period_end_from_fiscal_period(
 ) -> Optional[dt.date]:
     """根据财期标签推断 period_end 日期。
 
+    限制：本函数仅作为 HTML 表头/OCR 路径无法直接解析具体日期时的粗粒度兜底，
+    Q4/FY 一律按公历 12-31 推断，不感知公司实际财年结束月日（例如 Apple 9 月财年）。
+    **禁止**把本函数当作 filing 级权威 period_end 的来源；filing 级 period_end
+    必须使用 SEC EDGAR 提供的 ``report_date``（见 ``filing_manifest.json``），
+    XBRL fact 筛选也以 manifest report_date 为准。后续 code review 若再次质疑
+    硬编码 12-31，请先确认是否真有调用方把本函数输出当作权威值使用，没有则维持现状。
+
     Args:
         fiscal_period: 财期标签。
         fiscal_year: 财年。
@@ -1392,7 +1399,7 @@ def _resolve_period_end_from_fiscal_period(
         对应的期末日期；无法映射时返回 `None`。
 
     Raises:
-        RuntimeError: 推断失败时抛出。
+        无。
     """
 
     mapping: dict[str, tuple[int, int]] = {
