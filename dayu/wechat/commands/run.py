@@ -6,12 +6,12 @@ import argparse
 import asyncio
 from dataclasses import dataclass
 
-from dayu.host.host import Host
 from dayu.log import Log
 from dayu.process_lifecycle import (
     ProcessShutdownCoordinator,
     install_async_signal_handlers,
 )
+from dayu.process_lifecycle.coordinator import HostSettleHook
 from dayu.wechat.arg_parsing import MODULE, _resolve_command_context
 from dayu.wechat.runtime import WeChatDaemonLike, _create_run_daemon
 from dayu.wechat.state_store import FileWeChatStateStore
@@ -32,14 +32,16 @@ class _DaemonShutdownState:
 async def _run_daemon_with_graceful_shutdown(
     daemon: WeChatDaemonLike,
     *,
-    host: Host,
+    host: HostSettleHook,
     require_existing_auth: bool,
 ) -> int:
     """以前台方式运行 daemon，并通过统一的进程级协调器处理退出信号。
 
     Args:
         daemon: WeChat daemon。
-        host: WeChat daemon 关联的 Host，用于让协调器执行 owner-run 收敛。
+        host: WeChat daemon 关联的 Host 协调器钩子，
+            协议层契约 ``HostSettleHook``，由装配点（``runtime._create_run_daemon``）
+            注入实际 Host 实例；本函数仅依赖协议方法以避免反向耦合到具体类型。
         require_existing_auth: 是否要求已有登录态。
 
     Returns:

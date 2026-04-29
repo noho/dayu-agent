@@ -675,6 +675,6 @@ Service 单测写"如何调 Host"时：
 7. `dayu/host/concurrency.py` — lane 合并与 `acquire_many`；
 8. `dayu/host/conversation_*.py` — 两层记忆与 compaction；
 9. `dayu/host/startup_preparation.py` — 配置规范化与默认值；
-10. `dayu/host/host_cleanup.py` — 启动恢复的编排。
+10. `dayu/host/host_cleanup.py` — Host 包对装配期一次性会话残留清理的稳定 API（`purge_sessions_from_host_db`），由 UI 装配点在构造新 Host 之前 / 拆 service 时按 `host_db_path + session_ids` 直接调用。
 
 最后，任何与本文叙述冲突之处以代码为准；发现不一致请修正 README，而不是反过来。

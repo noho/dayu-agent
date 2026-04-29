@@ -12,7 +12,7 @@ from pathlib import Path
 
 from dayu.contracts.infrastructure import ModelCatalogProtocol, PromptAssetStoreProtocol
 from dayu.execution.options import ExecutionOptions, ResolvedExecutionOptions
-from dayu.fins.service_runtime import DefaultFinsRuntime
+from dayu.fins.service_runtime import DefaultFinsRuntime, FinsRuntimeProtocol
 from dayu.host import Host, resolve_host_config
 from dayu.services.concurrency_lanes import SERVICE_DEFAULT_LANE_CONFIG
 from dayu.services.conversation_policy_reader import ConversationPolicyReader
@@ -58,7 +58,7 @@ class PreparedHostRuntimeDependencies:
     default_execution_options: ResolvedExecutionOptions
     scene_execution_acceptance_preparer: SceneExecutionAcceptancePreparer
     host: Host
-    fins_runtime: DefaultFinsRuntime
+    fins_runtime: FinsRuntimeProtocol
 
 
 def prepare_scene_execution_acceptance_preparer(

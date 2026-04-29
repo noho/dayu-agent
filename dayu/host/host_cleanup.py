@@ -1,7 +1,11 @@
 """Host 层会话数据清理工具。
 
-提供按 session_id 批量清理 pending turns 和 reply outbox 的能力，
-供 UI 层在 service uninstall 时调用。
+该模块作为 Host 包对装配期（CLI/wechat 启动或 service uninstall）的稳定公开
+API，提供按 ``session_id`` 批量清理 pending turns 与 reply outbox 的能力。
+调用时机通常发生在"无在线 Host 实例"场景（构造新 Host 之前清理上一次残留，
+或拆 service 时清理 daemon 关联会话），因此契约直接以 ``host_db_path`` 为入参，
+无需依赖 Host 聚合根；UI 装配点应通过 ``from dayu.host import
+purge_sessions_from_host_db`` 引用，避免直接 import 该子模块。
 """
 
 from __future__ import annotations

@@ -45,6 +45,7 @@ class ChatService(ChatServiceProtocol):
 
     host: ConversationalExecutionGatewayProtocol
     scene_execution_acceptance_preparer: SceneExecutionAcceptancePreparer
+    default_scene_name: str
     company_name_resolver: Callable[[str], str] | None = None
     session_source: SessionSource = SessionSource.API
     # 以弱引用持有每 session 的串行锁：只要存在至少一个生成器/任务引用该锁对象，
@@ -195,11 +196,18 @@ class ChatService(ChatServiceProtocol):
             ValueError: 用户输入为空或 scene 非法时抛出。
         """
 
-        # scene_name 语义对齐：契约中 None 表示"未指定"，应走默认；
-        # 显式传入空串属于调用方错误，必须报错而不是被静默覆盖。
+        # scene_name 语义对齐：契约中 None 表示"未指定"，应走装配期注入的默认；
+        # 显式传入空串 / 装配期注入空白串均属契约违规，必须立刻抛出明确错误，
+        # 不能被静默 strip 掉后退化成下游 "scene 不存在" 这类误导性诊断。
         raw_scene_name = request.scene_name
         if raw_scene_name is None:
-            scene_name = "interactive"
+            stripped_default = self.default_scene_name.strip()
+            if not stripped_default:
+                raise ValueError(
+                    "ChatService.default_scene_name 装配期未注入有效值；"
+                    "请由装配点显式传入非空 scene_name"
+                )
+            scene_name = stripped_default
         else:
             stripped_scene_name = str(raw_scene_name).strip()
             if not stripped_scene_name:

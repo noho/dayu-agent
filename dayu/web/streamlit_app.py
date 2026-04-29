@@ -126,6 +126,7 @@ def _resolve_services(
         st.session_state["chat_service"] = ChatService(
             host=prepared_deps.host,
             scene_execution_acceptance_preparer=prepared_deps.scene_execution_acceptance_preparer,
+            default_scene_name="interactive",
             company_name_resolver=prepared_deps.fins_runtime.get_company_name,
             session_source=SessionSource.WEB,
         )

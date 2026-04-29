@@ -39,9 +39,9 @@ from dayu.execution.options import (
 )
 from dayu.execution.runtime_config import AgentRuntimeConfig, RunnerRuntimeConfig
 from dayu.fins.domain.enums import SourceKind
-from dayu.fins.service_runtime import DefaultFinsRuntime
+from dayu.fins.service_runtime import DefaultFinsRuntime, FinsRuntimeProtocol
 from dayu.fins.storage import FsSourceDocumentRepository
-from dayu.host import Host
+from dayu.host import Host, purge_sessions_from_host_db
 from dayu.log import Log, set_level_from_flags
 from dayu.services import prepare_host_runtime_dependencies, WriteRunConfig
 from dayu.services.chat_service import ChatService
@@ -265,8 +265,6 @@ def _purge_old_interactive_session(
     old_session_id = resolve_interactive_state_session_id(old_state)
     host_db_path = build_host_store_default_path(workspace_dir)
 
-    from dayu.host.host_cleanup import purge_sessions_from_host_db
-
     total_pending, total_outbox = purge_sessions_from_host_db(
         host_db_path=host_db_path,
         session_ids=[old_session_id],
@@ -479,7 +477,7 @@ def _prepare_cli_host_dependencies(
     ResolvedExecutionOptions,
     SceneExecutionAcceptancePreparer,
     Host,
-    DefaultFinsRuntime,
+    FinsRuntimeProtocol,
 ]:
     """准备 CLI 的 Host 级稳定依赖。
 
@@ -570,7 +568,7 @@ def _build_chat_service(
     *,
     host: Host,
     scene_execution_acceptance_preparer: SceneExecutionAcceptancePreparer,
-    fins_runtime: DefaultFinsRuntime,
+    fins_runtime: FinsRuntimeProtocol,
 ) -> ChatService:
     """构建交互聊天服务。
 
@@ -589,6 +587,7 @@ def _build_chat_service(
     return ChatService(
         host=host,
         scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
+        default_scene_name="interactive",
         company_name_resolver=fins_runtime.get_company_name,
         session_source=SessionSource.CLI,
     )
@@ -598,7 +597,7 @@ def _build_prompt_service(
     *,
     host: Host,
     scene_execution_acceptance_preparer: SceneExecutionAcceptancePreparer,
-    fins_runtime: DefaultFinsRuntime,
+    fins_runtime: FinsRuntimeProtocol,
 ) -> PromptService:
     """构建单轮 prompt 服务。
 
@@ -627,7 +626,7 @@ def _build_write_service(
     host: Host,
     workspace: WorkspaceResources,
     scene_execution_acceptance_preparer: SceneExecutionAcceptancePreparer,
-    fins_runtime: DefaultFinsRuntime,
+    fins_runtime: FinsRuntimeProtocol,
 ) -> WriteService:
     """构建写作服务。
 

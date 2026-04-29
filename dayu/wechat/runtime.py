@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Protocol
 
 from dayu.contracts.session import SessionSource
+from dayu.host import purge_sessions_from_host_db
 from dayu.host.host import Host
 from dayu.log import Log
 from dayu.services import prepare_host_runtime_dependencies
@@ -718,6 +719,7 @@ def _create_run_daemon(
     chat_service = ChatService(
         host=host,
         scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
+        default_scene_name="interactive",
         company_name_resolver=fins_runtime.get_company_name,
         session_source=SessionSource.WECHAT,
     )
@@ -901,9 +903,6 @@ def _purge_tracked_session_data(*, workspace_root: Path, state_dir: Path) -> Non
     host_db_path = build_host_store_default_path(workspace_root)
     if not host_db_path.exists():
         return
-
-    # host cleanup 仅在卸载 service 时需要，延迟导入避免影响冷启动路径。
-    from dayu.host.host_cleanup import purge_sessions_from_host_db
 
     total_pending, total_outbox = purge_sessions_from_host_db(
         host_db_path=host_db_path,

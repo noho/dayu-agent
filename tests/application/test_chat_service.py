@@ -265,6 +265,7 @@ def _build_service(
     service = ChatService(
         host=host,
         scene_execution_acceptance_preparer=cast(SceneExecutionAcceptancePreparer, resolver),
+        default_scene_name="interactive",
         company_name_resolver=lambda ticker: f"{ticker}-NAME",
         session_source=session_source,
     )
@@ -1140,6 +1141,7 @@ def test_submit_turn_translates_prompt_manifest_error_to_value_error() -> None:
     service = ChatService(
         host=host,
         scene_execution_acceptance_preparer=cast(SceneExecutionAcceptancePreparer, resolver),
+        default_scene_name="interactive",
         company_name_resolver=lambda ticker: f"{ticker}-NAME",
         session_source=SessionSource.API,
     )
@@ -1179,6 +1181,7 @@ def test_submit_turn_translates_missing_scene_to_value_error() -> None:
     service = ChatService(
         host=host,
         scene_execution_acceptance_preparer=cast(SceneExecutionAcceptancePreparer, resolver),
+        default_scene_name="interactive",
         company_name_resolver=lambda ticker: f"{ticker}-NAME",
         session_source=SessionSource.API,
     )
@@ -1187,6 +1190,71 @@ def test_submit_turn_translates_missing_scene_to_value_error() -> None:
         with pytest.raises(ValueError, match="scene 不存在"):
             await service.submit_turn(
                 ChatTurnRequest(session_id="s1", user_text="hello", ticker="AAPL"),
+            )
+
+    asyncio.run(scenario())
+
+
+def test_submit_turn_rejects_blank_default_scene_name() -> None:
+    """装配期注入空白 ``default_scene_name`` 时应在请求阶段立刻抛出明确错误，
+    而不是被静默 strip 后退化成下游 'scene 不存在' 这类误导性诊断（#24 review 补丁）。"""
+
+    resolver = _FakeSceneExecutionAcceptancePreparer()
+    session_registry = StubSessionRegistry()
+    session_registry.create_session(source=SessionSource.CLI, session_id="s1")
+    host = Host(
+        executor=StubHostExecutor(),  # type: ignore[arg-type]
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=StubRunRegistry(),  # type: ignore[arg-type]
+        pending_turn_store=StubPendingTurnStore(),  # type: ignore[arg-type]
+    )
+    service = ChatService(
+        host=host,
+        scene_execution_acceptance_preparer=cast(SceneExecutionAcceptancePreparer, resolver),
+        default_scene_name="   ",
+        company_name_resolver=lambda ticker: f"{ticker}-NAME",
+        session_source=SessionSource.API,
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(ValueError, match="default_scene_name 装配期未注入有效值"):
+            await service.submit_turn(
+                ChatTurnRequest(session_id="s1", user_text="hello", ticker="AAPL"),
+            )
+
+    asyncio.run(scenario())
+
+
+def test_submit_turn_rejects_explicit_blank_scene_name() -> None:
+    """显式传入纯空白 ``scene_name`` 时应抛出"不能为空字符串"的 ValueError，
+    与默认值校验路径保持对称契约。"""
+
+    resolver = _FakeSceneExecutionAcceptancePreparer()
+    session_registry = StubSessionRegistry()
+    session_registry.create_session(source=SessionSource.CLI, session_id="s1")
+    host = Host(
+        executor=StubHostExecutor(),  # type: ignore[arg-type]
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=StubRunRegistry(),  # type: ignore[arg-type]
+        pending_turn_store=StubPendingTurnStore(),  # type: ignore[arg-type]
+    )
+    service = ChatService(
+        host=host,
+        scene_execution_acceptance_preparer=cast(SceneExecutionAcceptancePreparer, resolver),
+        default_scene_name="interactive",
+        company_name_resolver=lambda ticker: f"{ticker}-NAME",
+        session_source=SessionSource.API,
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(ValueError, match="scene_name 不能为空字符串"):
+            await service.submit_turn(
+                ChatTurnRequest(
+                    session_id="s1",
+                    user_text="hello",
+                    ticker="AAPL",
+                    scene_name="   ",
+                ),
             )
 
     asyncio.run(scenario())
