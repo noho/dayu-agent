@@ -29,6 +29,7 @@ from dayu.services.internal.write_pipeline.audit_rules import (
     _log_chapter_confirm_result,
     _log_chapter_confirm_start,
     _merge_confirmed_evidence_results,
+    _rebuild_anchor_followup_audit_decision,
     _run_programmatic_audits,
 )
 from dayu.services.internal.write_pipeline.artifact_store import ArtifactStore, _build_phase_artifact_name
@@ -410,6 +411,16 @@ class ChapterAuditCoordinator:
                 applied=False,
                 skip_reason="no_anchor_rewrite_candidates",
             )
+
+        # 一旦确认存在 anchor rewrite 候选，先把 confirm merge 阶段因
+        # ``entry.anchor_fix is not None`` 静默丢弃的 supported_* 违规重建为 S7
+        # followup 违规，作为后续所有“未真正落地 rewrite”早退路径的基线 audit_decision。
+        # 仅当后续 rewrite 真正成功并通过后验校验时，再交由
+        # ``_drop_resolved_supported_anchor_violations`` 把已被吸收的 S7 followup 移除。
+        audit_decision = _rebuild_anchor_followup_audit_decision(
+            audit_decision=audit_decision,
+            confirmation_result=confirmation_result,
+        )
 
         rewritten_evidence_lines, resolved_violation_ids = _rewrite_evidence_lines_and_collect_resolved_anchor_issues(
             chapter_markdown=current_content,

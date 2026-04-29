@@ -7440,6 +7440,217 @@ def test_maybe_rewrite_evidence_anchors_rolls_back_when_post_validation_fails(
 
 
 @pytest.mark.unit
+def test_maybe_rewrite_evidence_anchors_rebuilds_dropped_followup_when_validation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """校验失败回退时，必须把因 anchor_fix 在 merge 阶段被静默移除的 supported_* 违规重建回 audit_decision，
+    避免审计 gate 把章节误判为 passed。"""
+
+    runner = _build_runner(tmp_path)
+    task = ChapterTask(index=5, title="经营表现与核心驱动", skeleton="## 经营表现与核心驱动")
+    current_content = (
+        "## 经营表现与核心驱动\n\n"
+        "### 结论要点\n\n"
+        "- 自由现金流下降。\n\n"
+        "### 证据与出处\n\n"
+        "- SEC EDGAR | Form 10-K | Filed 2026-01-29 | Accession 0001628280-26-003942 | "
+        "Financial Statement:cash_flow | Period:FY2025,FY2024 | Rows:Purchases of property and equipment,Net cash provided by operating activities\n"
+    )
+    suspected = AuditDecision(passed=True, category=AuditCategory.OK)
+    # audit_decision 模拟 merge 后状态：anchor_fix 非空时原 violation 被丢弃，
+    # passed 错误地保持为 True，等待 maybe_rewrite_evidence_anchors 通过机械 rewrite 实际修复。
+    audit = AuditDecision(passed=True, category=AuditCategory.OK, violations=[])
+    confirmation = EvidenceConfirmationResult(
+        entries=[
+            EvidenceConfirmationEntry(
+                violation_id="evidence_1",
+                rule=AuditRuleCode.E1,
+                excerpt="自由现金流从521亿美元降至436亿美元",
+                status=EvidenceConfirmationStatus.SUPPORTED_ELSEWHERE_IN_SAME_FILING,
+                reason="自由现金流数字在同一 filing 的 Part II - Item 7 | Free Cash Flow 中明确列示。",
+                rewrite_hint="将证据条目更改为：SEC EDGAR | Form 10-K | Filed 2026-01-29 | Accession 0001628280-26-003942 | Part II - Item 7 | Free Cash Flow",
+                anchor_fix=EvidenceAnchorFix(
+                    kind="same_filing_section",
+                    action="refine_existing",
+                    section_path="Part II - Item 7 | Free Cash Flow",
+                ),
+            )
+        ]
+    )
+
+    failing_decision = AuditDecision(
+        passed=False,
+        category=AuditCategory.CONTENT_VIOLATION,
+        violations=[Violation(rule=AuditRuleCode.P1, severity="high", excerpt="", reason="结构不匹配")],
+        notes=["结构不匹配"],
+        repair_contract=RepairContract(repair_strategy="regenerate"),
+        raw='{"pass": false}',
+    )
+    monkeypatch.setattr(
+        "dayu.services.internal.write_pipeline.audit_evidence_rewriter._run_programmatic_audits",
+        lambda *_args, **_kwargs: failing_decision,
+    )
+    process_state = build_process_state_template()
+
+    rewritten_content, _rewritten_suspected, rewritten_audit, _rewritten_confirmation = runner._chapter_audit_coordinator.maybe_rewrite_evidence_anchors(
+        task=task,
+        current_content=current_content,
+        suspected_decision=suspected,
+        audit_decision=audit,
+        confirmation_result=confirmation,
+        phase="repair_1",
+        skeleton=task.skeleton,
+        allowed_conditional_headings=set(),
+        process_state=process_state,
+    )
+
+    assert rewritten_content == current_content
+    # 关键断言：audit_decision 不再保留旧对象，而是重建后的版本，
+    # 必须包含一条对应该 confirm entry 的 S7 followup violation，
+    # 不能让违规因 anchor_fix 在 merge 阶段被静默吞掉。
+    assert rewritten_audit is not audit
+    followup_violations = [v for v in rewritten_audit.violations if v.rule == AuditRuleCode.S7]
+    assert len(followup_violations) == 1
+    assert followup_violations[0].excerpt == "自由现金流从521亿美元降至436亿美元"
+    assert process_state["latest_anchor_rewrite"]["attempted"] is True
+    assert process_state["latest_anchor_rewrite"]["applied"] is False
+
+
+@pytest.mark.unit
+def test_maybe_rewrite_evidence_anchors_rebuilds_dropped_followup_on_no_material_change(
+    tmp_path: Path,
+) -> None:
+    """early-return 分支 ``no_material_change``：rewrite 候选与现有 evidence 一致、
+    rewrite 实际未落地，audit_decision 仍必须含 supported_* 对应的 S7 followup violation，
+    不能让 confirm merge 阶段静默吞掉的违规丢失。"""
+
+    runner = _build_runner(tmp_path)
+    task = ChapterTask(index=5, title="经营表现与核心驱动", skeleton="## 经营表现与核心驱动")
+    # evidence_line 直接给出与 anchor_fix.evidence_line 完全一致的内容，
+    # 触发 ``rewritten_evidence_lines == current_evidence_lines`` 的早退路径。
+    evidence_line = (
+        "SEC EDGAR | Form 10-K | Filed 2026-01-29 | Accession 0001628280-26-003942 | "
+        "Part II - Item 7 | Free Cash Flow"
+    )
+    current_content = (
+        "## 经营表现与核心驱动\n\n"
+        "### 结论要点\n\n"
+        "- 自由现金流下降。\n\n"
+        "### 证据与出处\n\n"
+        f"- {evidence_line}\n"
+    )
+    suspected = AuditDecision(passed=True, category=AuditCategory.OK)
+    # 模拟 confirm merge 阶段已经把 anchor_fix 非空的 supported_* violation 静默丢弃后的状态。
+    audit = AuditDecision(passed=True, category=AuditCategory.OK, violations=[])
+    confirmation = EvidenceConfirmationResult(
+        entries=[
+            EvidenceConfirmationEntry(
+                violation_id="evidence_1",
+                rule=AuditRuleCode.E1,
+                excerpt="自由现金流从521亿美元降至436亿美元",
+                status=EvidenceConfirmationStatus.SUPPORTED_ELSEWHERE_IN_SAME_FILING,
+                reason="自由现金流数字在同一 filing 的 Part II - Item 7 | Free Cash Flow 中明确列示。",
+                rewrite_hint=f"将证据条目更改为：{evidence_line}",
+                anchor_fix=EvidenceAnchorFix(
+                    kind="same_filing_evidence_line",
+                    action="refine_existing",
+                    evidence_line=evidence_line,
+                ),
+            )
+        ]
+    )
+    process_state = build_process_state_template()
+
+    rewritten_content, _rewritten_suspected, rewritten_audit, _rewritten_confirmation = runner._chapter_audit_coordinator.maybe_rewrite_evidence_anchors(
+        task=task,
+        current_content=current_content,
+        suspected_decision=suspected,
+        audit_decision=audit,
+        confirmation_result=confirmation,
+        phase="repair_1",
+        skeleton=task.skeleton,
+        allowed_conditional_headings=set(),
+        process_state=process_state,
+    )
+
+    assert rewritten_content == current_content
+    assert rewritten_audit is not audit
+    followup_violations = [v for v in rewritten_audit.violations if v.rule == AuditRuleCode.S7]
+    assert len(followup_violations) == 1
+    assert followup_violations[0].excerpt == "自由现金流从521亿美元降至436亿美元"
+    assert process_state["latest_anchor_rewrite"]["attempted"] is False
+    assert process_state["latest_anchor_rewrite"]["applied"] is False
+    assert process_state["latest_anchor_rewrite"]["skip_reason"] == "no_material_change"
+
+
+@pytest.mark.unit
+def test_maybe_rewrite_evidence_anchors_rebuilds_dropped_followup_on_missing_evidence_section(
+    tmp_path: Path,
+) -> None:
+    """early-return 分支 ``missing_evidence_section``：原文没有"### 证据与出处"块，
+    rewrite 完全无法落地；audit_decision 仍必须含 supported_* 对应的 S7 followup violation。"""
+
+    runner = _build_runner(tmp_path)
+    task = ChapterTask(index=5, title="经营表现与核心驱动", skeleton="## 经营表现与核心驱动")
+    evidence_line = (
+        "SEC EDGAR | Form 10-K | Filed 2026-01-29 | Accession 0001628280-26-003942 | "
+        "Part II - Item 7 | Free Cash Flow"
+    )
+    # 故意去掉"### 证据与出处"小节，触发 missing_evidence_section 早退路径。
+    current_content = (
+        "## 经营表现与核心驱动\n\n"
+        "### 结论要点\n\n"
+        "- 自由现金流下降。\n"
+    )
+    suspected = AuditDecision(passed=True, category=AuditCategory.OK)
+    audit = AuditDecision(passed=True, category=AuditCategory.OK, violations=[])
+    confirmation = EvidenceConfirmationResult(
+        entries=[
+            EvidenceConfirmationEntry(
+                violation_id="evidence_1",
+                rule=AuditRuleCode.E1,
+                excerpt="自由现金流从521亿美元降至436亿美元",
+                status=EvidenceConfirmationStatus.SUPPORTED_ELSEWHERE_IN_SAME_FILING,
+                reason="自由现金流数字在同一 filing 的 Part II - Item 7 | Free Cash Flow 中明确列示。",
+                rewrite_hint=f"将证据条目更改为：{evidence_line}",
+                anchor_fix=EvidenceAnchorFix(
+                    kind="same_filing_evidence_line",
+                    action="refine_existing",
+                    evidence_line=evidence_line,
+                ),
+            )
+        ]
+    )
+    process_state = build_process_state_template()
+
+    _rewritten_content, _rewritten_suspected, rewritten_audit, _rewritten_confirmation = runner._chapter_audit_coordinator.maybe_rewrite_evidence_anchors(
+        task=task,
+        current_content=current_content,
+        suspected_decision=suspected,
+        audit_decision=audit,
+        confirmation_result=confirmation,
+        phase="repair_1",
+        skeleton=task.skeleton,
+        allowed_conditional_headings=set(),
+        process_state=process_state,
+    )
+
+    assert rewritten_audit is not audit
+    followup_violations = [v for v in rewritten_audit.violations if v.rule == AuditRuleCode.S7]
+    assert len(followup_violations) == 1
+    assert followup_violations[0].excerpt == "自由现金流从521亿美元降至436亿美元"
+    # missing_evidence_section / no_rewritten_evidence_lines 均会进入 early-return；
+    # 只断言核心契约：违规已被重建，且 attempted=False 表示未真正落地 rewrite。
+    assert process_state["latest_anchor_rewrite"]["attempted"] is False
+    assert process_state["latest_anchor_rewrite"]["applied"] is False
+    assert process_state["latest_anchor_rewrite"]["skip_reason"] in {
+        "missing_evidence_section",
+        "no_rewritten_evidence_lines",
+    }
+
+
+@pytest.mark.unit
 def test_persist_phase_confirm_parse_error_artifacts(tmp_path: Path) -> None:
     """验证 confirm 非法 JSON 时会落盘原始输出与解析错误。"""
 

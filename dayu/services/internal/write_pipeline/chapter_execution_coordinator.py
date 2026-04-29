@@ -385,6 +385,13 @@ class ChapterExecutionCoordinator:
             execution_state.process_state["repair_skipped"] = True
             execution_state.process_state["final_stage"] = "fast_written"
             Log.info(f"fast 模式跳过审计链路: {task.title}", module=MODULE)
+            # fast 模式下 ``audit_passed`` 强制为 ``False`` 是有意为之：
+            # fast 产物不写 audit artifact（未调 ``persist_phase_audit_artifact``），
+            # ``WritePipelineRunner._recover_prior_chapter_result_from_artifacts`` 仅承认
+            # 落盘 audit artifact 中 ``pass=True`` 的章节作为 resume 复用来源，
+            # 因此 fast 产物天然不会被 non-fast resume 误当成"已通过"。
+            # 同时 ``_satisfies_audit_gate_for_current_mode`` 在当前进程为 fast 时
+            # 直接放行，``audit_passed=False`` 不会影响本进程内的成功判定。
             return ChapterResult(
                 index=task.index,
                 title=task.title,

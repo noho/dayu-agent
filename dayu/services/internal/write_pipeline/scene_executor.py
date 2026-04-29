@@ -25,6 +25,7 @@ helper 层 ``_run_scene_prompt_with_retry`` 显式区分两类失败路径：
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import AsyncIterator, Awaitable
 from types import SimpleNamespace
@@ -38,6 +39,10 @@ from dayu.log import Log
 from dayu.services.internal.write_pipeline.audit_formatting import (
     _extract_markdown_content,
     parse_markdown_scene_output,
+)
+from dayu.services.internal.write_pipeline.audit_formatting import (
+    _extract_json_text,
+    _extract_markdown_content,
 )
 from dayu.services.internal.write_pipeline.audit_rules import (
     ConfirmOutputError,
@@ -921,9 +926,16 @@ class ScenePromptRunner:
 
 
 def _parse_audit_output(raw_text: str) -> AuditDecision:
-    """审计 success_parser：当前 ``_parse_audit_decision`` 自身已对脏数据
-    返回 ``AuditDecision``（不抛 ``ValueError``），故本 wrapper 仅原样透传，
-    保持 helper 协议形状一致。
+    """审计 success_parser：脏数据时抛 ``ValueError``，触发 helper 的
+    ``replay_on_parse_failure`` 兜底。
+
+    设计意图：
+    - JSON 不可解析 / 缺失（典型如 LLM 退化为自然语言解释）属于"脏数据"，
+      项目既有 Host.replay 兜底机制要求 success_parser 抛 ``ValueError``，
+      由 ``_run_scene_prompt_with_retry`` 进入 replay 路径让 Agent 自纠。
+    - JSON 形态合法但内部字段不规范（缺 violations / pass 等）属于"业务退化"，
+      由 ``_parse_audit_decision`` 内部规范化处理，仍返回有效 ``AuditDecision``，
+      不应触发 replay；replay 在已是合法 JSON 上重试无意义。
 
     Args:
         raw_text: 审计 Agent 原始输出。
@@ -932,28 +944,39 @@ def _parse_audit_output(raw_text: str) -> AuditDecision:
         规范化后的审计决策。
 
     Raises:
-        无。
+        ValueError: 当 ``raw_text`` 取不到 JSON 块或 JSON 解析失败时抛出，
+            交由 helper 触发 Host.replay 兜底。
     """
 
+    normalized = _extract_markdown_content(raw_text)
+    json_text = _extract_json_text(normalized)
+    if not json_text:
+        raise ValueError("审计输出不是合法 JSON：未提取到 JSON 块")
+    try:
+        json.loads(json_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"审计输出不是合法 JSON：{exc}") from exc
     return _parse_audit_decision(raw_text)
 
 
 def _build_audit_output_error(raw_text: str, error: ValueError) -> RuntimeError:
-    """构造审计输出解析失败异常（当前路径理论不可达，作为协议占位）。
+    """构造审计输出解析失败异常，用于 replay 仍失败后的最终上抛。
 
     Args:
         raw_text: 审计原始输出。
         error: 原始解析异常。
 
     Returns:
-        统一的 ``RuntimeError``，便于 helper 在未来若引入抛错型 parser 时复用。
+        带原始输出片段的 ``RuntimeError``，便于上层日志定位。
 
     Raises:
         无。
     """
 
-    del raw_text
-    return RuntimeError(f"审计输出解析失败: {error}")
+    snippet = raw_text.strip().replace("\n", " ")
+    if len(snippet) > 200:
+        snippet = snippet[:200] + "..."
+    return RuntimeError(f"审计输出解析失败: {error}; raw={snippet!r}")
 
 
 def _parse_repair_result(raw_text: str) -> tuple[dict[str, Any], str]:

@@ -1293,6 +1293,75 @@ def _rebuild_audit_decision_with_confirmation(
     )
 
 
+def _rebuild_anchor_followup_audit_decision(
+    *,
+    audit_decision: AuditDecision,
+    confirmation_result: EvidenceConfirmationResult,
+) -> AuditDecision:
+    """在锚点轻量修复回退路径上，把被 merge 阶段静默移除的 supported_* + anchor_fix 违规重建回审计决策。
+
+    背景：``_merge_confirmed_evidence_results`` 在 confirm 合并时，对
+    ``SUPPORTED_BUT_ANCHOR_TOO_COARSE`` / ``SUPPORTED_ELSEWHERE_IN_SAME_FILING``
+    且 ``anchor_fix`` 非空的 entry 直接 ``continue``——预设后续 ``maybe_rewrite_evidence_anchors``
+    会用机械 rewrite 吸收这些违规。但若机械 rewrite 后置校验失败、原文回退，
+    那些被假设会被吸收的违规仍然真实存在却已不在 audit_decision 里，
+    审计 gate 会把章节误判为 passed。
+
+    本 helper 仅在校验失败回退路径调用：基于现有 ``confirmation_result``
+    重建对应的 S7 followup 违规并合入当前 audit_decision，
+    再用 ``_recompute_audit_result`` 重算 ``passed`` / ``category``。
+    若没有需要恢复的 entry，则原样返回。
+
+    Args:
+        audit_decision: 当前最终审计结果（已经过 confirm merge）。
+        confirmation_result: 本轮证据复核结果。
+
+    Returns:
+        若有需要恢复的违规则返回新的 ``AuditDecision``；否则返回原对象。
+
+    Raises:
+        无。
+    """
+
+    pending_entries = [
+        entry
+        for entry in confirmation_result.entries
+        if entry.status
+        in {
+            EvidenceConfirmationStatus.SUPPORTED_BUT_ANCHOR_TOO_COARSE,
+            EvidenceConfirmationStatus.SUPPORTED_ELSEWHERE_IN_SAME_FILING,
+        }
+        and entry.anchor_fix is not None
+    ]
+    if not pending_entries:
+        return audit_decision
+    existing_followups = [
+        violation
+        for violation in audit_decision.violations
+        if any(
+            _is_supported_anchor_followup_violation_for_entry(violation=violation, entry=entry)
+            for entry in pending_entries
+        )
+    ]
+    missing_entries = [
+        entry
+        for entry in pending_entries
+        if not any(
+            _is_supported_anchor_followup_violation_for_entry(violation=violation, entry=entry)
+            for violation in existing_followups
+        )
+    ]
+    if not missing_entries:
+        return audit_decision
+    rebuilt_violations: list[Violation] = list(audit_decision.violations)
+    rebuilt_violations.extend(_build_supported_anchor_followup_violation(entry) for entry in missing_entries)
+    return _rebuild_audit_decision_with_confirmation(
+        audit_decision=audit_decision,
+        violations=rebuilt_violations,
+        confirmation_result=confirmation_result,
+    )
+
+
 def _drop_resolved_supported_anchor_violations(
     *,
     audit_decision: AuditDecision,

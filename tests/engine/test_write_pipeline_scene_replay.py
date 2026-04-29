@@ -396,21 +396,49 @@ def test_replay_path_propagates_cancellation(
 def test_run_audit_prompt_replays_on_dirty_output(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """audit success_parser 自身从不抛 ValueError，故脏数据不触发 replay；
-    本测试验证当前行为：首轮脏 JSON 也直接被 _parse_audit_decision 兜底成失败决策返回。"""
+    """audit success_parser 在拿不到合法 JSON 时必须抛 ValueError，
+    helper 借此触发 Host.replay 兜底；replay 返回合法 JSON 后正常解析为审计结果。"""
 
     runner = _build_runner(tmp_path)
     executor = _FakeContractExecutor(
         run_results=[_make_app_result(content="not json")],
+        replay_results=[
+            _make_app_result(
+                content='{"pass": true, "class": "ok", "violations": [], "notes": []}'
+            )
+        ],
     )
     _install_fake_executor(runner, executor, monkeypatch)
 
     decision = runner._prompt_runner.run_audit_prompt("prompt")
 
-    assert decision.passed is False
-    assert decision.violations
-    # audit 当前 success_parser 不抛 ValueError，故 replay 不触发
-    assert executor.replay_calls == []
+    assert decision.passed is True
+    assert decision.violations == []
+    # 关键：audit 路径已接入 Host.replay 兜底，replay 必须被调用一次
+    assert len(executor.replay_calls) == 1
+
+
+@pytest.mark.unit
+def test_run_audit_prompt_replay_failure_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """audit replay 仍返回脏数据时，helper 必须把解析失败上抛为 RuntimeError，
+    而不是再用伪装 STYLE_VIOLATION 决策吞掉错误。"""
+
+    runner = _build_runner(tmp_path)
+    executor = _FakeContractExecutor(
+        run_results=[_make_app_result(content="not json")],
+        replay_results=[
+            _make_app_result(content="still not json"),
+            _make_app_result(content="still bad"),
+            _make_app_result(content="still bad too"),
+        ],
+    )
+    _install_fake_executor(runner, executor, monkeypatch)
+
+    with pytest.raises(RuntimeError, match="审计输出解析失败"):
+        runner._prompt_runner.run_audit_prompt("prompt")
+    assert len(executor.replay_calls) >= 1
 
 
 # 防止 lint 抱怨未使用的 cast 导入；保留以便将来按需断言。
