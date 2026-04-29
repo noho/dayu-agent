@@ -15,6 +15,7 @@ from typing import AsyncIterator, cast
 from dayu.contracts.fins import (
     DownloadCommandPayload,
     DownloadProgressPayload,
+    DownloadResultData,
     FinsCommand,
     FinsCommandName,
     FinsEvent,
@@ -25,10 +26,14 @@ from dayu.contracts.fins import (
     ProcessCommandPayload,
     ProcessFilingCommandPayload,
     ProcessMaterialCommandPayload,
+    ProcessResultData,
+    ProcessSingleResultData,
     UploadFilingCommandPayload,
+    UploadFilingResultData,
     UploadFilingsFromCommandPayload,
     UploadFilingsFromResultData,
     UploadMaterialCommandPayload,
+    UploadMaterialResultData,
 )
 from dayu.fins.cli_support import (
     _coerce_document_ids_input as coerce_document_ids_input,
@@ -227,7 +232,36 @@ def _should_log_fins_progress_as_info(command_name: str) -> bool:
     return command_name in {"upload_filing", "upload_material"}
 
 
-_FINS_FAILURE_STATUS = "failed"
+_FINS_DOWNLOAD_SUCCESS_STATUSES: frozenset[str] = frozenset({"ok", "downloaded", "skipped", "cancelled"})
+_FINS_UPLOAD_SUCCESS_STATUSES: frozenset[str] = frozenset({"ok", "uploaded", "deleted", "skipped"})
+_FINS_PROCESS_SUCCESS_STATUSES: frozenset[str] = frozenset({"ok", "cancelled"})
+_FINS_PROCESS_SINGLE_SUCCESS_STATUSES: frozenset[str] = frozenset({"processed", "skipped"})
+_FINS_FAILURE_STATUS: str = "failed"
+
+
+def _classify_fins_status(status: str, success_set: frozenset[str]) -> bool:
+    """按 per-result-type 白名单判定单条结果是否需要以失败码上报。
+
+    Args:
+        status: 结果对象的 status 字段（已 strip）。
+        success_set: 该结果类型已枚举的成功 status 白名单。
+
+    Returns:
+        当 status 命中 ``"failed"`` 时返回 ``True``；命中成功白名单时返回 ``False``。
+
+    Raises:
+        ValueError: status 既不在成功白名单也不在 ``"failed"`` 时抛出，
+            强制未来新增 status 必须显式归类，避免被静默归"成功"。
+    """
+
+    if status == _FINS_FAILURE_STATUS:
+        return True
+    if status in success_set:
+        return False
+    raise ValueError(
+        f"未知财报命令 status，未显式归类成功/失败: status={status!r}; "
+        f"已知成功集合={sorted(success_set)}; 失败={_FINS_FAILURE_STATUS!r}"
+    )
 
 
 def _is_fins_result_failure(result: FinsResultData) -> bool:
@@ -240,16 +274,25 @@ def _is_fins_result_failure(result: FinsResultData) -> bool:
         当结果显式标注 ``failed`` 状态时返回 ``True``；
         ``UploadFilingsFromResultData`` 没有 status 字段，本身代表
         脚本生成步骤已经成功完成，统一返回 ``False``；
-        其它已知非失败 status（如 ``ok`` / ``downloaded`` / ``uploaded`` /
-        ``skipped`` / ``deleted``）均视为成功，不影响退出码。
+        其它结果按 per-result-type 白名单分支显式归类。
 
     Raises:
-        无。
+        ValueError: 结果 status 既不在成功白名单也不是 ``"failed"`` 时抛出，
+            通过类型 ``match`` 的穷尽性 + 白名单 ``case _`` 双重防线，
+            强迫未来新增结果类型 / 新增 status 必须显式归类。
     """
 
-    if isinstance(result, UploadFilingsFromResultData):
-        return False
-    return result.status == _FINS_FAILURE_STATUS
+    match result:
+        case UploadFilingsFromResultData():
+            return False
+        case DownloadResultData():
+            return _classify_fins_status(result.status, _FINS_DOWNLOAD_SUCCESS_STATUSES)
+        case UploadFilingResultData() | UploadMaterialResultData():
+            return _classify_fins_status(result.status, _FINS_UPLOAD_SUCCESS_STATUSES)
+        case ProcessResultData():
+            return _classify_fins_status(result.status, _FINS_PROCESS_SUCCESS_STATUSES)
+        case ProcessSingleResultData():
+            return _classify_fins_status(result.status, _FINS_PROCESS_SINGLE_SUCCESS_STATUSES)
 
 
 def _describe_fins_status(result: FinsResultData) -> str:
@@ -337,9 +380,15 @@ def run_fins_command(args: argparse.Namespace) -> int:
         return 1
     print(format_fins_cli_result(command.name, result))
     # FinsResultData 各 variant（除 UploadFilingsFromResultData 之外）携带
-    # status 字段，"succeeded" 表示成功；其它取值（如 "failed"/"skipped"）
-    # 都视为非成功，命令需要返回非零退出码以让 shell 与 CI 管线感知。
-    if _is_fins_result_failure(result):
+    # status 字段，按 per-result-type 白名单显式归类成功/失败；未在白名单
+    # 也未命中 "failed" 的 status 视为契约违规，按非零退出码上报，避免被
+    # 静默归"成功"导致 CI 失真。
+    try:
+        is_failure = _is_fins_result_failure(result)
+    except ValueError as exc:
+        Log.error(f"财报命令结果 status 未显式归类: {exc}", module=MODULE)
+        return 1
+    if is_failure:
         Log.warn(
             f"财报命令以非成功状态结束: command={command.name.value}, status={_describe_fins_status(result)}",
             module=MODULE,

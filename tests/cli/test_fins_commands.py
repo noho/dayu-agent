@@ -10,8 +10,10 @@ import pytest
 
 from dayu.cli.commands.fins import (
     _build_fins_command,
+    _classify_fins_status,
     _consume_fins_stream,
     _format_fins_progress_line,
+    _is_fins_result_failure,
     run_fins_command,
     _should_log_fins_progress_as_info,
 )
@@ -29,7 +31,10 @@ from dayu.contracts.fins import (
     ProcessResultData,
     ProcessSingleResultData,
     UploadFilingProgressPayload,
+    UploadFilingResultData,
+    UploadFilingsFromResultData,
     UploadMaterialProgressPayload,
+    UploadMaterialResultData,
 )
 
 
@@ -435,7 +440,7 @@ class TestRunFinsCommand:
         result_data = ProcessSingleResultData(
             pipeline="process_filing",
             action="process",
-            status="ok",
+            status="processed",
             ticker="AAPL",
             document_id="doc-1",
         )
@@ -493,3 +498,146 @@ class TestRunFinsCommand:
             exit_code = run_fins_command(args)
 
         assert exit_code == 1
+
+# --------------------------------------------------------------------------- #
+#  _is_fins_result_failure / _classify_fins_status
+# --------------------------------------------------------------------------- #
+
+
+class TestIsFinsResultFailure:
+    """`_is_fins_result_failure` 按 per-result-type 白名单显式归类。"""
+
+    def test_upload_filings_from_result_always_succeeds(self) -> None:
+        """``UploadFilingsFromResultData`` 没有 status 字段，统一归成功。"""
+
+        result = UploadFilingsFromResultData(
+            script_path="/tmp/x.sh",
+            script_platform="linux",
+            ticker="AAPL",
+            source_dir="/tmp",
+            total_files=0,
+            recognized_count=0,
+            material_count=0,
+            skipped_count=0,
+        )
+        assert _is_fins_result_failure(result) is False
+
+    def test_download_status_failed_returns_true(self) -> None:
+        """``DownloadResultData.status='failed'`` 上报失败。"""
+
+        result = DownloadResultData(pipeline="download", status="failed", ticker="AAPL")
+        assert _is_fins_result_failure(result) is True
+
+    def test_download_status_cancelled_is_success(self) -> None:
+        """``cancelled`` 是 download 白名单中的成功状态。"""
+
+        result = DownloadResultData(pipeline="download", status="cancelled", ticker="AAPL")
+        assert _is_fins_result_failure(result) is False
+
+    def test_process_single_status_processed_is_success(self) -> None:
+        """``processed`` 是 process_filing/process_material 白名单中的成功状态。"""
+
+        result = ProcessSingleResultData(
+            pipeline="process_filing",
+            action="process",
+            status="processed",
+            ticker="AAPL",
+            document_id="doc-1",
+        )
+        assert _is_fins_result_failure(result) is False
+
+    def test_process_single_status_skipped_is_success(self) -> None:
+        """``skipped`` 是 ProcessSingleResultData 白名单中的成功状态。"""
+
+        result = ProcessSingleResultData(
+            pipeline="process_filing",
+            action="process",
+            status="skipped",
+            ticker="AAPL",
+            document_id="doc-1",
+        )
+        assert _is_fins_result_failure(result) is False
+
+    def test_upload_filing_status_uploaded_is_success(self) -> None:
+        """``uploaded`` 是 upload_filing 白名单中的成功状态。"""
+
+        result = UploadFilingResultData(
+            pipeline="upload_filing",
+            status="uploaded",
+            ticker="AAPL",
+            filing_action="upload_filing",
+        )
+        assert _is_fins_result_failure(result) is False
+
+    def test_upload_material_status_deleted_is_success(self) -> None:
+        """``deleted`` 是 upload_material 白名单中的成功状态。"""
+
+        result = UploadMaterialResultData(
+            pipeline="upload_material",
+            status="deleted",
+            ticker="AAPL",
+            material_action="delete",
+        )
+        assert _is_fins_result_failure(result) is False
+
+    def test_unknown_status_raises_value_error(self) -> None:
+        """未在白名单也不是 ``failed`` 的 status 必须抛 ValueError。"""
+
+        result = ProcessResultData(pipeline="process", status="unknown_status", ticker="AAPL")
+        with pytest.raises(ValueError, match="未知财报命令 status"):
+            _is_fins_result_failure(result)
+
+    def test_run_fins_command_unknown_status_returns_one(self) -> None:
+        """run_fins_command 在未知 status 上必须以非零退出码上报。"""
+
+        args = argparse.Namespace(
+            command="process_filing",
+            ticker="AAPL",
+            document_id="doc-1",
+            overwrite=False,
+            ci=False,
+            log_level=None,
+            debug=False,
+            verbose=False,
+            info=False,
+            quiet=False,
+        )
+
+        result_data = ProcessSingleResultData(
+            pipeline="process_filing",
+            action="process",
+            status="brand_new_status",
+            ticker="AAPL",
+            document_id="doc-1",
+        )
+        mock_result = FinsResult(
+            command=FinsCommandName.PROCESS_FILING,
+            data=result_data,
+        )
+        mock_service = MagicMock()
+        mock_service.submit.return_value = MagicMock(execution=mock_result)
+
+        with patch("dayu.cli.commands.fins._build_fins_ops_service", return_value=mock_service):
+            exit_code = run_fins_command(args)
+
+        assert exit_code == 1
+
+
+class TestClassifyFinsStatus:
+    """``_classify_fins_status`` 私有 helper 直接测试。"""
+
+    def test_failed_returns_true(self) -> None:
+        """显式 ``failed`` 直接归失败。"""
+
+        assert _classify_fins_status("failed", frozenset({"ok"})) is True
+
+    def test_in_success_set_returns_false(self) -> None:
+        """命中白名单归成功。"""
+
+        assert _classify_fins_status("ok", frozenset({"ok", "skipped"})) is False
+
+    def test_unknown_raises(self) -> None:
+        """未知 status 抛 ValueError。"""
+
+        with pytest.raises(ValueError):
+            _classify_fins_status("running", frozenset({"ok"}))
