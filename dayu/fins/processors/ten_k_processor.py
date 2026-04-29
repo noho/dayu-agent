@@ -12,29 +12,8 @@ from typing import Optional
 
 from dayu.engine.processors.source import Source
 
-from .ten_k_form_common import (  # noqa: F401  re-export for backward compat
-    _TEN_K_HEADING_FALLBACK_PATTERNS,
-    _TEN_K_HEADING_FALLBACK_REQUIRED_ITEMS,
-    _TEN_K_HEADING_FALLBACK_SEARCH_PATTERNS,
-    _TEN_K_ITEM_ORDER,
-    _TEN_K_ITEM_PART_MAP,
-    _TEN_K_ITEM_PATTERN,
-    _TEN_K_NUMBERED_HEADING_KEYWORDS,
-    _TEN_K_PART_PATTERN,
-    _MIN_HEADING_SECTION_SPAN,
-    _TOC_PAGE_LINE_PATTERN,
-    _TOC_PAGE_SNIPPET_PATTERN,
-    _TRAILING_TOC_SPAN_RATIO,
-    _build_part_markers,
+from .ten_k_form_common import (
     _build_ten_k_markers,
-    _correct_part_from_sec_rules,
-    _find_first_pattern_position_after,
-    _find_ten_k_heading_fallback_positions,
-    _looks_like_toc_page_line,
-    _repair_ten_k_key_items_with_heading_fallback,
-    _resolve_part_title,
-    _select_ten_k_heading_fallback_markers,
-    _skip_heading_toc_cluster,
     expand_ten_k_virtual_sections_content,
 )
 from .sec_report_form_common import _BaseSecReportFormProcessor

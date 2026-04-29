@@ -7,9 +7,8 @@ from typing import Optional
 from dayu.engine.processors.source import Source
 from dayu.fins.processors.sec_report_form_common import _BaseSecReportFormProcessor
 
-from .eight_k_form_common import (  # noqa: F401  re-export for backward compat
+from .eight_k_form_common import (
     _EIGHT_K_FORMS,
-    _EIGHT_K_ITEM_PATTERN,
     _build_eight_k_markers,
 )
 

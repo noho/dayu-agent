@@ -805,7 +805,7 @@ def test_sc13_item_pattern_matches_item_with_parenthesized_sub() -> None:
     Raises:
         AssertionError: 断言失败时抛出。
     """
-    from dayu.fins.processors.sc13_processor import _SC13_ITEM_PATTERN
+    from dayu.fins.processors.sc13_form_common import _SC13_ITEM_PATTERN
 
     # 带括号子编号（BABA 格式）
     match = _SC13_ITEM_PATTERN.search("Item 1(a). Security and Issuer")
@@ -831,7 +831,7 @@ def test_sc13_item_pattern_matches_standard_formats() -> None:
     Raises:
         AssertionError: 断言失败时抛出。
     """
-    from dayu.fins.processors.sc13_processor import _SC13_ITEM_PATTERN
+    from dayu.fins.processors.sc13_form_common import _SC13_ITEM_PATTERN
 
     # 标准带句点
     match = _SC13_ITEM_PATTERN.search("Item 1. Security and Issuer")
@@ -862,7 +862,7 @@ def test_sc13_item_pattern_no_false_positive_beyond_7() -> None:
     Raises:
         AssertionError: 断言失败时抛出。
     """
-    from dayu.fins.processors.sc13_processor import _SC13_ITEM_PATTERN
+    from dayu.fins.processors.sc13_form_common import _SC13_ITEM_PATTERN
 
     assert _SC13_ITEM_PATTERN.search("Item 8. Extra Section") is None
     assert _SC13_ITEM_PATTERN.search("Item 0. Preamble") is None

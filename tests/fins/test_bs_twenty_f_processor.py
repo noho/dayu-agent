@@ -40,8 +40,8 @@ from dayu.fins.processors.twenty_f_form_common import (
     _repair_twenty_f_item_5_with_subheading_fallback,
     _repair_twenty_f_key_items_with_heading_fallback,
 )
-from dayu.fins.processors.twenty_f_processor import (
-    TwentyFFormProcessor,
+from dayu.fins.processors.twenty_f_processor import TwentyFFormProcessor
+from dayu.fins.processors.twenty_f_form_common import (
     _build_item_title,
     _build_twenty_f_markers,
     _find_twenty_f_key_heading_positions,
@@ -271,7 +271,7 @@ class TestBuildItemTitle:
             AssertionError: 断言失败时抛出。
         """
 
-        from dayu.fins.processors.twenty_f_processor import _TWENTY_F_ITEM_ORDER
+        from dayu.fins.processors.twenty_f_form_common import _TWENTY_F_ITEM_ORDER
 
         for token in _TWENTY_F_ITEM_ORDER:
             assert token in _TWENTY_F_ITEM_PART_MAP, f"Item {token} 缺少 Part 映射"
@@ -3776,7 +3776,7 @@ class TestSecRulesConsistency:
             AssertionError: 断言失败时抛出。
         """
 
-        from dayu.fins.processors.twenty_f_processor import _TWENTY_F_ITEM_ORDER
+        from dayu.fins.processors.twenty_f_form_common import _TWENTY_F_ITEM_ORDER
 
         for token in _TWENTY_F_ITEM_ORDER:
             assert token in _TWENTY_F_ITEM_PART_MAP, (

@@ -18,19 +18,19 @@ import pytest
 
 from dayu.fins.processors.bs_ten_q_processor import BsTenQFormProcessor
 from dayu.fins.processors.sec_form_section_common import _VirtualSection
-from dayu.fins.processors.ten_q_processor import (
-    TenQFormProcessor,
+from dayu.fins.processors.ten_q_processor import TenQFormProcessor
+from dayu.fins.processors.ten_q_form_common import (
     _anchor_produces_meaningful_items,
     _build_ten_q_markers,
     _find_all_part_heading_positions,
     _select_best_part_i_anchor,
     expand_ten_q_virtual_sections_content,
 )
-from dayu.fins.processors.ten_q_processor import (
+from dayu.fins.processors.ten_q_form_common import (
     _PART_I_HEADING_PATTERN,
     _PART_II_HEADING_PATTERN,
 )
-from dayu.fins.processors.ten_q_processor import _html_flexible_word
+from dayu.fins.processors.ten_q_form_common import _html_flexible_word
 from dayu.fins.storage.local_file_source import LocalFileSource
 
 

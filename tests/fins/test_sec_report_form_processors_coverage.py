@@ -30,10 +30,8 @@ from dayu.fins.processors.bs_twenty_f_processor import (
 )
 from dayu.fins.processors.ten_k_processor import TenKFormProcessor
 from dayu.fins.processors.ten_q_processor import TenQFormProcessor
-from dayu.fins.processors.twenty_f_processor import (
-    TwentyFFormProcessor,
-    _trim_twenty_f_source_text,
-)
+from dayu.fins.processors.twenty_f_processor import TwentyFFormProcessor
+from dayu.fins.processors.twenty_f_form_common import _trim_twenty_f_source_text
 from dayu.fins.storage.local_file_source import LocalFileSource
 
 
@@ -380,9 +378,9 @@ def test_processor_toc_line_detection_supports_inline_toc() -> None:
         AssertionError: 断言失败时抛出。
     """
 
-    from dayu.fins.processors.ten_k_processor import _looks_like_toc_page_line as ten_k_toc
-    from dayu.fins.processors.ten_q_processor import _looks_like_toc_page_line as ten_q_toc
-    from dayu.fins.processors.twenty_f_processor import _looks_like_toc_page_line as twenty_f_toc
+    from dayu.fins.processors.ten_k_form_common import _looks_like_toc_page_line as ten_k_toc
+    from dayu.fins.processors.ten_q_form_common import _looks_like_toc_page_line as ten_q_toc
+    from dayu.fins.processors.twenty_f_form_common import _looks_like_toc_page_line as twenty_f_toc
 
     inline_toc = (
         "Item 1A Risk Factors 50 "
@@ -2295,7 +2293,7 @@ def test_correct_part_from_sec_rules_fills_missing() -> None:
     Raises:
         AssertionError: 断言失败时抛出。
     """
-    from dayu.fins.processors.ten_k_processor import _correct_part_from_sec_rules
+    from dayu.fins.processors.ten_k_form_common import _correct_part_from_sec_rules
 
     # Item 1 → Part I（缺失时补全）
     assert _correct_part_from_sec_rules("1", None) == "Part I"
@@ -2330,7 +2328,7 @@ def test_correct_part_from_sec_rules_fixes_wrong_part() -> None:
     Raises:
         AssertionError: 断言失败时抛出。
     """
-    from dayu.fins.processors.ten_k_processor import _correct_part_from_sec_rules
+    from dayu.fins.processors.ten_k_form_common import _correct_part_from_sec_rules
 
     # Items 2/3/4 误标为 Part II → 修正为 Part I
     assert _correct_part_from_sec_rules("2", "Part II") == "Part I"
@@ -2355,7 +2353,7 @@ def test_correct_part_from_sec_rules_preserves_correct() -> None:
     Raises:
         AssertionError: 断言失败时抛出。
     """
-    from dayu.fins.processors.ten_k_processor import _correct_part_from_sec_rules
+    from dayu.fins.processors.ten_k_form_common import _correct_part_from_sec_rules
 
     assert _correct_part_from_sec_rules("1", "Part I") == "Part I"
     assert _correct_part_from_sec_rules("2", "Part I") == "Part I"
@@ -2378,7 +2376,7 @@ def test_correct_part_unknown_item_preserves_original() -> None:
     Raises:
         AssertionError: 断言失败时抛出。
     """
-    from dayu.fins.processors.ten_k_processor import _correct_part_from_sec_rules
+    from dayu.fins.processors.ten_k_form_common import _correct_part_from_sec_rules
 
     assert _correct_part_from_sec_rules("99", "Part X") == "Part X"
     assert _correct_part_from_sec_rules("99", None) is None
@@ -2406,7 +2404,7 @@ def test_ten_q_anchor_validation_rejects_running_header() -> None:
     Raises:
         AssertionError: 断言失败时抛出。
     """
-    from dayu.fins.processors.ten_q_processor import (
+    from dayu.fins.processors.ten_q_form_common import (
         _anchor_produces_meaningful_items,
         _find_all_part_heading_positions,
         _select_best_part_i_anchor,
@@ -2466,7 +2464,7 @@ def test_ten_q_anchor_validation_accepts_normal_document() -> None:
     Raises:
         AssertionError: 断言失败时抛出。
     """
-    from dayu.fins.processors.ten_q_processor import (
+    from dayu.fins.processors.ten_q_form_common import (
         _find_all_part_heading_positions,
         _select_best_part_i_anchor,
     )
@@ -2504,7 +2502,7 @@ def test_anchor_produces_meaningful_items_rejects_short_spans() -> None:
     Raises:
         AssertionError: 断言失败时抛出。
     """
-    from dayu.fins.processors.ten_q_processor import (
+    from dayu.fins.processors.ten_q_form_common import (
         _anchor_produces_meaningful_items,
     )
 

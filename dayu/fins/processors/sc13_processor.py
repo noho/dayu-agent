@@ -7,13 +7,10 @@ from typing import Optional
 from dayu.engine.processors.source import Source
 from dayu.fins.processors.sec_report_form_common import _BaseSecReportFormProcessor
 
-from .sc13_form_common import (  # noqa: F401  re-export for backward compat
+from .sc13_form_common import (
     _SC13_FORMS,
-    _SC13_ITEM_PATTERN,
     _build_sc13_markers,
-    _find_item_position_after,
     _has_sufficient_sc13_markers,
-    _select_sc13_item_markers,
 )
 from .sec_form_section_common import (
     _is_table_placeholder_dominant_text,

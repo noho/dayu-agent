@@ -14,34 +14,8 @@ from typing import Optional
 
 from dayu.engine.processors.source import Source
 
-from .ten_q_form_common import (  # noqa: F401  re-export for backward compat
-    _TEN_Q_ITEM_PATTERN,
-    _TEN_Q_PART_I_ITEM_ORDER,
-    _TEN_Q_PART_II_ITEM_ORDER,
-    _html_flexible_word,
-    _PART_I_HEADING_PATTERN,
-    _PART_II_HEADING_PATTERN,
-    _ANCHOR_QUALITY_MIN_SPAN,
-    _ANCHOR_QUALITY_MIN_MEANINGFUL_ITEMS,
-    _PART_II_ANCHOR_MAX_TOC_SPREAD,
-    _TOC_PAGE_LINE_PATTERN,
-    _TOC_PAGE_SNIPPET_PATTERN,
-    _TEN_Q_PART_I_HEADING_FALLBACK_PATTERNS,
-    _TEN_Q_PART_I_EXPECTED_KEYWORDS,
-    _TEN_Q_PART_I_TOC_SUMMARY_PATTERN,
-    _TEN_Q_ITEM_1_STRUCTURED_HEADING_PATTERNS,
-    _MIN_PART_I_KEY_ITEM_GAP_CHARS,
+from .ten_q_form_common import (
     _build_ten_q_markers,
-    _find_all_part_heading_positions,
-    _select_best_part_i_anchor,
-    _anchor_produces_meaningful_items,
-    _repair_part_i_key_items_with_heading_fallback,
-    _repair_item_1_with_structured_heading_fallback,
-    _find_item_1_structured_heading_position,
-    _find_first_pattern_position_in_range,
-    _looks_like_part_i_toc_summary,
-    _matches_part_i_expected_heading,
-    _looks_like_toc_page_line,
     expand_ten_q_virtual_sections_content,
 )
 from .sec_report_form_common import _BaseSecReportFormProcessor

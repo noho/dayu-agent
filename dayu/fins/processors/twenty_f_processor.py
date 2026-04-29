@@ -22,25 +22,10 @@ from typing import Optional
 
 from dayu.engine.processors.source import Source
 
-from .twenty_f_form_common import (  # noqa: F401  re-export for backward compat
-    _TWENTY_F_ITEM_ORDER,
-    _TWENTY_F_ITEM_PATTERN,
-    _TWENTY_F_KEY_ITEM_FALLBACK_PATTERNS,
-    _TWENTY_F_ITEM_5_SUBHEADING_PATTERNS,
-    _TWENTY_F_KEY_ITEMS,
-    _TOC_PAGE_LINE_PATTERN,
-    _TOC_PAGE_SNIPPET_PATTERN,
-    _TWENTY_F_ITEM_PART_MAP,
-    _TWENTY_F_ITEM_DESCRIPTIONS,
+from .twenty_f_form_common import (
     _build_twenty_f_markers,
     _select_preferred_twenty_f_text,
     _trim_twenty_f_source_text,
-    _repair_twenty_f_key_items_with_heading_fallback,
-    _repair_twenty_f_item_5_with_subheading_fallback,
-    _find_next_item_position_after_token,
-    _find_twenty_f_key_heading_positions,
-    _looks_like_toc_page_line,
-    _build_item_title,
 )
 from .sec_report_form_common import (
     _BaseSecReportFormProcessor,

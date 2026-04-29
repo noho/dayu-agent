@@ -6,15 +6,9 @@ from typing import Optional
 
 from dayu.engine.processors.source import Source
 
-from .def14a_form_common import (  # noqa: F401  re-export for backward compat
-    _DEF14A_ANNEX_PATTERN,
-    _DEF14A_APPENDIX_PATTERN,
+from .def14a_form_common import (
     _DEF14A_FORMS,
-    _DEF14A_PROPOSAL_PATTERN,
-    _DEF14A_SECTION_MARKERS,
     _build_def14a_markers,
-    _find_proposal_position_after,
-    _select_def14a_proposal_markers,
 )
 from .sec_report_form_common import _BaseSecReportFormProcessor
 
