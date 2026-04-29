@@ -139,7 +139,17 @@ class SceneExecutionAcceptancePreparer:
         model_name = str(resolved_execution_options.model_name or "").strip()
         if not model_name:
             raise ValueError("当前执行缺少 model_name")
-        model_config = self.model_catalog.load_model(model_name)
+        try:
+            model_config = self.model_catalog.load_model(model_name)
+        except KeyError as exc:
+            # ModelCatalog 对未注册模型抛 KeyError；CLI 启动路径与 UI 异常处理
+            # 仅识别 ValueError/RuntimeError，KeyError 会击穿到 main() 顶层以
+            # traceback 退出。在此把契约边界上的"模型不存在"统一为 ValueError，
+            # 不向上层泄漏底层异常类型。
+            # 优先透传底层（如 ConfigLoader）已构造好的多行诊断（含"可用模型"
+            # 列表）；仅在 args 为空或非字符串时回退到简化文案。
+            detail = exc.args[0] if exc.args and isinstance(exc.args[0], str) else None
+            raise ValueError(detail or f"模型不存在: {model_name}") from exc
         resolved_temperature = resolve_scene_temperature(
             resolved_temperature=resolved_execution_options.temperature,
             model_config=model_config,

@@ -651,6 +651,90 @@ def test_interactive_command_prints_restore_context_for_labeled_session(
 
 
 @pytest.mark.unit
+def test_interactive_command_rejects_unknown_model_name_with_exit_code_2(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """启动阶段 ``--model`` 指向未注册模型应以 exit code 2 失败，不进入 REPL。
+
+    覆盖 finding #38：``ModelCatalog`` 抛 ``KeyError`` 经由
+    ``scene_execution_acceptance.prepare`` 翻译为 ``ValueError``，再被
+    interactive 命令的统一 ``except ValueError`` 兜底捕获。
+    """
+
+    workspace = _build_workspace(tmp_path)
+    error_logs: list[str] = []
+    interactive_calls: list[dict[str, object]] = []
+
+    def _raise_missing_model(*_args: object, **_kwargs: object) -> SceneModelConfig:
+        """模拟 service 层把 KeyError 转出来的"模型不存在" ValueError。"""
+
+        raise ValueError("模型不存在: bogus-model")
+
+    monkeypatch.setattr(interactive_command_module, "setup_loglevel", lambda _args: None)
+    monkeypatch.setattr(
+        interactive_command_module,
+        "setup_paths",
+        lambda _args: SimpleNamespace(workspace_dir=workspace),
+    )
+    monkeypatch.setattr(
+        interactive_command_module,
+        "_build_execution_options",
+        lambda _args: ExecutionOptions(model_name="bogus-model"),
+    )
+    monkeypatch.setattr(
+        interactive_command_module,
+        "_prepare_cli_host_dependencies",
+        lambda **_kwargs: (
+            None,
+            None,
+            SimpleNamespace(resolve_scene_model=_raise_missing_model),
+            object(),
+            None,
+        ),
+    )
+    monkeypatch.setattr(interactive_command_module, "_build_chat_service", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        interactive_command_module,
+        "HostAdminService",
+        lambda **_kwargs: SimpleNamespace(
+            get_session=lambda _session_id: None,
+            list_session_recent_turns=lambda _session_id, *, limit: [],
+        ),
+    )
+    monkeypatch.setattr(
+        interactive_command_module,
+        "StateDirSingleInstanceLock",
+        lambda **_kwargs: SimpleNamespace(acquire=lambda: None, release=lambda: None),
+    )
+    monkeypatch.setattr(
+        interactive_command_module,
+        "interactive",
+        lambda *_args, **kwargs: interactive_calls.append(dict(kwargs)),
+    )
+    monkeypatch.setattr(
+        interactive_command_module.Log,
+        "error",
+        lambda message, **_kwargs: error_logs.append(str(message)),
+    )
+
+    exit_code = interactive_command_module.run_interactive_command(
+        Namespace(
+            label=None,
+            label_session_id=None,
+            label_scene_name=None,
+            session_id=None,
+            new_session=False,
+            thinking=False,
+        )
+    )
+
+    assert exit_code == 2
+    assert interactive_calls == []
+    assert any("模型不存在: bogus-model" in msg for msg in error_logs)
+
+
+@pytest.mark.unit
 def test_interactive_command_logs_create_label_for_new_labeled_session(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

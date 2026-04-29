@@ -698,6 +698,158 @@ def test_scene_execution_acceptance_includes_model_stream_idle_in_snapshot(tmp_p
     assert runner_snapshot.get("stream_idle_heartbeat_sec") == pytest.approx(3.0)
 
 
+def test_scene_execution_acceptance_translates_missing_model_keyerror_to_valueerror(
+    tmp_path: Path,
+) -> None:
+    """ModelCatalog 抛 KeyError 时 prepare 应转为 ValueError 并保留底层诊断。
+
+    CLI 启动路径与 UI 异常处理仅识别 ``ValueError``/``RuntimeError``，若让底层
+    ``KeyError`` 冒泡会击穿到 ``main()`` 顶层以 traceback 退出；契约层应在此把
+    "模型不存在"语义统一为 ``ValueError``，并优先复用底层（如 ConfigLoader）
+    已构造好的多行诊断（含"可用模型"列表）。
+    """
+
+    base_options = ResolvedExecutionOptions(
+        model_name="",
+        runner_running_config=OpenAIRunnerRuntimeConfig(
+            tool_timeout_seconds=45.0,
+            stream_idle_timeout=120.0,
+            stream_idle_heartbeat_sec=10.0,
+        ),
+        agent_running_config=AgentRuntimeConfig(max_iterations=5),
+        toolset_configs=_build_toolset_configs(web_tools_config=WebToolsConfig(provider="off")),
+        trace_settings=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
+        conversation_memory_settings=ConversationMemorySettings(),
+    )
+    scene_definition = SceneDefinition(
+        name="prompt",
+        model=SceneModelDefinition(default_name="missing-model", allowed_names=("missing-model",)),
+        version="v1",
+        description="test",
+    )
+
+    detailed_message = "模型 'missing-model' 不存在\n  可用模型: m1, m2"
+
+    class _MissingModelCatalogStub:
+        """对所有 model_name 都抛带详细诊断的 KeyError 的 catalog 桩。"""
+
+        def load_model(self, model_name: str) -> ModelConfig:
+            """模拟 ConfigLoader 对未注册模型构造的多行诊断 KeyError。
+
+            Args:
+                model_name: 模型名（未使用，仅满足签名）。
+
+            Returns:
+                不会返回，始终抛出。
+
+            Raises:
+                KeyError: 始终抛出，args[0] 含完整诊断。
+            """
+
+            del model_name
+            raise KeyError(detailed_message)
+
+        def load_models(self) -> dict[str, ModelConfig]:
+            """返回空目录。
+
+            Args:
+                无。
+
+            Returns:
+                空 dict。
+
+            Raises:
+                无。
+            """
+
+            return {}
+
+    preparer = SceneExecutionAcceptancePreparer(
+        workspace_dir=tmp_path,
+        base_execution_options=base_options,
+        model_catalog=cast(ModelCatalogProtocol, _MissingModelCatalogStub()),
+        scene_definition_reader=cast(SceneDefinitionReader, _SceneDefinitionReaderStub(scene_definition)),
+        conversation_policy_reader=ConversationPolicyReader(),
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        preparer.prepare("prompt", ExecutionOptions())
+
+    message = str(exc_info.value)
+    assert "模型 'missing-model' 不存在" in message
+    assert "可用模型: m1, m2" in message
+
+
+def test_scene_execution_acceptance_falls_back_when_keyerror_has_no_message(
+    tmp_path: Path,
+) -> None:
+    """KeyError 无可读 args 时 prepare 应回退到简化文案，避免空异常文本。"""
+
+    base_options = ResolvedExecutionOptions(
+        model_name="",
+        runner_running_config=OpenAIRunnerRuntimeConfig(
+            tool_timeout_seconds=45.0,
+            stream_idle_timeout=120.0,
+            stream_idle_heartbeat_sec=10.0,
+        ),
+        agent_running_config=AgentRuntimeConfig(max_iterations=5),
+        toolset_configs=_build_toolset_configs(web_tools_config=WebToolsConfig(provider="off")),
+        trace_settings=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
+        conversation_memory_settings=ConversationMemorySettings(),
+    )
+    scene_definition = SceneDefinition(
+        name="prompt",
+        model=SceneModelDefinition(default_name="bare-model", allowed_names=("bare-model",)),
+        version="v1",
+        description="test",
+    )
+
+    class _BareKeyErrorCatalogStub:
+        """抛出空 args KeyError 的 catalog 桩，触发 fallback 路径。"""
+
+        def load_model(self, model_name: str) -> ModelConfig:
+            """抛出无消息 KeyError。
+
+            Args:
+                model_name: 模型名（未使用）。
+
+            Returns:
+                不会返回。
+
+            Raises:
+                KeyError: 始终抛出，args 为空。
+            """
+
+            del model_name
+            raise KeyError()
+
+        def load_models(self) -> dict[str, ModelConfig]:
+            """返回空目录。
+
+            Args:
+                无。
+
+            Returns:
+                空 dict。
+
+            Raises:
+                无。
+            """
+
+            return {}
+
+    preparer = SceneExecutionAcceptancePreparer(
+        workspace_dir=tmp_path,
+        base_execution_options=base_options,
+        model_catalog=cast(ModelCatalogProtocol, _BareKeyErrorCatalogStub()),
+        scene_definition_reader=cast(SceneDefinitionReader, _SceneDefinitionReaderStub(scene_definition)),
+        conversation_policy_reader=ConversationPolicyReader(),
+    )
+
+    with pytest.raises(ValueError, match="模型不存在: bare-model"):
+        preparer.prepare("prompt", ExecutionOptions())
+
+
 def test_resolve_scene_temperature_prefers_explicit_override() -> None:
     """显式 temperature 应优先于模型 profile。"""
 

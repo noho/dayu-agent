@@ -112,13 +112,16 @@ def run_interactive_command(args: argparse.Namespace) -> int:
                 prompt_asset_store=getattr(paths_config, "prompt_asset_store", None),
                 host_admin_service=host_admin_service,
             )
+            interactive_model = scene_execution_acceptance_preparer.resolve_scene_model(
+                interactive_scene_name,
+                execution_options,
+            )
         except ValueError as exc:
+            # 启动阶段一切语义化失败（含 scene_execution_acceptance 把
+            # ModelCatalog KeyError 转出来的"模型不存在"）统一以 exit code 2
+            # 退出，避免未捕获异常 traceback 击穿 main()。
             Log.error(str(exc), module=MODULE)
             return 2
-        interactive_model = scene_execution_acceptance_preparer.resolve_scene_model(
-            interactive_scene_name,
-            execution_options,
-        )
         Log.info(
             "使用模型: "
             f"{json.dumps(asdict(interactive_model), ensure_ascii=False, sort_keys=True)}",
