@@ -792,16 +792,40 @@ class WritePipelineRunner:
                         future_to_task[next_future] = next_task
                         pending_index += 1
             except (CancelledError, SceneAgentCreationError):
+                # 异常路径并发收敛三步走：先 cancel 尚未启动的 future 释放 worker
+                # slot；再阻塞等剩余在跑的 future 自然 settle，并 drain 出所有已
+                # 成功完成、尚未被主循环 pop 的结果；最后统一落盘并 raise。
+                # 仅 cancel pending 不阻塞、也不抛弃 future_to_task 中已 done 的
+                # 成功结果——主循环 future.result() 一旦在某个 future 上抛异常，
+                # 同批次 completed_futures 中其他已完成 future 与后续仍在跑的
+                # future 都不会被原循环 pop，必须在这里补救。
+                # 落盘二次异常用 Log.warn 吞掉，避免掩盖原始 CancelledError /
+                # SceneAgentCreationError —— 上层依赖原异常类型走取消/失败分支。
                 self._cancel_pending_middle_task_futures(future_to_task)
+                self._drain_done_middle_task_futures(
+                    future_to_task=future_to_task,
+                    completed_results=completed_results,
+                )
+                try:
+                    self._persist_completed_middle_results(
+                        middle_tasks=middle_tasks,
+                        completed_results=completed_results,
+                        chapter_results=chapter_results,
+                        manifest=manifest,
+                    )
+                except Exception as persist_exc:  # noqa: BLE001
+                    Log.warn(
+                        f"异常路径下落盘已完成中间章节失败，已忽略: {persist_exc!r}",
+                        module=MODULE,
+                    )
                 raise
 
-        for task in middle_tasks:
-            result = completed_results.get(task.title)
-            if result is None:
-                continue
-            chapter_results[task.title] = result
-            self._store.persist_chapter_artifacts(result)
-            self._store.persist_manifest(manifest=manifest, chapter_results=chapter_results)
+        self._persist_completed_middle_results(
+            middle_tasks=middle_tasks,
+            completed_results=completed_results,
+            chapter_results=chapter_results,
+            manifest=manifest,
+        )
         return chapter_results
 
     def _cancel_pending_middle_task_futures(
@@ -829,6 +853,79 @@ class WritePipelineRunner:
                 f"中止中间章节批次后，已取消尚未启动任务: {cancelled_titles}",
                 module=MODULE,
             )
+
+    def _drain_done_middle_task_futures(
+        self,
+        *,
+        future_to_task: dict[concurrent.futures.Future[ChapterResult], ChapterTask],
+        completed_results: dict[str, ChapterResult],
+    ) -> None:
+        """异常路径下回收 future_to_task 中所有成功完成的结果。
+
+        主循环 `for future in completed_futures` 一旦某 future 抛异常，同批次
+        其他已完成 future 不会再被 pop，且未取消的 in-flight future 会在
+        executor `with` 退出时继续跑完。本 helper 阻塞等所有未取消的 future
+        settle，成功的结果按 task.title 写入 `completed_results`，失败 / 取消的
+        逐个吞掉（`Log.warn` 留痕），避免覆盖上游原始异常。
+
+        Args:
+            future_to_task: 异常发生时仍未被主循环 pop 的 future → task 映射。
+                被取消的 future 也包含在内，本 helper 会跳过它们。
+            completed_results: 累积成功结果的字典，原地更新。
+
+        Returns:
+            无。
+
+        Raises:
+            无。所有 future 异常都被吞掉，仅打日志。
+        """
+
+        for future, task in future_to_task.items():
+            if future.cancelled():
+                continue
+            try:
+                result = future.result()
+            except Exception as exc:  # noqa: BLE001
+                Log.warn(
+                    f"异常路径下回收中间章节 future 失败，已忽略: title={task.title}, error={exc!r}",
+                    module=MODULE,
+                )
+                continue
+            completed_results.setdefault(task.title, result)
+
+    def _persist_completed_middle_results(
+        self,
+        *,
+        middle_tasks: list[ChapterTask],
+        completed_results: dict[str, ChapterResult],
+        chapter_results: dict[str, ChapterResult],
+        manifest: RunManifest,
+    ) -> None:
+        """把已完成的中间章节结果落盘到 store 与 manifest。
+
+        在中间批次正常完成与异常路径上共用，确保异常 unwind 前已完成
+        章节不会因局部变量销毁而丢失，避免 resume 时重跑。
+
+        Args:
+            middle_tasks: 中间章节任务列表，按顺序遍历以保持 manifest 写入顺序稳定。
+            completed_results: 本批次已完成 future 收集到的章节结果映射。
+            chapter_results: 当前累积的全部章节结果映射，会被原地更新。
+            manifest: 运行 manifest，用于刷新 chapter_results 快照。
+
+        Returns:
+            无。
+
+        Raises:
+            无。底层 store 抛出的异常由调用方决定如何处置。
+        """
+
+        for task in middle_tasks:
+            result = completed_results.get(task.title)
+            if result is None:
+                continue
+            chapter_results[task.title] = result
+            self._store.persist_chapter_artifacts(result)
+            self._store.persist_manifest(manifest=manifest, chapter_results=chapter_results)
 
     def _run_middle_task_worker(self, *, task: ChapterTask, company_name: str) -> ChapterResult:
         """执行单个中间章节 worker，并在可恢复异常时生成兜底结果。

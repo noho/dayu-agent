@@ -8112,6 +8112,200 @@ def test_run_middle_tasks_in_parallel_stops_dispatching_after_scene_creation_err
 
 
 @pytest.mark.unit
+def test_run_middle_tasks_in_parallel_persists_completed_chapters_before_raise(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证中间章节批次异常 unwind 前会先把已完成章节持久化到 store 与 manifest。"""
+
+    runner = _build_runner(tmp_path)
+    monkeypatch.setattr(runner, "_resolve_middle_worker_limit", lambda: 1)
+
+    middle_tasks = [
+        ChapterTask(index=1, title="A", skeleton="## A"),
+        ChapterTask(index=2, title="B", skeleton="## B"),
+        ChapterTask(index=3, title="C", skeleton="## C"),
+    ]
+
+    persisted_chapter_titles: list[str] = []
+    persisted_manifest_snapshots: list[list[str]] = []
+
+    def _record_persist_chapter(result: ChapterResult) -> None:
+        persisted_chapter_titles.append(result.title)
+
+    def _record_persist_manifest(*, manifest: RunManifest, chapter_results: dict[str, ChapterResult]) -> None:
+        del manifest
+        persisted_manifest_snapshots.append(sorted(chapter_results.keys()))
+
+    monkeypatch.setattr(runner._store, "persist_chapter_artifacts", _record_persist_chapter)
+    monkeypatch.setattr(runner._store, "persist_manifest", _record_persist_manifest)
+
+    def _run_worker(*, task: ChapterTask, company_name: str) -> ChapterResult:
+        del company_name
+        if task.title == "C":
+            raise SceneAgentCreationError(scene_name="write", agent_label="写作 Agent")
+        return ChapterResult(
+            index=task.index,
+            title=task.title,
+            status="passed",
+            content=f"## {task.title}\n正文",
+            audit_passed=True,
+        )
+
+    monkeypatch.setattr(runner, "_run_middle_task_worker", _run_worker)
+
+    chapter_results: dict[str, ChapterResult] = {}
+    manifest = RunManifest(
+        version="write_manifest_v1",
+        signature="sig",
+        config=_build_test_write_config(tmp_path),
+        chapter_results={},
+    )
+
+    with pytest.raises(SceneAgentCreationError):
+        runner._run_middle_tasks_in_parallel(
+            middle_tasks=middle_tasks,
+            chapter_results=chapter_results,
+            manifest=manifest,
+            company_name="TestCo",
+        )
+
+    assert sorted(persisted_chapter_titles) == ["A", "B"]
+    assert "A" in chapter_results and "B" in chapter_results
+    assert "C" not in chapter_results
+    assert persisted_manifest_snapshots[-1] == ["A", "B"]
+
+
+@pytest.mark.unit
+def test_run_middle_tasks_in_parallel_drains_concurrent_successes_before_raise(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证 worker_limit>1 并发场景下，异常触发时同批/后续仍在跑的成功 future 也会被回收落盘。
+
+    场景：worker_limit=3，A/B/C 同批派发，C 立刻抛 SceneAgentCreationError；
+    A 与 B 在 C 抛异常后短暂 sleep 才返回成功。
+    若 except 路径不 drain in-flight future，A/B 的成功结果会被 executor 自然
+    跑完后丢弃，导致 manifest 无记录、resume 重跑——即 #41 reviewer 指出的并发漏洞。
+    """
+
+    runner = _build_runner(tmp_path)
+    monkeypatch.setattr(runner, "_resolve_middle_worker_limit", lambda: 3)
+
+    middle_tasks = [
+        ChapterTask(index=1, title="A", skeleton="## A"),
+        ChapterTask(index=2, title="B", skeleton="## B"),
+        ChapterTask(index=3, title="C", skeleton="## C"),
+    ]
+
+    persisted_chapter_titles: list[str] = []
+    persisted_manifest_snapshots: list[list[str]] = []
+
+    monkeypatch.setattr(
+        runner._store,
+        "persist_chapter_artifacts",
+        lambda result: persisted_chapter_titles.append(result.title),
+    )
+
+    def _record_persist_manifest(*, manifest: RunManifest, chapter_results: dict[str, ChapterResult]) -> None:
+        del manifest
+        persisted_manifest_snapshots.append(sorted(chapter_results.keys()))
+
+    monkeypatch.setattr(runner._store, "persist_manifest", _record_persist_manifest)
+
+    def _run_worker(*, task: ChapterTask, company_name: str) -> ChapterResult:
+        del company_name
+        if task.title == "C":
+            raise SceneAgentCreationError(scene_name="write", agent_label="写作 Agent")
+        # A/B 故意延后返回，确保主循环先在 C 上抛异常进入 except 路径
+        time.sleep(0.1)
+        return ChapterResult(
+            index=task.index,
+            title=task.title,
+            status="passed",
+            content=f"## {task.title}\n正文",
+            audit_passed=True,
+        )
+
+    monkeypatch.setattr(runner, "_run_middle_task_worker", _run_worker)
+
+    chapter_results: dict[str, ChapterResult] = {}
+    manifest = RunManifest(
+        version="write_manifest_v1",
+        signature="sig",
+        config=_build_test_write_config(tmp_path),
+        chapter_results={},
+    )
+
+    with pytest.raises(SceneAgentCreationError):
+        runner._run_middle_tasks_in_parallel(
+            middle_tasks=middle_tasks,
+            chapter_results=chapter_results,
+            manifest=manifest,
+            company_name="TestCo",
+        )
+
+    assert sorted(persisted_chapter_titles) == ["A", "B"]
+    assert sorted(chapter_results.keys()) == ["A", "B"]
+    assert persisted_manifest_snapshots[-1] == ["A", "B"]
+
+
+@pytest.mark.unit
+def test_run_middle_tasks_in_parallel_swallows_persist_failure_in_exception_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证异常路径下二次落盘失败被吞掉，不会掩盖原始 SceneAgentCreationError。"""
+
+    runner = _build_runner(tmp_path)
+    monkeypatch.setattr(runner, "_resolve_middle_worker_limit", lambda: 1)
+
+    middle_tasks = [
+        ChapterTask(index=1, title="A", skeleton="## A"),
+        ChapterTask(index=2, title="B", skeleton="## B"),
+    ]
+
+    def _explode_persist_chapter(_result: ChapterResult) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(runner._store, "persist_chapter_artifacts", _explode_persist_chapter)
+    monkeypatch.setattr(
+        runner._store,
+        "persist_manifest",
+        lambda **_: None,
+    )
+
+    def _run_worker(*, task: ChapterTask, company_name: str) -> ChapterResult:
+        del company_name
+        if task.title == "B":
+            raise SceneAgentCreationError(scene_name="write", agent_label="写作 Agent")
+        return ChapterResult(
+            index=task.index,
+            title=task.title,
+            status="passed",
+            content=f"## {task.title}\n正文",
+            audit_passed=True,
+        )
+
+    monkeypatch.setattr(runner, "_run_middle_task_worker", _run_worker)
+
+    manifest = RunManifest(
+        version="write_manifest_v1",
+        signature="sig",
+        config=_build_test_write_config(tmp_path),
+        chapter_results={},
+    )
+
+    with pytest.raises(SceneAgentCreationError, match="写作 Agent 创建失败"):
+        runner._run_middle_tasks_in_parallel(
+            middle_tasks=middle_tasks,
+            chapter_results={},
+            manifest=manifest,
+            company_name="TestCo",
+        )
+
+
+@pytest.mark.unit
 def test_run_repair_prompt_retries_on_json_parse_failure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
