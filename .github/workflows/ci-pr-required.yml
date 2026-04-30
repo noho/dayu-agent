@@ -43,6 +43,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Free up disk space on runner
+        run: |
+          # 离线 bundle 需把 torch / nvidia-cu12 / docling 等大体积 wheel
+          # 一并解压安装；ubuntu-latest 默认仅约 14GB 可用，容易触发 ENOSPC。
+          # 这里清理 runner 上对本 job 无用的预装内容，腾出磁盘。
+          set -eux
+          BEFORE=$(df -BM --output=avail / | tail -1)
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          sudo rm -rf /usr/local/share/boost || true
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"/Ruby || true
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"/PyPy || true
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"/go || true
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"/node || true
+          sudo docker image prune --all --force || true
+          AFTER=$(df -BM --output=avail / | tail -1)
+          echo "Disk before: $BEFORE, after: $AFTER"
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
