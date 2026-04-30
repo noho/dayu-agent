@@ -17,6 +17,7 @@ from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.contracts.model_config import OpenAICompatibleRunnerParams
 from dayu.contracts.toolset_config import ToolsetConfigSnapshot
 from dayu.host.host_store import HostStore
+from dayu.host.lease import LeaseExpiredError
 from dayu.host.conversation_store import ConversationTranscript
 from dayu.host.pending_turn_store import (
     InMemoryPendingConversationTurnStore,
@@ -484,7 +485,11 @@ def test_sqlite_pending_turn_store_records_resume_attempts_and_failure_message(t
     )
 
     attempted = store.record_resume_attempt(created.pending_turn_id, max_attempts=3)
-    failed = store.record_resume_failure(created.pending_turn_id, error_message="source run still active")
+    failed = store.record_resume_failure(
+        created.pending_turn_id,
+        error_message="source run still active",
+        lease_id=attempted.resume_lease_id or "",
+    )
 
     assert attempted.resume_attempt_count == 1
     assert attempted.last_resume_error_message is None
@@ -672,18 +677,21 @@ def test_sqlite_pending_turn_store_release_resume_lease_restores_state(tmp_path:
         state=PendingConversationTurnState.PREPARED_BY_HOST,
         resume_source_json='{"scene_name": "wechat"}',
     )
-    store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+    attempted = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
 
-    released = store.release_resume_lease(created.pending_turn_id)
+    released = store.release_resume_lease(
+        created.pending_turn_id, lease_id=attempted.resume_lease_id or ""
+    )
     assert released is not None
     assert released.state is PendingConversationTurnState.PREPARED_BY_HOST
     assert released.pre_resume_state is None
 
-    # 幂等：非 RESUMING 再调用返回当前记录（no-op），不再变更 state。
-    again = store.release_resume_lease(created.pending_turn_id)
-    assert again is not None
-    assert again.state is PendingConversationTurnState.PREPARED_BY_HOST
-    assert again.pre_resume_state is None
+    # 同一持有者的 lease 在 release 后已被清空，再调用应抛 LeaseExpiredError
+    # （fence token 语义：state 非 RESUMING 时旧 lease 一律视为过期）。
+    with pytest.raises(LeaseExpiredError):
+        store.release_resume_lease(
+            created.pending_turn_id, lease_id=attempted.resume_lease_id or ""
+        )
 
 
 @pytest.mark.unit
@@ -702,9 +710,13 @@ def test_sqlite_pending_turn_store_record_resume_failure_releases_lease(tmp_path
         state=PendingConversationTurnState.PREPARED_BY_HOST,
         resume_source_json='{"scene_name": "wechat"}',
     )
-    store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+    attempted = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
 
-    failed = store.record_resume_failure(created.pending_turn_id, error_message="boom")
+    failed = store.record_resume_failure(
+        created.pending_turn_id,
+        error_message="boom",
+        lease_id=attempted.resume_lease_id or "",
+    )
     assert failed.state is PendingConversationTurnState.PREPARED_BY_HOST
     assert failed.pre_resume_state is None
     assert failed.last_resume_error_message == "boom"
@@ -723,14 +735,20 @@ def test_inmemory_pending_turn_store_release_resume_lease_restores_state() -> No
         resumable=True,
         state=PendingConversationTurnState.ACCEPTED_BY_HOST,
     )
-    store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+    attempted = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
 
-    released = store.release_resume_lease(created.pending_turn_id)
+    released = store.release_resume_lease(
+        created.pending_turn_id, lease_id=attempted.resume_lease_id or ""
+    )
     assert released is not None
     assert released.state is PendingConversationTurnState.ACCEPTED_BY_HOST
     assert released.pre_resume_state is None
 
-    assert store.release_resume_lease(created.pending_turn_id) is not None
+    # 第二次回退：state 已不在 RESUMING，旧 lease 视为过期，必抛 LeaseExpiredError。
+    with pytest.raises(LeaseExpiredError):
+        store.release_resume_lease(
+            created.pending_turn_id, lease_id=attempted.resume_lease_id or ""
+        )
 
 
 @pytest.mark.unit
@@ -774,7 +792,7 @@ def test_inmemory_release_resume_lease_warns_on_missing_pre_resume_state(
     )
     # 模拟 pre_resume_state 字段损坏：手动写入 RESUMING 但不附带 pre_resume_state。
     record = store._records[created.pending_turn_id]
-    store._records[created.pending_turn_id] = type(record)(
+    forced_record = type(record)(
         pending_turn_id=record.pending_turn_id,
         session_id=record.session_id,
         scene_name=record.scene_name,
@@ -790,9 +808,13 @@ def test_inmemory_release_resume_lease_warns_on_missing_pre_resume_state(
         pre_resume_state=None,
         metadata=record.metadata,
     )
+    store._records[created.pending_turn_id] = forced_record
 
     with caplog.at_level("WARNING"):
-        released = store.release_resume_lease(created.pending_turn_id)
+        released = store.cleanup_stale_resuming(
+            created.pending_turn_id,
+            expected_updated_at=forced_record.updated_at,
+        )
     assert released is not None
     assert released.state is PendingConversationTurnState.ACCEPTED_BY_HOST
     assert any("pre_resume_state 缺失" in r.message for r in caplog.records), (
@@ -815,6 +837,7 @@ def test_inmemory_record_resume_failure_warns_on_missing_pre_resume_state(
         resumable=True,
         state=PendingConversationTurnState.ACCEPTED_BY_HOST,
     )
+    forced_lease = "lease_force_inmemory"
     record = store._records[created.pending_turn_id]
     store._records[created.pending_turn_id] = type(record)(
         pending_turn_id=record.pending_turn_id,
@@ -830,11 +853,14 @@ def test_inmemory_record_resume_failure_warns_on_missing_pre_resume_state(
         resume_attempt_count=record.resume_attempt_count,
         last_resume_error_message=record.last_resume_error_message,
         pre_resume_state=None,
+        resume_lease_id=forced_lease,
         metadata=record.metadata,
     )
 
     with caplog.at_level("WARNING"):
-        failed = store.record_resume_failure(created.pending_turn_id, error_message="boom")
+        failed = store.record_resume_failure(
+            created.pending_turn_id, error_message="boom", lease_id=forced_lease,
+        )
     assert failed.state is PendingConversationTurnState.ACCEPTED_BY_HOST
     assert failed.last_resume_error_message == "boom"
     assert any("pre_resume_state 缺失" in r.message for r in caplog.records), (
@@ -847,7 +873,7 @@ def test_sqlite_release_resume_lease_warns_on_missing_pre_resume_state(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """SQLite 版 release_resume_lease 在 pre_resume_state 为 NULL 时应告警并降级回退。"""
+    """SQLite 版 cleanup_stale_resuming 在 pre_resume_state 为 NULL 时应告警并降级回退。"""
 
     host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
     host_store.initialize_schema()
@@ -870,8 +896,13 @@ def test_sqlite_release_resume_lease_warns_on_missing_pre_resume_state(
     )
     conn.commit()
 
+    refreshed = store.get_pending_turn(created.pending_turn_id)
+    assert refreshed is not None
     with caplog.at_level("WARNING"):
-        released = store.release_resume_lease(created.pending_turn_id)
+        released = store.cleanup_stale_resuming(
+            created.pending_turn_id,
+            expected_updated_at=refreshed.updated_at,
+        )
     assert released is not None
     assert released.state is PendingConversationTurnState.ACCEPTED_BY_HOST
     assert any("pre_resume_state 缺失" in r.message for r in caplog.records), (
@@ -898,17 +929,365 @@ def test_sqlite_record_resume_failure_warns_on_missing_pre_resume_state(
         resumable=True,
         state=PendingConversationTurnState.ACCEPTED_BY_HOST,
     )
+    forced_lease = "lease_force_sqlite"
     conn = host_store.get_connection()
     conn.execute(
-        "UPDATE pending_conversation_turns SET state = ?, pre_resume_state = NULL WHERE pending_turn_id = ?",
-        (PendingConversationTurnState.RESUMING.value, created.pending_turn_id),
+        "UPDATE pending_conversation_turns SET state = ?, pre_resume_state = NULL, resume_lease_id = ? WHERE pending_turn_id = ?",
+        (PendingConversationTurnState.RESUMING.value, forced_lease, created.pending_turn_id),
     )
     conn.commit()
 
     with caplog.at_level("WARNING"):
-        failed = store.record_resume_failure(created.pending_turn_id, error_message="boom")
+        failed = store.record_resume_failure(
+            created.pending_turn_id, error_message="boom", lease_id=forced_lease,
+        )
     assert failed.state is PendingConversationTurnState.ACCEPTED_BY_HOST
     assert failed.last_resume_error_message == "boom"
     assert any("pre_resume_state 缺失" in r.message for r in caplog.records), (
         "pre_resume_state 缺失时应输出告警"
     )
+
+
+@pytest.mark.unit
+def test_inmemory_lease_mismatch_release_raises_lease_expired() -> None:
+    """In-Memory 实现：A 持有 lease → cleanup_stale_resuming 抢占 → A 迟到 release 必抛 LeaseExpiredError。"""
+
+    store = InMemoryPendingConversationTurnStore()
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.ACCEPTED_BY_HOST,
+    )
+    a_record = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+    assert a_record.resume_lease_id
+
+    # cleanup 兜底：把 lease 抢占清空，state 回退到 ACCEPTED_BY_HOST。
+    cleaned = store.cleanup_stale_resuming(
+        created.pending_turn_id,
+        expected_updated_at=a_record.updated_at,
+    )
+    assert cleaned is not None
+    assert cleaned.resume_lease_id is None
+
+    # B 重新 acquire，分配新 lease。
+    b_record = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+    assert b_record.resume_lease_id
+    assert b_record.resume_lease_id != a_record.resume_lease_id
+
+    # A 迟到的 release / rebind / failure 全部应抛 LeaseExpiredError。
+    with pytest.raises(LeaseExpiredError):
+        store.release_resume_lease(created.pending_turn_id, lease_id=a_record.resume_lease_id or "")
+    with pytest.raises(LeaseExpiredError):
+        store.rebind_source_run_id_for_resume(
+            created.pending_turn_id,
+            new_source_run_id="run_a_late",
+            lease_id=a_record.resume_lease_id or "",
+        )
+    with pytest.raises(LeaseExpiredError):
+        store.record_resume_failure(
+            created.pending_turn_id,
+            error_message="late",
+            lease_id=a_record.resume_lease_id or "",
+        )
+
+    # B 持有的新 lease 仍能正常 release。
+    released = store.release_resume_lease(
+        created.pending_turn_id, lease_id=b_record.resume_lease_id or ""
+    )
+    assert released is not None
+    assert released.state is PendingConversationTurnState.ACCEPTED_BY_HOST
+
+
+@pytest.mark.unit
+def test_sqlite_lease_mismatch_release_raises_lease_expired(tmp_path: Path) -> None:
+    """SQLite 实现：A → cleanup → B → A 迟到写入路径全部 LeaseExpiredError。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLitePendingConversationTurnStore(host_store)
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.ACCEPTED_BY_HOST,
+    )
+    a_record = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+    assert a_record.resume_lease_id
+    assert a_record.state is PendingConversationTurnState.RESUMING
+
+    cleaned = store.cleanup_stale_resuming(
+        created.pending_turn_id,
+        expected_updated_at=a_record.updated_at,
+    )
+    assert cleaned is not None
+    assert cleaned.resume_lease_id is None
+    assert cleaned.state is PendingConversationTurnState.ACCEPTED_BY_HOST
+
+    b_record = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+    assert b_record.resume_lease_id
+    assert b_record.resume_lease_id != a_record.resume_lease_id
+
+    with pytest.raises(LeaseExpiredError):
+        store.release_resume_lease(created.pending_turn_id, lease_id=a_record.resume_lease_id or "")
+    with pytest.raises(LeaseExpiredError):
+        store.rebind_source_run_id_for_resume(
+            created.pending_turn_id,
+            new_source_run_id="run_a_late",
+            lease_id=a_record.resume_lease_id or "",
+        )
+    with pytest.raises(LeaseExpiredError):
+        store.record_resume_failure(
+            created.pending_turn_id,
+            error_message="late",
+            lease_id=a_record.resume_lease_id or "",
+        )
+
+    # B 仍可正常 release。
+    released = store.release_resume_lease(
+        created.pending_turn_id, lease_id=b_record.resume_lease_id or ""
+    )
+    assert released is not None
+    assert released.state is PendingConversationTurnState.ACCEPTED_BY_HOST
+
+
+@pytest.mark.unit
+def test_sqlite_lease_threading_double_connection(tmp_path: Path) -> None:
+    """跨线程双连接：A acquire → cleanup（另一线程）→ A 迟到 rebind 必抛 LeaseExpiredError。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLitePendingConversationTurnStore(host_store)
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.ACCEPTED_BY_HOST,
+    )
+    a_record = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+
+    cleanup_done = threading.Event()
+    cleanup_error: list[BaseException] = []
+
+    def _cleanup_in_other_thread() -> None:
+        try:
+            store.cleanup_stale_resuming(
+                created.pending_turn_id,
+                expected_updated_at=a_record.updated_at,
+            )
+        except BaseException as exc:  # pragma: no cover - 被主线程抓取
+            cleanup_error.append(exc)
+        finally:
+            cleanup_done.set()
+
+    thread = threading.Thread(target=_cleanup_in_other_thread, name="lease-cleanup")
+    thread.start()
+    thread.join(timeout=5.0)
+    assert cleanup_done.is_set()
+    assert not cleanup_error
+
+    # B 在主线程重新 acquire，使状态再次进入 RESUMING（持新 lease）。
+    b_record = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+    assert b_record.resume_lease_id
+    assert b_record.resume_lease_id != a_record.resume_lease_id
+
+    # A 迟到 rebind 必失配。
+    with pytest.raises(LeaseExpiredError):
+        store.rebind_source_run_id_for_resume(
+            created.pending_turn_id,
+            new_source_run_id="run_a_late",
+            lease_id=a_record.resume_lease_id or "",
+        )
+
+
+@pytest.mark.unit
+def test_inmemory_cleanup_stale_resuming_skips_when_updated_at_advanced() -> None:
+    """InMemory：cleanup 带 stale ``expected_updated_at`` 时不得抢占 fresh lease。
+
+    覆盖"Host snapshot 判 stale → 期间被合法新 holder 重新 acquire → cleanup 必须 no-op"
+    的 TOCTOU 窗口。
+    """
+
+    store = InMemoryPendingConversationTurnStore()
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.ACCEPTED_BY_HOST,
+    )
+    stale_record = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+    assert stale_record.resume_lease_id
+
+    # 模拟 lease 自动过期被 cleanup 接管，B 立刻重新 acquire 拿到 fresh lease。
+    store.cleanup_stale_resuming(
+        created.pending_turn_id, expected_updated_at=stale_record.updated_at
+    )
+    fresh_record = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+    assert fresh_record.resume_lease_id
+    assert fresh_record.resume_lease_id != stale_record.resume_lease_id
+
+    # Host 持有的 stale snapshot 触发 cleanup：必须 no-op，不能抹掉 B 的 fresh lease。
+    result = store.cleanup_stale_resuming(
+        created.pending_turn_id, expected_updated_at=stale_record.updated_at
+    )
+    assert result is not None
+    assert result.state is PendingConversationTurnState.RESUMING
+    assert result.resume_lease_id == fresh_record.resume_lease_id
+
+    # B 仍能正常 release。
+    released = store.release_resume_lease(
+        created.pending_turn_id, lease_id=fresh_record.resume_lease_id or ""
+    )
+    assert released is not None
+    assert released.state is PendingConversationTurnState.ACCEPTED_BY_HOST
+
+
+@pytest.mark.unit
+def test_sqlite_cleanup_stale_resuming_skips_when_updated_at_advanced(tmp_path: Path) -> None:
+    """SQLite：同结构 TOCTOU 防御：stale snapshot 不得抹掉 fresh lease。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLitePendingConversationTurnStore(host_store)
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.ACCEPTED_BY_HOST,
+    )
+    stale_record = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+    assert stale_record.resume_lease_id
+
+    store.cleanup_stale_resuming(
+        created.pending_turn_id, expected_updated_at=stale_record.updated_at
+    )
+    fresh_record = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+    assert fresh_record.resume_lease_id
+    assert fresh_record.resume_lease_id != stale_record.resume_lease_id
+
+    # Host stale snapshot 再触发 cleanup：必须 no-op。
+    result = store.cleanup_stale_resuming(
+        created.pending_turn_id, expected_updated_at=stale_record.updated_at
+    )
+    assert result is not None
+    assert result.state is PendingConversationTurnState.RESUMING
+    assert result.resume_lease_id == fresh_record.resume_lease_id
+
+    released = store.release_resume_lease(
+        created.pending_turn_id, lease_id=fresh_record.resume_lease_id or ""
+    )
+    assert released is not None
+    assert released.state is PendingConversationTurnState.ACCEPTED_BY_HOST
+
+
+@pytest.mark.unit
+def test_inmemory_writes_after_cleanup_before_reacquire_raise_lease_expired() -> None:
+    """InMemory：cleanup 后、B 还未 acquire 时，A 的所有迟到写入必抛 LeaseExpiredError。
+
+    覆盖三个缺口：``release_resume_lease`` / ``rebind_source_run_id_for_resume`` /
+    ``record_resume_failure`` 在 state 已被 cleanup 回退到非 RESUMING 时，必须统一
+    把旧 lease 识别为过期，**不允许**沉默 no-op、不允许误改 ``last_resume_error_message``。
+    """
+
+    store = InMemoryPendingConversationTurnStore()
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.ACCEPTED_BY_HOST,
+    )
+    a_record = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+
+    # cleanup 把 lease 抢占清空，state 回退；B 尚未 acquire。
+    store.cleanup_stale_resuming(
+        created.pending_turn_id, expected_updated_at=a_record.updated_at
+    )
+
+    snapshot_before = store.get_pending_turn(created.pending_turn_id)
+    assert snapshot_before is not None
+    assert snapshot_before.state is PendingConversationTurnState.ACCEPTED_BY_HOST
+    assert snapshot_before.last_resume_error_message is None
+
+    with pytest.raises(LeaseExpiredError):
+        store.release_resume_lease(
+            created.pending_turn_id, lease_id=a_record.resume_lease_id or ""
+        )
+    with pytest.raises(LeaseExpiredError):
+        store.rebind_source_run_id_for_resume(
+            created.pending_turn_id,
+            new_source_run_id="run_a_late",
+            lease_id=a_record.resume_lease_id or "",
+        )
+    with pytest.raises(LeaseExpiredError):
+        store.record_resume_failure(
+            created.pending_turn_id,
+            error_message="late failure",
+            lease_id=a_record.resume_lease_id or "",
+        )
+
+    snapshot_after = store.get_pending_turn(created.pending_turn_id)
+    assert snapshot_after is not None
+    # last_resume_error_message 不得被旧 holder 误写。
+    assert snapshot_after.last_resume_error_message is None
+    assert snapshot_after.state is PendingConversationTurnState.ACCEPTED_BY_HOST
+
+
+@pytest.mark.unit
+def test_sqlite_writes_after_cleanup_before_reacquire_raise_lease_expired(tmp_path: Path) -> None:
+    """SQLite：同结构防御：cleanup 后、B 未 acquire 时旧 holder 三类写入全 LeaseExpired。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLitePendingConversationTurnStore(host_store)
+    created = store.upsert_pending_turn(
+        session_id="s1",
+        scene_name="wechat",
+        user_text="问题",
+        source_run_id="run_1",
+        resumable=True,
+        state=PendingConversationTurnState.ACCEPTED_BY_HOST,
+    )
+    a_record = store.record_resume_attempt(created.pending_turn_id, max_attempts=5)
+
+    store.cleanup_stale_resuming(
+        created.pending_turn_id, expected_updated_at=a_record.updated_at
+    )
+
+    snapshot_before = store.get_pending_turn(created.pending_turn_id)
+    assert snapshot_before is not None
+    assert snapshot_before.state is PendingConversationTurnState.ACCEPTED_BY_HOST
+    assert snapshot_before.last_resume_error_message is None
+
+    with pytest.raises(LeaseExpiredError):
+        store.release_resume_lease(
+            created.pending_turn_id, lease_id=a_record.resume_lease_id or ""
+        )
+    with pytest.raises(LeaseExpiredError):
+        store.rebind_source_run_id_for_resume(
+            created.pending_turn_id,
+            new_source_run_id="run_a_late",
+            lease_id=a_record.resume_lease_id or "",
+        )
+    with pytest.raises(LeaseExpiredError):
+        store.record_resume_failure(
+            created.pending_turn_id,
+            error_message="late failure",
+            lease_id=a_record.resume_lease_id or "",
+        )
+
+    snapshot_after = store.get_pending_turn(created.pending_turn_id)
+    assert snapshot_after is not None
+    assert snapshot_after.last_resume_error_message is None
+    assert snapshot_after.state is PendingConversationTurnState.ACCEPTED_BY_HOST

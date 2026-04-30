@@ -2533,8 +2533,9 @@ def test_resume_pending_turn_stream_rebind_failure_finishes_run_without_leak(
             pending_turn_id: str,
             *,
             new_source_run_id: str,
+            lease_id: str,
         ) -> PendingConversationTurn:
-            del pending_turn_id, new_source_run_id
+            del pending_turn_id, new_source_run_id, lease_id
             raise SessionClosedError("session closed during rebind")
 
     class _StubScenePreparation:
@@ -3043,4 +3044,132 @@ def test_register_accepted_pending_turn_absorbs_clearing_failed_error() -> None:
         run_id="run_test",
     )
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# PR-2 review #4 回归：执行期间被 cleanup_stale_pending_turns 抢占时，
+# 失败补写抛出的 LeaseExpiredError 不得覆盖原始执行异常。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_resume_pending_turn_stream_lease_expired_during_failure_record_does_not_mask_original_exc() -> None:
+    """executor 抛业务异常 + 并发 cleanup 抢占 lease 场景下原始异常必须穿透到上层。
+
+    场景：``Host.resume_pending_turn_stream`` 进入 try/except 后，executor 抛出
+    业务异常 ``RuntimeError("executor 内部失败")``；此时若 ``cleanup_stale_pending_turns``
+    在运行时（``host_admin_service`` / ``interactive_ui`` 都可主动触发）已把记录
+    回退至非 RESUMING，``record_resume_failure`` 会抛 ``LeaseExpiredError``。Host 必须
+    捕获并降级为告警日志，让原始 ``RuntimeError`` 继续向上抛，否则上层看到的会
+    是 ``LeaseExpiredError`` 这种内部 fence token 异常，原因诊断被掩盖。
+    """
+
+    from dayu.host.lease import LeaseExpiredError
+    from tests.application.conftest import (
+        StubPendingTurnStore,
+        StubRunRegistry,
+        StubSessionRegistry,
+    )
+
+    class _LeaseExpiredOnFailurePendingTurnStore(StubPendingTurnStore):
+        """``record_resume_failure`` 强制抛 ``LeaseExpiredError``，模拟并发 cleanup。"""
+
+        def record_resume_failure(
+            self,
+            pending_turn_id: str,
+            *,
+            error_message: str,
+            lease_id: str,
+        ) -> PendingConversationTurn:
+            del pending_turn_id, error_message
+            raise LeaseExpiredError(
+                "lease 已被 cleanup 抢占",
+                record_id="pt-mocked",
+                lease_id=lease_id,
+            )
+
+    class _StubScenePreparation:
+        async def prepare(
+            self,
+            execution_contract: ExecutionContract,
+            run_context: HostedRunContext,
+        ) -> PreparedAgentExecution:
+            del execution_contract, run_context
+            raise AssertionError("prepared snapshot 路径不应走 prepare")
+
+        async def restore_prepared_execution(
+            self,
+            prepared_turn: PreparedAgentTurnSnapshot,
+            run_context: HostedRunContext,
+        ) -> AgentInput:
+            del prepared_turn, run_context
+            # executor 在 restore 阶段抛业务异常，模拟"恢复执行失败"。
+            raise RuntimeError("executor 内部失败")
+
+    session_registry = StubSessionRegistry()
+    session_registry.create_session(source=cast("object", "interactive"), session_id="s-lease-overrides")  # type: ignore[arg-type]
+    run_registry = StubRunRegistry()
+    pending_turn_store = _LeaseExpiredOnFailurePendingTurnStore()
+
+    execution_contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="interactive",
+        host_policy=ExecutionHostPolicy(session_key="s-lease-overrides", resumable=True),
+        preparation_spec=ScenePreparationSpec(),
+        message_inputs=ExecutionMessageInputs(user_message="问题-lease-overrides"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
+        execution_options=ExecutionOptions(model_name="resume-model", max_iterations=6),
+        metadata={"delivery_channel": "interactive"},
+    )
+    prepared_execution = _build_prepared_execution(execution_contract=execution_contract)
+    prepared_turn = prepared_execution.resume_snapshot
+    assert prepared_turn is not None
+    prepared_turn_json = json.dumps(
+        serialize_prepared_agent_turn_snapshot(prepared_turn),
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+    source_run = run_registry.register_run(
+        session_id="s-lease-overrides",
+        service_type="chat_turn",
+        scene_name="interactive",
+    )
+    run_registry.start_run(source_run.run_id)
+    run_registry.mark_cancelled(source_run.run_id, cancel_reason=RunCancelReason.TIMEOUT)
+
+    seeded = pending_turn_store.seed_pending_turn(
+        session_id="s-lease-overrides",
+        scene_name="interactive",
+        user_text="问题-lease-overrides",
+        source_run_id=source_run.run_id,
+        resumable=True,
+        resume_source_json=prepared_turn_json,
+        state=PendingConversationTurnState.PREPARED_BY_HOST,
+    )
+
+    executor = DefaultHostExecutor(
+        run_registry=run_registry,  # type: ignore[arg-type]
+        pending_turn_store=pending_turn_store,  # type: ignore[arg-type]
+        scene_preparation=_StubScenePreparation(),  # type: ignore[arg-type]
+    )
+    host = Host(
+        executor=executor,
+        session_registry=session_registry,  # type: ignore[arg-type]
+        run_registry=run_registry,  # type: ignore[arg-type]
+        pending_turn_store=pending_turn_store,  # type: ignore[arg-type]
+    )
+
+    async def _resume() -> None:
+        async for _event in host.resume_pending_turn_stream(
+            pending_turn_id=seeded.pending_turn_id,
+            session_id="s-lease-overrides",
+        ):
+            pass
+
+    # 关键断言：上抛的必须是 executor 抛出的原始 RuntimeError，
+    # 而不是 record_resume_failure 抛出的 LeaseExpiredError。
+    with pytest.raises(RuntimeError, match="executor 内部失败") as exc_info:
+        asyncio.run(_resume())
+    assert not isinstance(exc_info.value, LeaseExpiredError)
 

@@ -29,6 +29,7 @@ from dayu.host.executor import DefaultHostExecutor, should_delete_pending_turn_a
 from dayu.host.host_execution import HostExecutorProtocol, HostedRunContext, HostedRunSpec
 from dayu.host._datetime_utils import now_utc as _now_utc
 from dayu.host.host_store import HostStore
+from dayu.host.lease import LeaseExpiredError
 from dayu.host.pending_turn_store import (
     InMemoryPendingConversationTurnStore,
     PendingConversationTurn,
@@ -610,6 +611,7 @@ class Host:
         execution_contract: ExecutionContract,
         *,
         resumed_pending_turn_id: str | None = None,
+        resumed_pending_turn_lease_id: str | None = None,
     ) -> AsyncIterator[AppEvent]:
         """托管一次 Agent 子执行并返回应用层事件流。
 
@@ -618,6 +620,9 @@ class Host:
             resumed_pending_turn_id: resume 路径下由 Host 端传入的 pending turn
                 ID；executor 以此识别"不要再 upsert pending turn"。非 resume 路径
                 保持 ``None``。
+            resumed_pending_turn_lease_id: resume 路径下 Host 端持有的
+                ``resume_lease_id``；executor 在 rebind / release 时必须原样回传，
+                双条件 CAS 失配会被识别为"已被接管"。非 resume 路径保持 ``None``。
 
         Yields:
             应用层事件。
@@ -633,6 +638,7 @@ class Host:
         async for event in self._executor.run_agent_stream(
             execution_contract,
             resumed_pending_turn_id=resumed_pending_turn_id,
+            resumed_pending_turn_lease_id=resumed_pending_turn_lease_id,
         ):
             yield event
 
@@ -641,6 +647,7 @@ class Host:
         prepared_turn: PreparedAgentTurnSnapshot,
         *,
         resumed_pending_turn_id: str | None = None,
+        resumed_pending_turn_lease_id: str | None = None,
     ) -> AsyncIterator[AppEvent]:
         """托管一次已完成 scene preparation 的 Agent 子执行。
 
@@ -649,6 +656,9 @@ class Host:
             resumed_pending_turn_id: resume 路径下由 Host 端传入的 pending turn
                 ID；executor 以此识别"不要再 upsert pending turn"。非 resume 路径
                 保持 ``None``。
+            resumed_pending_turn_lease_id: resume 路径下 Host 端持有的
+                ``resume_lease_id``；executor 在 rebind / release 时必须原样回传。
+                非 resume 路径保持 ``None``。
 
         Yields:
             应用层事件。
@@ -664,6 +674,7 @@ class Host:
         async for event in self._executor.run_prepared_turn_stream(
             prepared_turn,
             resumed_pending_turn_id=resumed_pending_turn_id,
+            resumed_pending_turn_lease_id=resumed_pending_turn_lease_id,
         ):
             yield event
 
@@ -1271,7 +1282,10 @@ class Host:
                 if now - record.updated_at < _STALE_RESUMING_PENDING_TURN_MAX_AGE:
                     continue
                 try:
-                    released = self._pending_turn_store.release_resume_lease(record.pending_turn_id)
+                    released = self._pending_turn_store.cleanup_stale_resuming(
+                        record.pending_turn_id,
+                        expected_updated_at=record.updated_at,
+                    )
                 except Exception as exc:
                     Log.warn(
                         "Host 释放 stale RESUMING pending turn lease 失败: "
@@ -1596,6 +1610,7 @@ class Host:
                 async for event in self._executor.run_agent_stream(
                     execution_contract,
                     resumed_pending_turn_id=pending_turn_id,
+                    resumed_pending_turn_lease_id=pending_turn_record.resume_lease_id,
                 ):
                     yield event
                 return
@@ -1608,6 +1623,7 @@ class Host:
             async for event in self._executor.run_prepared_turn_stream(
                 prepared_turn,
                 resumed_pending_turn_id=pending_turn_id,
+                resumed_pending_turn_lease_id=pending_turn_record.resume_lease_id,
             ):
                 yield event
         except Exception as exc:
@@ -1631,6 +1647,7 @@ class Host:
                     self._pending_turn_store.record_resume_failure(
                         pending_turn_id,
                         error_message=str(exc),
+                        lease_id=pending_turn_record.resume_lease_id or "",
                     )
                 except SessionWriteBlockedError as failure_exc:
                     # session 已不再接受写入（CLOSED / CLEARING / CLEARING_FAILED），
@@ -1641,6 +1658,19 @@ class Host:
                         f"依赖 cleanup 兜底: pending_turn_id={pending_turn_id}, "
                         f"session_id={session_id}, barrier={type(failure_exc).__name__}, "
                         f"error={failure_exc}",
+                        module=MODULE,
+                    )
+                except LeaseExpiredError as lease_exc:
+                    # 在执行期间被 cleanup_stale_pending_turns 抢占：记录已被回退到非
+                    # RESUMING 或 lease_id 已被换发，store 双条件 CAS 拒绝当前补写。
+                    # 此时不得让 lease 异常覆盖真正的执行失败原因 exc，由 cleanup 兜底
+                    # 即可。注意：cleanup_stale_pending_turns 可在运行时由
+                    # host_admin_service / interactive_ui 主动触发，不仅启动期生效。
+                    Log.warning(
+                        "pending conversation turn lease 回退被 cleanup 抢占，"
+                        f"跳过补写并保留原始执行异常: pending_turn_id={pending_turn_id}, "
+                        f"session_id={session_id}, lease_id={lease_exc.lease_id}, "
+                        f"error={lease_exc}",
                         module=MODULE,
                     )
             # Host 对外只暴露业务语义异常：把仓储写入屏障抛出的

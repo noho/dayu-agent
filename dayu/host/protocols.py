@@ -728,19 +728,70 @@ class PendingConversationTurnStoreProtocol(Protocol):
         pending_turn_id: str,
         *,
         error_message: str,
+        lease_id: str,
     ) -> PendingConversationTurn:
-        """记录一次 pending turn 恢复失败。"""
+        """记录一次 pending turn 恢复失败。
+
+        Args:
+            pending_turn_id: 目标 pending turn ID。
+            error_message: 失败原因文本。
+            lease_id: 调用方持有的 ``resume_lease_id``，必须与记录当前 lease 等值。
+
+        Returns:
+            写入失败信息后的 pending turn 记录。
+
+        Raises:
+            KeyError: 记录不存在时抛出。
+            LeaseExpiredError: 当前 state 非 ``RESUMING``，或 lease_id 与记录
+                当前 lease 不匹配时抛出（含 cleanup 抢占改写 lease 的场景）。
+        """
         ...
 
-    def release_resume_lease(self, pending_turn_id: str) -> PendingConversationTurn | None:
+    def release_resume_lease(
+        self,
+        pending_turn_id: str,
+        *,
+        lease_id: str,
+    ) -> PendingConversationTurn | None:
         """把 RESUMING 的 pending turn 原子回退到 ``pre_resume_state``。
 
         Args:
             pending_turn_id: 目标 pending turn ID。
+            lease_id: 调用方持有的 ``resume_lease_id``，必须与记录当前 lease
+                等值；mismatch 抛 ``LeaseExpiredError``。
 
         Returns:
-            回退后的 pending turn；若记录缺失或当前 state 非 RESUMING 则
-            返回 ``None`` 或原记录（幂等 no-op）。
+            回退后的 pending turn 记录；记录不存在时返回 ``None``。
+
+        Raises:
+            LeaseExpiredError: 当前 state 非 ``RESUMING``，或 lease_id 与记录当前
+                lease 不匹配时抛出（含 cleanup 抢占改写 lease 的场景）。
+        """
+        ...
+
+    def cleanup_stale_resuming(
+        self,
+        pending_turn_id: str,
+        *,
+        expected_updated_at: datetime,
+    ) -> PendingConversationTurn | None:
+        """Host 兜底专用：把 stale RESUMING 强制回退到 ``pre_resume_state``。
+
+        与 ``release_resume_lease`` 不同，本方法不要求 lease_id 匹配；它是
+        ``cleanup_stale_pending_turns`` 兜底用的接管路径，会把 ``resume_lease_id``
+        置 NULL，让旧 resumer 后续 release/rebind/failure 双条件 CAS 必失败。
+
+        以 ``updated_at == expected_updated_at`` 作为附加 CAS 条件，关闭
+        Host 端"snapshot 判 stale → cleanup" 的 TOCTOU 窗口：若期间记录已被
+        合法 holder 重新 acquire / 重新 touch，cleanup 视为 no-op。
+
+        Args:
+            pending_turn_id: 目标 pending turn ID。
+            expected_updated_at: Host 判 stale 时持有的 ``updated_at`` 快照值。
+
+        Returns:
+            回退后的 pending turn；记录缺失、当前 state 非 RESUMING 或
+            ``updated_at`` 已被刷新时返回 ``None`` / 原记录（幂等 no-op）。
 
         Raises:
             无：状态不符合回退条件时视为 no-op。
@@ -752,12 +803,14 @@ class PendingConversationTurnStoreProtocol(Protocol):
         pending_turn_id: str,
         *,
         new_source_run_id: str,
+        lease_id: str,
     ) -> PendingConversationTurn:
         """在持有 RESUMING lease 的前提下把 ``source_run_id`` 原子重绑到当前 resumed run。
 
         Args:
             pending_turn_id: 目标 pending turn ID。
             new_source_run_id: 当前 resumed run 的 run_id。
+            lease_id: 调用方持有的 ``resume_lease_id``，必须与记录当前 lease 等值。
 
         Returns:
             重绑后的 pending turn 记录。
@@ -765,7 +818,8 @@ class PendingConversationTurnStoreProtocol(Protocol):
         Raises:
             KeyError: 记录不存在时抛出。
             ValueError: ``new_source_run_id`` 为空字符串时抛出。
-            PendingTurnResumeConflictError: 当前 state 非 ``RESUMING`` 时抛出。
+            LeaseExpiredError: 当前 state 非 ``RESUMING``，或 lease_id 与记录
+                当前 lease 不匹配时抛出（含 cleanup 抢占改写 lease 的场景）。
         """
         ...
 

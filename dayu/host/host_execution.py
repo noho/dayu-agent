@@ -49,6 +49,7 @@ class HostExecutorProtocol(Protocol):
         execution_contract: ExecutionContract,
         *,
         resumed_pending_turn_id: str | None = None,
+        resumed_pending_turn_lease_id: str | None = None,
     ) -> AsyncIterator[AppEvent]:
         """托管一次 Agent 子执行并返回应用层事件流。"""
         ...
@@ -58,6 +59,7 @@ class HostExecutorProtocol(Protocol):
         prepared_turn: PreparedAgentTurnSnapshot,
         *,
         resumed_pending_turn_id: str | None = None,
+        resumed_pending_turn_lease_id: str | None = None,
     ) -> AsyncIterator[AppEvent]:
         """基于 Host prepared turn 快照恢复一次 Agent 子执行。"""
         ...

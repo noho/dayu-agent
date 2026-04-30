@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS pending_conversation_turns (
     resume_attempt_count INTEGER NOT NULL DEFAULT 0,
     last_resume_error_message TEXT,
     pre_resume_state TEXT,
+    resume_lease_id TEXT,
     metadata_json   TEXT NOT NULL DEFAULT '{}'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_turns_session_scene
@@ -223,6 +224,8 @@ class HostStore:
                 "resume_source_json",
                 "resume_attempt_count",
                 "last_resume_error_message",
+                "pre_resume_state",
+                "resume_lease_id",
                 "metadata_json",
             ),
             db_path=self._db_path,

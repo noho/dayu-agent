@@ -196,15 +196,30 @@ ACCEPTED_BY_HOST ─► PREPARED_BY_HOST ─► SENT_TO_LLM
 `PreparedAgentTurnSnapshot` 都必须携带完整的 `concurrency_acquire_policy`。
 缺字段的旧快照会被判为损坏记录，而不是再猜测默认等待语义。
 
-三种失败分别以 `PendingTurnResumeConflictError` 的不同 reason 抛出（冲突 vs 超限 vs 记录缺失 vs 不可恢复），上层据此决定"重试 / 跳过 / 转告用户"。
+acquire 失败按语义分流：
+- **`PendingTurnResumeConflictError`**：当前 state 不在可 acquire 集合内（已被其它 resumer 持有 RESUMING）。该异常**仅覆盖 acquire 阶段的并发互斥**，与持有 lease 后的 release / rebind / failure 路径无关——后者一律抛 `LeaseExpiredError`（见 §6.3.1）。
+- **`ValueError`**：`max_attempts` 非正、达上限（同事务原子删除记录）、或恢复目标快照解析失败 / 不可恢复。
+- **`KeyError`**：pending turn 记录不存在。
+
+上层据此决定"重试 / 跳过 / 转告用户"。
 
 **超限即删除**（稳定契约）：在同一事务内发现 `attempt_count >= max_attempts`，直接删除该 pending turn，避免进入半永久残留。
+
+### 6.3.1 Resume lease fence token（`resume_lease_id`）
+
+`resume_lease_id` 是 pending turn 上的 record 级 fence token，用于把"谁当前持有 RESUMING lease"刻成强一致条件，**根治"旧 resumer 迟到写入误覆盖新 holder"**。
+
+- **分配**：`record_resume_attempt` acquire 成功时由 store 通过 `dayu.host.lease.generate_lease_id()` 当场生成，写入记录的 `resume_lease_id` 字段并随返回的 `PendingConversationTurn` 一并交给 executor 持有。
+- **CAS 谓词**：`release_resume_lease` / `rebind_source_run_id_for_resume` / `record_resume_failure` 全部使用双条件 CAS `WHERE state = 'resuming' AND resume_lease_id = ?`；mismatch 时抛 `LeaseExpiredError`，旧 resumer 的迟到写入被 fail-closed 拦下。**state 非 RESUMING 也一律视为 lease 已过期**——cleanup 兜底已把记录回退到 `pre_resume_state`，旧 holder 持有的 lease 在物理上已不存在，对这三个写入路径必须统一抛 `LeaseExpiredError`，不允许沉默 no-op，也不允许仅写 `last_resume_error_message`（否则会把"已重新开放给后续恢复"的 pending turn 打上陈旧失败原因）。
+- **接管路径（Host 兜底专用）**：`cleanup_stale_resuming(pending_turn_id, *, expected_updated_at)` 在同一事务内把 stale RESUMING 强制回退到 `pre_resume_state`，并把 `resume_lease_id` 显式置 NULL。后续旧 resumer 用旧 lease 撞双条件 CAS 必然 mismatch（state 不再是 RESUMING），抛 `LeaseExpiredError`。该入口**不持 lease 也不允许带 lease**——它存在的语义就是"上层 lease 已无效，由 Host 兜底接管"。`expected_updated_at` 是必填的 TOCTOU 防御：Host 端"snapshot 判 stale → 调用 cleanup"之间记录可能已被合法新 holder 重新 acquire，store 在事务内重新校验 `updated_at` 与传入快照值一致才执行回退；否则视为 no-op，绝不抢占 fresh lease。
+- **lease 边界（不上翻 Service / UI）**：`resume_lease_id` 只在 Host 内部 round-trip。`PendingTurnSummary`、`PendingConversationTurnStoreProtocol` 的 view 层入口（`get_pending_turn` / `list_pending_turns`）一律**不**暴露 lease。executor 在 acquire 后内部持有，rebind/release/failure 在同一调用链内透传；Service 入口只交 `pending_turn_id` 触发 resume，全程不参与 lease round-trip。这与 `reply_outbox.lease_id`（需要由渠道侧 round-trip）不同，**因为 pending turn resume 的全链路都发生在 Host 内部，没有跨进程异步回调阶段**。
+- **`Host.resume_pending_turn_stream` 的 lease 异常自吸收契约**：`cleanup_stale_pending_turns` 在 Host 启动期与运行时（`host_admin_service` / `interactive_ui` 主动触发）都可能并发抢占当前 RESUMING lease。executor 抛业务异常后 Host 试图调用 `record_resume_failure` 写入失败原因时，若 cleanup 已并发抢占，store 会按 §6.3.1 的双条件 CAS 抛 `LeaseExpiredError`。Host 必须在外层 try/except 中捕获该异常并降级为 warning 日志，**让 executor 抛出的原始异常继续向上抛**——`LeaseExpiredError` 是内部 fence token 语义，对 Service / UI 没有诊断价值；让它覆盖原始执行失败原因会污染上层错误观测。同样，`SessionWriteBlockedError` 也按"自吸收 + 不覆盖原始异常"处理，由 cleanup 兜底完成 lease 回退。
 
 ### 6.4 Pending turn cleanup 三分支（启动恢复 + 周期性兜底）
 
 `cleanup_stale_pending_turns` 严格按以下分支顺序：
 
-- **分支 A — RESUMING 过期 lease 回退**：`state == RESUMING` 且 `updated_at` 超过 10 分钟 → 释放 lease，按 `pre_resume_state` 回写。保护"resumer 进程中断但 lease 未释放"场景。
+- **分支 A — RESUMING 过期 lease 回退**：`state == RESUMING` 且 `updated_at` 超过 10 分钟 → 通过 `cleanup_stale_resuming(pending_turn_id, expected_updated_at=record.updated_at)` 强制按 `pre_resume_state` 回写并把 `resume_lease_id` 置 NULL。`expected_updated_at` 是 TOCTOU 关键字段：若 snapshot 判 stale 之后该记录已被新 holder 合法重新 acquire，store 内层 CAS 失配视为 no-op，绝不抢占 fresh lease。该路径**不需要持 lease**，是 Host 兜底接管入口；旧 holder 用旧 lease 的迟到写入会因双条件 CAS 失配抛 `LeaseExpiredError`（见 §6.3.1）。
 - **分支 B — source_run 终态联动**：`source_run` 已是终态时，按 `should_delete_pending_turn_after_terminal_run` 真值表判定：
   - `run is None` → 删除；
   - `state ∈ {FAILED, UNSETTLED}` 且 `resumable=True` → **保留**（等 resume）；
@@ -705,10 +720,9 @@ Host 抛出的错误分两类：**业务可恢复** vs **上游编程错**。前
 **业务可恢复（必须 catch）**：
 
 - `SessionClosedError` — 目标 session 已 CLOSED；UI 应提示用户"会话已结束"。
-- `PendingTurnResumeConflictError` — 按 reason 分流：
-  - `attempt_exhausted` → 告知用户"已超最大重试"，不再 resume；
-  - `lease_conflict` → 有其它 resumer 在跑，通常等一下或跳过；
-  - `not_resumable` / `record_missing` → 对应"状态不合法"与"记录已不存在"，UI 按"静默丢弃 / 提示"处理。
+- `PendingTurnResumeConflictError` — **acquire 阶段并发互斥**：另有 resumer 已持有该 pending turn 的 RESUMING lease。Host 默认转译为 `ValueError("...正被其他 resumer 持有...")`，UI 通常按"等一下重试或跳过"处理。
+- `LeaseExpiredError` — Host **内部** fence token 异常：持有的 `resume_lease_id` 已被 cleanup 抢占改写。Host 在 `resume_pending_turn_stream` 里会自吸收为 warning 日志，**不向 Service / UI 暴露**；上层只会看到 executor 的原始执行异常或 Host 转译后的 `ValueError`，不需要直接 catch（见 §6.3.1）。
+- 其它 acquire 失败语义（达上限、记录缺失、不可恢复 / 快照损坏）由 Host 统一转成 `KeyError` / `ValueError`，按错误文本分流。
 - Run 超时 / 取消抛出的事件在事件流里以 `ERROR` / `CANCELLED` 呈现；UI 按事件处理，**不要**等异常。
 
 **上游编程错（不该 catch）**：

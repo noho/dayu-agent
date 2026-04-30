@@ -205,6 +205,31 @@ def _resolve_concurrency_acquire_timeout_seconds(spec: HostedRunSpec) -> float |
     return max(0.001, spec.timeout_ms / 1000.0)
 
 
+def _ensure_resume_lease_pair_consistent(
+    *,
+    resumed_pending_turn_id: str | None,
+    resumed_pending_turn_lease_id: str | None,
+) -> None:
+    """校验 resume 路径下 ``pending_turn_id`` 与 ``lease_id`` 必须同时存在或同时为空。
+
+    Args:
+        resumed_pending_turn_id: 调用方传入的 pending turn ID。
+        resumed_pending_turn_lease_id: 调用方传入的 resume_lease_id。
+
+    Returns:
+        无。
+
+    Raises:
+        ValueError: 两者一者非空、另一者为空时抛出，避免 executor 走入"想用 lease
+            但没拿到 / 拿到了 lease 但没指定 turn"的歧义路径。
+    """
+
+    if (resumed_pending_turn_id is None) != (resumed_pending_turn_lease_id is None):
+        raise ValueError(
+            "resumed_pending_turn_id 与 resumed_pending_turn_lease_id 必须同时提供或同时缺省"
+        )
+
+
 def _required_lanes_for_spec(spec: HostedRunSpec, *, include_agent_lane: bool) -> list[str]:
     """计算一次 run 需要叠加持有的 lane 名，按字母序返回以防死锁。
 
@@ -489,6 +514,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
         execution_contract: ExecutionContract,
         *,
         resumed_pending_turn_id: str | None = None,
+        resumed_pending_turn_lease_id: str | None = None,
     ) -> AsyncIterator[Any]:
         """托管一次 Agent 子执行并返回应用层事件流。
 
@@ -498,17 +524,27 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 表示本次执行已由 Host 端持有 RESUMING lease；executor 必须跳过
                 ``_register_accepted_pending_turn`` 的 upsert，以免覆盖调用方持有的
                 lease。非 resume 路径保持 ``None``。
+            resumed_pending_turn_lease_id: resume 路径下 Host 端持有的
+                ``resume_lease_id``；executor 在 rebind / release 时必须原样回传，
+                双条件 CAS 失配会被识别为"已被接管"。``resumed_pending_turn_id``
+                非 ``None`` 时本字段必填。
 
         Returns:
             应用层事件流。
 
         Raises:
             RuntimeError: 未配置 scene preparation 时抛出。
+            ValueError: ``resumed_pending_turn_id`` 与 lease 字段一者非空、另一者为空时抛出。
         """
 
+        _ensure_resume_lease_pair_consistent(
+            resumed_pending_turn_id=resumed_pending_turn_id,
+            resumed_pending_turn_lease_id=resumed_pending_turn_lease_id,
+        )
         async for event in self._run_agent_stream_internal(
             execution_contract,
             resumed_pending_turn_id=resumed_pending_turn_id,
+            resumed_pending_turn_lease_id=resumed_pending_turn_lease_id,
             replay_capture=None,
         ):
             yield event
@@ -518,6 +554,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
         execution_contract: ExecutionContract,
         *,
         resumed_pending_turn_id: str | None = None,
+        resumed_pending_turn_lease_id: str | None = None,
         replay_capture: _ReplayCapture | None = None,
     ) -> AsyncIterator[Any]:
         """``run_agent_stream`` 的内部实现，附带 replay 捕获能力。
@@ -564,6 +601,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             yield self._settle_agent_cancelled_before_pending_turn_binding(
                 run_id=run.run_id,
                 resumed_pending_turn_id=resumed_pending_turn_id,
+                resumed_pending_turn_lease_id=resumed_pending_turn_lease_id,
                 resumable=resumable,
             )
             return
@@ -597,9 +635,11 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 # pending turn 的 source_run_id 重绑到当前 resumed run；否则 "成功执行
                 # 后 delete 瞬时失败" 会留下 source_run_id 指向旧 timeout-cancelled run
                 # 的残留，后续 resume gate 仍会放行，触发重复恢复。
+                assert resumed_pending_turn_lease_id is not None  # 由入口 _ensure_resume_lease_pair_consistent 保证
                 self.pending_turn_store.rebind_source_run_id_for_resume(
                     resumed_pending_turn_id,
                     new_source_run_id=run.run_id,
+                    lease_id=resumed_pending_turn_lease_id,
                 )
             prepared_execution = await self.scene_preparation.prepare(execution_contract, context)
             if resumable and prepared_execution.resume_snapshot is None:
@@ -647,6 +687,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
         prepared_turn: PreparedAgentTurnSnapshot,
         *,
         resumed_pending_turn_id: str | None = None,
+        resumed_pending_turn_lease_id: str | None = None,
     ) -> AsyncIterator[Any]:
         """基于 prepared turn 快照恢复一次 Agent 子执行。
 
@@ -656,7 +697,18 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 表示本次执行已由 Host 端持有 RESUMING lease；executor 必须跳过
                 ``_register_prepared_pending_turn`` 的 upsert，以免覆盖调用方持有
                 的 lease。非 resume 路径保持 ``None``。
+            resumed_pending_turn_lease_id: resume 路径下 Host 端持有的
+                ``resume_lease_id``；executor 在 rebind / release 时必须原样回传。
+                ``resumed_pending_turn_id`` 非 ``None`` 时本字段必填。
+
+        Raises:
+            ValueError: ``resumed_pending_turn_id`` 与 lease 字段一者非空、另一者为空时抛出。
         """
+
+        _ensure_resume_lease_pair_consistent(
+            resumed_pending_turn_id=resumed_pending_turn_id,
+            resumed_pending_turn_lease_id=resumed_pending_turn_lease_id,
+        )
 
         if self.scene_preparation is None:
             raise RuntimeError("当前 HostExecutor 未配置 scene preparation")
@@ -677,6 +729,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             yield self._settle_agent_cancelled_before_pending_turn_binding(
                 run_id=run.run_id,
                 resumed_pending_turn_id=resumed_pending_turn_id,
+                resumed_pending_turn_lease_id=resumed_pending_turn_lease_id,
                 resumable=resumable,
             )
             return
@@ -707,9 +760,11 @@ class DefaultHostExecutor(HostExecutorProtocol):
             if resumed_pending_turn_id is not None and self.pending_turn_store is not None:
                 # 同 run_agent_stream 的 resume 分支：显式把 source_run_id 切到当前
                 # resumed run，避免 delete 失败后旧 source_run 被再次放行恢复。
+                assert resumed_pending_turn_lease_id is not None  # 由入口 _ensure_resume_lease_pair_consistent 保证
                 self.pending_turn_store.rebind_source_run_id_for_resume(
                     resumed_pending_turn_id,
                     new_source_run_id=run.run_id,
+                    lease_id=resumed_pending_turn_lease_id,
                 )
             agent_input = await self.scene_preparation.restore_prepared_execution(prepared_turn, context)
             async for event in self._run_prepared_agent_stream(
@@ -1825,6 +1880,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
         *,
         run_id: str,
         resumed_pending_turn_id: str | None,
+        resumed_pending_turn_lease_id: str | None,
         resumable: bool,
     ) -> AppEvent:
         """收敛发生在 pending turn 绑定前的 Agent 取消。
@@ -1839,6 +1895,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
             run_id: 当前 Host run ID。
             resumed_pending_turn_id: Host 外层已持有的 resume lease 对应 pending turn ID；
                 非 resume 路径为 `None`。
+            resumed_pending_turn_lease_id: 配套 lease；resume 路径必传。
             resumable: 当前 scene 是否允许恢复。
 
         Returns:
@@ -1861,6 +1918,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
         self._release_resumed_pending_turn_lease_best_effort(
             run_id=run_id,
             pending_turn_id=resumed_pending_turn_id,
+            lease_id=resumed_pending_turn_lease_id,
         )
         return self._publish_cancelled_app_event(run_id=run_id, run=cancelled_run)
 
@@ -1869,24 +1927,33 @@ class DefaultHostExecutor(HostExecutorProtocol):
         *,
         run_id: str,
         pending_turn_id: str | None,
+        lease_id: str | None,
     ) -> None:
         """best-effort 释放 resume 路径已持有的 RESUMING lease。
 
         Args:
             run_id: 当前 Host run ID，仅用于日志。
             pending_turn_id: 待释放 lease 的 pending turn ID；为 `None` 时直接返回。
+            lease_id: 调用方持有的 ``resume_lease_id``；``pending_turn_id`` 非空时必填。
 
         Returns:
             无。
 
         Raises:
-            无。释放失败只记录告警，最终由 stale-RESUMING cleanup 兜底。
+            无。释放失败（含 lease 已被接管）只记录告警，最终由 stale-RESUMING cleanup 兜底。
         """
 
         if pending_turn_id is None or self.pending_turn_store is None:
             return
+        if lease_id is None:
+            Log.warn(
+                "resume 取消前释放 RESUMING lease 缺少 lease_id，跳过释放，依赖 cleanup 兜底: "
+                f"run_id={run_id}, pending_turn_id={pending_turn_id}",
+                module=MODULE,
+            )
+            return
         try:
-            self.pending_turn_store.release_resume_lease(pending_turn_id)
+            self.pending_turn_store.release_resume_lease(pending_turn_id, lease_id=lease_id)
         except Exception as exc:  # noqa: BLE001
             Log.warn(
                 "resume 取消前释放 RESUMING lease 失败，依赖 cleanup 兜底: "
