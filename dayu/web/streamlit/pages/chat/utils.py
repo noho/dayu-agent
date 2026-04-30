@@ -140,7 +140,7 @@ def _payload_message(payload: str | dict[str, str | bool]) -> str:
 
     if isinstance(payload, str):
         return payload.strip()
-    if isinstance(payload, dict):
+    elif isinstance(payload, dict):
         for key in ("message", "error", "detail", "content"):
             candidate = payload.get(key)
             if isinstance(candidate, str):
@@ -148,6 +148,8 @@ def _payload_message(payload: str | dict[str, str | bool]) -> str:
                 if normalized_message:
                     return normalized_message
         return str(payload).strip()
+    else:
+        return ""
 
 
 def _format_cancelled_message(payload: str | dict[str, str | bool]) -> str:

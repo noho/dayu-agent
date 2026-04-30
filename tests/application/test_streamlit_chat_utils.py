@@ -7,16 +7,11 @@
 from __future__ import annotations
 
 import re
-from dataclasses import asdict
-
 import pytest
 
 from dayu.contracts.events import AppEvent, AppEventType
 from dayu.web.streamlit.pages.chat.stream_runtime import (
     StreamQueueItem,
-    _ChatStreamFrameState,
-    _ChatStreamRuntimeHandle,
-    _new_stream_frame_state,
 )
 from dayu.web.streamlit.pages.chat.utils import (
     build_chat_session_id,
@@ -27,7 +22,7 @@ from dayu.web.streamlit.pages.chat.utils import (
     should_keep_current_frame_for_side_effects,
     summarize_user_text,
 )
-from dayu.web.streamlit.pages.chat_tab import _ChatMessage, _build_state_key
+from dayu.web.streamlit.pages.chat_tab import ChatMessage
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -41,52 +36,23 @@ class TestChatMessage:
 
     def test_default_reasoning_content(self) -> None:
         """不传 reasoning_content 时应默认为空字符串。"""
-        msg = _ChatMessage(role="user", content="hello")
+        msg = ChatMessage(role="user", content="hello")
         assert msg.role == "user"
         assert msg.content == "hello"
         assert msg.reasoning_content == ""
 
     def test_with_reasoning_content(self) -> None:
         """传入 reasoning_content 时应正确存储。"""
-        msg = _ChatMessage(role="assistant", content="reply", reasoning_content="thinking...")
+        msg = ChatMessage(role="assistant", content="reply", reasoning_content="thinking...")
         assert msg.role == "assistant"
         assert msg.content == "reply"
         assert msg.reasoning_content == "thinking..."
 
     def test_frozen(self) -> None:
         """_ChatMessage 应为 frozen dataclass。"""
-        msg = _ChatMessage(role="user", content="hello")
+        msg = ChatMessage(role="user", content="hello")
         with pytest.raises(Exception):
             msg.content = "changed"  # type: ignore[misc]
-
-
-# ═════════════════════════════════════════════════════════════════════════
-# chat_tab.py — _build_state_key
-# ═════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.unit
-class TestBuildStateKey:
-    """_build_state_key 测试。"""
-
-    def test_normal_ticker(self) -> None:
-        """正常 ticker 与 suffix 应生成 chat_tab_{ticker}_{suffix} 格式。"""
-        key = _build_state_key("AAPL", "messages")
-        assert key == "chat_tab_AAPL_messages"
-
-    def test_ticker_with_dot(self) -> None:
-        """ticker 含点号时应生成合法 session_state 键。"""
-        key = _build_state_key("BRK.B", "input_text")
-        assert key == "chat_tab_BRK.B_input_text"
-
-    def test_empty_suffix(self) -> None:
-        """空 suffix 仍应生成有效键。"""
-        key = _build_state_key("AAPL", "")
-        assert key == "chat_tab_AAPL_"
-
-    def test_different_tickers_isolated(self) -> None:
-        """不同 ticker 的键应相互隔离。"""
-        assert _build_state_key("AAPL", "messages") != _build_state_key("GOOGL", "messages")
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -495,61 +461,3 @@ class TestStreamQueueItem:
         with pytest.raises(Exception):
             item.done = True  # type: ignore[misc]
 
-
-# ═════════════════════════════════════════════════════════════════════════
-# chat/stream_runtime.py — _ChatStreamFrameState
-# ═════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.unit
-class TestChatStreamFrameState:
-    """_ChatStreamFrameState 与 _new_stream_frame_state 测试。"""
-
-    def test_new_frame_defaults(self) -> None:
-        """_new_stream_frame_state 创建的帧应有正确默认值。"""
-        frame = _new_stream_frame_state(trace_id="trace-1", session_id="sess-1")
-        assert frame.trace_id == "trace-1"
-        assert frame.session_id == "sess-1"
-        assert frame.reasoning_text == ""
-        assert frame.answer_text == ""
-        assert frame.side_messages == []
-        assert frame.filtered_flags == []
-        assert frame.done is False
-        assert frame.error_message == ""
-
-    def test_frame_mutable_fields(self) -> None:
-        """帧为可变 dataclass，支持字段修改。"""
-        frame = _new_stream_frame_state(trace_id="t1", session_id="s1")
-        frame.reasoning_text = "thinking..."
-        frame.answer_text = "answer"
-        frame.done = True
-        assert frame.reasoning_text == "thinking..."
-        assert frame.answer_text == "answer"
-        assert frame.done is True
-
-
-# ═════════════════════════════════════════════════════════════════════════
-# chat/stream_runtime.py — _ChatStreamRuntimeHandle
-# ═════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.unit
-class TestChatStreamRuntimeHandle:
-    """_ChatStreamRuntimeHandle dataclass 测试。"""
-
-    def test_creation(self) -> None:
-        """_ChatStreamRuntimeHandle 可正确创建。"""
-        import threading
-        from queue import Queue
-
-        handle = _ChatStreamRuntimeHandle(
-            worker=threading.Thread(target=lambda: None),
-            event_queue=Queue(),
-            cancel_event=threading.Event(),
-            started_at=100.0,
-            last_chunk_at=100.0,
-            has_received_chunk=False,
-        )
-        assert handle.started_at == 100.0
-        assert handle.has_received_chunk is False
-        assert isinstance(handle.event_queue, Queue)

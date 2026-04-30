@@ -22,7 +22,6 @@ from dayu.services.protocols import ChatServiceProtocol
 from dayu.web.streamlit.pages.chat.utils import (
     extract_stream_text,
     fold_app_events_to_assistant_text,
-    normalize_stream_text_for_markdown,
     summarize_user_text,
 )
 
@@ -47,7 +46,7 @@ class StreamQueueItem:
 
 
 @dataclass
-class _ChatStreamFrameState:
+class ChatStreamFrameState:
     """聊天流式渲染帧状态。"""
 
     trace_id: str
@@ -273,7 +272,7 @@ def _run_stream_worker(
         )
 
 
-def _new_stream_frame_state(*, trace_id: str, session_id: str) -> _ChatStreamFrameState:
+def _new_stream_frame_state(*, trace_id: str, session_id: str) -> ChatStreamFrameState:
     """创建新的流式渲染帧状态。
 
     参数:
@@ -287,7 +286,7 @@ def _new_stream_frame_state(*, trace_id: str, session_id: str) -> _ChatStreamFra
         无。
     """
 
-    return _ChatStreamFrameState(
+    return ChatStreamFrameState(
         trace_id=trace_id,
         session_id=session_id,
         reasoning_text="",
@@ -299,7 +298,7 @@ def _new_stream_frame_state(*, trace_id: str, session_id: str) -> _ChatStreamFra
     )
 
 
-def _read_stream_frame_state(state_key: str) -> _ChatStreamFrameState | None:
+def read_stream_frame_state(state_key: str) -> ChatStreamFrameState | None:
     """读取流式渲染帧状态。
 
     参数:
@@ -313,7 +312,7 @@ def _read_stream_frame_state(state_key: str) -> _ChatStreamFrameState | None:
     """
 
     raw_state = st.session_state.get(state_key)
-    if isinstance(raw_state, _ChatStreamFrameState):
+    if isinstance(raw_state, ChatStreamFrameState):
         return raw_state
     return None
 
@@ -402,7 +401,7 @@ def start_chat_stream_runtime(
     )
 
 
-def poll_chat_stream_events(*, ticker: str, stream_state_key: str) -> _ChatStreamFrameState | None:
+def poll_chat_stream_events(*, ticker: str, stream_state_key: str) -> ChatStreamFrameState | None:
     """轮询并消费聊天流式事件。
 
     参数:
@@ -416,7 +415,7 @@ def poll_chat_stream_events(*, ticker: str, stream_state_key: str) -> _ChatStrea
         无。
     """
 
-    state = _read_stream_frame_state(stream_state_key)
+    state = read_stream_frame_state(stream_state_key)
     if state is None:
         return None
 
@@ -437,9 +436,9 @@ def poll_chat_stream_events(*, ticker: str, stream_state_key: str) -> _ChatStrea
         processed_events += 1
         if event.event_type == "chunk":
             if event.kind == "reasoning":
-                state.reasoning_text = normalize_stream_text_for_markdown(f"{state.reasoning_text}{event.chunk}")
+                state.reasoning_text = f"{state.reasoning_text}{event.chunk}"
             else:
-                state.answer_text = normalize_stream_text_for_markdown(f"{state.answer_text}{event.chunk}")
+                state.answer_text = f"{state.answer_text}{event.chunk}"
             runtime.has_received_chunk = True
             runtime.last_chunk_at = time.perf_counter()
             continue

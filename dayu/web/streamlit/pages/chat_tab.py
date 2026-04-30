@@ -19,7 +19,8 @@ from dayu.log import Log
 from dayu.services.protocols import ChatServiceProtocol
 from dayu.web.streamlit.components.sidebar import WatchlistItem
 from dayu.web.streamlit.pages.chat.stream_runtime import (
-    _ChatStreamFrameState,
+    ChatStreamFrameState,
+    read_stream_frame_state,
     clear_chat_stream_runtime,
     poll_chat_stream_events,
     start_chat_stream_runtime,
@@ -27,6 +28,7 @@ from dayu.web.streamlit.pages.chat.stream_runtime import (
 from dayu.web.streamlit.pages.chat.utils import (
     build_chat_session_id,
     build_request_trace_id,
+    normalize_stream_text_for_markdown,
     should_keep_current_frame_for_side_effects,
     summarize_user_text,
 )
@@ -45,7 +47,7 @@ _FILTERED_INFO_MESSAGE = "本轮输出触发内容过滤，结果可能不完整
 
 
 @dataclass(frozen=True)
-class _ChatMessage:
+class ChatMessage:
     """聊天消息视图模型。"""
 
     role: str
@@ -111,7 +113,7 @@ def _apply_pending_input_reset(*, input_key: str, clear_input_key: str) -> None:
         Log.info(f"应用延迟输入清空: input_key={input_key}", module=MODULE)
 
 
-def _ensure_messages(state_key: str) -> list[_ChatMessage]:
+def _ensure_messages(state_key: str) -> list[ChatMessage]:
     """确保会话消息列表存在，且元素类型为 ``_ChatMessage``。
 
     首次访问时初始化为空列表；类型不匹配时自动修复为合法状态。
@@ -129,7 +131,7 @@ def _ensure_messages(state_key: str) -> list[_ChatMessage]:
     if state_key not in st.session_state:
         st.session_state[state_key] = []
     raw_messages = st.session_state[state_key]
-    if isinstance(raw_messages, list) and all(isinstance(m, _ChatMessage) for m in raw_messages):
+    if isinstance(raw_messages, list) and all(isinstance(m, ChatMessage) for m in raw_messages):
         return raw_messages
     st.session_state[state_key] = []
     reset_messages = st.session_state[state_key]
@@ -138,7 +140,7 @@ def _ensure_messages(state_key: str) -> list[_ChatMessage]:
     return []
 
 
-def _render_message_history(messages: list[_ChatMessage]) -> None:
+def _render_message_history(messages: list[ChatMessage]) -> None:
     """渲染历史消息。
 
     按对话轮次依次渲染用户消息与助手回复；助手消息中若含
@@ -172,7 +174,7 @@ def _render_message_history(messages: list[_ChatMessage]) -> None:
                     st.markdown(message.content)
 
 
-def _render_stream_frame(*, state: _ChatStreamFrameState) -> None:
+def _render_stream_frame(*, title, state: ChatStreamFrameState) -> None:
     """渲染当前流式帧的思考与正文。
 
     参数:
@@ -185,19 +187,19 @@ def _render_stream_frame(*, state: _ChatStreamFrameState) -> None:
         无。
     """
 
-    with st.expander(_THINKING_EXPANDER_TITLE, expanded=True):
+    with st.expander(title, expanded=True):
         if state.reasoning_text.strip():
-            st.markdown(state.reasoning_text)
+            st.markdown(normalize_stream_text_for_markdown(state.reasoning_text))
         elif not state.done:
             st.markdown("正在思考...")
-    st.markdown(state.answer_text)
+    st.markdown(normalize_stream_text_for_markdown(state.answer_text))
 
 
 def _load_history_for_ticker(
     *,
     chat_service: ChatServiceProtocol,
     ticker: str,
-) -> list[_ChatMessage]:
+) -> list[ChatMessage]:
     """根据 ticker 对应的固定 session_id 加载历史会话消息。
 
     通过 ``ChatServiceProtocol.list_conversation_session_turn_excerpts``
@@ -219,12 +221,13 @@ def _load_history_for_ticker(
         turns = chat_service.list_conversation_session_turn_excerpts(session_id=session_id, limit=50)
         if not turns:
             return []
-        
-        messages: list[_ChatMessage] = []
+
+
+        messages: list[ChatMessage] = []
         for turn in turns:
-            messages.append(_ChatMessage(role="user", content=turn.user_text))
+            messages.append(ChatMessage(role="user", content=turn.user_text))
             messages.append(
-                _ChatMessage(
+                ChatMessage(
                     role="assistant",
                     content=turn.assistant_text,
                     reasoning_content=turn.reasoning_text,
@@ -238,7 +241,6 @@ def _load_history_for_ticker(
     except Exception as e:
         Log.error(f"加载历史会话失败: ticker={ticker}, session_id={session_id}, error={e}", module=MODULE)
         return []
-    
 
 def _perform_clear_session_history(
     *,
@@ -314,7 +316,7 @@ def _perform_clear_session_history(
     except ConversationClearPartiallyAppliedError as exc:
         Log.error(
             f"清空会话部分生效: ticker={ticker}, session_id={session_id}, "
-            f"residual_sources={list(getattr(exc, 'residual_sources', []))}",
+            f"residual_sources={exc.residual_sources}",
             module=MODULE,
         )
         st.error("会话历史已清空，但部分残留待修复。请联系管理员。")
@@ -365,7 +367,7 @@ def _render_stream_polling_fragment(
     assistant_column, _ = st.columns(_ASSISTANT_MESSAGE_COLUMN_SPEC, gap="small")
     with assistant_column:
         with st.chat_message("assistant"):
-            _render_stream_frame(state=stream_state)
+            _render_stream_frame(title=_THINKING_EXPANDER_TITLE, state=stream_state)
 
     if not stream_state.done:
         return
@@ -380,8 +382,8 @@ def _render_stream_polling_fragment(
         clear_chat_stream_runtime(ticker=ticker, stream_state_key=stream_state_key)
         return
 
-    assistant_text = stream_state.answer_text
-    assistant_reasoning_text = stream_state.reasoning_text
+    assistant_text = normalize_stream_text_for_markdown(stream_state.answer_text)
+    assistant_reasoning_text = normalize_stream_text_for_markdown(stream_state.reasoning_text)
     side_messages = stream_state.side_messages
     filtered_flags = stream_state.filtered_flags
 
@@ -399,7 +401,7 @@ def _render_stream_polling_fragment(
 
     messages = _ensure_messages(message_state_key)
     messages.append(
-        _ChatMessage(
+        ChatMessage(
             role="assistant",
             content=assistant_text,
             reasoning_content=assistant_reasoning_text,
@@ -428,7 +430,7 @@ def render_chat_tab(
     clear_input_key = _build_state_key(ticker, "clear_input_pending")
     stream_state_key = _build_state_key(ticker, "stream_state")
 
-    stream_state = poll_chat_stream_events(ticker=ticker, stream_state_key=stream_state_key)
+    stream_state = read_stream_frame_state(stream_state_key)
 
     messages = _ensure_messages(message_state_key)
     Log.verbose(
@@ -471,7 +473,7 @@ def render_chat_tab(
                     input_key=input_key,
                     clear_input_key=clear_input_key,
                 )
-        
+
     history_container = st.container()
     with history_container:
         if not messages:
@@ -519,7 +521,7 @@ def render_chat_tab(
             Log.warning(f"[{trace_id}] 提交被拒绝：服务未初始化", module=MODULE)
             st.warning(_MISSING_SERVICE_WARNING)
             return
-        messages.append(_ChatMessage(role="user", content=normalized_user_text))
+        messages.append(ChatMessage(role="user", content=normalized_user_text))
         session_id = build_chat_session_id(ticker)
         Log.info(
             f"[{trace_id}] 开始请求流式回复: ticker={ticker}, session_id={session_id}",
