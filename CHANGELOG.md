@@ -18,23 +18,25 @@
 
 ### 新增
 
-- 提供离线安装包，覆盖 `macOS ARM64`、`macOS x64`、`Linux x64`、`Windows x64` 四个平台。
-- `dayu-cli init`支持本地 Ollama 上运行的模型。
-- `dayu-cli init`支持自定义 OpenAI 兼容模型（如 OpenRouter）。
+- 离线安装包支持 4 个平台（macOS ARM64 / x64、Linux x64、Windows x64），新增 macOS Intel (x64)
+- 支持 Gemini 模型，通过运行`dayu-cli init`选择。
+- 支持本地 Ollama 上运行的模型，通过运行`dayu-cli init`选择。
+- 支持自定义 OpenAI 兼容模型（如 OpenRouter），通过运行`dayu-cli init`选择。
 - Agent 执行进度感知：CLI 交互模式下实时显示当前执行的工具名和关键参数。(@deanbear ： 观察 agent 努力也是一种参与感)
 - prompt / interactive 的 --label 恢复语义
   - prompt 无 --label：保留 one-shot 语义，不支持恢复上下文。
-  - prompt --label <label>：每次相同`label`的 prompt 都共用相同聊天记录。
+  - prompt --label <label>：每次相同`label`的 prompt 都共用相同聊天记录，**适合在OpenClaw中使用**。
   - interactive 无 --label：恢复上次相同聊天记录的交互式对话。
   - interactive --label <label>：每次相同`label`的 interactive 都是相同聊天记录的交互式对话。
 - `dayu-cli init` 添加 `--reset`，删除 workspace/ 下 `.dayu`、`config`、`assets` 目录。
 - SSE 协议错误 trace 诊断。
-- 优化写作流水线，提高成功率。
 - 埋入web支持，下个版本见。(@xingren23)
 
-**系统优化**
+**优化**
 
-- 针对财报分析优化的全新多轮会话记忆子系统
+- 针对财报分析优化的全新多轮会话记忆子系统。
+- 优化写作流水线，提高成功率。
+- 优化CLI输出。
 
 ### 变更
 
@@ -44,12 +46,10 @@
 
 ### 修复
 
-- 兼容 Gemini 和 Qwen 非标协议行为。(@deanbear)
+- 兼容 Gemini 和 Qwen 非标协议行为。
 - 剥离本地小模型输出的 Markdown 代码围栏，修复 prompt/interactive 显示问题。
-- 修复 write 流水线并发治理：消除嵌套 lane 占用导致的 permit 超时。
-- 修复 Windows 非 ASCII 路径上传 bug 及 docling 后端排序问题。
-- 修复 Host 兜底清理 source_run 终态的 pending turn 长尾残留。
-- Host SQLite 写事务契约化，消除并发写入的 upgrade deadlock。
+- 修复 write 流水线并发治理，消除本地模型下的 permit 超时。
+- 修复 Windows 上传、docling 后端排序等平台兼容问题。
 
 ### 贡献者
 

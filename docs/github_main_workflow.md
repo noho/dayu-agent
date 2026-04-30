@@ -698,16 +698,23 @@ pip install --upgrade https://github.com/noho/dayu-agent/releases/download/v0.1.
 **新功能**
 
 - 离线安装包支持 4 个平台（macOS ARM64 / x64、Linux x64、Windows x64），新增 macOS Intel (x64)
-- `dayu-cli init` 支持本地 Ollama 模型
-- `dayu-cli init` 支持自定义 OpenAI 兼容 API（如 OpenRouter）
-- `prompt --label` / `interactive --label` 会话复用：相同 label 共享聊天记录
+- 支持 Gemini 模型，通过运行`dayu-cli init`选择。
+- 支持本地 Ollama 上运行的模型，通过运行`dayu-cli init`选择。
+- 支持自定义 OpenAI 兼容模型（如 OpenRouter），通过运行`dayu-cli init`选择。
 - Agent 执行进度感知：CLI 交互模式下实时显示当前执行的工具名和关键参数。(@deanbear ： 观察 agent 努力也是一种参与感)
+- prompt / interactive 的 --label 恢复语义
+  - prompt 无 --label：保留 one-shot 语义，不支持恢复上下文。
+  - prompt --label <label>：每次相同`label`的 prompt 都共用相同聊天记录，**适合在OpenClaw中使用**。
+  - interactive 无 --label：恢复上次相同聊天记录的交互式对话。
+  - interactive --label <label>：每次相同`label`的 interactive 都是相同聊天记录的交互式对话。
 - `dayu-cli init --reset` 一键重置工作区配置
 - 埋入web支持，下个版本见。
 
-**系统优化**
+**优化**
 
-- 针对财报分析优化的全新多轮会话记忆子系统
+- 针对财报分析优化的全新多轮会话记忆子系统。
+- 优化写作流水线，提高成功率。
+- 优化CLI输出。
 
 **模型升级**
 
@@ -717,8 +724,10 @@ pip install --upgrade https://github.com/noho/dayu-agent/releases/download/v0.1.
 
 **修复与改进**
 
-- 修复 write 流水线并发治理，消除本地模型下的 permit 超时
-- 修复 Windows 上传、docling 后端排序等平台兼容问题
+- 兼容 Gemini 和 Qwen 非标协议行为。
+- 剥离本地小模型输出的 Markdown 代码围栏，修复 prompt/interactive 显示问题。
+- 修复 write 流水线并发治理，消除本地模型下的 permit 超时。
+- 修复 Windows 上传、docling 后端排序等平台兼容问题。
 - SSE tool call 兼容 Gemini / Qwen 非标协议行为
 
 安装后可用命令：
