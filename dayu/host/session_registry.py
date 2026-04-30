@@ -217,13 +217,15 @@ class SQLiteSessionRegistry(SessionRegistryProtocol):
         Log.debug(f"关闭 session: session_id={session_id}", module=MODULE)
 
     def is_session_active(self, session_id: str) -> bool:
-        """查询 session 是否仍处于非 CLOSED 状态。
+        """查询 session 是否处于 ``ACTIVE`` 状态。
 
         Args:
             session_id: 目标 session ID。
 
         Returns:
-            session 存在且状态非 ``CLOSED`` 时返回 ``True``；否则返回 ``False``。
+            session 存在且状态为 ``ACTIVE`` 时返回 ``True``；不存在或处于
+            ``CLEARING`` / ``CLEARING_FAILED`` / ``CLOSED`` 任一非 ACTIVE
+            状态时返回 ``False``。
 
         Raises:
             无。
@@ -239,7 +241,108 @@ class SQLiteSessionRegistry(SessionRegistryProtocol):
         ).fetchone()
         if row is None:
             return False
-        return str(row["state"]) != SessionState.CLOSED.value
+        return str(row["state"]) == SessionState.ACTIVE.value
+
+    def get_session_state(self, session_id: str) -> SessionState | None:
+        """查询 session 当前状态。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            session 当前 ``SessionState``；不存在返回 ``None``。
+
+        Raises:
+            无。
+        """
+
+        normalized = str(session_id or "").strip()
+        if not normalized:
+            return None
+        conn = self._host_store.get_connection()
+        row = conn.execute(
+            "SELECT state FROM sessions WHERE session_id = ?",
+            (normalized,),
+        ).fetchone()
+        if row is None:
+            return None
+        return SessionState(str(row["state"]))
+
+    def _transition_state(
+        self,
+        session_id: str,
+        *,
+        expected_states: tuple[SessionState, ...],
+        target_state: SessionState,
+        operation: str,
+    ) -> None:
+        """通用状态机迁移：仅当当前状态在 ``expected_states`` 集合内时切换。
+
+        SQL 直接用 ``WHERE state IN (...)`` 做条件 update，rowcount=0 表示
+        前置条件不满足。session 不存在时通过额外查询区分 ``KeyError`` 与
+        ``RuntimeError``。
+        """
+
+        normalized = str(session_id or "").strip()
+        if not normalized:
+            raise KeyError(f"session 不存在: {session_id}")
+
+        expected_values = tuple(state.value for state in expected_states)
+        placeholders = ",".join("?" for _ in expected_values)
+        conn = self._host_store.get_connection()
+        with write_transaction(conn):
+            cursor = conn.execute(
+                f"""
+                UPDATE sessions SET state = ?
+                WHERE session_id = ? AND state IN ({placeholders})
+                """,  # noqa: S608
+                (target_state.value, normalized, *expected_values),
+            )
+            rowcount = cursor.rowcount
+        if rowcount > 0:
+            Log.debug(
+                f"{operation}: session_id={normalized}, target_state={target_state.value}",
+                module=MODULE,
+            )
+            return
+
+        existing_state = self.get_session_state(normalized)
+        if existing_state is None:
+            raise KeyError(f"session 不存在: {normalized}")
+        raise RuntimeError(
+            f"{operation} 前置状态不满足: session_id={normalized}, "
+            f"current_state={existing_state.value}, expected={','.join(expected_values)}"
+        )
+
+    def begin_clearing(self, session_id: str) -> None:
+        """从 ``ACTIVE`` 推进到 ``CLEARING``。"""
+
+        self._transition_state(
+            session_id,
+            expected_states=(SessionState.ACTIVE,),
+            target_state=SessionState.CLEARING,
+            operation="进入 CLEARING 屏障",
+        )
+
+    def end_clearing(self, session_id: str) -> None:
+        """从 ``CLEARING`` 退出回 ``ACTIVE``。"""
+
+        self._transition_state(
+            session_id,
+            expected_states=(SessionState.CLEARING,),
+            target_state=SessionState.ACTIVE,
+            operation="退出 CLEARING 屏障",
+        )
+
+    def mark_clearing_failed(self, session_id: str) -> None:
+        """从 ``CLEARING`` 升级为 ``CLEARING_FAILED`` 持久锁定。"""
+
+        self._transition_state(
+            session_id,
+            expected_states=(SessionState.CLEARING,),
+            target_state=SessionState.CLEARING_FAILED,
+            operation="升级 CLEARING_FAILED 锁定",
+        )
 
     def close_idle_sessions(self, idle_threshold: timedelta) -> list[str]:
         """关闭超过空闲阈值的活跃 session。"""

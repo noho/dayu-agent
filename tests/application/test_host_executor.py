@@ -2615,9 +2615,9 @@ def test_resume_pending_turn_stream_rebind_failure_finishes_run_without_leak(
         ):
             pass
 
-    # Host 必须把内部仓储屏障异常 (SessionClosedError) 收敛为业务语义
+    # Host 必须把内部仓储屏障异常 (SessionWriteBlockedError 子类) 收敛为业务语义
     # ValueError，避免把 RuntimeError 子类泄漏到 Service / UI。
-    with pytest.raises(ValueError, match="session 已关闭"):
+    with pytest.raises(ValueError, match="session 已不再接受写入"):
         asyncio.run(_resume())
 
     # 关键断言 1：不泄漏活跃 run —— rebind 抛异常后 executor 的 try/except/finally
@@ -2734,7 +2734,7 @@ def test_resume_pending_turn_stream_translates_session_closed_error_at_acquire()
         ):
             pass
 
-    with pytest.raises(ValueError, match="session 已关闭") as exc_info:
+    with pytest.raises(ValueError, match="session 已不再接受写入") as exc_info:
         asyncio.run(_resume())
     # 保留诊断链路：原始仓储屏障异常应挂在 __cause__ 上。
     assert isinstance(exc_info.value.__cause__, SessionClosedError)
@@ -2969,3 +2969,77 @@ def test_accepted_turn_snapshot_rejects_missing_concurrency_policy() -> None:
 
     with pytest.raises(ValueError, match="host_policy.concurrency_acquire_policy"):
         deserialize_accepted_agent_turn_snapshot(payload)
+
+
+# ---------------------------------------------------------------------------
+# Review 缺口回归：CLEARING / CLEARING_FAILED 屏障下 executor 必须吸收抛错，
+# 不能升级为未预期失败。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_register_accepted_pending_turn_absorbs_clearing_error() -> None:
+    """``CLEARING`` 屏障期间 ``_register_accepted_pending_turn`` 抛 ``SessionClearingError``
+    必须被吸收为 ``None`` 返回（与 ``SessionClosedError`` 同侧降级）。"""
+
+    from dayu.host.protocols import SessionClearingError
+
+    class _ClearingPendingTurnStore:
+        """无条件抛 SessionClearingError 的最小 stub。"""
+
+        def upsert_pending_turn(self, **kwargs):  # type: ignore[no-untyped-def]
+            del kwargs
+            raise SessionClearingError("s-x")
+
+    executor = DefaultHostExecutor(
+        run_registry=None,  # type: ignore[arg-type]
+        pending_turn_store=_ClearingPendingTurnStore(),  # type: ignore[arg-type]
+    )
+    contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="interactive",
+        host_policy=ExecutionHostPolicy(session_key="s-x", resumable=True),
+        preparation_spec=ScenePreparationSpec(),
+        message_inputs=ExecutionMessageInputs(user_message="hi"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
+        execution_options=ExecutionOptions(),
+        metadata={"delivery_channel": "interactive"},
+    )
+    result = executor._register_accepted_pending_turn(  # type: ignore[attr-defined]
+        execution_contract=contract,
+        run_id="run_test",
+    )
+    assert result is None  # 异常被吸收，返回 None
+
+
+@pytest.mark.unit
+def test_register_accepted_pending_turn_absorbs_clearing_failed_error() -> None:
+    """``CLEARING_FAILED`` 持久锁定下迟到 accepted 登记同样降级为 no-op。"""
+
+    from dayu.host.protocols import SessionClearingFailedError
+
+    class _ClearingFailedPendingTurnStore:
+        def upsert_pending_turn(self, **kwargs):  # type: ignore[no-untyped-def]
+            del kwargs
+            raise SessionClearingFailedError("s-y")
+
+    executor = DefaultHostExecutor(
+        run_registry=None,  # type: ignore[arg-type]
+        pending_turn_store=_ClearingFailedPendingTurnStore(),  # type: ignore[arg-type]
+    )
+    contract = ExecutionContract(
+        service_name="chat_turn",
+        scene_name="interactive",
+        host_policy=ExecutionHostPolicy(session_key="s-y", resumable=True),
+        preparation_spec=ScenePreparationSpec(),
+        message_inputs=ExecutionMessageInputs(user_message="hi"),
+        accepted_execution_spec=_minimal_accepted_execution_spec(),
+        execution_options=ExecutionOptions(),
+        metadata={"delivery_channel": "interactive"},
+    )
+    result = executor._register_accepted_pending_turn(  # type: ignore[attr-defined]
+        execution_contract=contract,
+        run_id="run_test",
+    )
+    assert result is None
+

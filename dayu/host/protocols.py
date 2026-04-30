@@ -25,12 +25,41 @@ from dayu.host.pending_turn_store import PendingConversationTurn, PendingConvers
 # ---------------------------------------------------------------------------
 
 
-class SessionClosedError(RuntimeError):
+class SessionWriteBlockedError(RuntimeError):
+    """session 写入屏障基类——三个具体屏障异常的共同祖先。
+
+    Host 内部仓储 / run_registry / executor 在 session 不再 ``ACTIVE`` 时抛出。
+    存在三种具体子类（``SessionClosedError`` / ``SessionClearingError`` /
+    ``SessionClearingFailedError``）以便观测面区分"已关闭""正在清空"
+    "清空失败锁定"，但**调用方降级路径应统一捕获本基类**——它们在语义上
+    都表示"session 已不再接受新写入"，吸收策略相同（迟到写入降级为
+    no-op，避免产生孤儿数据）。
+    """
+
+    def __init__(self, session_id: str, message: str) -> None:
+        """初始化异常。
+
+        Args:
+            session_id: 触发屏障的 session ID。
+            message: 由子类提供的具体描述文本。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        super().__init__(message)
+        self.session_id = session_id
+
+
+class SessionClosedError(SessionWriteBlockedError):
     """尝试对不存在或已 CLOSED 的 session 执行写入时抛出。
 
-    该异常由 Host 内部写入屏障（pending turn / reply outbox 仓储）在检测到
-    session 不存在或已进入 ``CLOSED`` 终态时抛出，用于阻断
-    ``cancel_session`` 窗口期内的并发写入，防止产生孤儿数据。
+    该异常由 Host 内部写入屏障（pending turn / reply outbox 仓储 /
+    run_registry）在检测到 session 不存在或已进入 ``CLOSED`` 终态时抛出，
+    用于阻断 ``cancel_session`` 窗口期内的并发写入，防止产生孤儿数据。
     """
 
     def __init__(self, session_id: str) -> None:
@@ -46,8 +75,160 @@ class SessionClosedError(RuntimeError):
             无。
         """
 
-        super().__init__(f"session 不存在或已关闭，拒绝写入: session_id={session_id}")
+        super().__init__(
+            session_id,
+            f"session 不存在或已关闭，拒绝写入: session_id={session_id}",
+        )
+
+
+class SessionClearingError(SessionWriteBlockedError):
+    """session 处于 ``CLEARING`` 临时屏障期间尝试写入时抛出。
+
+    该异常由 Host 内部写入屏障在检测到 session 当前状态为 ``CLEARING``
+    （``#117`` 共享设计 §3.3 的临时屏障窗口）时抛出，调用方语义上应当
+    与 ``SessionClosedError`` 同侧降级（拒绝写入），但单独命名以便观测面
+    区分"会话已关闭"与"会话正在清空"。
+    """
+
+    def __init__(self, session_id: str) -> None:
+        """初始化异常。
+
+        Args:
+            session_id: 触发屏障的 session ID。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        super().__init__(
+            session_id,
+            f"session 正在清空中，拒绝写入: session_id={session_id}",
+        )
+
+
+class SessionClearingFailedError(SessionWriteBlockedError):
+    """session 处于 ``CLEARING_FAILED`` 持久锁定屏障时尝试写入时抛出。
+
+    清空动作 archive 写已生效但补偿性 delete 在有界 retry 后仍未收敛，
+    session 进入持久锁定屏障。任何新 run / pending turn / reply outbox 写入
+    都必须被拒绝，避免"已知不一致 + 新写入混杂"恶化恢复成本。
+    退出该状态需 ``#117`` 范围外的人工修复路径（reopen / cancel）。
+    """
+
+    def __init__(self, session_id: str) -> None:
+        """初始化异常。
+
+        Args:
+            session_id: 触发屏障的 session ID。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        super().__init__(
+            session_id,
+            f"session 处于 clearing_failed 锁定状态，拒绝写入: session_id={session_id}",
+        )
+
+
+class ConversationClearRejectedError(RuntimeError):
+    """``Host.clear_session_history`` 在 archive 写之前因预检条件未满足而拒绝。
+
+    `#117` 共享设计 §3.5 契约 A：archive 写之前的失败必为 RejectedError，
+    五真源完整保留。命中条件：session 不存在 / 已 ``CLOSED`` / 处于
+    ``CLEARING`` / 处于 ``CLEARING_FAILED`` / 存在 active run / 存在 pending
+    turn / 存在待投递 reply outbox。
+    """
+
+    def __init__(self, session_id: str, *, reason: str) -> None:
+        """初始化异常。
+
+        Args:
+            session_id: 触发拒绝的 session ID。
+            reason: 拒绝原因（活跃 run / pending turn / reply outbox / 屏障）。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        super().__init__(
+            f"clear_session_history 拒绝清空: session_id={session_id}, reason={reason}"
+        )
         self.session_id = session_id
+        self.reason = reason
+
+
+class ConversationClearStaleError(RuntimeError):
+    """``Host.clear_session_history`` 在 archive 写阶段命中乐观锁冲突。
+
+    `#117` 共享设计 §3.4 场景 b 时间窗：清空在锁内拿到的 ``live.revision``
+    被另一写者（典型来源是 ``ConversationMemory`` 的 compaction 写回）推进，
+    archive 乐观锁拒绝写入；仍属契约 A，五真源不变。
+    """
+
+    def __init__(self, session_id: str, *, expected_revision: str, actual_revision: str) -> None:
+        """初始化异常。
+
+        Args:
+            session_id: 触发冲突的 session ID。
+            expected_revision: 清空预期的 archive revision。
+            actual_revision: archive 实际 revision。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        super().__init__(
+            f"clear_session_history archive 乐观锁冲突: session_id={session_id}, "
+            f"expected={expected_revision}, actual={actual_revision}"
+        )
+        self.session_id = session_id
+        self.expected_revision = expected_revision
+        self.actual_revision = actual_revision
+
+
+class ConversationClearPartiallyAppliedError(RuntimeError):
+    """``Host.clear_session_history`` archive 写已生效但补偿 delete 仍未收敛。
+
+    `#117` 共享设计 §3.5 契约 B：archive 已成功 ``save(empty)``，
+    ``history_archive`` 与 ``runtime_transcript`` 已清空、revision 已推进；
+    但后续 pending turn / reply outbox / replay stash 中至少一项在有界 retry
+    后仍 delete 失败。session 已被推入 ``CLEARING_FAILED`` 持久锁定屏障，
+    调用方**不应再调** ``clear_session_history``，应升级为人工介入告警。
+    """
+
+    def __init__(self, session_id: str, *, residual_sources: tuple[str, ...]) -> None:
+        """初始化异常。
+
+        Args:
+            session_id: 触发部分应用的 session ID。
+            residual_sources: 仍未清干净的真源名称（如 ``pending_turn_store``）。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        super().__init__(
+            f"clear_session_history 已部分生效: session_id={session_id}, "
+            f"residual_sources={list(residual_sources)}"
+        )
+        self.session_id = session_id
+        self.residual_sources = residual_sources
 
 
 class SessionActivityQueryProtocol(Protocol):
@@ -56,18 +237,38 @@ class SessionActivityQueryProtocol(Protocol):
     仅暴露仓储写入屏障所需的最小查询能力，避免把 ``SessionRegistryProtocol``
     的完整生命周期接口泄漏给 pending turn / reply outbox 仓储。
 
-    查询语义：``True`` 表示 session 存在且当前不是 ``CLOSED``；
-    ``False`` 表示 session 不存在或已 ``CLOSED``。
+    查询语义：
+
+    - ``is_session_active``：``True`` 表示 session 存在且当前为 ``ACTIVE``；
+      ``False`` 表示 session 不存在或处于 ``CLEARING`` / ``CLEARING_FAILED``
+      / ``CLOSED`` 任一非 ACTIVE 状态。
+    - ``get_session_state``：返回 session 当前 ``SessionState``，不存在返回
+      ``None``。屏障辅助函数据此区分异常类型。
     """
 
     def is_session_active(self, session_id: str) -> bool:
-        """查询指定 session 是否仍处于非 CLOSED 状态。
+        """查询指定 session 是否处于 ``ACTIVE`` 状态。
 
         Args:
             session_id: 目标 session ID。
 
         Returns:
-            session 存在且非 CLOSED 时返回 ``True``，否则返回 ``False``。
+            session 存在且为 ``ACTIVE`` 时返回 ``True``；不存在或处于
+            ``CLEARING`` / ``CLEARING_FAILED`` / ``CLOSED`` 时返回 ``False``。
+
+        Raises:
+            无。
+        """
+        ...
+
+    def get_session_state(self, session_id: str) -> SessionState | None:
+        """查询指定 session 的当前状态。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            session 当前 ``SessionState``；session 不存在返回 ``None``。
 
         Raises:
             无。
@@ -191,17 +392,70 @@ class SessionRegistryProtocol(Protocol):
         ...
 
     def is_session_active(self, session_id: str) -> bool:
-        """查询指定 session 是否仍处于非 CLOSED 状态。
+        """查询指定 session 是否处于 ``ACTIVE`` 状态。
 
         仓储写入屏障会在每次写入前调用本方法，若返回 ``False`` 则拒绝写入，
-        确保 ``cancel_session`` 关闭 session 后不会再产生孤儿 pending turn /
-        reply outbox 记录。
+        确保 ``cancel_session`` 关闭 session、或 ``clear_session_history``
+        进入 ``CLEARING`` / ``CLEARING_FAILED`` 屏障后不会再产生孤儿
+        pending turn / reply outbox 记录。
 
         Args:
             session_id: 目标 session ID。
 
         Returns:
-            session 存在且状态非 ``CLOSED`` 时返回 ``True``；否则返回 ``False``。
+            session 存在且为 ``ACTIVE`` 时返回 ``True``；不存在或处于任一非
+            ACTIVE 状态时返回 ``False``。
+        """
+        ...
+
+    def get_session_state(self, session_id: str) -> SessionState | None:
+        """查询指定 session 的当前状态。
+
+        屏障辅助函数据此区分异常类型（``SessionClosedError`` /
+        ``SessionClearingError`` / ``SessionClearingFailedError``）。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            session 当前 ``SessionState``；不存在返回 ``None``。
+        """
+        ...
+
+    def begin_clearing(self, session_id: str) -> None:
+        """把 session 从 ``ACTIVE`` 推进到 ``CLEARING`` 临时屏障状态。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Raises:
+            KeyError: session 不存在时抛出。
+            RuntimeError: session 当前不是 ``ACTIVE``（已 ``CLEARING`` /
+                ``CLEARING_FAILED`` / ``CLOSED``）时抛出。
+        """
+        ...
+
+    def end_clearing(self, session_id: str) -> None:
+        """把 session 从 ``CLEARING`` 退出回 ``ACTIVE``。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Raises:
+            KeyError: session 不存在时抛出。
+            RuntimeError: session 当前不是 ``CLEARING`` 时抛出。
+        """
+        ...
+
+    def mark_clearing_failed(self, session_id: str) -> None:
+        """把 session 从 ``CLEARING`` 升级为 ``CLEARING_FAILED`` 持久锁定。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Raises:
+            KeyError: session 不存在时抛出。
+            RuntimeError: session 当前不是 ``CLEARING`` 时抛出。
         """
         ...
 
@@ -1048,6 +1302,36 @@ class HostAdminOperationsProtocol(
         """读取指定 session 的最近 conversation 单轮摘录。"""
         ...
 
+    def clear_session_history(self, session_id: str) -> None:
+        """清空指定 session 的对话历史与运行态送模子视图。
+
+        语义遵循 ``#117`` 共享设计 §3.2 ~ §3.6：
+
+        - 清五真源：archive ``history_archive`` 与 ``runtime_transcript``、
+          pending_turn_store、reply_outbox_store、executor replay stash；
+        - 写屏障：进入 ``CLEARING`` 临时屏障，拒绝并发写入；archive 写在
+          文件锁与屏障内执行；
+        - 拒绝预检：session 不存在 / 已 ``CLOSED`` / 处于
+          ``CLEARING`` / ``CLEARING_FAILED`` / 存在 active run / pending turn /
+          待投递 reply outbox 时直接拒绝；
+        - 失败回报：分层契约。Contract A（archive 写之前）→
+          ``ConversationClearRejectedError`` / ``ConversationClearStaleError``，
+          五真源不变；Contract B（archive 写之后补偿失败）→
+          ``ConversationClearPartiallyAppliedError``，session 进入
+          ``CLEARING_FAILED`` 持久锁定。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Raises:
+            KeyError: session 不存在时抛出。
+            ConversationClearRejectedError: 预检命中拒绝条件。
+            ConversationClearStaleError: archive 乐观锁冲突。
+            ConversationClearPartiallyAppliedError: archive 写已生效但补偿
+                delete 仍未收敛。
+        """
+        ...
+
 
 __all__ = [
     "ConversationSessionDigest",
@@ -1071,7 +1355,13 @@ __all__ = [
     "RunAdministrationProtocol",
     "RunRegistryProtocol",
     "SessionActivityQueryProtocol",
+    "SessionWriteBlockedError",
     "SessionClosedError",
+    "SessionClearingError",
+    "SessionClearingFailedError",
+    "ConversationClearRejectedError",
+    "ConversationClearStaleError",
+    "ConversationClearPartiallyAppliedError",
     "SessionOperationsProtocol",
     "SessionRegistryProtocol",
 ]

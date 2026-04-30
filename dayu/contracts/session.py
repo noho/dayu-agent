@@ -26,9 +26,22 @@ class SessionSource(str, Enum):
 
 
 class SessionState(str, Enum):
-    """Session 状态枚举。"""
+    """Session 状态枚举。
+
+    - ``ACTIVE``：默认活跃状态，允许全部写入路径（pending turn / reply outbox /
+      新 run / archive 写）。
+    - ``CLEARING``：``Host.clear_session_history`` 正在进行的临时屏障状态。
+      所有写入路径被拒绝；清空成功后自动回到 ``ACTIVE``，清空内部失败则升级为
+      ``CLEARING_FAILED``。
+    - ``CLEARING_FAILED``：清空动作 archive 写已生效但补偿性 delete 在有界
+      retry 后仍未收敛，session 进入持久锁定屏障。所有写入路径继续被拒绝，
+      退出该状态需要范围外的人工修复路径（reopen / cancel）。
+    - ``CLOSED``：终态，不可逆。
+    """
 
     ACTIVE = "active"
+    CLEARING = "clearing"
+    CLEARING_FAILED = "clearing_failed"
     CLOSED = "closed"
 
 

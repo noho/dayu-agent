@@ -11,8 +11,9 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
+from dayu.host._session_barrier import ensure_session_active
 from dayu.host.host_store import HostStore, write_transaction
-from dayu.host.protocols import RunRegistryProtocol
+from dayu.host.protocols import RunRegistryProtocol, SessionActivityQueryProtocol
 from dayu.contracts.execution_metadata import (
     ExecutionDeliveryContext,
     empty_execution_delivery_context,
@@ -145,14 +146,24 @@ class SQLiteRunRegistry(RunRegistryProtocol):
     状态机校验使用 contracts.run 中的转换表。
     """
 
-    def __init__(self, host_store: HostStore) -> None:
+    def __init__(
+        self,
+        host_store: HostStore,
+        *,
+        session_activity: SessionActivityQueryProtocol | None = None,
+    ) -> None:
         """初始化 RunRegistry。
 
         Args:
             host_store: 共享 SQLite 存储。
+            session_activity: 可选的 session 活性查询源；装配后 ``register_run``
+                会在 session 不再 ``ACTIVE`` 时拒绝新 run 写入，与 #117
+                ``CLEARING`` / ``CLEARING_FAILED`` 屏障语义一致。装配为
+                ``None`` 时退化为不做屏障的旧行为，仅用于独立 store 单元测试。
         """
 
         self._host_store = host_store
+        self._session_activity: SessionActivityQueryProtocol | None = session_activity
 
     def register_run(
         self,
@@ -163,6 +174,15 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         metadata: ExecutionDeliveryContext | None = None,
     ) -> RunRecord:
         """注册一个新 run。"""
+
+        if session_id is not None:
+            ensure_session_active(
+                self._session_activity,
+                session_id=session_id,
+                operation="register_run",
+                module=MODULE,
+                target_name="run",
+            )
 
         run_id = f"run_{uuid.uuid4().hex[:12]}"
         now = _now_utc()

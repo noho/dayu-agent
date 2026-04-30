@@ -57,7 +57,10 @@ from dayu.host.protocols import (
     RunEventBusProtocol,
     RunRegistryProtocol,
     SessionRegistryProtocol,
-    SessionClosedError,
+    SessionWriteBlockedError,
+    ConversationClearRejectedError,
+    ConversationClearStaleError,
+    ConversationClearPartiallyAppliedError,
 )
 from dayu.log import Log
 from dayu.host.run_registry import SQLiteRunRegistry
@@ -67,6 +70,12 @@ from dayu.workspace_paths import build_conversation_store_dir
 
 
 MODULE = "HOST"
+
+# `#117` 共享设计 §3.5 / §3.6 契约 B：archive 写成功后补偿性 delete 失败时
+# 在同锁同屏障内做有界 retry。当前选择 3 次固定间隔 50ms（总尾延迟 ≤150ms），
+# SQLite 写锁瞬态冲突通常 ≤几十 ms，足以覆盖；超过则升级 ``CLEARING_FAILED``。
+_CLEAR_HISTORY_MAX_RETRY = 3
+_CLEAR_HISTORY_RETRY_INTERVAL_SEC = 0.05
 # 会话预览截断长度：控制 session 摘要、日志输出等场景下的 user_message 预览宽度，
 # 48 字符能覆盖常见一行标题，同时避免日志中占用过多宽度。
 _CONVERSATION_PREVIEW_MAX_CHARS = 48
@@ -870,6 +879,175 @@ class Host:
         )
         return updated, cancelled_ids
 
+    def clear_session_history(self, session_id: str) -> None:
+        """清空指定 session 的对话历史与五真源。
+
+        实现遵循 ``#117`` 共享设计 §3.2 ~ §3.6：
+
+        1. 立 ``CLEARING`` 临时屏障 → pending turn / reply outbox / 新 run 写入
+           被 ``_session_barrier`` 拒绝；
+        2. 取 archive 文件锁、做拒绝预检（active run / pending turn / outbox /
+           CLOSED / 已 CLEARING / CLEARING_FAILED）；
+        3. ``save(empty_archive, expected_revision=live.revision)``——清空成功的唯一切点；
+        4. 同锁同屏障内幂等 delete pending turn / reply outbox / replay stash，
+           失败则有界 retry（``_CLEAR_HISTORY_MAX_RETRY`` 次、固定间隔
+           ``_CLEAR_HISTORY_RETRY_INTERVAL_SEC`` 秒）；
+        5. 全部收敛 → ``end_clearing`` 释放屏障；retry 仍未收敛 →
+           ``mark_clearing_failed`` 升级持久锁定 + ``ConversationClearPartiallyAppliedError``。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Raises:
+            KeyError: session 不存在时抛出。
+            ConversationClearRejectedError: 预检命中拒绝条件，五真源不变。
+            ConversationClearStaleError: archive 乐观锁冲突（场景 b 时间窗），
+                五真源不变。
+            ConversationClearPartiallyAppliedError: archive 已清但补偿 delete
+                在有界 retry 后仍未收敛，session 进入 ``CLEARING_FAILED``。
+        """
+
+        import time
+
+        if self._archive_store is None:
+            raise RuntimeError(
+                f"Host 未装配 archive_store，无法清空对话历史: session_id={session_id}"
+            )
+
+        session = self.get_session(session_id)
+        if session is None:
+            raise KeyError(f"session 不存在: {session_id}")
+
+        # 步骤 1：立屏障。begin_clearing 仅允许从 ACTIVE 进入 CLEARING；
+        # CLOSED / 已 CLEARING / CLEARING_FAILED 一律抛 RuntimeError，转换为
+        # 业务级 RejectedError 上抛，五真源完全不变。
+        try:
+            self._session_registry.begin_clearing(session_id)
+        except RuntimeError as exc:
+            current = self._session_registry.get_session_state(session_id)
+            reason = f"session_state={current.value if current else 'unknown'}"
+            Log.info(
+                f"clear_session_history 屏障拒绝: session_id={session_id}, {reason}, error={exc}",
+                module=MODULE,
+            )
+            raise ConversationClearRejectedError(session_id, reason=reason) from exc
+
+        try:
+            # 步骤 2：archive 文件锁 + 预检（active run / pending turn / outbox）。
+            # 三类查询都走 store / registry 高层接口，禁止跨层 SQL。
+            active_runs = [
+                run
+                for run in self._run_registry.list_runs(session_id=session_id)
+                if run.is_active()
+            ]
+            if active_runs:
+                raise ConversationClearRejectedError(
+                    session_id,
+                    reason=f"active_runs={len(active_runs)}",
+                )
+            pending_records = self._pending_turn_store.list_pending_turns(
+                session_id=session_id,
+            )
+            if pending_records:
+                raise ConversationClearRejectedError(
+                    session_id,
+                    reason=f"pending_turns={len(pending_records)}",
+                )
+            outbox_records = self._reply_outbox_store.list_replies(
+                session_id=session_id,
+            )
+            if outbox_records:
+                raise ConversationClearRejectedError(
+                    session_id,
+                    reason=f"reply_outbox={len(outbox_records)}",
+                )
+
+            # archive 写：load_or_create → save(empty, expected_revision=live.revision)
+            # archive 缺失时 load_or_create 在锁内创建空 archive，本身已等价"清空"，
+            # 但仍要把空状态显式 save 一次推进 revision，便于上游观察清空切点。
+            live = self._archive_store.load_or_create(session_id)
+            empty_archive = ConversationSessionArchive.create_empty(session_id)
+            try:
+                self._archive_store.save(empty_archive, expected_revision=live.revision)
+            except RuntimeError as exc:
+                # 与 ``conversation_store`` 的 revision 冲突错误类型对齐：
+                # 仍是 RuntimeError，依据消息片段映射为 StaleError。
+                msg = str(exc)
+                if "revision 冲突" in msg:
+                    raise ConversationClearStaleError(
+                        session_id,
+                        expected_revision=live.revision,
+                        actual_revision=msg,
+                    ) from exc
+                raise
+
+            # 步骤 4：同锁同屏障内做有界 retry 的补偿性 delete。
+            residual: tuple[str, ...] = ()
+            last_exc: Exception | None = None
+            for attempt in range(_CLEAR_HISTORY_MAX_RETRY):
+                residual_buf: list[str] = []
+                last_exc = None
+                try:
+                    self._pending_turn_store.delete_by_session_id(session_id)
+                except Exception as exc:  # noqa: BLE001
+                    residual_buf.append("pending_turn_store")
+                    last_exc = exc
+                try:
+                    self._reply_outbox_store.delete_by_session_id(session_id)
+                except Exception as exc:  # noqa: BLE001
+                    residual_buf.append("reply_outbox_store")
+                    last_exc = exc
+                try:
+                    self._executor.discard_replay_state_for_session(session_id)
+                except Exception as exc:  # noqa: BLE001
+                    residual_buf.append("executor_replay_stash")
+                    last_exc = exc
+
+                if not residual_buf:
+                    residual = ()
+                    break
+
+                residual = tuple(residual_buf)
+                if attempt < _CLEAR_HISTORY_MAX_RETRY - 1:
+                    time.sleep(_CLEAR_HISTORY_RETRY_INTERVAL_SEC)
+
+            if residual:
+                # 契约 B：archive 已清，session 升级为 CLEARING_FAILED 持久锁定。
+                self._session_registry.mark_clearing_failed(session_id)
+                Log.error(
+                    f"clear_session_history 补偿 delete 仍未收敛，session 进入 CLEARING_FAILED: "
+                    f"session_id={session_id}, residual={list(residual)}, last_error={last_exc}",
+                    module=MODULE,
+                )
+                raise ConversationClearPartiallyAppliedError(
+                    session_id,
+                    residual_sources=residual,
+                )
+        except (
+            ConversationClearRejectedError,
+            ConversationClearStaleError,
+            ConversationClearPartiallyAppliedError,
+        ):
+            # RejectedError / StaleError：archive 写未发生，释放临时屏障；
+            # PartiallyAppliedError：已 mark_clearing_failed，无需再 end_clearing。
+            current_state = self._session_registry.get_session_state(session_id)
+            if current_state == SessionState.CLEARING:
+                self._session_registry.end_clearing(session_id)
+            raise
+        except Exception:
+            # 未预料异常：保守释放临时屏障，避免误把 session 锁死在 CLEARING。
+            current_state = self._session_registry.get_session_state(session_id)
+            if current_state == SessionState.CLEARING:
+                self._session_registry.end_clearing(session_id)
+            raise
+        else:
+            # 步骤 7a：补偿 delete 全收敛 → 退出 CLEARING 屏障，session 重新对正常写入开放。
+            self._session_registry.end_clearing(session_id)
+            Log.info(
+                f"Host 清空会话历史: session_id={session_id}",
+                module=MODULE,
+            )
+
     def get_run(self, run_id: str) -> RunRecord | None:
         """查询单个 run。
 
@@ -1351,13 +1529,15 @@ class Host:
                 "pending conversation turn 正被其他 resumer 持有，拒绝并发恢复: "
                 f"pending_turn_id={pending_turn_id}, session_id={session_id}"
             ) from exc
-        except SessionClosedError as exc:
-            # acquire lease 阶段的仓储写入屏障：session 已在 acquire 前后一刻被关闭；
-            # 此时 lease 尚未落地，直接按"session 已关闭"契约对外暴露 ValueError，
+        except SessionWriteBlockedError as exc:
+            # acquire lease 阶段的仓储写入屏障：session 已在 acquire 前后一刻进入
+            # 非 ACTIVE 状态（CLOSED / CLEARING / CLEARING_FAILED）。lease 尚未
+            # 落地，统一按"session 不再接受新写入"契约对外暴露 ValueError，
             # 避免把 RuntimeError 子类泄漏给 Service / UI。
             raise ValueError(
-                "pending conversation turn 所属 session 已关闭，拒绝恢复: "
-                f"pending_turn_id={pending_turn_id}, session_id={session_id}"
+                "pending conversation turn 所属 session 已不再接受写入，拒绝恢复: "
+                f"pending_turn_id={pending_turn_id}, session_id={session_id}, "
+                f"barrier={type(exc).__name__}"
             ) from exc
         except ValueError as exc:
             # record_resume_attempt 内部已在达上限时原子删除记录；此处不再重复 DELETE，避免无意义 SQL 与模糊的代码意图。
@@ -1425,11 +1605,11 @@ class Host:
                 if current_record.resume_attempt_count >= self._pending_turn_resume_max_attempts:
                     try:
                         self._delete_pending_turn(pending_turn_id)
-                    except SessionClosedError as delete_exc:
+                    except SessionWriteBlockedError as delete_exc:
                         Log.warning(
                             "pending conversation turn 达到最大恢复次数但删除被 session 屏障拒绝: "
                             f"pending_turn_id={pending_turn_id}, session_id={session_id}, "
-                            f"error={delete_exc}",
+                            f"barrier={type(delete_exc).__name__}, error={delete_exc}",
                             module=MODULE,
                         )
                     raise ValueError(
@@ -1441,23 +1621,26 @@ class Host:
                         pending_turn_id,
                         error_message=str(exc),
                     )
-                except SessionClosedError as failure_exc:
-                    # session 已关闭，lease 回退将由 cleanup_stale_pending_turns 兜底；
-                    # 此时不得再抛 SessionClosedError 覆盖原因异常。
+                except SessionWriteBlockedError as failure_exc:
+                    # session 已不再接受写入（CLOSED / CLEARING / CLEARING_FAILED），
+                    # lease 回退将由 cleanup_stale_pending_turns 兜底；
+                    # 此时不得再抛屏障异常覆盖原因异常。
                     Log.warning(
                         "pending conversation turn lease 回退被 session 屏障拒绝，"
                         f"依赖 cleanup 兜底: pending_turn_id={pending_turn_id}, "
-                        f"session_id={session_id}, error={failure_exc}",
+                        f"session_id={session_id}, barrier={type(failure_exc).__name__}, "
+                        f"error={failure_exc}",
                         module=MODULE,
                     )
             # Host 对外只暴露业务语义异常：把仓储写入屏障抛出的
-            # SessionClosedError（session 不存在或已 CLOSED）统一转成 ValueError，
-            # 避免将内部 RuntimeError 子类泄漏给 Service / UI，保持 docstring
-            # 声明的 "KeyError | ValueError" 契约。
-            if isinstance(exc, SessionClosedError):
+            # SessionWriteBlockedError（CLOSED / CLEARING / CLEARING_FAILED 任一）
+            # 统一转成 ValueError，避免将内部 RuntimeError 子类泄漏给
+            # Service / UI，保持 docstring 声明的 "KeyError | ValueError" 契约。
+            if isinstance(exc, SessionWriteBlockedError):
                 raise ValueError(
-                    "pending conversation turn 所属 session 已关闭，拒绝恢复: "
-                    f"pending_turn_id={pending_turn_id}, session_id={session_id}"
+                    "pending conversation turn 所属 session 已不再接受写入，拒绝恢复: "
+                    f"pending_turn_id={pending_turn_id}, session_id={session_id}, "
+                    f"barrier={type(exc).__name__}"
                 ) from exc
             raise
 
@@ -1782,7 +1965,7 @@ def _build_default_host_components(
     host_store = HostStore(host_store_path)
     host_store.initialize_schema()
     session_registry = SQLiteSessionRegistry(host_store)
-    run_registry = SQLiteRunRegistry(host_store)
+    run_registry = SQLiteRunRegistry(host_store, session_activity=session_registry)
     concurrency_governor = SQLiteConcurrencyGovernor(host_store, lane_config=lane_config)
     # 注入 session_registry 作为 session activity 查询源，让仓储层可以在 session
     # 已关闭时以 SessionClosedError 屏障 executor 的迟到写入。

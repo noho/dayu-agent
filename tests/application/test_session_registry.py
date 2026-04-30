@@ -196,6 +196,85 @@ class TestCloseSession:
             registry.close_session("nonexistent")
 
 
+class TestClearingBarrier:
+    """``#117`` ``CLEARING`` / ``CLEARING_FAILED`` 屏障状态机测试。"""
+
+    @pytest.mark.unit
+    def test_begin_clearing_from_active(self, registry: SQLiteSessionRegistry) -> None:
+        """ACTIVE → CLEARING：is_session_active 收紧为 ACTIVE-only。"""
+
+        session = registry.create_session(SessionSource.CLI)
+        assert registry.is_session_active(session.session_id) is True
+
+        registry.begin_clearing(session.session_id)
+
+        assert registry.get_session_state(session.session_id) == SessionState.CLEARING
+        assert registry.is_session_active(session.session_id) is False
+
+    @pytest.mark.unit
+    def test_end_clearing_returns_to_active(self, registry: SQLiteSessionRegistry) -> None:
+        """CLEARING → ACTIVE：屏障释放后写入恢复。"""
+
+        session = registry.create_session(SessionSource.CLI)
+        registry.begin_clearing(session.session_id)
+        registry.end_clearing(session.session_id)
+
+        assert registry.get_session_state(session.session_id) == SessionState.ACTIVE
+        assert registry.is_session_active(session.session_id) is True
+
+    @pytest.mark.unit
+    def test_mark_clearing_failed_locks_session(self, registry: SQLiteSessionRegistry) -> None:
+        """CLEARING → CLEARING_FAILED：持久锁定，不被 is_session_active 视为活跃。"""
+
+        session = registry.create_session(SessionSource.CLI)
+        registry.begin_clearing(session.session_id)
+        registry.mark_clearing_failed(session.session_id)
+
+        assert registry.get_session_state(session.session_id) == SessionState.CLEARING_FAILED
+        assert registry.is_session_active(session.session_id) is False
+
+    @pytest.mark.unit
+    def test_begin_clearing_rejects_non_active(self, registry: SQLiteSessionRegistry) -> None:
+        """已 CLOSED / CLEARING / CLEARING_FAILED 不允许再 begin_clearing。"""
+
+        session = registry.create_session(SessionSource.CLI)
+        registry.close_session(session.session_id)
+        with pytest.raises(RuntimeError, match="进入 CLEARING"):
+            registry.begin_clearing(session.session_id)
+
+        s2 = registry.create_session(SessionSource.CLI)
+        registry.begin_clearing(s2.session_id)
+        with pytest.raises(RuntimeError, match="进入 CLEARING"):
+            registry.begin_clearing(s2.session_id)
+
+        registry.mark_clearing_failed(s2.session_id)
+        with pytest.raises(RuntimeError, match="进入 CLEARING"):
+            registry.begin_clearing(s2.session_id)
+
+    @pytest.mark.unit
+    def test_end_clearing_rejects_non_clearing(self, registry: SQLiteSessionRegistry) -> None:
+        """ACTIVE / CLEARING_FAILED / CLOSED 不允许 end_clearing。"""
+
+        session = registry.create_session(SessionSource.CLI)
+        with pytest.raises(RuntimeError, match="退出 CLEARING"):
+            registry.end_clearing(session.session_id)
+
+    @pytest.mark.unit
+    def test_mark_failed_rejects_non_clearing(self, registry: SQLiteSessionRegistry) -> None:
+        """ACTIVE 状态直接 mark_clearing_failed 必须报错。"""
+
+        session = registry.create_session(SessionSource.CLI)
+        with pytest.raises(RuntimeError, match="升级 CLEARING_FAILED"):
+            registry.mark_clearing_failed(session.session_id)
+
+    @pytest.mark.unit
+    def test_clearing_state_blocks_nonexistent(self, registry: SQLiteSessionRegistry) -> None:
+        """begin_clearing 不存在的 session 抛 KeyError。"""
+
+        with pytest.raises(KeyError, match="session 不存在"):
+            registry.begin_clearing("nonexistent")
+
+
 class TestCloseIdleSessions:
     """close_idle_sessions 测试。"""
 

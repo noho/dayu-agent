@@ -35,7 +35,7 @@ from dayu.host.protocols import (
     PendingConversationTurnStoreProtocol,
     RunEventBusProtocol,
     RunRegistryProtocol,
-    SessionClosedError,
+    SessionWriteBlockedError,
 )
 from dayu.contracts.agent_execution import (
     AgentInput,
@@ -770,12 +770,15 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 resume_source_json=accepted_turn_json,
                 metadata=_extract_pending_turn_metadata(execution_contract.metadata),
             )
-        except SessionClosedError:
-            # cancel_session 已在仓储层屏障处关闭 session，executor 必须放弃登记
-            # 以避免生成孤儿 pending turn。
+        except SessionWriteBlockedError as exc:
+            # cancel_session / clear_session_history 已在仓储层屏障处使 session
+            # 进入非 ACTIVE 状态，executor 必须放弃登记以避免生成孤儿 pending
+            # turn。三个具体子类（CLOSED / CLEARING / CLEARING_FAILED）共享同一
+            # 吸收语义，统一捕获基类。
             Log.verbose(
-                f"[{run_id}] session 已关闭，跳过 accepted pending turn 登记: "
-                f"session_id={session_id}, scene_name={scene_name}",
+                f"[{run_id}] session 写入屏障已立，跳过 accepted pending turn 登记: "
+                f"session_id={session_id}, scene_name={scene_name}, "
+                f"barrier={type(exc).__name__}",
                 module=MODULE,
             )
             return None
@@ -831,12 +834,14 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 resume_source_json=prepared_turn_json,
                 metadata=metadata,
             )
-        except SessionClosedError:
-            # cancel_session 已在仓储层屏障处关闭 session，executor 必须放弃登记
-            # 以避免生成孤儿 pending turn。
+        except SessionWriteBlockedError as exc:
+            # cancel_session / clear_session_history 已在仓储层屏障处使 session
+            # 进入非 ACTIVE 状态，executor 必须放弃登记以避免生成孤儿 pending
+            # turn。三个具体子类共享同一吸收语义，统一捕获基类。
             Log.verbose(
-                f"[{run_id}] session 已关闭，跳过 prepared pending turn 登记: "
-                f"session_id={session_id}, scene_name={scene_name}",
+                f"[{run_id}] session 写入屏障已立，跳过 prepared pending turn 登记: "
+                f"session_id={session_id}, scene_name={scene_name}, "
+                f"barrier={type(exc).__name__}",
                 module=MODULE,
             )
             return None

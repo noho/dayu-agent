@@ -22,13 +22,19 @@ from dayu.host.pending_turn_store import (
     PendingConversationTurnState,
     SQLitePendingConversationTurnStore,
 )
-from dayu.host.protocols import SessionActivityQueryProtocol, SessionClosedError
+from dayu.host.protocols import (
+    SessionActivityQueryProtocol,
+    SessionClearingError,
+    SessionClearingFailedError,
+    SessionClosedError,
+    SessionWriteBlockedError,
+)
 from dayu.host.reply_outbox_store import (
     InMemoryReplyOutboxStore,
     SQLiteReplyOutboxStore,
 )
 from dayu.host.session_registry import SQLiteSessionRegistry
-from dayu.contracts.session import SessionSource
+from dayu.contracts.session import SessionSource, SessionState
 
 from tests.application.conftest import (
     StubHostExecutor,
@@ -48,6 +54,14 @@ class _StaticActivity:
 
         del session_id
         return self._active
+
+    def get_session_state(self, session_id: str) -> SessionState | None:
+        """非活跃路径上仅区分 ``CLOSED`` 与不存在；本桩按"已 CLOSED"返回。"""
+
+        del session_id
+        if self._active:
+            return SessionState.ACTIVE
+        return SessionState.CLOSED
 
 
 def _assert_protocol(activity: _StaticActivity) -> SessionActivityQueryProtocol:
@@ -219,3 +233,85 @@ def test_explicit_injected_host_cancel_session_blocks_late_pending_turn_writes()
                 reply_content="late",
             )
         )
+
+
+# ---------------------------------------------------------------------------
+# `SessionWriteBlockedError` 基类 / 三子类的契约：observability 区分 + 吸收统一
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_session_barrier_errors_share_common_base() -> None:
+    """三类屏障异常都继承 ``SessionWriteBlockedError`` 以便上层统一吸收。"""
+
+    assert issubclass(SessionClosedError, SessionWriteBlockedError)
+    assert issubclass(SessionClearingError, SessionWriteBlockedError)
+    assert issubclass(SessionClearingFailedError, SessionWriteBlockedError)
+
+
+@pytest.mark.unit
+def test_executor_absorbs_clearing_error_for_accepted_pending_turn() -> None:
+    """``_register_accepted_pending_turn`` 在 ``CLEARING`` 屏障下降级为 no-op。
+
+    回归 Review 缺口：原实现仅 ``except SessionClosedError``，
+    ``clear_session_history`` 屏障期间 executor 迟到登记会未被吸收，
+    抛出 ``SessionClearingError`` 把 run 升级为未预期失败。
+    扩 ``SessionWriteBlockedError`` 后三子类共享同一吸收链路。
+    """
+
+    from dayu.host.pending_turn_store import InMemoryPendingConversationTurnStore
+
+    class _ClearingActivity:
+        def is_session_active(self, session_id: str) -> bool:
+            del session_id
+            return False
+
+        def get_session_state(self, session_id: str):
+            del session_id
+            return SessionState.CLEARING
+
+    pending = InMemoryPendingConversationTurnStore(session_activity=_ClearingActivity())
+    # 直接验证仓储抛 SessionClearingError，且它是 SessionWriteBlockedError 的子类。
+    with pytest.raises(SessionClearingError) as excinfo:
+        pending.upsert_pending_turn(
+            session_id="s-clearing",
+            scene_name="interactive",
+            user_text="late",
+            source_run_id="run_late",
+            resumable=True,
+            state=PendingConversationTurnState.PREPARED_BY_HOST,
+            resume_source_json="{}",
+        )
+    assert isinstance(excinfo.value, SessionWriteBlockedError)
+
+
+@pytest.mark.unit
+def test_executor_absorbs_clearing_failed_error_for_accepted_pending_turn() -> None:
+    """``CLEARING_FAILED`` 持久锁定下迟到 pending turn 写入抛出可被基类吸收。"""
+
+    from dayu.host.pending_turn_store import InMemoryPendingConversationTurnStore
+
+    class _ClearingFailedActivity:
+        def is_session_active(self, session_id: str) -> bool:
+            del session_id
+            return False
+
+        def get_session_state(self, session_id: str):
+            del session_id
+            return SessionState.CLEARING_FAILED
+
+    pending = InMemoryPendingConversationTurnStore(
+        session_activity=_ClearingFailedActivity()
+    )
+    with pytest.raises(SessionClearingFailedError) as excinfo:
+        pending.upsert_pending_turn(
+            session_id="s-failed",
+            scene_name="interactive",
+            user_text="late",
+            source_run_id="run_late",
+            resumable=True,
+            state=PendingConversationTurnState.PREPARED_BY_HOST,
+            resume_source_json="{}",
+        )
+    assert isinstance(excinfo.value, SessionWriteBlockedError)
+

@@ -86,9 +86,9 @@ lane 合并顺序（后者覆盖前者）：
                                         （pending turn / reply outbox / run 新建）
 ```
 
-- `SessionState` 仅两态：`ACTIVE` / `CLOSED`。
+- `SessionState` 四态：`ACTIVE` / `CLEARING` / `CLEARING_FAILED` / `CLOSED`（详见 §10.10）。
 - `SessionSource` 标识来源（CLI / WEB / WECHAT / GUI / API / INTERNAL），语义上是"谁是这条会话的主使者"。
-- **活性屏障**：所有依赖 session 的写入路径（pending turn 写、reply outbox 写、run 新建）统一经过"会话必须处于 ACTIVE"检查，违反即抛 `SessionClosedError`。这把 session 从 TOCTOU 竞态里抽出来，由持久层做一致性保证。
+- **活性屏障**：所有依赖 session 的写入路径（pending turn 写、reply outbox 写、`run_registry.register_run`）统一经过 `_session_barrier.ensure_session_active`——"会话必须处于 ACTIVE"检查；违反即抛 `SessionWriteBlockedError` 子类（`SessionClosedError` / `SessionClearingError` / `SessionClearingFailedError`）。这把 session 从 TOCTOU 竞态里抽出来，由持久层做一致性保证。
 - **cancel_session 顺序（稳定契约）**：
   1. 先把 session 置 CLOSED（关门）；
   2. 再批量 cancel 关联的 active run（不再接新活）；
@@ -527,6 +527,34 @@ Compaction 有两条触发路径，职责分离：
 - compaction 任何路径**不修改** `history_archive`，仅通过 `with_runtime_transcript` 替换运行态子视图。
 
 **旧 schema 迁移**：`dayu-cli init` 走 `dayu/cli/workspace_migrations/conversation_archive_init.py`：识别"顶层缺 `runtime_transcript` 但含 `turns`"的旧 transcript 文件，原地包成 archive；`history_archive.turns` 全量从旧 turns 投影（`assistant_reasoning=""`）。损坏文件 warning 跳过、新 schema 文件 no-op。`FileConversationSessionArchiveStore.load` 遇到旧 schema 直接抛 `RuntimeError` 提示运行迁移，**不**做兼容读取。
+
+### 10.10 清空会话历史（`#117`）
+
+`Host.clear_session_history(session_id)` 在不关闭 session 的前提下原子清空"五真源"——`history_archive.turns` / `runtime_transcript.turns` + memory / `pending_turn_store` / `reply_outbox_store` / executor replay stash——清完后 session 仍 `ACTIVE`，下一轮可继续；`#116` 历史读返回 `[]`。
+
+**`SessionState` 状态机扩展**：`{ACTIVE, CLEARING, CLEARING_FAILED, CLOSED}`。`is_session_active` 收紧为"仅 ACTIVE"，三类写入路径——`pending_turn_store` / `reply_outbox_store` 写入、以及 **`run_registry.register_run`**——统一经 `_session_barrier.ensure_session_active` 检查：`CLEARING` 抛 `SessionClearingError`、`CLEARING_FAILED` 抛 `SessionClearingFailedError`、`CLOSED` 抛 `SessionClosedError`。三者共享基类 **`SessionWriteBlockedError(RuntimeError)`**，便于上层用单条 `except` 统一吸收，同时 `type()` / `isinstance()` 仍可区分子类用于 observability。
+
+**屏障吸收链路**：executor 的 `_register_accepted_pending_turn` / `_register_prepared_pending_turn` 在 scene prepare 与 cancel 时间窗内的迟到登记统一 `except SessionWriteBlockedError`，降级为 no-op（日志携带 `barrier=type(exc).__name__` 区分子类）；Host 的 `resume_pending_turn_stream` 在 lease acquire / lease 回退两处也统一 `except SessionWriteBlockedError`，对外收敛为 `ValueError("...session 已不再接受写入...")`，`__cause__` 保留原始屏障异常便于诊断。这条链路是"清空 / 关停期间防止 executor 迟到写入产生孤儿数据"的最终防线，不依赖 archive 文件锁。
+
+**写入顺序（强约束）**：
+
+1. `SessionRegistry.begin_clearing` — `ACTIVE → CLEARING`；非 `ACTIVE` 直接 `ConversationClearRejectedError`。
+2. 锁内拒绝预检：active run / pending turn / reply outbox 任一非空 → `ConversationClearRejectedError`，**不**自动 cancel。
+3. `archive_store.save(empty, expected_revision=live.revision)`；`with_runtime_transcript` 与 `history_archive.create_empty` 共用同一 revision。`save` 抛"revision 冲突" → `ConversationClearStaleError`（场景 b：compaction 写回竞速）。**这是清空成功的唯一切点**。
+4. archive 写成功后，对 pending turn / reply outbox / replay stash 做幂等 `delete_by_session_id` / `discard_replay_state_for_session`；任一失败进入有界 retry（3 次、固定 50ms 间隔）。
+5. retry 仍未收敛 → `mark_clearing_failed`（`CLEARING → CLEARING_FAILED`，**持久锁定**），抛 `ConversationClearPartiallyAppliedError`，错误体携带 `residual_sources`；session 写入面持续锁定直至外部修复路径（reopen / cancel）触发，不在 `#117` 范围。
+6. 全部收敛 → `end_clearing`（`CLEARING → ACTIVE`，释放屏障）。
+
+**失败语义（分层契约）**：
+
+| 时间窗 | 失败类型 | 五真源状态 | session 状态 |
+| --- | --- | --- | --- |
+| archive 写之前 | `ConversationClearRejectedError` / `ConversationClearStaleError` | 全部不变 | `CLEARING → ACTIVE`（屏障释放） |
+| archive 写之后、其他真源未收敛 | `ConversationClearPartiallyAppliedError` | archive 已空，其余可能残留 | `CLEARING → CLEARING_FAILED`（持久锁定） |
+
+**调用方契约**：`ConversationClearPartiallyAppliedError` **不可重试**——清空内部已尽力 retry，再调一次会被 `CLEARING_FAILED` 屏障拒；上层应升级观测告警 / 人工介入。
+
+回归用例见 `tests/application/test_host_clear_session_history.py`、`tests/application/test_session_registry.py::TestClearingBarrier`、`tests/application/test_session_barrier.py`、`tests/application/test_run_registry.py::TestRegisterRunSessionBarrier`。
 
 ---
 

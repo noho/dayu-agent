@@ -462,3 +462,98 @@ class TestCleanupOrphanRuns:
         assert persisted is not None
         assert persisted.pending_turn_id == pending_turn.pending_turn_id
         assert persisted.source_run_id == run.run_id
+
+
+class TestRegisterRunSessionBarrier:
+    """``register_run`` 在 session 屏障下的拒绝测试（``#117`` 设计 §3.3）。"""
+
+    @pytest.mark.unit
+    def test_register_run_blocked_when_session_clearing(self, tmp_path: Path) -> None:
+        """``CLEARING`` 期间 ``register_run`` 抛 ``SessionClearingError``。"""
+
+        from dayu.host.protocols import SessionClearingError
+        from dayu.host.session_registry import SQLiteSessionRegistry
+        from dayu.contracts.session import SessionSource
+
+        store = HostStore(tmp_path / "test.db")
+        store.initialize_schema()
+        session_registry = SQLiteSessionRegistry(store)
+        run_registry = SQLiteRunRegistry(store, session_activity=session_registry)
+
+        session = session_registry.create_session(SessionSource.CLI, session_id="s1")
+        session_registry.begin_clearing(session.session_id)
+
+        with pytest.raises(SessionClearingError):
+            run_registry.register_run(session_id=session.session_id, service_type="chat_turn")
+
+    @pytest.mark.unit
+    def test_register_run_blocked_when_session_clearing_failed(self, tmp_path: Path) -> None:
+        """``CLEARING_FAILED`` 持久锁定下 ``register_run`` 抛 ``SessionClearingFailedError``。"""
+
+        from dayu.host.protocols import SessionClearingFailedError
+        from dayu.host.session_registry import SQLiteSessionRegistry
+        from dayu.contracts.session import SessionSource
+
+        store = HostStore(tmp_path / "test.db")
+        store.initialize_schema()
+        session_registry = SQLiteSessionRegistry(store)
+        run_registry = SQLiteRunRegistry(store, session_activity=session_registry)
+
+        session = session_registry.create_session(SessionSource.CLI, session_id="s2")
+        session_registry.begin_clearing(session.session_id)
+        session_registry.mark_clearing_failed(session.session_id)
+
+        with pytest.raises(SessionClearingFailedError):
+            run_registry.register_run(session_id=session.session_id, service_type="chat_turn")
+
+    @pytest.mark.unit
+    def test_register_run_blocked_when_session_closed(self, tmp_path: Path) -> None:
+        """``CLOSED`` 状态下 ``register_run`` 抛 ``SessionClosedError``。"""
+
+        from dayu.host.protocols import SessionClosedError
+        from dayu.host.session_registry import SQLiteSessionRegistry
+        from dayu.contracts.session import SessionSource
+
+        store = HostStore(tmp_path / "test.db")
+        store.initialize_schema()
+        session_registry = SQLiteSessionRegistry(store)
+        run_registry = SQLiteRunRegistry(store, session_activity=session_registry)
+
+        session = session_registry.create_session(SessionSource.CLI, session_id="s3")
+        session_registry.close_session(session.session_id)
+
+        with pytest.raises(SessionClosedError):
+            run_registry.register_run(session_id=session.session_id, service_type="chat_turn")
+
+    @pytest.mark.unit
+    def test_register_run_passes_when_session_active(self, tmp_path: Path) -> None:
+        """``ACTIVE`` 状态正常注册。"""
+
+        from dayu.host.session_registry import SQLiteSessionRegistry
+        from dayu.contracts.session import SessionSource
+
+        store = HostStore(tmp_path / "test.db")
+        store.initialize_schema()
+        session_registry = SQLiteSessionRegistry(store)
+        run_registry = SQLiteRunRegistry(store, session_activity=session_registry)
+
+        session = session_registry.create_session(SessionSource.CLI, session_id="s4")
+        run = run_registry.register_run(
+            session_id=session.session_id, service_type="chat_turn"
+        )
+        assert run.session_id == session.session_id
+
+    @pytest.mark.unit
+    def test_register_run_no_barrier_when_session_id_none(self, tmp_path: Path) -> None:
+        """``session_id`` 为 ``None`` 时跳过屏障校验（无 session 归属的 run 不受屏障约束）。"""
+
+        from dayu.host.session_registry import SQLiteSessionRegistry
+
+        store = HostStore(tmp_path / "test.db")
+        store.initialize_schema()
+        session_registry = SQLiteSessionRegistry(store)
+        run_registry = SQLiteRunRegistry(store, session_activity=session_registry)
+
+        run = run_registry.register_run(service_type="maintenance")
+        assert run.session_id is None
+

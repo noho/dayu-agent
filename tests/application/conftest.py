@@ -122,12 +122,69 @@ class StubSessionRegistry:
         return []
 
     def is_session_active(self, session_id: str) -> bool:
-        """查询 session 是否仍处于非 CLOSED 状态。"""
+        """查询 session 是否处于 ACTIVE 状态。"""
 
         existing = self._sessions.get(str(session_id or "").strip())
         if existing is None:
             return False
-        return existing.state != SessionState.CLOSED
+        return existing.state == SessionState.ACTIVE
+
+    def get_session_state(self, session_id: str) -> SessionState | None:
+        """查询 session 当前状态。"""
+
+        existing = self._sessions.get(str(session_id or "").strip())
+        if existing is None:
+            return None
+        return existing.state
+
+    def _replace_state(self, session_id: str, target: SessionState) -> SessionRecord:
+        existing = self._sessions.get(session_id)
+        if existing is None:
+            raise KeyError(f"session 不存在: {session_id}")
+        replaced = SessionRecord(
+            session_id=existing.session_id,
+            source=existing.source,
+            state=target,
+            scene_name=existing.scene_name,
+            created_at=existing.created_at,
+            last_activity_at=existing.last_activity_at,
+            metadata=existing.metadata,
+        )
+        self._sessions[session_id] = replaced
+        return replaced
+
+    def begin_clearing(self, session_id: str) -> None:
+        """从 ACTIVE 进入 CLEARING。"""
+        existing = self._sessions.get(session_id)
+        if existing is None:
+            raise KeyError(f"session 不存在: {session_id}")
+        if existing.state != SessionState.ACTIVE:
+            raise RuntimeError(
+                f"begin_clearing 前置状态不满足: session_id={session_id}, current={existing.state.value}"
+            )
+        self._replace_state(session_id, SessionState.CLEARING)
+
+    def end_clearing(self, session_id: str) -> None:
+        """从 CLEARING 退出回 ACTIVE。"""
+        existing = self._sessions.get(session_id)
+        if existing is None:
+            raise KeyError(f"session 不存在: {session_id}")
+        if existing.state != SessionState.CLEARING:
+            raise RuntimeError(
+                f"end_clearing 前置状态不满足: session_id={session_id}, current={existing.state.value}"
+            )
+        self._replace_state(session_id, SessionState.ACTIVE)
+
+    def mark_clearing_failed(self, session_id: str) -> None:
+        """从 CLEARING 升级到 CLEARING_FAILED。"""
+        existing = self._sessions.get(session_id)
+        if existing is None:
+            raise KeyError(f"session 不存在: {session_id}")
+        if existing.state != SessionState.CLEARING:
+            raise RuntimeError(
+                f"mark_clearing_failed 前置状态不满足: session_id={session_id}, current={existing.state.value}"
+            )
+        self._replace_state(session_id, SessionState.CLEARING_FAILED)
 
 
 class StubRunRegistry:
