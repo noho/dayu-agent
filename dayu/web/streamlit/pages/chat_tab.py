@@ -195,7 +195,7 @@ def _render_stream_frame(*, title, state: ChatStreamFrameState) -> None:
     st.markdown(normalize_stream_text_for_markdown(state.answer_text))
 
 
-def _load_history_for_ticker(
+def load_history_for_ticker(
     *,
     chat_service: ChatServiceProtocol,
     ticker: str,
@@ -242,7 +242,7 @@ def _load_history_for_ticker(
         Log.error(f"加载历史会话失败: ticker={ticker}, session_id={session_id}, error={e}", module=MODULE)
         return []
 
-def _perform_clear_session_history(
+def perform_clear_session_history(
     *,
     chat_service: ChatServiceProtocol,
     session_id: str,
@@ -439,7 +439,7 @@ def render_chat_tab(
     )
 
     if (stream_state is None) and (st.session_state.get(message_state_key) is not None) and (chat_service is not None):
-        messages = _load_history_for_ticker(
+        messages = load_history_for_ticker(
             chat_service=chat_service,
             ticker=ticker,
         )
@@ -464,7 +464,7 @@ def render_chat_tab(
                 st.warning("聊天服务未就绪，无法清空后端历史。")
             else:
                 session_id = build_chat_session_id(ticker)
-                _perform_clear_session_history(
+                perform_clear_session_history(
                     chat_service=chat_service,
                     session_id=session_id,
                     ticker=ticker,

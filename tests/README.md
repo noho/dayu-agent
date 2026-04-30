@@ -124,7 +124,9 @@ pip install -r requirements.txt
 - `test_web_routes.py` 还要守住 Web 的客户端错误语义：像 `PromptService.submit()`、`ChatService.resume_pending_turn()` 这类已经在 Service 边界同步抛出的 `ValueError/KeyError`，router 必须映射成对应 `4xx`，且 `/api/chat/resume` 只能在 resume 成功后才创建后台消费任务，不能漏成 `500` 或先受理后失败。
 - `test_web_routes.py` 还要守住 `/api/write` 的未支持语义：当 Web 当前不支持在线写作时，route 必须显式返回 `501`，不能再用 `202` / `accepted=true` 伪装成已受理。
 - `test_streamlit_watchlist.py` 负责守住 Streamlit 自选股组件的本地持久化与表格合并边界：`workspace/.dayu/streamlit/watchlist.json` 读写、删除/编辑/新增合并、必填校验与 ticker 去重语义不能漂移。
-- `test_streamlit_chat_utils.py` 负责守住 Streamlit Chat 纯函数与流式运行时边界：`chat/utils.py` 的 session/trace 标识生成、流式文本提取与 Markdown 归一、事件折叠与副作用判定，以及 `chat_tab.py` / `chat/stream_runtime.py` 中消息与帧状态 dataclass 的稳定语义不能漂移。
+- `test_streamlit_chat_utils.py` 负责守住 `chat/utils.py` 的 session/trace 标识生成、流式文本提取与 Markdown 归一、事件折叠与副作用判定等纯函数语义。
+- `test_streamlit_chat_stream_runtime.py` 负责守住 `chat/stream_runtime.py` 的首 chunk 超时、chunk 间超时、取消传播、worker 退出后 trailing event 消费与 error 事件收口语义。
+- `test_streamlit_chat_tab.py` 负责守住 `chat_tab.py` 中 `ChatMessage` 稳定语义、`load_history_for_ticker` 的历史轮次映射与 fail-soft（空结果/异常）语义，以及 `perform_clear_session_history` 对 `KeyError / Rejected / Stale(含静默重试) / PartiallyApplied / 重试失败` 的 UI 分支语义。
 - `test_fins_service.py`、`test_sec_process_workflow.py`、`test_sec_pipeline_process_filing_source.py`、`test_cn_pipeline_process.py` 与 `test_tool_snapshot_export.py` 还要共同守住 Fins 取消传播链路：`Host` 的取消状态只能以窄 `cancel_checker` 形式从 `FinsService -> FinsRuntime -> Pipeline` 下传；同步 `process_filing/process_material` 与已支持取消协作的流式 `download/process` 都必须在阶段边界及时抛出 `CancelledError` 或收口为 cancelled，不能等 direct operation 整体结束后才统一收口。
 - `test_sec_pipeline_process_filing_source.py` 还要继续守住 snapshot 导出后的仓储可发现性：当 `tool_snapshot_*.json` 已成功写入 `processed/{document_id}` 时，`FsProcessedDocumentRepository.list_processed_documents()` 必须能同步发现该文档，不能再出现“目录里有 snapshot、manifest 里没有登记”的漂移。
 - `test_host_admin_service.py` 负责守住宿主管理面已经收口到 `HostAdminService`，避免 Web / CLI 管理面重新直接触碰 Host。

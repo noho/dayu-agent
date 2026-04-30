@@ -60,7 +60,7 @@ class ChatStreamFrameState:
 
 
 @dataclass
-class _ChatStreamRuntimeHandle:
+class ChatStreamRuntimeHandle:
     """后台流式 worker 运行时句柄。"""
 
     worker: threading.Thread
@@ -71,10 +71,10 @@ class _ChatStreamRuntimeHandle:
     has_received_chunk: bool
 
 
-_CHAT_STREAM_RUNTIME_HANDLES: dict[str, _ChatStreamRuntimeHandle] = {}
+CHAT_STREAM_RUNTIME_HANDLES: dict[str, ChatStreamRuntimeHandle] = {}
 
 
-async def _consume_chat_event_stream(
+async def consume_chat_event_stream(
     *,
     chat_service: ChatServiceProtocol,
     user_text: str,
@@ -214,7 +214,7 @@ async def _consume_chat_event_stream(
     )
 
 
-def _run_stream_worker(
+def run_stream_worker(
     *,
     chat_service: ChatServiceProtocol,
     user_text: str,
@@ -244,7 +244,7 @@ def _run_stream_worker(
 
     try:
         asyncio.run(
-            _consume_chat_event_stream(
+            consume_chat_event_stream(
                 chat_service=chat_service,
                 user_text=user_text,
                 session_id=session_id,
@@ -272,7 +272,7 @@ def _run_stream_worker(
         )
 
 
-def _new_stream_frame_state(*, trace_id: str, session_id: str) -> ChatStreamFrameState:
+def new_stream_frame_state(*, trace_id: str, session_id: str) -> ChatStreamFrameState:
     """创建新的流式渲染帧状态。
 
     参数:
@@ -331,7 +331,7 @@ def clear_chat_stream_runtime(*, ticker: str, stream_state_key: str) -> None:
         无。
     """
 
-    runtime = _CHAT_STREAM_RUNTIME_HANDLES.pop(ticker, None)
+    runtime = CHAT_STREAM_RUNTIME_HANDLES.pop(ticker, None)
     if runtime is not None:
         if runtime.worker.is_alive():
             runtime.cancel_event.set()
@@ -372,7 +372,7 @@ def start_chat_stream_runtime(
     event_queue: Queue[StreamQueueItem] = Queue()
     cancel_event = threading.Event()
     worker = threading.Thread(
-        target=_run_stream_worker,
+        target=run_stream_worker,
         kwargs={
             "chat_service": chat_service,
             "user_text": user_text,
@@ -385,7 +385,7 @@ def start_chat_stream_runtime(
         daemon=True,
     )
     started_at = time.perf_counter()
-    _CHAT_STREAM_RUNTIME_HANDLES[ticker] = _ChatStreamRuntimeHandle(
+    CHAT_STREAM_RUNTIME_HANDLES[ticker] = ChatStreamRuntimeHandle(
         worker=worker,
         event_queue=event_queue,
         cancel_event=cancel_event,
@@ -393,7 +393,7 @@ def start_chat_stream_runtime(
         last_chunk_at=started_at,
         has_received_chunk=False,
     )
-    st.session_state[stream_state_key] = _new_stream_frame_state(trace_id=trace_id, session_id=session_id)
+    st.session_state[stream_state_key] = new_stream_frame_state(trace_id=trace_id, session_id=session_id)
     worker.start()
     Log.info(
         f"[{trace_id}] 启动流式 worker: ticker={ticker}, session_id={session_id}",
@@ -419,7 +419,7 @@ def poll_chat_stream_events(*, ticker: str, stream_state_key: str) -> ChatStream
     if state is None:
         return None
 
-    runtime = _CHAT_STREAM_RUNTIME_HANDLES.get(ticker)
+    runtime = CHAT_STREAM_RUNTIME_HANDLES.get(ticker)
     if runtime is None:
         state.done = True
         if not state.error_message:
