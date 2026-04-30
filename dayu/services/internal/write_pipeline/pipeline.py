@@ -379,12 +379,6 @@ def _log_write_pipeline_config(
         f"tool_trace={tool_trace_state}, tool_trace_dir={tool_trace_config.output_dir}",
         module=MODULE,
     )
-    Log.info(
-        f"- agent_max_iterations={getattr(agent_running_config, 'max_iterations', None)}, "
-        f"tool_timeout_seconds={getattr(runner_running_config, 'tool_timeout_seconds', None)}",
-        module=MODULE,
-    )
-
 
 class WritePipelineRunner:
     """写作流水线执行器。"""
