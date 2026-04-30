@@ -33,37 +33,6 @@ MODULE = "HOST.RUN_REGISTRY"
 _ORPHAN_CLEANUP_MIN_RUN_AGE = timedelta(minutes=10)
 
 
-def _identity_matches(*, stored: OwnerIdentity, current: OwnerIdentity) -> bool:
-    """判断持久化的 ``OwnerIdentity`` 是否与当前进程身份匹配。
-
-    任一字段为 ``None`` 则视为「未采集到」，不参与等值校验，
-    自动退化为剩余字段比对，最差等价于仅 PID 比对。
-
-    Args:
-        stored: 持久化记录里写入的 owner 身份。
-        current: 当前进程身份。
-
-    Returns:
-        ``True`` 表示两者指向同一个 owner；``False`` 表示明确不匹配。
-    """
-
-    if stored.pid != current.pid:
-        return False
-    if (
-        stored.process_start_time is not None
-        and current.process_start_time is not None
-        and stored.process_start_time != current.process_start_time
-    ):
-        return False
-    if (
-        stored.boot_id is not None
-        and current.boot_id is not None
-        and stored.boot_id != current.boot_id
-    ):
-        return False
-    return True
-
-
 from dayu.host._datetime_utils import now_utc as _now_utc, parse_dt_optional as _parse_dt_optional, serialize_dt as _serialize_dt
 
 
@@ -471,11 +440,20 @@ class SQLiteRunRegistry(RunRegistryProtocol):
     def list_active_runs_for_owner(self, owner: OwnerIdentity) -> list[RunRecord]:
         """列出指定 ``OwnerIdentity`` 拥有的所有活跃 run。
 
-        匹配规则：以 ``owner_pid`` 作为索引列做等值过滤；其余两列
-        （``owner_process_start_time`` / ``owner_boot_id``）若双方均非
-        ``None`` 则参与等值校验，否则视为不参与（任一方为 ``None``
-        即 fallback 为仅 PID 比对，与 ``is_owner_identity_alive`` 一致），
-        以闭合 PID 复用窗口。
+        匹配规则分两步：
+
+        1. **SQL 粗筛**：以 ``owner_pid`` 为索引列做等值过滤，命中所有
+           PID 相同的活跃 run（包含 PID 已被复用为新 owner 的旧 record）。
+        2. **Python 精筛**：在内存里调用 :meth:`OwnerIdentity.matches`
+           做完整三元组匹配，``process_start_time`` / ``owner_boot_id``
+           任一字段双方均非 ``None`` 时必须等值，否则视为不参与比对，
+           最差等价于仅 PID 比对。
+
+        粗筛 + 精筛的拆分原因：``owner_pid`` 是 SQL 索引列；
+        三元组里另两列含 NULL 语义，做 SQL 等值需要 ``IS`` / NULL 友好
+        谓词，复杂度收益不及 Python 侧直接调用 ``matches``。
+        ACTIVE 状态下被 PID 复用的 orphan record 由 :meth:`cleanup_orphan_runs`
+        在启动期回收，残留窗口极窄。
 
         Args:
             owner: 当前进程身份。
@@ -503,7 +481,7 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         return [
             record
             for record in records
-            if _identity_matches(stored=record.owner_identity, current=owner)
+            if record.owner_identity.matches(owner)
         ]
 
     def cleanup_orphan_runs(self) -> list[str]:
@@ -613,9 +591,7 @@ class SQLiteRunRegistry(RunRegistryProtocol):
                 if (
                     current_state == RunState.UNSETTLED
                     and target_state == RunState.SUCCEEDED
-                    and _identity_matches(
-                        stored=stored_owner, current=current_owner_identity()
-                    )
+                    and stored_owner.matches(current_owner_identity())
                 ):
                     is_owner_unsettled_recovery = True
                     Log.warn(

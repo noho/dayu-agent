@@ -139,6 +139,43 @@ class OwnerIdentity:
     process_start_time: float | None
     boot_id: str | None
 
+    def matches(self, other: "OwnerIdentity") -> bool:
+        """判断两个 ``OwnerIdentity`` 是否指向同一个 owner。
+
+        判定规则（与 :func:`is_owner_identity_alive` 共用退化策略）：
+          * PID 必须严格相等；不等直接返回 ``False``。
+          * ``process_start_time`` / ``boot_id`` 若双方均非 ``None`` 则参与
+            等值校验；任一方为 ``None`` 时视为「未采集到」，不参与比对，
+            自动退化为剩余非 NULL 字段比对，最差等价于仅 PID 比对。
+
+        ``process_start_time`` 用 ``!=`` 直接比较 ``float`` 是安全的：
+        SQLite ``REAL`` 类型是 IEEE 754 binary64，与 Python ``float``
+        位等价，写入再读出 round-trip 不引入精度漂移；``psutil``
+        在同一平台同一 PID 下也保证读到同一个 ``create_time()`` 值。
+
+        Args:
+            other: 待比对的另一个 owner 身份。
+
+        Returns:
+            ``True`` 表示两者指向同一个 owner；``False`` 表示明确不匹配。
+        """
+
+        if self.pid != other.pid:
+            return False
+        if (
+            self.process_start_time is not None
+            and other.process_start_time is not None
+            and self.process_start_time != other.process_start_time
+        ):
+            return False
+        if (
+            self.boot_id is not None
+            and other.boot_id is not None
+            and self.boot_id != other.boot_id
+        ):
+            return False
+        return True
+
 
 def _get_process_start_time(pid: int) -> float | None:
     """跨平台采集指定 PID 的进程创建时间（epoch 秒）。
@@ -228,9 +265,9 @@ def is_owner_identity_alive(identity: OwnerIdentity) -> bool:
 
     判定规则：
       1. PID 必须仍然活着（`is_pid_alive`）；否则直接 `False`。
-      2. 重新采集当前 PID 的身份，与给定 identity 做按字段等值；
-         任一字段为 `None`（无论是给定值还是当前采集值）则该字段不参与比对。
-      3. 三字段全部 `None` 时退化为仅 PID 判活，与历史行为等价。
+      2. 重新采集当前 PID 的身份，与给定 identity 调用 :meth:`OwnerIdentity.matches`
+         做按字段等值；任一字段为 `None`（无论是给定值还是当前采集值）则该字段
+         不参与比对，最差等价于仅 PID 判活。
 
     Args:
         identity: 持久化记录里保存的 owner 身份。
@@ -243,24 +280,12 @@ def is_owner_identity_alive(identity: OwnerIdentity) -> bool:
     if not is_pid_alive(identity.pid):
         return False
 
-    current_start_time = _get_process_start_time(identity.pid)
-    current_boot_id = _get_current_boot_id()
-
-    if (
-        identity.process_start_time is not None
-        and current_start_time is not None
-        and identity.process_start_time != current_start_time
-    ):
-        return False
-
-    if (
-        identity.boot_id is not None
-        and current_boot_id is not None
-        and identity.boot_id != current_boot_id
-    ):
-        return False
-
-    return True
+    current_at_pid = OwnerIdentity(
+        pid=identity.pid,
+        process_start_time=_get_process_start_time(identity.pid),
+        boot_id=_get_current_boot_id(),
+    )
+    return identity.matches(current_at_pid)
 
 
 __all__ = [

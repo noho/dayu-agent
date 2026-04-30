@@ -238,90 +238,47 @@ class StubRunRegistry:
     def start_run(self, run_id: str) -> RunRecord:
         """标记 RUNNING。"""
         record = self._runs[run_id]
-        self._runs[run_id] = RunRecord(
-            run_id=record.run_id,
-            session_id=record.session_id,
-            service_type=record.service_type,
-            scene_name=record.scene_name,
+        self._runs[run_id] = dataclass_replace(
+            record,
             state=RunState.RUNNING,
-            created_at=record.created_at,
             started_at=datetime.now(timezone.utc),
-            cancel_requested_at=record.cancel_requested_at,
-            cancel_requested_reason=record.cancel_requested_reason,
             cancel_reason=None,
-            owner_pid=record.owner_pid,
-            owner_process_start_time=record.owner_process_start_time,
-            owner_boot_id=record.owner_boot_id,
-            metadata=record.metadata,
         )
         return self._runs[run_id]
 
     def complete_run(self, run_id: str, *, error_summary: str | None = None) -> RunRecord:
         """标记成功。"""
         record = self._runs[run_id]
-        self._runs[run_id] = RunRecord(
-            run_id=record.run_id,
-            session_id=record.session_id,
-            service_type=record.service_type,
-            scene_name=record.scene_name,
+        self._runs[run_id] = dataclass_replace(
+            record,
             state=RunState.SUCCEEDED,
-            created_at=record.created_at,
-            started_at=record.started_at,
             completed_at=datetime.now(timezone.utc),
             error_summary=error_summary,
-            cancel_requested_at=record.cancel_requested_at,
-            cancel_requested_reason=record.cancel_requested_reason,
             cancel_reason=None,
-            owner_pid=record.owner_pid,
-            owner_process_start_time=record.owner_process_start_time,
-            owner_boot_id=record.owner_boot_id,
-            metadata=record.metadata,
         )
         return self._runs[run_id]
 
     def fail_run(self, run_id: str, *, error_summary: str | None = None) -> RunRecord:
         """标记失败。"""
         record = self._runs[run_id]
-        self._runs[run_id] = RunRecord(
-            run_id=record.run_id,
-            session_id=record.session_id,
-            service_type=record.service_type,
-            scene_name=record.scene_name,
+        self._runs[run_id] = dataclass_replace(
+            record,
             state=RunState.FAILED,
-            created_at=record.created_at,
-            started_at=record.started_at,
             completed_at=datetime.now(timezone.utc),
             error_summary=error_summary,
-            cancel_requested_at=record.cancel_requested_at,
-            cancel_requested_reason=record.cancel_requested_reason,
             cancel_reason=None,
-            owner_pid=record.owner_pid,
-            owner_process_start_time=record.owner_process_start_time,
-            owner_boot_id=record.owner_boot_id,
-            metadata=record.metadata,
         )
         return self._runs[run_id]
 
     def mark_unsettled(self, run_id: str, *, error_summary: str | None = None) -> RunRecord:
         """标记 UNSETTLED（测试桩同 fail_run 模型）。"""
         record = self._runs[run_id]
-        self._runs[run_id] = RunRecord(
-            run_id=record.run_id,
-            session_id=record.session_id,
-            service_type=record.service_type,
-            scene_name=record.scene_name,
+        self._runs[run_id] = dataclass_replace(
+            record,
             state=RunState.UNSETTLED,
-            created_at=record.created_at,
-            started_at=record.started_at,
             completed_at=datetime.now(timezone.utc),
             error_summary=error_summary,
-            cancel_requested_at=record.cancel_requested_at,
-            cancel_requested_reason=record.cancel_requested_reason,
             cancel_reason=None,
-            owner_pid=record.owner_pid,
-            owner_process_start_time=record.owner_process_start_time,
-            owner_boot_id=record.owner_boot_id,
-            metadata=record.metadata,
         )
         return self._runs[run_id]
 
@@ -333,22 +290,11 @@ class StubRunRegistry:
     ) -> RunRecord:
         """标记取消。"""
         record = self._runs[run_id]
-        self._runs[run_id] = RunRecord(
-            run_id=record.run_id,
-            session_id=record.session_id,
-            service_type=record.service_type,
-            scene_name=record.scene_name,
+        self._runs[run_id] = dataclass_replace(
+            record,
             state=RunState.CANCELLED,
-            created_at=record.created_at,
-            started_at=record.started_at,
             completed_at=datetime.now(timezone.utc),
-            cancel_requested_at=record.cancel_requested_at,
-            cancel_requested_reason=record.cancel_requested_reason,
             cancel_reason=cancel_reason,
-            owner_pid=record.owner_pid,
-            owner_process_start_time=record.owner_process_start_time,
-            owner_boot_id=record.owner_boot_id,
-            metadata=record.metadata,
         )
         return self._runs[run_id]
 
@@ -377,23 +323,10 @@ class StubRunRegistry:
             return False
         if record.cancel_requested_at is not None:
             return False
-        self._runs[run_id] = RunRecord(
-            run_id=record.run_id,
-            session_id=record.session_id,
-            service_type=record.service_type,
-            scene_name=record.scene_name,
-            state=record.state,
-            created_at=record.created_at,
-            started_at=record.started_at,
-            completed_at=record.completed_at,
-            error_summary=record.error_summary,
+        self._runs[run_id] = dataclass_replace(
+            record,
             cancel_requested_at=datetime.now(timezone.utc),
             cancel_requested_reason=cancel_reason,
-            cancel_reason=record.cancel_reason,
-            owner_pid=record.owner_pid,
-            owner_process_start_time=record.owner_process_start_time,
-            owner_boot_id=record.owner_boot_id,
-            metadata=record.metadata,
         )
         return True
 
