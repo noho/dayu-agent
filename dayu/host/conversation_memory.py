@@ -24,7 +24,7 @@ from dayu.host._coercion import _coerce_string_tuple
 from dayu.host.conversation_store import (
     ConversationEpisodeSummary,
     ConversationPinnedState,
-    ConversationStore,
+    ConversationSessionArchiveStore,
     ConversationToolUseSummary,
     ConversationTranscript,
     ConversationTurnRecord,
@@ -1131,7 +1131,7 @@ class DefaultConversationMemoryManager:
         self,
         runtime: ConversationRuntimeProtocol,
         *,
-        conversation_store: ConversationStore,
+        archive_store: ConversationSessionArchiveStore,
         working_memory_policy: WorkingMemoryPolicyProtocol | None = None,
         episodic_memory_compressor: EpisodicMemoryCompressorProtocol | None = None,
         durable_memory_store: DurableMemoryStoreProtocol | None = None,
@@ -1142,7 +1142,7 @@ class DefaultConversationMemoryManager:
 
         Args:
             runtime: 默认 Runtime 实现。
-            conversation_store: transcript 存储。
+            archive_store: 会话 archive 存储。
             working_memory_policy: working memory 策略。
             episodic_memory_compressor: episode 摘要压缩器。
             durable_memory_store: durable memory 存储。
@@ -1157,7 +1157,7 @@ class DefaultConversationMemoryManager:
         """
 
         self._runtime = runtime
-        self._conversation_store = conversation_store
+        self._archive_store = archive_store
         self._working_memory_policy = working_memory_policy or DefaultWorkingMemoryPolicy()
         self._episodic_memory_compressor = episodic_memory_compressor or DefaultEpisodicMemoryCompressor(runtime)
         self._durable_memory_store = durable_memory_store or NullDurableMemoryStore()
@@ -1226,7 +1226,22 @@ class DefaultConversationMemoryManager:
                 episodes=(*current.episodes, result.episode_summary),
                 compacted_turn_count=current.compacted_turn_count + len(candidate_turns),
             )
-            current = self._conversation_store.save(next_transcript, expected_revision=current.revision)
+            # archive 形态下：只在聚合根上替换运行态子视图，``history_archive`` 原样保留。
+            live_archive = self._archive_store.load(session_id)
+            if live_archive is None or live_archive.runtime_transcript.revision != current.revision:
+                # 同步 compaction 罕见冲突路径（外部并发推进 archive）：放弃本次写回，
+                # 与既有 _run_compaction 自愈链路一致——下一轮 turn 会重新触发判定。
+                Log.verbose(
+                    f"同步 compaction 写回 archive 冲突，跳过本次：session_id={session_id}",
+                    module=MODULE,
+                )
+                return current
+            next_archive = live_archive.with_runtime_transcript(next_transcript)
+            persisted_archive = self._archive_store.save(
+                next_archive,
+                expected_revision=live_archive.revision,
+            )
+            current = persisted_archive.runtime_transcript
             self._retrieval_index.index_transcript(current)
             Log.verbose(
                 f"同步压缩写回 transcript: session_id={session_id}, revision={current.revision}, compacted_turn_count={current.compacted_turn_count}",
@@ -1558,10 +1573,11 @@ class DefaultConversationMemoryManager:
                     module=MODULE,
                 )
                 return
-            current_transcript = self._conversation_store.load(session_id)
-            if current_transcript is None:
-                Log.debug(f"后台 compaction 写回前 transcript 已不存在: session_id={session_id}", module=MODULE)
+            live_archive = self._archive_store.load(session_id)
+            if live_archive is None:
+                Log.debug(f"后台 compaction 写回前 archive 已不存在: session_id={session_id}", module=MODULE)
                 return
+            current_transcript = live_archive.runtime_transcript
             if current_transcript.revision != transcript.revision:
                 # REVIEW NOTE (finding 078, 驳回留观):
                 # revision 冲突时本次后台压缩结果被丢弃且**不在此处退避重试**。
@@ -1573,6 +1589,13 @@ class DefaultConversationMemoryManager:
                 #    抢占调度器"，与新到来的 schedule 产生竞态窗口（cancel vs 重入）。
                 # 3. 失效场景只有"session 永久闲置"，此时 compaction 的价值本身也消失。
                 # 下一位 reviewer：若要改动此分支，请先核对上述自愈假设是否仍成立。
+                #
+                # archive 形态硬规则：业务层 stale-check 比较的是
+                # ``live.runtime_transcript.revision``（与运行态语义对齐），不是
+                # ``live.revision``（那是物理层 archive 乐观锁的参与方）。两层语义
+                # 必须保持独立——禁止偷换为 archive.revision 比较，否则在
+                # history_archive 单独被推进、runtime_transcript 未变的场景下会
+                # 误判 stale。
                 Log.verbose(
                     f"conversation compaction 结果已过期，跳过写回：session_id={session_id}",
                     module=MODULE,
@@ -1583,7 +1606,9 @@ class DefaultConversationMemoryManager:
                 episodes=(*current_transcript.episodes, result.episode_summary),
                 compacted_turn_count=current_transcript.compacted_turn_count + len(turns),
             )
-            self._conversation_store.save(next_transcript, expected_revision=current_transcript.revision)
+            # archive 形态：只替换运行态子视图，``history_archive`` 原样保留。
+            next_archive = live_archive.with_runtime_transcript(next_transcript)
+            self._archive_store.save(next_archive, expected_revision=live_archive.revision)
             self._retrieval_index.index_transcript(next_transcript)
             Log.verbose(
                 f"后台 compaction 写回成功: session_id={session_id}, revision={next_transcript.revision}, compacted_turn_count={next_transcript.compacted_turn_count}",

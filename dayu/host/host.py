@@ -20,7 +20,10 @@ from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 from dayu.execution.options import ResolvedExecutionOptions
 from dayu.engine.tool_registry import ToolRegistry
 from dayu.host.concurrency import SQLiteConcurrencyGovernor
-from dayu.host.conversation_store import ConversationStore, FileConversationStore
+from dayu.host.conversation_store import (
+    ConversationSessionArchiveStore,
+    FileConversationSessionArchiveStore,
+)
 from dayu.host.executor import DefaultHostExecutor, should_delete_pending_turn_after_terminal_run
 from dayu.host.host_execution import HostExecutorProtocol, HostedRunContext, HostedRunSpec
 from dayu.host._datetime_utils import now_utc as _now_utc
@@ -112,16 +115,16 @@ def _to_pending_turn_summary(record: PendingConversationTurn) -> PendingTurnSumm
     )
 
 
-def _build_default_conversation_store(
+def _build_default_conversation_archive_store(
     workspace: WorkspaceResourcesProtocol | None,
-) -> ConversationStore | None:
-    """根据工作区构造默认 conversation 存储。
+) -> ConversationSessionArchiveStore | None:
+    """根据工作区构造默认 conversation archive 存储。
 
     Args:
         workspace: Host 运行所需工作区稳定资源。
 
     Returns:
-        conversation 存储；未提供工作区时返回 ``None``。
+        conversation archive 存储；未提供工作区时返回 ``None``。
 
     Raises:
         无。
@@ -129,7 +132,9 @@ def _build_default_conversation_store(
 
     if workspace is None:
         return None
-    return FileConversationStore(build_conversation_store_dir(workspace.workspace_dir))
+    return FileConversationSessionArchiveStore(
+        build_conversation_store_dir(workspace.workspace_dir)
+    )
 
 
 def _empty_conversation_session_digest() -> ConversationSessionDigest:
@@ -221,7 +226,7 @@ class Host:
         concurrency_governor: ConcurrencyGovernorProtocol | None = None,
         pending_turn_store: PendingConversationTurnStoreProtocol | None = None,
         reply_outbox_store: ReplyOutboxStoreProtocol | None = None,
-        conversation_store: ConversationStore | None = None,
+        archive_store: ConversationSessionArchiveStore | None = None,
     ) -> None:
         """初始化 Host。"""
 
@@ -260,16 +265,16 @@ class Host:
             self._event_bus = event_bus
             self._pending_turn_resume_max_attempts = pending_turn_resume_max_attempts
             self._pending_turn_retention = timedelta(hours=pending_turn_retention_hours)
-            self._conversation_store = conversation_store or _build_default_conversation_store(workspace)
+            self._archive_store = archive_store or _build_default_conversation_archive_store(workspace)
             return
 
         if host_store_path is None:
             raise ValueError("默认 Host 装配缺少 host_store_path")
 
-        # 默认装配路径下 Host 与内部 ScenePreparer 共享同一 conversation_store 实例，
+        # 默认装配路径下 Host 与内部 ScenePreparer 共享同一 archive_store 实例，
         # 避免出现指向同一 workspace 目录的多实例（文件锁虽保证跨实例一致性，
         # 但内存缓存/订阅状态无法共享，后续若引入 transcript 缓存会触发 stale read）。
-        shared_conversation_store = conversation_store or _build_default_conversation_store(workspace)
+        shared_archive_store = archive_store or _build_default_conversation_archive_store(workspace)
         default_components = _build_default_host_components(
             workspace=workspace,
             model_catalog=model_catalog,
@@ -277,7 +282,7 @@ class Host:
             host_store_path=host_store_path,
             lane_config=lane_config,
             event_bus=event_bus,
-            conversation_store=shared_conversation_store,
+            archive_store=shared_archive_store,
         )
         self._executor = executor or default_components._executor
         self._session_registry = session_registry or default_components._session_registry
@@ -288,7 +293,7 @@ class Host:
         self._event_bus = event_bus
         self._pending_turn_resume_max_attempts = pending_turn_resume_max_attempts
         self._pending_turn_retention = timedelta(hours=pending_turn_retention_hours)
-        self._conversation_store = shared_conversation_store
+        self._archive_store = shared_archive_store
 
     def create_session(
         self,
@@ -431,15 +436,15 @@ class Host:
             无。
         """
 
-        if self._conversation_store is None:
+        if self._archive_store is None:
             return _empty_conversation_session_digest()
-        transcript = self._conversation_store.load(session_id)
-        if transcript is None or not transcript.turns:
+        archive = self._archive_store.load(session_id)
+        if archive is None or not archive.runtime_transcript.turns:
             return _empty_conversation_session_digest()
-        first_turn = transcript.turns[0]
-        last_turn = transcript.turns[-1]
+        first_turn = archive.runtime_transcript.turns[0]
+        last_turn = archive.runtime_transcript.turns[-1]
         return ConversationSessionDigest(
-            turn_count=len(transcript.turns),
+            turn_count=len(archive.runtime_transcript.turns),
             first_question_preview=_truncate_conversation_preview(first_turn.user_text),
             last_question_preview=_truncate_conversation_preview(last_turn.user_text),
         )
@@ -463,12 +468,12 @@ class Host:
             无。
         """
 
-        if self._conversation_store is None or limit <= 0:
+        if self._archive_store is None or limit <= 0:
             return []
-        transcript = self._conversation_store.load(session_id)
-        if transcript is None or not transcript.turns:
+        archive = self._archive_store.load(session_id)
+        if archive is None or not archive.runtime_transcript.turns:
             return []
-        recent_turns = transcript.turns[-limit:]
+        recent_turns = archive.runtime_transcript.turns[-limit:]
         return [
             ConversationSessionTurnExcerpt(
                 user_text=turn.user_text,
@@ -1713,7 +1718,7 @@ def _build_default_host_components(
     host_store_path: Path,
     lane_config: dict[str, int] | None,
     event_bus: RunEventBusProtocol | None,
-    conversation_store: ConversationStore | None,
+    archive_store: ConversationSessionArchiveStore | None,
 ) -> _DefaultHostComponents:
     """构造 Host 默认内部子组件。
 
@@ -1724,7 +1729,7 @@ def _build_default_host_components(
         host_store_path: Host SQLite 路径。
         lane_config: 并发 lane 配置。
         event_bus: 事件总线。
-        conversation_store: Host 外层构造并共享的 conversation 存储；
+        archive_store: Host 外层构造并共享的 conversation archive 存储；
             传入后将由内部 ScenePreparer 与 Host 公共字段复用同一实例。
 
     Returns:
@@ -1751,7 +1756,7 @@ def _build_default_host_components(
         workspace=workspace,
         model_catalog=model_catalog,
         default_execution_options=default_execution_options,
-        conversation_store=conversation_store,
+        archive_store=archive_store,
     )
     executor = DefaultHostExecutor(
         run_registry=run_registry,
@@ -1775,7 +1780,7 @@ def _build_default_scene_preparation(
     workspace: WorkspaceResourcesProtocol | None,
     model_catalog: ModelCatalogProtocol | None,
     default_execution_options: ResolvedExecutionOptions | None,
-    conversation_store: ConversationStore | None,
+    archive_store: ConversationSessionArchiveStore | None,
 ) -> DefaultScenePreparer | None:
     """构造 Host 默认 scene preparation。
 
@@ -1783,7 +1788,7 @@ def _build_default_scene_preparation(
         workspace: 工作区稳定资源。
         model_catalog: 模型目录。
         default_execution_options: 默认执行基线。
-        conversation_store: 由 Host 构造并共享的 conversation 存储；
+        archive_store: 由 Host 构造并共享的 conversation archive 存储；
             传入 ``None`` 时 ScenePreparer 会回退为按 workspace 自建实例，
             正式默认装配路径不应使用该回退。
     Returns:
@@ -1812,7 +1817,7 @@ def _build_default_scene_preparation(
         model_catalog=model_catalog,
         default_execution_options=default_execution_options,
         tool_registry_factory=lambda: ToolRegistry(),
-        conversation_store=conversation_store,
+        archive_store=archive_store,
     )
 
 

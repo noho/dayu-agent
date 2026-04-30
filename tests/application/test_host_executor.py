@@ -938,6 +938,9 @@ def test_run_agent_stream_skips_persist_turn_after_external_cancel(monkeypatch: 
         def __init__(self) -> None:
             self.persist_calls: list[dict[str, object]] = []
 
+        def record_reasoning_delta(self, chunk: str) -> None:
+            del chunk
+
         def persist_turn(self, **kwargs) -> None:
             self.persist_calls.append(kwargs)
 
@@ -1016,6 +1019,9 @@ def test_run_agent_stream_emits_verbose_logs_for_pending_turn_lifecycle(monkeypa
         def __init__(self) -> None:
             self.persist_calls = 0
             self.pending_states_during_persist: list[PendingConversationTurnState] = []
+
+        def record_reasoning_delta(self, chunk: str) -> None:
+            del chunk
 
         def persist_turn(self, **_kwargs) -> None:
             self.persist_calls += 1
@@ -1433,6 +1439,9 @@ def test_run_agent_stream_keeps_prepared_pending_turn_when_persist_turn_fails(mo
     from tests.application.conftest import StubPendingTurnStore, StubRunRegistry
 
     class _BrokenSessionState:
+        def record_reasoning_delta(self, chunk: str) -> None:
+            del chunk
+
         def persist_turn(self, **_kwargs) -> None:
             raise RuntimeError("persist failed")
 
@@ -1505,6 +1514,9 @@ def test_run_agent_stream_keeps_success_when_sent_to_llm_update_fails(monkeypatc
     class _RecordingSessionState:
         def __init__(self) -> None:
             self.persist_calls = 0
+
+        def record_reasoning_delta(self, chunk: str) -> None:
+            del chunk
 
         def persist_turn(self, **_kwargs) -> None:
             self.persist_calls += 1
@@ -1583,6 +1595,9 @@ def test_run_agent_stream_delete_pending_failure_keeps_succeeded_run_and_blocks_
     from tests.application.conftest import StubHostExecutor, StubPendingTurnStore, StubRunRegistry, StubSessionRegistry
 
     class _RecordingSessionState:
+        def record_reasoning_delta(self, chunk: str) -> None:
+            del chunk
+
         def persist_turn(self, **_kwargs) -> None:
             return None
 
@@ -2110,6 +2125,9 @@ def test_resume_pending_turn_stream_keeps_lease_through_executor(
     )
 
     class _RecordingSessionState:
+        def record_reasoning_delta(self, chunk: str) -> None:
+            del chunk
+
         def persist_turn(self, **_kwargs) -> None:
             return None
 
@@ -2353,6 +2371,9 @@ def test_resume_pending_turn_stream_rebinds_source_run_id_and_blocks_reresume_wh
     )
 
     class _RecordingSessionState:
+        def record_reasoning_delta(self, chunk: str) -> None:
+            del chunk
+
         def persist_turn(self, **_kwargs) -> None:
             return None
 

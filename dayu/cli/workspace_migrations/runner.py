@@ -13,6 +13,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from dayu.cli.workspace_migrations.conversation_archive_init import (
+    migrate_conversation_archive_init,
+)
 from dayu.cli.workspace_migrations.host_store_rename_concurrency_lane import (
     migrate_host_store_rename_concurrency_lane,
 )
@@ -55,4 +58,11 @@ def apply_all_workspace_migrations(*, base_dir: Path, config_dir: Path) -> None:
         print(
             "✓ 工作区迁移: Host SQLite pending turn 快照已剥离 "
             f"max_output_tokens 字段（共 {stripped} 行）"
+        )
+
+    archive_rewritten = migrate_conversation_archive_init(base_dir)
+    if archive_rewritten > 0:
+        print(
+            "✓ 工作区迁移: 旧 conversation transcript 已升级为 "
+            f"ConversationSessionArchive（共 {archive_rewritten} 个会话）"
         )

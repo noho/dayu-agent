@@ -481,6 +481,51 @@ Compaction 有两条触发路径，职责分离：
 
 具体的 token 预算数值、触发阈值倍数定义在 `dayu/config/run.json`、`dayu/contracts/execution_options.py::ConversationMemorySettings` 与 `dayu/host/conversation_memory.py`，三处默认值通过单元测试 `test_default_conversation_memory_settings_match_runtime_default` 保持一致。详细字段说明见 [config/README.md §5.8](../config/README.md)。
 
+### 10.9 会话存储（ConversationSessionArchive）
+
+会话级真源被收敛到一个聚合根 `ConversationSessionArchive`，定义在 `dayu/host/conversation_session_archive.py`，物理落盘在 `<workspace>/<CONVERSATION_STORE_RELATIVE_DIR>/<session_id>.json`。聚合根包含两个**逻辑分离、物理同写**的子视图：
+
+| 子视图 | 内容 | 谁能读 | 谁能写 |
+| --- | --- | --- | --- |
+| `runtime_transcript` | 运行态真源（`ConversationTurnRecord` 列表 + `compacted_turn_count` + memory layers） | 送模/memory/compaction/resume/prepared snapshot | `with_next_turn`（新轮）/ `with_runtime_transcript`（compaction 写回） |
+| `history_archive` | 仅供历史展示的扁平副本（`ConversationHistoryTurnRecord`，含 `assistant_reasoning`） | 历史展示链路 | 仅 `with_next_turn`（新轮同步推进） |
+
+**单聚合 / 单 revision / 单文件原子提交**：`runtime_transcript` 与 `history_archive` 共享同一 `archive.revision`，落盘走 `FileConversationSessionArchiveStore.save(archive, expected_revision=...)`：取文件锁 → 校验 revision → 临时文件 → fsync → replace → fsync 父目录。任一失败 → 整个聚合写失败、磁盘旧版本完整保留。**不**做 sidecar 双写、不做两阶段提交。
+
+**首轮装配走 `load_or_create`，不用 `save(expected_revision=None)`**：`scene_preparer.prepare` 在 session 第一次进来时通过 `archive_store.load_or_create(session_id)` 拿到真源——该方法在文件锁保护下做 load-or-create，先到的胜出、后到的拿到 live archive。这条路径**严禁**回退到"先 `load` 看是否存在再 `save(create_empty, expected_revision=None)`"——`save` 只在 `expected_revision is not None` 时做冲突校验，TOCTOU 窗口里的并发 prepare 会把另一进程已经写好的 live archive 直接覆盖成空文件。
+
+**`from_dict` fail-closed**：`ConversationSessionArchive.from_dict` 对 `history_archive` 字段缺失或非对象**直接抛 `ValueError`**，不静默降级为 `create_empty`。理由：`history_archive` 是聚合根的物理同写组成，缺失只可能是数据损坏或迁移不完整；若降级为空历史，下一次 `persist_turn` / compaction 写回会把这份空历史持久化覆盖，永久抹掉已有 `assistant_reasoning`。损坏数据必须走 migration / repair 路径修复，不通过运行态读取被静默吞掉。
+
+**结构边界（硬约束）**：
+
+- `runtime_transcript` / `ConversationTurnRecord` 字段集**不含** `assistant_reasoning`。
+- `history_archive` 内容**不进入** prepared snapshot / `resume_source_json` / `restore_prepared_execution` / `to_messages` / compaction 输入；它纯粹是展示侧字段。
+- 模块结构隔离由 `tests/application/test_history_archive_isolation.py` 反射式回归——`dayu/host/conversation_memory.py` / `pending_turn_store.py` / `prepared_turn.py` / `dayu/contracts/agent_execution.py` / `agent_execution_serialization.py` / `agent_types.py` 六处源码不得出现 `assistant_reasoning` / `ConversationHistoryTurnRecord` / `ConversationHistoryArchive` 三个 token。
+
+**reasoning 的采集与落盘**（`#118` 关键链路）：
+
+1. Engine 层流式产出 `EventType.REASONING_DELTA`。
+2. Executor 在 `agent_input.session_state` 存在时调 `session_state.record_reasoning_delta(text)`，否则静默丢弃。
+3. `ConversationSessionState` 把 chunk 累计在内部 `_reasoning_buffer`。
+4. 在 `persist_turn(...)` 时把 `"".join(_reasoning_buffer)` 一次性投影到 `ConversationHistoryTurnRecord.assistant_reasoning`，与新 `ConversationTurnRecord` 一同走 `with_next_turn` 推进聚合根，再一次原子落盘；落盘成功才清空 buffer，失败重试不丢内容。
+5. `ConversationTurnPersistenceProtocol.persist_turn` 签名**不变**——展示字段不污染契约。
+
+**resume：输入只信 prepared snapshot；输出走 reconcile-on-write**
+
+- **输入**：`restore_prepared_execution` 仍只从 `PreparedConversationSessionSnapshot.transcript` 重建运行态——prepare 与 resume 之间外部状态变化（清空、compaction、文件丢失）**不影响** resume 决策。
+- 重建 `current_archive` 时构造**临时 placeholder archive**：`runtime_transcript = snapshot.transcript`、`history_archive = create_empty(session_id)`、`revision = ""`。`revision == ""` 是路径分叉标记位。
+- **输出**：`persist_turn` 路径分叉
+  - `current_archive.revision == ""` → 走 `archive_store.append_turn(session_id, *, turn_record, history_record)`：取文件锁 → load live → live 缺失抛 `ConversationArchiveMissingError` → 在 live 上 `with_next_turn` → 原子写。**不**预设"自动 create_empty"，缺失时显式报错（清空 vs pending turn 并发处置策略由 `#117` 决定）。
+  - 否则（正常路径）→ `with_next_turn` + `save(... expected_revision=current_archive.revision)`。
+
+**compaction：两层 stale-check（业务层 + 物理层）**
+
+- **业务层**：比较 `live.runtime_transcript.revision` 与 `compaction_input_transcript.revision`，不一致 → 丢弃结果（依靠下一轮 turn 触发 schedule_compaction 自愈）。这一层**不能**被偷换成"只看 archive 乐观锁"。
+- **物理层**：`archive_store.save(next_archive, expected_revision=live.revision)`。
+- compaction 任何路径**不修改** `history_archive`，仅通过 `with_runtime_transcript` 替换运行态子视图。
+
+**旧 schema 迁移**：`dayu-cli init` 走 `dayu/cli/workspace_migrations/conversation_archive_init.py`：识别"顶层缺 `runtime_transcript` 但含 `turns`"的旧 transcript 文件，原地包成 archive；`history_archive.turns` 全量从旧 turns 投影（`assistant_reasoning=""`）。损坏文件 warning 跳过、新 schema 文件 no-op。`FileConversationSessionArchiveStore.load` 遇到旧 schema 直接抛 `RuntimeError` 提示运行迁移，**不**做兼容读取。
+
 ---
 
 ## 11. 场景准备（scene preparation）

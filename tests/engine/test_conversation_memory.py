@@ -46,14 +46,35 @@ from dayu.host.conversation_runtime import (
     ConversationCompactionRequest,
     ConversationCompactionSceneProtocol,
 )
+from dayu.host.conversation_session_archive import (
+    ConversationHistoryArchive,
+    ConversationSessionArchive,
+)
 from dayu.host.conversation_store import (
     ConversationEpisodeSummary,
     ConversationPinnedState,
     ConversationToolUseSummary,
     ConversationTranscript,
     ConversationTurnRecord,
-    FileConversationStore,
+    FileConversationSessionArchiveStore,
 )
+
+
+def _archive_from_transcript(transcript: ConversationTranscript) -> ConversationSessionArchive:
+    """把测试用 transcript 包装成 archive，便于直接 store.save 预置。"""
+
+    from dataclasses import replace
+
+    base = ConversationSessionArchive.create_empty(transcript.session_id)
+    runtime = replace(transcript, revision=base.revision)
+    return ConversationSessionArchive(
+        session_id=base.session_id,
+        revision=base.revision,
+        created_at=base.created_at,
+        updated_at=base.updated_at,
+        runtime_transcript=runtime,
+        history_archive=ConversationHistoryArchive.create_empty(transcript.session_id),
+    )
 
 
 def _build_toolset_configs(
@@ -549,7 +570,7 @@ def test_default_conversation_memory_manager_builds_memory_block_and_raw_tail(tm
     runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
     manager = DefaultConversationMemoryManager(
         runtime,
-        conversation_store=FileConversationStore(tmp_path / "conversations"),
+        archive_store=FileConversationSessionArchiveStore(tmp_path / "conversations"),
     )
     transcript = ConversationTranscript.create_empty("sess_1")
     for index in range(1, 4):
@@ -596,7 +617,7 @@ def test_compaction_candidate_uses_current_scene_context_budget(tmp_path: Path) 
     runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
     manager = DefaultConversationMemoryManager(
         runtime,
-        conversation_store=FileConversationStore(tmp_path / "conversations"),
+        archive_store=FileConversationSessionArchiveStore(tmp_path / "conversations"),
     )
     transcript = ConversationTranscript.create_empty("sess_1")
     for index in range(1, 7):
@@ -730,18 +751,18 @@ def test_conversation_memory_manager_compacts_in_background_and_replans(tmp_path
         compaction_trigger_context_ratio=0.001,
         compaction_tail_preserve_turns=1,
     )
-    store = FileConversationStore(tmp_path / "conversations")
+    store = FileConversationSessionArchiveStore(tmp_path / "conversations")
     runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
     compressor = _FakeCompressor(delay=0.02)
     manager = DefaultConversationMemoryManager(
         runtime,
-        conversation_store=store,
+        archive_store=store,
         episodic_memory_compressor=compressor,
     )
     transcript = ConversationTranscript.create_empty("sess_1")
     for index in range(1, 5):
         transcript = transcript.append_turn(_build_turn(index))
-    store.save(transcript)
+    store.save(_archive_from_transcript(transcript), expected_revision=None)
 
     async def _run() -> None:
         manager.schedule_compaction(
@@ -751,24 +772,30 @@ def test_conversation_memory_manager_compacts_in_background_and_replans(tmp_path
             system_prompt="sys",
         )
         await asyncio.sleep(0)
-        current = store.load("sess_1")
-        assert current is not None
-        updated = current.append_turn(_build_turn(5))
-        store.save(updated, expected_revision=current.revision)
+        current_archive = store.load("sess_1")
+        assert current_archive is not None
+        current_runtime = current_archive.runtime_transcript
+        from dataclasses import replace as _dc_replace
+        updated_runtime = current_runtime.append_turn(_build_turn(5))
+        store.save(
+            _dc_replace(current_archive, runtime_transcript=updated_runtime),
+            expected_revision=current_archive.revision,
+        )
         await manager.cancel_pending_compaction("sess_1")
         manager.schedule_compaction(
             session_id="sess_1",
             prepared_scene=_build_prepared_scene(settings=settings),
-            transcript=updated,
+            transcript=updated_runtime,
             system_prompt="sys",
         )
         await manager.wait_for_session("sess_1")
 
     asyncio.run(_run())
 
-    loaded = store.load("sess_1")
+    loaded_archive = store.load("sess_1")
 
-    assert loaded is not None
+    assert loaded_archive is not None
+    loaded = loaded_archive.runtime_transcript
     assert loaded.compacted_turn_count >= 4
     assert loaded.episodes
     assert loaded.pinned_state.current_goal == "跟踪公司最新变化"
@@ -780,12 +807,12 @@ def test_prepare_transcript_compacts_persisted_tail_before_resumed_turn(tmp_path
     """验证进程重启后恢复同 session 的首轮会先同步压缩已落盘 transcript。"""
 
     settings = ConversationMemorySettings()
-    store = FileConversationStore(tmp_path / "conversations")
+    store = FileConversationSessionArchiveStore(tmp_path / "conversations")
     runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
     compressor = _FakeCompressor()
     manager = DefaultConversationMemoryManager(
         runtime,
-        conversation_store=store,
+        archive_store=store,
         episodic_memory_compressor=compressor,
     )
     transcript = ConversationTranscript.create_empty("sess_1")
@@ -798,25 +825,28 @@ def test_prepare_transcript_compacts_persisted_tail_before_resumed_turn(tmp_path
                 assistant_final="",
             )
         )
-    store.save(transcript)
+    store.save(_archive_from_transcript(transcript), expected_revision=None)
+    seeded_archive = store.load("sess_1")
+    assert seeded_archive is not None
+    seeded_transcript = seeded_archive.runtime_transcript
 
     prepared = asyncio.run(
         manager.prepare_transcript(
             session_id="sess_1",
             prepared_scene=_build_prepared_scene(settings=settings, max_context_tokens=2048),
-            transcript=transcript,
+            transcript=seeded_transcript,
             system_prompt="sys",
             user_text="hi",
         )
     )
 
-    persisted = store.load("sess_1")
+    persisted_archive = store.load("sess_1")
 
     assert prepared.compacted_turn_count == 2
     assert prepared.episodes
     assert compressor.calls == [("sess_1", ("turn_1", "turn_2"))]
-    assert persisted is not None
-    assert persisted.compacted_turn_count == 2
+    assert persisted_archive is not None
+    assert persisted_archive.runtime_transcript.compacted_turn_count == 2
 
 
 @pytest.mark.unit
@@ -824,12 +854,12 @@ def test_conversation_memory_emits_compaction_logs(tmp_path: Path, monkeypatch: 
     """ConversationMemory 关键 compaction 动作应输出 verbose/debug 日志。"""
 
     settings = ConversationMemorySettings()
-    store = FileConversationStore(tmp_path / "conversations")
+    store = FileConversationSessionArchiveStore(tmp_path / "conversations")
     runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
     compressor = _FakeCompressor()
     manager = DefaultConversationMemoryManager(
         runtime,
-        conversation_store=store,
+        archive_store=store,
         episodic_memory_compressor=compressor,
     )
     transcript = ConversationTranscript.create_empty("sess_log")
@@ -842,7 +872,10 @@ def test_conversation_memory_emits_compaction_logs(tmp_path: Path, monkeypatch: 
                 assistant_final="",
             )
         )
-    store.save(transcript)
+    store.save(_archive_from_transcript(transcript), expected_revision=None)
+    seeded_archive = store.load("sess_log")
+    assert seeded_archive is not None
+    transcript = seeded_archive.runtime_transcript
 
     verbose_mock = Mock()
     debug_mock = Mock()
@@ -923,7 +956,7 @@ def test_compaction_triggered_by_window_ratio(tmp_path: Path) -> None:
     runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
     manager = DefaultConversationMemoryManager(
         runtime,
-        conversation_store=FileConversationStore(tmp_path / "conversations"),
+        archive_store=FileConversationSessionArchiveStore(tmp_path / "conversations"),
     )
     transcript = ConversationTranscript.create_empty("sess_trig")
     for index in range(1, 5):
@@ -955,7 +988,7 @@ def test_compaction_not_triggered_below_ratio(tmp_path: Path) -> None:
     runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
     manager = DefaultConversationMemoryManager(
         runtime,
-        conversation_store=FileConversationStore(tmp_path / "conversations"),
+        archive_store=FileConversationSessionArchiveStore(tmp_path / "conversations"),
     )
     transcript = ConversationTranscript.create_empty("sess_low")
     for index in range(1, 4):
@@ -1048,7 +1081,7 @@ def test_compaction_trigger_does_not_count_episodes(tmp_path: Path) -> None:
     runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
     manager = DefaultConversationMemoryManager(
         runtime,
-        conversation_store=FileConversationStore(tmp_path / "conversations"),
+        archive_store=FileConversationSessionArchiveStore(tmp_path / "conversations"),
     )
     transcript = ConversationTranscript.create_empty("sess_no_eps")
     transcript = transcript.append_turn(_build_turn(1))
@@ -1096,7 +1129,7 @@ def test_schedule_compaction_passes_system_prompt_token_estimate(tmp_path: Path)
     runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
     manager = DefaultConversationMemoryManager(
         runtime,
-        conversation_store=FileConversationStore(tmp_path / "conversations"),
+        archive_store=FileConversationSessionArchiveStore(tmp_path / "conversations"),
     )
     transcript = ConversationTranscript.create_empty("sess_wired")
     for index in range(1, 4):
@@ -1164,7 +1197,7 @@ def test_compaction_trigger_counts_actual_episode_in_prompt(tmp_path: Path) -> N
     runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
     manager = DefaultConversationMemoryManager(
         runtime,
-        conversation_store=FileConversationStore(tmp_path / "conversations"),
+        archive_store=FileConversationSessionArchiveStore(tmp_path / "conversations"),
     )
     transcript = ConversationTranscript.create_empty("sess_round2_1")
     # raw turns 体量很小，单独不会触发。
@@ -1224,3 +1257,166 @@ def test_default_conversation_memory_settings_match_runtime_default() -> None:
         == runtime_default.compaction_context_episode_window
     )
     assert dataclass_default.compaction_scene_name == runtime_default.compaction_scene_name
+
+
+@pytest.mark.unit
+def test_prepare_transcript_skips_compaction_write_when_live_runtime_revision_diverged(
+    tmp_path: Path,
+) -> None:
+    """业务层 stale-check：``live.runtime_transcript.revision`` 与
+    ``compaction_input_transcript.revision`` 不一致时丢弃 compaction 结果，
+    既不调用 ``archive_store.save``，也不触碰 ``history_archive``。
+    """
+
+    from unittest.mock import MagicMock
+
+    settings = ConversationMemorySettings()
+    store = FileConversationSessionArchiveStore(tmp_path / "conversations")
+    runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
+    compressor = _FakeCompressor()
+    manager = DefaultConversationMemoryManager(
+        runtime,
+        archive_store=store,
+        episodic_memory_compressor=compressor,
+    )
+    transcript = ConversationTranscript.create_empty("sess_stale")
+    for index in range(1, 7):
+        transcript = transcript.append_turn(
+            ConversationTurnRecord(
+                turn_id=f"turn_{index}",
+                scene_name="interactive",
+                user_text=f"问题-{index}-" + ("x" * 794),
+                assistant_final="",
+            )
+        )
+    store.save(_archive_from_transcript(transcript), expected_revision=None)
+    seeded_archive = store.load("sess_stale")
+    assert seeded_archive is not None
+
+    # 模拟 prepare_transcript 期间外部并发推进 runtime_transcript.revision：
+    # 通过 monkeypatch store.load 让 manager 读到的 live archive 带新 revision
+    # 同时保留原 history_archive，使写入断言能区分两者。
+    from dataclasses import replace
+
+    bumped_runtime = replace(
+        seeded_archive.runtime_transcript, revision="bumped-runtime-rev"
+    )
+    bumped_archive = replace(
+        seeded_archive, runtime_transcript=bumped_runtime, revision="bumped-archive-rev"
+    )
+
+    save_spy = MagicMock(side_effect=AssertionError("save 不应被调用"))
+    store.save = save_spy  # type: ignore[method-assign]
+    store.load = lambda session_id: (  # type: ignore[method-assign]
+        bumped_archive if session_id == "sess_stale" else None
+    )
+
+    asyncio.run(
+        manager.prepare_transcript(
+            session_id="sess_stale",
+            prepared_scene=_build_prepared_scene(
+                settings=settings, max_context_tokens=2048
+            ),
+            transcript=seeded_archive.runtime_transcript,
+            system_prompt="sys",
+            user_text="hi",
+        )
+    )
+
+    # 业务层 stale-check 应触发：save 一次也不应被调用
+    save_spy.assert_not_called()
+    # compaction 仍尝试压缩（_FakeCompressor 被调用），只是结果被丢弃
+    assert compressor.calls, "compaction 应该执行了，但写回被 stale-check 丢弃"
+
+
+@pytest.mark.unit
+def test_compaction_only_replaces_runtime_transcript_subview(tmp_path: Path) -> None:
+    """compaction 写回路径仅替换 runtime_transcript 子视图，``history_archive`` 原样保留。"""
+
+    settings = ConversationMemorySettings()
+    store = FileConversationSessionArchiveStore(tmp_path / "conversations")
+    runtime = _FakeRuntime(resolved_options=_build_resolved_options(settings))
+    compressor = _FakeCompressor()
+    manager = DefaultConversationMemoryManager(
+        runtime,
+        archive_store=store,
+        episodic_memory_compressor=compressor,
+    )
+    transcript = ConversationTranscript.create_empty("sess_keep_history")
+    for index in range(1, 7):
+        transcript = transcript.append_turn(
+            ConversationTurnRecord(
+                turn_id=f"turn_{index}",
+                scene_name="interactive",
+                user_text=f"问题-{index}-" + ("x" * 794),
+                assistant_final="",
+            )
+        )
+    store.save(_archive_from_transcript(transcript), expected_revision=None)
+    seeded_archive = store.load("sess_keep_history")
+    assert seeded_archive is not None
+
+    # 在 archive 中预置一条 history（模拟"已有展示历史"）
+    from dayu.host.conversation_session_archive import ConversationHistoryTurnRecord
+
+    history_turn = ConversationHistoryTurnRecord(
+        turn_id="hist_turn_1",
+        scene_name="interactive",
+        user_text="历史问题",
+        assistant_text="历史回答",
+        assistant_reasoning="历史思考片段",
+        created_at=seeded_archive.runtime_transcript.created_at,
+    )
+    archive_with_history = _dc_replace_archive_history(
+        seeded_archive, history_turns=(history_turn,)
+    )
+    store.save(archive_with_history, expected_revision=seeded_archive.revision)
+
+    seeded_archive_with_history = store.load("sess_keep_history")
+    assert seeded_archive_with_history is not None
+
+    asyncio.run(
+        manager.prepare_transcript(
+            session_id="sess_keep_history",
+            prepared_scene=_build_prepared_scene(
+                settings=settings, max_context_tokens=2048
+            ),
+            transcript=seeded_archive_with_history.runtime_transcript,
+            system_prompt="sys",
+            user_text="hi",
+        )
+    )
+
+    persisted = store.load("sess_keep_history")
+    assert persisted is not None
+    # runtime_transcript 已被压缩推进
+    assert persisted.runtime_transcript.compacted_turn_count >= 1
+    # history_archive 完整保留：内容、reasoning 都未被 compaction 触碰
+    assert len(persisted.history_archive.turns) == 1
+    assert persisted.history_archive.turns[0].assistant_reasoning == "历史思考片段"
+    assert persisted.history_archive.turns[0].assistant_text == "历史回答"
+
+
+def _dc_replace_archive_history(
+    archive,
+    *,
+    history_turns,
+):
+    """构造仅替换 history_archive 的 archive 副本，并推进 archive.revision 与 runtime.revision 同步。"""
+
+    from dataclasses import replace
+    import uuid
+
+    from dayu.host.conversation_session_archive import ConversationHistoryArchive
+
+    new_history = ConversationHistoryArchive(
+        session_id=archive.session_id, turns=tuple(history_turns)
+    )
+    new_revision = f"rev_{uuid.uuid4().hex[:8]}"
+    runtime = replace(archive.runtime_transcript, revision=new_revision)
+    return replace(
+        archive,
+        revision=new_revision,
+        runtime_transcript=runtime,
+        history_archive=new_history,
+    )

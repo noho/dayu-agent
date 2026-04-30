@@ -1516,18 +1516,27 @@ def test_scene_preparer_conversation_session_state_persist_turn_saves_and_schedu
     persisted: list[object] = []
     scheduled: list[object] = []
 
-    def _save(next_transcript, *, expected_revision):
-        persisted.extend([next_transcript, expected_revision])
-        return next_transcript
+    def _save(next_archive, *, expected_revision):
+        persisted.extend([next_archive, expected_revision])
+        return next_archive
 
     def _schedule_compaction(*, session_id, prepared_scene, transcript, system_prompt):
         scheduled.extend([session_id, prepared_scene, transcript, system_prompt])
 
+    from dataclasses import replace as _dc_replace
+    base_archive = scene_preparer_module.ConversationSessionArchive.create_empty("session-1")
+    initial_archive = _dc_replace(
+        base_archive,
+        runtime_transcript=_dc_replace(transcript, revision=base_archive.revision),
+    )
     session_state = scene_preparer_module.ConversationSessionState(
         session_id="session-1",
         scene_name="prompt",
-        transcript=transcript,
-        conversation_store=cast(scene_preparer_module.ConversationStore, SimpleNamespace(save=_save)),
+        current_archive=initial_archive,
+        archive_store=cast(
+            scene_preparer_module.ConversationSessionArchiveStore,
+            SimpleNamespace(save=_save),
+        ),
         memory_manager=cast(scene_preparer_module.DefaultConversationMemoryManager, SimpleNamespace(schedule_compaction=_schedule_compaction)),
         prepared_scene=prepared_scene,
         user_message="hello",
@@ -1542,8 +1551,9 @@ def test_scene_preparer_conversation_session_state_persist_turn_saves_and_schedu
         errors=("err",),
     )
 
-    saved_transcript = cast(scene_preparer_module.ConversationTranscript, persisted[0])
-    assert persisted[1] == transcript.revision
+    saved_archive = cast(scene_preparer_module.ConversationSessionArchive, persisted[0])
+    saved_transcript = saved_archive.runtime_transcript
+    assert persisted[1] == initial_archive.revision
     assert len(saved_transcript.turns) == 1
     assert saved_transcript.turns[0].assistant_final == "done"
     assert saved_transcript.turns[0].warnings == ("warn",)

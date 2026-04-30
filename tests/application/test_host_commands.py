@@ -684,11 +684,11 @@ def test_format_helpers_cover_invalid_and_elapsed_cases(monkeypatch: pytest.Monk
 
 
 @pytest.mark.unit
-def test_default_host_assembly_shares_conversation_store_with_scene_preparer(tmp_path: Path) -> None:
-    """Host 默认装配应让 ScenePreparer 与 Host 本体持有同一 conversation_store 实例。
+def test_default_host_assembly_shares_archive_store_with_scene_preparer(tmp_path: Path) -> None:
+    """Host 默认装配应让 ScenePreparer 与 Host 本体持有同一 archive_store 实例。
 
     回归 review 条目 080：此前 `DefaultScenePreparer.__post_init__` 会在未收到外部
-    conversation_store 时自建 `FileConversationStore`，导致 Host 与其内部 ScenePreparer
+    archive_store 时自建实例，导致 Host 与其内部 ScenePreparer
     指向同一目录的两个独立实例，未来引入 transcript 内存缓存会触发 stale read。
     """
 
@@ -699,7 +699,7 @@ def test_default_host_assembly_shares_conversation_store_with_scene_preparer(tmp
         OpenAIRunnerRuntimeConfig,
     )
     from dayu.host.host import _build_default_host_components
-    from dayu.host.conversation_store import FileConversationStore
+    from dayu.host.conversation_store import FileConversationSessionArchiveStore
     from dayu.host.scene_preparer import DefaultScenePreparer
     from dayu.workspace_paths import build_conversation_store_dir
 
@@ -718,7 +718,7 @@ def test_default_host_assembly_shares_conversation_store_with_scene_preparer(tmp
         trace_settings=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
         temperature=None,
     )
-    shared_store = FileConversationStore(build_conversation_store_dir(workspace_root))
+    shared_store = FileConversationSessionArchiveStore(build_conversation_store_dir(workspace_root))
     components = _build_default_host_components(
         workspace=workspace,
         model_catalog=cast(Any, object()),
@@ -726,10 +726,10 @@ def test_default_host_assembly_shares_conversation_store_with_scene_preparer(tmp
         host_store_path=tmp_path / "host.sqlite3",
         lane_config={"llm_api": 1},
         event_bus=None,
-        conversation_store=shared_store,
+        archive_store=shared_store,
     )
 
     executor = components._executor
     scene_preparation = cast(DefaultScenePreparer, executor.scene_preparation)
     assert scene_preparation is not None
-    assert scene_preparation._conversation_store_impl is shared_store
+    assert scene_preparation._archive_store_impl is shared_store

@@ -11,7 +11,13 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Protocol, TextIO
+from typing import TYPE_CHECKING, Iterator, Protocol, TextIO
+
+if TYPE_CHECKING:
+    from dayu.host.conversation_session_archive import (
+        ConversationHistoryTurnRecord,
+        ConversationSessionArchive,
+    )
 
 import dayu.file_lock as file_lock_module
 
@@ -498,52 +504,122 @@ def _parse_turn_list(raw: object) -> tuple[ConversationTurnRecord, ...]:
     return tuple(turns)
 
 
-class ConversationStore(Protocol):
-    """会话 transcript 存储协议。"""
+class ConversationSessionArchiveStore(Protocol):
+    """会话 archive 存储协议。
 
-    def load(self, session_id: str) -> ConversationTranscript | None:
-        """读取指定 session 的 transcript。
+    存储对象升级为 ``ConversationSessionArchive`` 聚合根；``runtime_transcript``
+    与 ``history_archive`` 子视图通过聚合根在单文件下原子提交。
+    """
+
+    def load(self, session_id: str) -> "ConversationSessionArchive | None":
+        """读取指定 session 的 archive。
 
         Args:
             session_id: 会话 ID。
 
         Returns:
-            transcript；不存在时返回 ``None``。
+            archive；不存在时返回 ``None``。
 
         Raises:
             ValueError: session_id 非法时抛出。
+            RuntimeError: 磁盘内容是旧 transcript schema 时抛出。
         """
         ...
 
     def save(
         self,
-        transcript: ConversationTranscript,
+        archive: "ConversationSessionArchive",
         *,
         expected_revision: str | None = None,
-    ) -> ConversationTranscript:
-        """保存 transcript。
+    ) -> "ConversationSessionArchive":
+        """保存 archive。
 
         Args:
-            transcript: 待保存 transcript。
-            expected_revision: 预期旧 revision；用于乐观锁控制。
+            archive: 待保存 archive。
+            expected_revision: 预期旧 archive revision；用于乐观锁控制。
 
         Returns:
-            实际保存后的 transcript。
+            实际保存后的 archive。
 
         Raises:
             RuntimeError: revision 冲突时抛出。
         """
         ...
 
+    def load_or_create(self, session_id: str) -> "ConversationSessionArchive":
+        """读取 archive；若磁盘缺失则在锁内原子创建空 archive。
 
-class FileConversationStore:
-    """基于文件系统的 transcript 存储。"""
+        ``prepare`` 首轮装配真源专用：消除 ``load -> save(expected_revision=None)``
+        之间的 TOCTOU 窗口，避免并发 prepare 把另一进程已经写好的 live archive
+        覆盖成空文件。
+
+        语义：取 session 文件锁 -> ``load`` live -> 若 ``None`` 则**在锁内**
+        原子写入 ``ConversationSessionArchive.create_empty(session_id)`` -> 返回
+        live archive 或新建 archive。任何并发写入只会让先到的胜出，后到的拿到
+        live archive 而不会回写空版本。
+
+        Args:
+            session_id: 会话 ID。
+
+        Returns:
+            读到或新建的 archive。
+
+        Raises:
+            ValueError: session_id 非法时抛出。
+            RuntimeError: 磁盘内容是旧 transcript schema 时抛出。
+        """
+        ...
+
+    def append_turn(
+        self,
+        session_id: str,
+        *,
+        turn_record: ConversationTurnRecord,
+        history_record: "ConversationHistoryTurnRecord",
+    ) -> "ConversationSessionArchive":
+        """resume 落盘专用：在 live archive 上 reconcile 写入新一轮。
+
+        语义：取 session 文件锁 -> ``load`` live -> 若 ``None`` 则抛
+        ``ConversationArchiveMissingError`` -> 在 live 上 ``with_next_turn`` 推进 ->
+        单文件原子写。**不**预设"自动 create_empty"策略。
+
+        Args:
+            session_id: 会话 ID。
+            turn_record: 新增运行态 turn。
+            history_record: 与之一一对应的历史展示记录。
+
+        Returns:
+            落盘后的 archive。
+
+        Raises:
+            ConversationArchiveMissingError: live archive 缺失时抛出。
+            ValueError: 当 ``turn_id`` 不一致时抛出。
+        """
+        ...
+
+    def delete(self, session_id: str) -> bool:
+        """删除指定 session 的 archive。
+
+        Args:
+            session_id: 会话 ID。
+
+        Returns:
+            archive 文件存在并被删除返回 ``True``，否则 ``False``。
+
+        Raises:
+            ValueError: session_id 非法时抛出。
+        """
+        ...
+
+
+class FileConversationSessionArchiveStore:
+    """基于文件系统的 archive 存储。"""
 
     def __init__(self, root_dir: Path) -> None:
         """初始化存储实现。
 
         Args:
-            root_dir: transcript 根目录。
+            root_dir: archive 根目录。
 
         Returns:
             无。
@@ -557,75 +633,197 @@ class FileConversationStore:
         self._lock_dir = self._root_dir / ".locks"
         self._lock_dir.mkdir(parents=True, exist_ok=True)
 
-    def load(self, session_id: str) -> ConversationTranscript | None:
-        """读取指定 session 的 transcript。
+    def load(self, session_id: str) -> "ConversationSessionArchive | None":
+        """读取指定 session 的 archive。
 
         Args:
             session_id: 会话 ID。
 
         Returns:
-            transcript；文件不存在时返回 ``None``。
+            archive；文件不存在时返回 ``None``。
 
         Raises:
             ValueError: session_id 为空时抛出。
+            RuntimeError: 磁盘内容是旧 transcript schema 时抛出。
         """
+
+        from dayu.host.conversation_session_archive import ConversationSessionArchive
 
         file_path = self._resolve_file_path(session_id)
         if not file_path.exists():
-            Log.debug(f"transcript 不存在: session_id={session_id}", module=MODULE)
+            Log.debug(f"archive 不存在: session_id={session_id}", module=MODULE)
             return None
         payload = json.loads(file_path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
-            raise ValueError(f"conversation transcript 非法: {file_path}")
-        Log.debug(f"加载 transcript: session_id={session_id}, file={file_path.name}", module=MODULE)
-        return ConversationTranscript.from_dict(payload)
+            raise ValueError(f"conversation session archive 非法: {file_path}")
+        if "runtime_transcript" not in payload and "turns" in payload:
+            raise RuntimeError(
+                "conversation transcript 已升级为 archive schema，请运行 dayu-cli init 完成迁移："
+                f"session_id={session_id}, file={file_path}"
+            )
+        Log.debug(f"加载 archive: session_id={session_id}, file={file_path.name}", module=MODULE)
+        return ConversationSessionArchive.from_dict(payload)
 
     def save(
         self,
-        transcript: ConversationTranscript,
+        archive: "ConversationSessionArchive",
         *,
         expected_revision: str | None = None,
-    ) -> ConversationTranscript:
-        """保存 transcript。
+    ) -> "ConversationSessionArchive":
+        """保存 archive。
 
         Args:
-            transcript: 待保存 transcript。
-            expected_revision: 预期旧 revision；用于乐观锁控制。
+            archive: 待保存 archive。
+            expected_revision: 预期旧 archive revision；用于乐观锁控制。
 
         Returns:
-            实际保存后的 transcript。
+            实际保存后的 archive。
 
         Raises:
             RuntimeError: revision 冲突时抛出。
         """
 
-        file_path = self._resolve_file_path(transcript.session_id)
-        with self._transcript_file_lock(transcript.session_id):
+        file_path = self._resolve_file_path(archive.session_id)
+        with self._transcript_file_lock(archive.session_id):
             if file_path.exists():
-                existing = self.load(transcript.session_id)
-                if existing is not None and expected_revision is not None and existing.revision != expected_revision:
+                existing = self.load(archive.session_id)
+                if (
+                    existing is not None
+                    and expected_revision is not None
+                    and existing.revision != expected_revision
+                ):
                     Log.warning(
-                        "conversation transcript revision 冲突: "
-                        f"session_id={transcript.session_id}, expected={expected_revision}, actual={existing.revision}",
+                        "conversation session archive revision 冲突: "
+                        f"session_id={archive.session_id}, expected={expected_revision}, actual={existing.revision}",
                         module=MODULE,
                     )
                     raise RuntimeError(
-                        "conversation transcript revision 冲突："
-                        f"session_id={transcript.session_id}, expected={expected_revision}, actual={existing.revision}"
+                        "conversation session archive revision 冲突："
+                        f"session_id={archive.session_id}, expected={expected_revision}, actual={existing.revision}"
                     )
-            # 文件不存在时直接写入：首轮 transcript 仅存在于内存，不构成并发冲突
+            # 文件不存在时直接写入：首轮 archive 仅存在于内存，不构成并发冲突
             _atomic_write_text(
                 file_path,
-                json.dumps(_serialize_transcript(transcript), ensure_ascii=False, indent=2),
+                json.dumps(archive.to_dict(), ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
         Log.debug(
-            "保存 transcript: "
-            f"session_id={transcript.session_id}, revision={transcript.revision}, turns={len(transcript.turns)}, "
-            f"episodes={len(transcript.episodes)}, compacted_turn_count={transcript.compacted_turn_count}",
+            "保存 archive: "
+            f"session_id={archive.session_id}, revision={archive.revision}, "
+            f"turns={len(archive.runtime_transcript.turns)}, history_turns={len(archive.history_archive.turns)}",
             module=MODULE,
         )
-        return transcript
+        return archive
+
+    def load_or_create(self, session_id: str) -> "ConversationSessionArchive":
+        """读取 archive；磁盘缺失时在锁内原子创建空 archive。
+
+        消除 ``prepare`` 首轮装配真源的 TOCTOU 窗口：``load`` 与 ``save`` 之间
+        若另一进程已经写好真实 archive，普通的
+        ``save(create_empty, expected_revision=None)`` 会把对方刚落下的历史
+        覆盖成空文件。本方法在文件锁保护下做 load-or-create，先到的胜出，
+        后到的拿到 live archive。
+
+        Args:
+            session_id: 会话 ID。
+
+        Returns:
+            读到或新建的 archive。
+
+        Raises:
+            ValueError: session_id 非法时抛出。
+            RuntimeError: 磁盘内容是旧 transcript schema 时抛出。
+        """
+
+        from dayu.host.conversation_session_archive import ConversationSessionArchive
+
+        normalized_session_id = _normalize_session_id(session_id)
+        file_path = self._resolve_file_path(normalized_session_id)
+        with self._transcript_file_lock(normalized_session_id):
+            existing = self.load(normalized_session_id)
+            if existing is not None:
+                return existing
+            new_archive = ConversationSessionArchive.create_empty(normalized_session_id)
+            _atomic_write_text(
+                file_path,
+                json.dumps(new_archive.to_dict(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        Log.debug(
+            f"创建空 archive: session_id={normalized_session_id}, revision={new_archive.revision}",
+            module=MODULE,
+        )
+        return new_archive
+
+    def append_turn(
+        self,
+        session_id: str,
+        *,
+        turn_record: ConversationTurnRecord,
+        history_record: "ConversationHistoryTurnRecord",
+    ) -> "ConversationSessionArchive":
+        """resume 落盘专用：在 live archive 上 reconcile 写入新一轮。
+
+        Args:
+            session_id: 会话 ID。
+            turn_record: 新增运行态 turn。
+            history_record: 与之一一对应的历史展示记录。
+
+        Returns:
+            落盘后的 archive。
+
+        Raises:
+            ConversationArchiveMissingError: live archive 缺失时抛出。
+            ValueError: 当 ``turn_id`` 不一致时抛出。
+        """
+
+        from dayu.host.conversation_session_archive import ConversationArchiveMissingError
+
+        normalized_session_id = _normalize_session_id(session_id)
+        file_path = self._resolve_file_path(normalized_session_id)
+        with self._transcript_file_lock(normalized_session_id):
+            live = self.load(normalized_session_id)
+            if live is None:
+                raise ConversationArchiveMissingError(
+                    "conversation session archive 缺失，无法 reconcile-on-write："
+                    f"session_id={normalized_session_id}"
+                )
+            next_archive = live.with_next_turn(turn_record, history_record)
+            _atomic_write_text(
+                file_path,
+                json.dumps(next_archive.to_dict(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        Log.debug(
+            "reconcile 写入 archive: "
+            f"session_id={normalized_session_id}, revision={next_archive.revision}, "
+            f"turns={len(next_archive.runtime_transcript.turns)}",
+            module=MODULE,
+        )
+        return next_archive
+
+    def delete(self, session_id: str) -> bool:
+        """删除指定 session 的 archive。
+
+        Args:
+            session_id: 会话 ID。
+
+        Returns:
+            archive 文件存在并被删除返回 ``True``，否则 ``False``。
+
+        Raises:
+            ValueError: session_id 非法时抛出。
+        """
+
+        normalized_session_id = _normalize_session_id(session_id)
+        file_path = self._resolve_file_path(normalized_session_id)
+        with self._transcript_file_lock(normalized_session_id):
+            if not file_path.exists():
+                return False
+            file_path.unlink()
+            _fsync_parent_directory(file_path)
+        Log.debug(f"删除 archive: session_id={normalized_session_id}", module=MODULE)
+        return True
 
     def _resolve_file_path(self, session_id: str) -> Path:
         """解析指定 session 的文件路径。
@@ -686,9 +884,9 @@ class FileConversationStore:
 __all__ = [
     "ConversationEpisodeSummary",
     "ConversationPinnedState",
-    "ConversationStore",
+    "ConversationSessionArchiveStore",
     "ConversationToolUseSummary",
     "ConversationTranscript",
     "ConversationTurnRecord",
-    "FileConversationStore",
+    "FileConversationSessionArchiveStore",
 ]

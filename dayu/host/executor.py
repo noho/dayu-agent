@@ -1287,6 +1287,13 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 final_content = str(stream_event.data.get("content") or "")
                 degraded = bool(stream_event.data.get("degraded", False))
                 filtered = bool(stream_event.data.get("filtered", False))
+            elif stream_event.type == EventType.REASONING_DELTA:
+                # reasoning 仅作为历史展示字段 buffer，不进入运行态 transcript / persist。
+                # session_state 缺失时静默丢弃；reasoning 是展示侧能力，不应阻塞 run。
+                if agent_input.session_state is not None:
+                    agent_input.session_state.record_reasoning_delta(
+                        str(stream_event.data or "")
+                    )
         if replay_capture is not None:
             # 即使被取消或失败也把当前历史快照交给 caller，由调用方决定是否登记。
             replay_capture.messages = list(running_messages)

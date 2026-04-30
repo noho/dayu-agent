@@ -172,6 +172,23 @@ class ConversationTurnPersistenceProtocol(Protocol):
     ) -> None:
         """持久化当前 conversation turn 的执行结果。"""
 
+    def record_reasoning_delta(self, chunk: str) -> None:
+        """累积本轮 reasoning 增量到展示侧 buffer。
+
+        语义说明：reasoning 仅作为历史展示字段持久化，**不**进入运行态送模、
+        memory、compaction、resume 决策链路。executor 在收到 reasoning 增量
+        事件时调用本方法做 buffer，``persist_turn`` 时统一刷入展示侧子视图。
+
+        Args:
+            chunk: 单次 reasoning 增量文本。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
 
 __all__ = [
     "AgentMessage",

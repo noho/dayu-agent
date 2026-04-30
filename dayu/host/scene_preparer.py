@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from importlib import import_module
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Literal, Protocol, cast, runtime_checkable
 
@@ -51,11 +51,17 @@ from dayu.host.conversation_runtime import (
     ConversationCompactionSceneProtocol,
 )
 from dayu.host.conversation_store import (
-    ConversationStore,
+    ConversationSessionArchiveStore,
     ConversationToolUseSummary,
     ConversationTranscript,
     ConversationTurnRecord,
-    FileConversationStore,
+    FileConversationSessionArchiveStore,
+)
+from dayu.host.conversation_session_archive import (
+    ConversationArchiveMissingError,
+    ConversationHistoryArchive,
+    ConversationHistoryTurnRecord,
+    ConversationSessionArchive,
 )
 from dayu.host.host_execution import HostedRunContext
 from dayu.host.prepared_turn import PreparedAgentTurnSnapshot, PreparedConversationSessionSnapshot
@@ -181,16 +187,60 @@ class PreparedSceneState:
 
 @dataclass
 class ConversationSessionState:
-    """多轮 Host Session 的会话状态快照。"""
+    """多轮 Host Session 的会话状态快照。
+
+    ``current_archive`` 是落盘真源；``transcript`` 仅暴露运行态送模子视图，
+    ``_reasoning_buffer`` 在 turn 内累积 reasoning 流式 chunk，仅在
+    ``persist_turn`` 落盘时投影进 ``history_archive``，**绝不**进入运行态
+    transcript / messages / memory / compaction 任何路径。
+    """
 
     session_id: str
     scene_name: str
-    transcript: ConversationTranscript
-    conversation_store: ConversationStore
+    current_archive: ConversationSessionArchive
+    archive_store: ConversationSessionArchiveStore
     memory_manager: DefaultConversationMemoryManager
     prepared_scene: PreparedSceneState
     user_message: str
     system_prompt: str
+    _reasoning_buffer: list[str] = field(default_factory=list, init=False)
+
+    @property
+    def transcript(self) -> ConversationTranscript:
+        """返回当前 archive 的运行态送模子视图。
+
+        Args:
+            无。
+
+        Returns:
+            ``current_archive.runtime_transcript``。
+
+        Raises:
+            无。
+        """
+
+        return self.current_archive.runtime_transcript
+
+    def record_reasoning_delta(self, chunk: str) -> None:
+        """累积本轮 reasoning 流式增量到展示侧 buffer。
+
+        展示侧字段：仅在 ``persist_turn`` 时投影到 ``history_archive``，
+        不进入运行态 transcript / 送模 messages / memory / compaction。
+
+        Args:
+            chunk: 流式 reasoning 增量文本。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        normalized = str(chunk or "")
+        if not normalized:
+            return
+        self._reasoning_buffer.append(normalized)
 
     def persist_turn(
         self,
@@ -201,7 +251,34 @@ class ConversationSessionState:
         warnings: tuple[str, ...],
         errors: tuple[str, ...],
     ) -> None:
-        """把当前轮结果写回 transcript 并调度后台压缩。"""
+        """把当前轮结果写回 archive 并调度后台压缩。
+
+        路径分叉（必须在构造 ``next_archive`` 之前）：
+
+        - ``current_archive.revision == ""`` 表示当前 archive 是 resume 路径
+          的临时 placeholder（不持有 live revision）。走
+          ``archive_store.append_turn(... reconcile-on-write)`` 落盘合并 live。
+          缺失 live archive 时 ``ConversationArchiveMissingError`` 直接上抛。
+        - 否则（正常路径）走 ``with_next_turn`` + ``save(expected_revision=...)``
+          的乐观锁路径。
+
+        任一步失败 → 异常上抛、``_reasoning_buffer`` 不清空（重试不丢内容）、
+        磁盘旧 archive 完整。
+
+        Args:
+            final_content: assistant 最终回复文本。
+            degraded: 本轮是否进入降级路径。
+            tool_uses: 本轮工具调用摘要。
+            warnings: 本轮告警。
+            errors: 本轮错误。
+
+        Returns:
+            无。
+
+        Raises:
+            ConversationArchiveMissingError: resume 路径下 live archive 缺失时抛出。
+            RuntimeError: 乐观锁冲突时抛出。
+        """
 
         turn_record = ConversationTurnRecord(
             turn_id=f"turn_{uuid.uuid4().hex[:8]}",
@@ -213,12 +290,32 @@ class ConversationSessionState:
             warnings=warnings,
             errors=errors,
         )
-        next_transcript = self.transcript.append_turn(turn_record)
-        persisted = self.conversation_store.save(next_transcript, expected_revision=self.transcript.revision)
+        history_record = ConversationHistoryTurnRecord(
+            turn_id=turn_record.turn_id,
+            scene_name=turn_record.scene_name,
+            user_text=turn_record.user_text,
+            assistant_text=final_content,
+            assistant_reasoning="".join(self._reasoning_buffer),
+            created_at=turn_record.created_at,
+        )
+        if self.current_archive.revision == "":
+            persisted = self.archive_store.append_turn(
+                self.session_id,
+                turn_record=turn_record,
+                history_record=history_record,
+            )
+        else:
+            next_archive = self.current_archive.with_next_turn(turn_record, history_record)
+            persisted = self.archive_store.save(
+                next_archive,
+                expected_revision=self.current_archive.revision,
+            )
+        self.current_archive = persisted
+        self._reasoning_buffer.clear()
         self.memory_manager.schedule_compaction(
             session_id=self.session_id,
             prepared_scene=self.prepared_scene,
-            transcript=persisted,
+            transcript=persisted.runtime_transcript,
             system_prompt=self.system_prompt,
         )
 
@@ -352,20 +449,23 @@ class DefaultScenePreparer(ScenePreparationProtocol):
     model_catalog: ModelCatalogProtocol
     default_execution_options: ResolvedExecutionOptions
     tool_registry_factory: ToolRegistryFactory
-    conversation_store: ConversationStore | None = None
+    archive_store: ConversationSessionArchiveStore | None = None
 
     def __post_init__(self) -> None:
         """初始化辅助依赖。"""
 
         self._prompt_composer = PromptComposer()
         self._trace_provider = TraceRecorderFactoryProvider()
-        self._conversation_store_impl = self.conversation_store or FileConversationStore(
-            build_conversation_store_dir(self.workspace.workspace_dir)
+        self._archive_store_impl: ConversationSessionArchiveStore = (
+            self.archive_store
+            or FileConversationSessionArchiveStore(
+                build_conversation_store_dir(self.workspace.workspace_dir)
+            )
         )
         self._conversation_runtime = _ConversationRuntimeAdapter(self)
         self._memory_manager = DefaultConversationMemoryManager(
             self._conversation_runtime,
-            conversation_store=self._conversation_store_impl,
+            archive_store=self._archive_store_impl,
         )
 
     async def prepare(
@@ -399,26 +499,32 @@ class DefaultScenePreparer(ScenePreparationProtocol):
         session_state: ConversationSessionState | None = None
         if prepared_scene.scene_definition.conversation.enabled and session_key:
             await self._memory_manager.cancel_pending_compaction(session_key)
-            existing_transcript = self._conversation_store_impl.load(session_key)
-            transcript = existing_transcript or ConversationTranscript.create_empty(session_key)
+            existing_archive = self._archive_store_impl.load_or_create(session_key)
+            current_archive = existing_archive
             transcript = await self._memory_manager.prepare_transcript(
                 session_id=session_key,
                 prepared_scene=prepared_scene,
-                transcript=transcript,
+                transcript=current_archive.runtime_transcript,
                 system_prompt=system_prompt,
                 user_text=user_message,
             )
+            if transcript.revision != current_archive.runtime_transcript.revision:
+                # prepare_transcript 内部走 archive_store.save 后，archive 已被推进；
+                # 这里重新读 live archive 保证 current_archive 持有最新 revision。
+                refreshed = self._archive_store_impl.load(session_key)
+                if refreshed is not None:
+                    current_archive = refreshed
             messages = self._memory_manager.build_messages(
                 prepared_scene=prepared_scene,
-                transcript=transcript,
+                transcript=current_archive.runtime_transcript,
                 system_prompt=system_prompt,
                 user_text=user_message,
             )
             session_state = ConversationSessionState(
                 session_id=session_key,
                 scene_name=execution_contract.scene_name,
-                transcript=transcript,
-                conversation_store=self._conversation_store_impl,
+                current_archive=current_archive,
+                archive_store=self._archive_store_impl,
                 memory_manager=self._memory_manager,
                 prepared_scene=prepared_scene,
                 user_message=user_message,
@@ -472,11 +578,21 @@ class DefaultScenePreparer(ScenePreparationProtocol):
         session_state: ConversationSessionState | None = None
         session_snapshot = prepared_turn.conversation_session
         if session_snapshot is not None:
+            # resume 输入只信 prepared snapshot：构造临时 placeholder archive，
+            # revision="" 标记位让 persist_turn 走 reconcile-on-write 落盘合并 live。
+            placeholder_archive = ConversationSessionArchive(
+                session_id=session_snapshot.session_id,
+                revision="",
+                created_at=session_snapshot.transcript.created_at,
+                updated_at=session_snapshot.transcript.updated_at,
+                runtime_transcript=session_snapshot.transcript,
+                history_archive=ConversationHistoryArchive.create_empty(session_snapshot.session_id),
+            )
             session_state = ConversationSessionState(
                 session_id=session_snapshot.session_id,
                 scene_name=prepared_turn.scene_name,
-                transcript=session_snapshot.transcript,
-                conversation_store=self._conversation_store_impl,
+                current_archive=placeholder_archive,
+                archive_store=self._archive_store_impl,
                 memory_manager=self._memory_manager,
                 prepared_scene=prepared_scene,
                 user_message=session_snapshot.user_message,

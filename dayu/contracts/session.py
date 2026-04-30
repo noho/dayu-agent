@@ -2,7 +2,7 @@
 
 定义会话（Session）的来源、状态和记录结构。
 Session 是宿主层对一个交互会话的元数据索引，存储在 SQLite 中。
-对话内容（ConversationTranscript）由 ConversationStore 独立管理。
+对话内容（ConversationSessionArchive）由 ConversationSessionArchiveStore 独立管理。
 """
 
 from __future__ import annotations
