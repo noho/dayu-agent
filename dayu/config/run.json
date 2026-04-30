@@ -63,6 +63,10 @@
     },
     "pending_turn_retention": {
       "retention_hours": 168
+    },
+    "cancellation_bridge": {
+      "poll_interval_seconds": 0.5,
+      "failure_grace_period_seconds": 5.0
     }
   },
   "tool_trace_config": {

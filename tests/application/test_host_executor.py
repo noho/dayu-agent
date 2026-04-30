@@ -327,8 +327,9 @@ def test_start_run_marks_failed_when_deadline_watcher_start_raises(
             run_id: str,
             token: executor_module.CancellationToken,
             poll_interval: float = 0.5,
+            failure_grace_period_seconds: float = 5.0,
         ) -> None:
-            del run_registry, run_id, token, poll_interval
+            del run_registry, run_id, token, poll_interval, failure_grace_period_seconds
             self.started = False
             self.stopped = False
             _TrackingBridge.instances.append(self)

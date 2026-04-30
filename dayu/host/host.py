@@ -37,6 +37,8 @@ from dayu.host.pending_turn_store import (
     SQLitePendingConversationTurnStore,
 )
 from dayu.host.startup_preparation import (
+    DEFAULT_CANCELLATION_BRIDGE_FAILURE_GRACE_PERIOD_SECONDS,
+    DEFAULT_CANCELLATION_BRIDGE_POLL_INTERVAL_SECONDS,
     DEFAULT_PENDING_TURN_RESUME_MAX_ATTEMPTS,
     DEFAULT_PENDING_TURN_RETENTION_HOURS,
 )
@@ -231,6 +233,12 @@ class Host:
         lane_config: dict[str, int] | None = None,
         pending_turn_resume_max_attempts: int = DEFAULT_PENDING_TURN_RESUME_MAX_ATTEMPTS,
         pending_turn_retention_hours: int = DEFAULT_PENDING_TURN_RETENTION_HOURS,
+        cancellation_bridge_poll_interval_seconds: float = (
+            DEFAULT_CANCELLATION_BRIDGE_POLL_INTERVAL_SECONDS
+        ),
+        cancellation_bridge_failure_grace_period_seconds: float = (
+            DEFAULT_CANCELLATION_BRIDGE_FAILURE_GRACE_PERIOD_SECONDS
+        ),
         event_bus: RunEventBusProtocol | None = None,
         executor: HostExecutorProtocol | None = None,
         session_registry: SessionRegistryProtocol | None = None,
@@ -295,6 +303,10 @@ class Host:
             lane_config=lane_config,
             event_bus=event_bus,
             archive_store=shared_archive_store,
+            cancellation_bridge_poll_interval_seconds=cancellation_bridge_poll_interval_seconds,
+            cancellation_bridge_failure_grace_period_seconds=(
+                cancellation_bridge_failure_grace_period_seconds
+            ),
         )
         self._executor = executor or default_components._executor
         self._session_registry = session_registry or default_components._session_registry
@@ -1941,6 +1953,12 @@ def _build_default_host_components(
     lane_config: dict[str, int] | None,
     event_bus: RunEventBusProtocol | None,
     archive_store: ConversationSessionArchiveStore | None,
+    cancellation_bridge_poll_interval_seconds: float = (
+        DEFAULT_CANCELLATION_BRIDGE_POLL_INTERVAL_SECONDS
+    ),
+    cancellation_bridge_failure_grace_period_seconds: float = (
+        DEFAULT_CANCELLATION_BRIDGE_FAILURE_GRACE_PERIOD_SECONDS
+    ),
 ) -> _DefaultHostComponents:
     """构造 Host 默认内部子组件。
 
@@ -1986,6 +2004,12 @@ def _build_default_host_components(
         event_bus=event_bus,
         scene_preparation=scene_preparation,
         pending_turn_store=pending_turn_store,
+        cancellation_bridge_poll_interval_seconds=(
+            cancellation_bridge_poll_interval_seconds
+        ),
+        cancellation_bridge_failure_grace_period_seconds=(
+            cancellation_bridge_failure_grace_period_seconds
+        ),
     )
     return _DefaultHostComponents(
         executor=executor,

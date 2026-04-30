@@ -383,6 +383,10 @@ class DefaultHostExecutor(HostExecutorProtocol):
     concurrency_governor: ConcurrencyGovernorProtocol | None = None
     event_bus: RunEventBusProtocol | None = None
     scene_preparation: ScenePreparationProtocol | None = None
+    # CancellationBridge 配置：默认值与 ``CancellationBridge.__init__`` 默认值
+    # 保持一致；调用方需要更精细的失败降级策略时由 Host 装配链路透传。
+    cancellation_bridge_poll_interval_seconds: float = 0.5
+    cancellation_bridge_failure_grace_period_seconds: float = 5.0
     _replay_stash: dict[str, _ReplayState] = field(default_factory=dict, init=False, repr=False)
     _replay_stash_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_resources: dict[str, _RunResources] = field(default_factory=dict, init=False, repr=False)
@@ -1352,7 +1356,13 @@ class DefaultHostExecutor(HostExecutorProtocol):
             token.cancel()
             self._finalize_cancelled(run_id)
             raise CancelledError("run 已在启动前收到取消请求")
-        bridge = CancellationBridge(self.run_registry, run_id, token)
+        bridge = CancellationBridge(
+            self.run_registry,
+            run_id,
+            token,
+            poll_interval=self.cancellation_bridge_poll_interval_seconds,
+            failure_grace_period_seconds=self.cancellation_bridge_failure_grace_period_seconds,
+        )
         deadline_watcher = RunDeadlineWatcher(
             self.run_registry,
             run_id,

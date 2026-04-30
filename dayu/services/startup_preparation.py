@@ -164,6 +164,12 @@ def prepare_host_runtime_dependencies(
         lane_config=host_config.lane_config,
         pending_turn_resume_max_attempts=host_config.pending_turn_resume_max_attempts,
         pending_turn_retention_hours=host_config.pending_turn_retention_hours,
+        cancellation_bridge_poll_interval_seconds=(
+            host_config.cancellation_bridge_poll_interval_seconds
+        ),
+        cancellation_bridge_failure_grace_period_seconds=(
+            host_config.cancellation_bridge_failure_grace_period_seconds
+        ),
         event_bus=None,
     )
     recover_host_startup_state(
@@ -220,6 +226,12 @@ def prepare_host_admin_dependencies(
         lane_config=host_config.lane_config,
         pending_turn_resume_max_attempts=host_config.pending_turn_resume_max_attempts,
         pending_turn_retention_hours=host_config.pending_turn_retention_hours,
+        cancellation_bridge_poll_interval_seconds=(
+            host_config.cancellation_bridge_poll_interval_seconds
+        ),
+        cancellation_bridge_failure_grace_period_seconds=(
+            host_config.cancellation_bridge_failure_grace_period_seconds
+        ),
         event_bus=None,
     )
     return PreparedHostAdminDependencies(

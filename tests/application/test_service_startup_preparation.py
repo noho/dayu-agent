@@ -83,6 +83,8 @@ def test_prepare_host_runtime_dependencies_runs_unified_startup_recovery(
             lane_config={"llm_api": 1},
             pending_turn_resume_max_attempts=3,
             pending_turn_retention_hours=168,
+            cancellation_bridge_poll_interval_seconds=0.5,
+            cancellation_bridge_failure_grace_period_seconds=5.0,
         ),
     )
     monkeypatch.setattr("dayu.services.startup_preparation.Host", lambda **_kwargs: fake_host)
@@ -189,6 +191,8 @@ def test_prepare_host_runtime_dependencies_loads_run_config_once(
             lane_config={"llm_api": 1},
             pending_turn_resume_max_attempts=3,
             pending_turn_retention_hours=168,
+            cancellation_bridge_poll_interval_seconds=0.5,
+            cancellation_bridge_failure_grace_period_seconds=5.0,
         ),
     )
     monkeypatch.setattr("dayu.services.startup_preparation.Host", lambda **_kwargs: fake_host)

@@ -20,6 +20,13 @@ DEFAULT_PENDING_TURN_RESUME_MAX_ATTEMPTS = 3
 # 未询问用户"是否重发"导致库无限累积。168 = 7 天，预留给 UI 的询问窗口，
 # 同时远大于正常 CLI / Web / WeChat 的实际询问周期（一般 <72 小时）。
 DEFAULT_PENDING_TURN_RETENTION_HOURS = 168
+# CancellationBridge 默认轮询间隔（秒）。覆盖 SQLite 单次 get_run 调用，
+# 与跨进程取消信号期望的探测时延同维度。
+DEFAULT_CANCELLATION_BRIDGE_POLL_INTERVAL_SECONDS = 0.5
+# CancellationBridge 默认连续失败容忍窗口（秒）。bridge 内部会按
+# `failure_grace_period_seconds / poll_interval_seconds` 推导连续失败次数阈值，
+# 5 秒窗口对应当前实现常量 10 次（与既有行为等价）。
+DEFAULT_CANCELLATION_BRIDGE_FAILURE_GRACE_PERIOD_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -30,6 +37,8 @@ class ResolvedHostConfig:
     lane_config: dict[str, int]
     pending_turn_resume_max_attempts: int
     pending_turn_retention_hours: int
+    cancellation_bridge_poll_interval_seconds: float
+    cancellation_bridge_failure_grace_period_seconds: float
 
 
 def resolve_host_config(
@@ -71,6 +80,12 @@ def resolve_host_config(
         ),
         pending_turn_resume_max_attempts=_resolve_pending_turn_resume_max_attempts(raw_host_config),
         pending_turn_retention_hours=_resolve_pending_turn_retention_hours(raw_host_config),
+        cancellation_bridge_poll_interval_seconds=(
+            _resolve_cancellation_bridge_poll_interval_seconds(raw_host_config)
+        ),
+        cancellation_bridge_failure_grace_period_seconds=(
+            _resolve_cancellation_bridge_failure_grace_period_seconds(raw_host_config)
+        ),
     )
 
 
@@ -218,7 +233,81 @@ def _normalize_lane_config(raw_lane_config: Any, *, source_name: str) -> dict[st
     return normalized
 
 
+def _resolve_cancellation_bridge_poll_interval_seconds(
+    raw_host_config: dict[str, Any],
+) -> float:
+    """解析 CancellationBridge 轮询间隔（秒）。"""
+
+    raw_bridge_config = _read_cancellation_bridge_section(raw_host_config)
+    raw_value = raw_bridge_config.get(
+        "poll_interval_seconds",
+        DEFAULT_CANCELLATION_BRIDGE_POLL_INTERVAL_SECONDS,
+    )
+    return _coerce_positive_float(
+        raw_value,
+        field_name=(
+            "run.json.host_config.cancellation_bridge.poll_interval_seconds"
+        ),
+    )
+
+
+def _resolve_cancellation_bridge_failure_grace_period_seconds(
+    raw_host_config: dict[str, Any],
+) -> float:
+    """解析 CancellationBridge 失败容忍窗口（秒）。"""
+
+    raw_bridge_config = _read_cancellation_bridge_section(raw_host_config)
+    raw_value = raw_bridge_config.get(
+        "failure_grace_period_seconds",
+        DEFAULT_CANCELLATION_BRIDGE_FAILURE_GRACE_PERIOD_SECONDS,
+    )
+    return _coerce_positive_float(
+        raw_value,
+        field_name=(
+            "run.json.host_config.cancellation_bridge.failure_grace_period_seconds"
+        ),
+    )
+
+
+def _read_cancellation_bridge_section(
+    raw_host_config: dict[str, Any],
+) -> dict[str, Any]:
+    """读取并校验 ``cancellation_bridge`` 子配置块结构。
+
+    Returns:
+        若未配置则返回空字典；若结构非法抛 ``TypeError``。
+    """
+
+    raw_bridge_config = raw_host_config.get("cancellation_bridge")
+    if raw_bridge_config is None:
+        return {}
+    if not isinstance(raw_bridge_config, dict):
+        raise TypeError("run.json.host_config.cancellation_bridge 必须是对象")
+    return raw_bridge_config
+
+
+def _coerce_positive_float(raw_value: Any, *, field_name: str) -> float:
+    """把原始配置值转为正浮点数。
+
+    Args:
+        raw_value: 原始 JSON 值，允许 ``int`` 或 ``float``，禁止布尔。
+        field_name: 用于错误信息的字段全路径。
+
+    Raises:
+        ValueError: 类型非法或非正数。
+    """
+
+    if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+        raise ValueError(f"{field_name} 必须是正数")
+    coerced = float(raw_value)
+    if coerced <= 0.0:
+        raise ValueError(f"{field_name} 必须是正数")
+    return coerced
+
+
 __all__ = [
+    "DEFAULT_CANCELLATION_BRIDGE_FAILURE_GRACE_PERIOD_SECONDS",
+    "DEFAULT_CANCELLATION_BRIDGE_POLL_INTERVAL_SECONDS",
     "DEFAULT_PENDING_TURN_RESUME_MAX_ATTEMPTS",
     "DEFAULT_PENDING_TURN_RETENTION_HOURS",
     "ResolvedHostConfig",

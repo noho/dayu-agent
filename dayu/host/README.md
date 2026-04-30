@@ -61,6 +61,9 @@ host_config:
   lane:  { default: 1, writer: 2, ... }               # UI 级 lane 覆盖
   pending_turn_resume:    { max_attempts: 3 }         # resume 尝试次数上限
   pending_turn_retention: { retention_hours: 168 }    # UI 未询问窗口的兜底删除阈值（7 天）
+  cancellation_bridge:                                 # 跨进程取消桥配置
+    poll_interval_seconds: 0.5                         # 轮询 SQLite run 状态的间隔
+    failure_grace_period_seconds: 5.0                  # 连续失败容忍窗口；超出后 bridge 停止
 ```
 
 lane 合并顺序（后者覆盖前者）：
@@ -127,6 +130,12 @@ SUCCEEDED FAILED    CANCELLED       UNSETTLED
 - **取消终态**：`Run.state = CANCELLED` 被落库。两者时间点可分离——intent 可以立即设置，但终态由实际退出路径写入。
 
 `CancellationBridge` 桥接引擎回调与 Host 取消链；`RunDeadlineWatcher` 在 timeout 到点时设置 intent，然后依赖同一路径走到终态。
+
+**Bridge 失败降级**：底层 `RunRegistry.get_run` 持续抛出非预期异常时，bridge 会按
+`failure_grace_period_seconds / poll_interval_seconds` 推导连续失败阈值（至少为 1），
+超过阈值后通过 `Log.error` 告知并停止轮询线程，避免在系统性异常下空转。一旦成功
+查询一次，失败计数立即清零。两个参数均可在 `host_config.cancellation_bridge` 配置，
+默认 `0.5s` / `5.0s`。
 
 **终态守门**：Run 一旦进入 `TERMINAL_STATES`（SUCCEEDED/FAILED/CANCELLED/UNSETTLED）不再接受任何状态转移，也不再触发事件。转移表在 `dayu/contracts/run.py` 中集中。
 

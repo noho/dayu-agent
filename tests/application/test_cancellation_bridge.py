@@ -10,10 +10,7 @@ from typing import cast
 
 import pytest
 
-from dayu.host.cancellation_bridge import (
-    CancellationBridge,
-    _MAX_CONSECUTIVE_POLL_FAILURES,
-)
+from dayu.host.cancellation_bridge import CancellationBridge
 from dayu.host.protocols import RunRegistryProtocol
 from dayu.contracts.run import RunRecord, RunState
 from dayu.contracts.cancellation import CancellationToken
@@ -44,6 +41,15 @@ class _MockRunRegistry:
             cancel_requested_at=self._cancel_requested_at,
             owner_pid=1,
         )
+
+
+class _NoopRegistry:
+    """始终返回 ``None`` 的 registry 桩，用于不依赖运行记录内容的构造期测试。"""
+
+    def get_run(self, run_id: str) -> RunRecord | None:
+        """返回 ``None`` 表示 run 已被删除。"""
+        _ = run_id
+        return None
 
 
 def _wait_until(predicate: Callable[[], bool], timeout_seconds: float, interval_seconds: float = 0.01) -> bool:
@@ -224,11 +230,16 @@ class TestCancellationBridgePolling:
 
         registry = _AlwaysFailingRegistry()
         token = CancellationToken()
+        # grace=0.1s, poll=0.01s -> 阈值 10 次
+        poll_interval = 0.01
+        grace = 0.1
+        expected_threshold = 10
         bridge = CancellationBridge(
             run_registry=cast(RunRegistryProtocol, registry),
             run_id="run_test",
             token=token,
-            poll_interval=0.01,
+            poll_interval=poll_interval,
+            failure_grace_period_seconds=grace,
         )
         bridge.start()
         # 等待轮询线程退出
@@ -239,8 +250,8 @@ class TestCancellationBridgePolling:
         # token 不应被取消（无法判定取消请求时不应误判取消）
         assert not token.is_cancelled()
         # 调用次数应在阈值附近（允许少量偏差，但远小于无限循环）
-        assert registry.call_count >= _MAX_CONSECUTIVE_POLL_FAILURES
-        assert registry.call_count <= _MAX_CONSECUTIVE_POLL_FAILURES + 2
+        assert registry.call_count >= expected_threshold
+        assert registry.call_count <= expected_threshold + 2
         bridge.stop()
 
     @pytest.mark.unit
@@ -270,14 +281,18 @@ class TestCancellationBridgePolling:
                 )
 
         # 失败次数小于阈值，且后续始终成功；轮询线程应保持运行。
-        fail_times = max(1, _MAX_CONSECUTIVE_POLL_FAILURES - 2)
+        # grace=0.1s, poll=0.01s -> 阈值 10 次，故意让失败次数 = 8 次。
+        poll_interval = 0.01
+        grace = 0.1
+        fail_times = 8
         registry = _IntermittentRegistry(fail_times=fail_times)
         token = CancellationToken()
         bridge = CancellationBridge(
             run_registry=cast(RunRegistryProtocol, registry),
             run_id="run_test",
             token=token,
-            poll_interval=0.01,
+            poll_interval=poll_interval,
+            failure_grace_period_seconds=grace,
         )
         bridge.start()
         # 给足时间让失败次数累计后再清零，并继续多轮成功轮询。
@@ -287,3 +302,61 @@ class TestCancellationBridgePolling:
         assert thread.is_alive(), "失败计数清零后轮询线程应继续运行"
         assert not token.is_cancelled()
         bridge.stop()
+
+    @pytest.mark.unit
+    def test_failure_threshold_derived_from_grace_period(self) -> None:
+        """失败阈值由 grace_period / poll_interval 推导，且至少为 1。"""
+
+        token = CancellationToken()
+
+        # grace=5s, poll=0.5s -> 10
+        bridge = CancellationBridge(
+            run_registry=cast(RunRegistryProtocol, _NoopRegistry()),
+            run_id="r",
+            token=token,
+            poll_interval=0.5,
+            failure_grace_period_seconds=5.0,
+        )
+        assert bridge._max_consecutive_failures == 10
+
+        # grace=0.3s, poll=0.5s -> ceil(0.6)=1，仍至少为 1
+        bridge_small = CancellationBridge(
+            run_registry=cast(RunRegistryProtocol, _NoopRegistry()),
+            run_id="r",
+            token=token,
+            poll_interval=0.5,
+            failure_grace_period_seconds=0.3,
+        )
+        assert bridge_small._max_consecutive_failures == 1
+
+        # grace=2.5s, poll=0.5s -> 5
+        bridge_mid = CancellationBridge(
+            run_registry=cast(RunRegistryProtocol, _NoopRegistry()),
+            run_id="r",
+            token=token,
+            poll_interval=0.5,
+            failure_grace_period_seconds=2.5,
+        )
+        assert bridge_mid._max_consecutive_failures == 5
+
+    @pytest.mark.unit
+    def test_invalid_constructor_arguments_raise(self) -> None:
+        """非法构造参数应直接抛 ValueError。"""
+
+        token = CancellationToken()
+
+        with pytest.raises(ValueError):
+            CancellationBridge(
+                run_registry=cast(RunRegistryProtocol, _NoopRegistry()),
+                run_id="r",
+                token=token,
+                poll_interval=0.0,
+            )
+        with pytest.raises(ValueError):
+            CancellationBridge(
+                run_registry=cast(RunRegistryProtocol, _NoopRegistry()),
+                run_id="r",
+                token=token,
+                poll_interval=0.5,
+                failure_grace_period_seconds=0.0,
+            )
