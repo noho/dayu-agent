@@ -151,3 +151,96 @@ def test_processor_lru_cache_property_and_evict_clear_paths() -> None:
     assert cache.size() == 1
     cache.clear()
     assert cache.size() == 0
+
+
+@pytest.mark.unit
+def test_processor_lru_cache_keys_snapshot_returns_lru_order() -> None:
+    """验证 keys_snapshot 返回当前 LRU 顺序的只读快照。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    cache: ProcessorLRUCache[str] = ProcessorLRUCache(max_entries=4)
+    key_a = ProcessorCacheKey(ticker="AAPL", document_id="fil_1")
+    key_b = ProcessorCacheKey(ticker="AAPL", document_id="fil_2")
+    key_c = ProcessorCacheKey(ticker="AAPL", document_id="fil_3")
+
+    assert cache.keys_snapshot() == ()
+
+    cache.put(key_a, "a")
+    cache.put(key_b, "b")
+    cache.put(key_c, "c")
+    # 复杂逻辑说明：访问 key_a 使其成为最近使用，验证快照顺序随之刷新。
+    assert cache.get(key_a) == "a"
+
+    snapshot = cache.keys_snapshot()
+    assert snapshot == (key_b, key_c, key_a)
+    # 快照必须是只读元组，调用方拿不到内部存储引用。
+    assert isinstance(snapshot, tuple)
+
+
+@pytest.mark.unit
+def test_processor_lru_cache_keys_snapshot_reflects_eviction_and_clear() -> None:
+    """验证淘汰与清空后 keys_snapshot 同步收敛。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    cache: ProcessorLRUCache[str] = ProcessorLRUCache(max_entries=2)
+    key_a = ProcessorCacheKey(ticker="AAPL", document_id="fil_1")
+    key_b = ProcessorCacheKey(ticker="AAPL", document_id="fil_2")
+    key_c = ProcessorCacheKey(ticker="AAPL", document_id="fil_3")
+
+    cache.put(key_a, "a")
+    cache.put(key_b, "b")
+    cache.put(key_c, "c")  # 触发 key_a 被淘汰
+    assert cache.keys_snapshot() == (key_b, key_c)
+
+    cache.clear()
+    assert cache.keys_snapshot() == ()
+
+
+@pytest.mark.unit
+def test_processor_lru_cache_peek_does_not_change_lru_order() -> None:
+    """验证 peek 命中不会改变 LRU 顺序。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    cache: ProcessorLRUCache[str] = ProcessorLRUCache(max_entries=4)
+    key_a = ProcessorCacheKey(ticker="AAPL", document_id="fil_1")
+    key_b = ProcessorCacheKey(ticker="AAPL", document_id="fil_2")
+    key_c = ProcessorCacheKey(ticker="AAPL", document_id="fil_3")
+
+    cache.put(key_a, "a")
+    cache.put(key_b, "b")
+    cache.put(key_c, "c")
+
+    # 复杂逻辑说明：peek 命中应保持原 LRU 顺序，不把候选条目"算作一次访问"。
+    assert cache.peek(key_a) == "a"
+    assert cache.keys_snapshot() == (key_a, key_b, key_c)
+
+    # 未命中时返回 None，且不影响顺序。
+    assert cache.peek(ProcessorCacheKey(ticker="AAPL", document_id="fil_x")) is None
+    assert cache.keys_snapshot() == (key_a, key_b, key_c)

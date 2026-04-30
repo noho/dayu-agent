@@ -95,6 +95,26 @@ class ProcessorLRUCache(Generic[ProcessorT]):
             self._store.move_to_end(key, last=True)
             return value
 
+    def peek(self, key: ProcessorCacheKey) -> Optional[ProcessorT]:
+        """读取缓存但不改变 LRU 顺序。
+
+        诊断、统计、只读巡检等不应将候选条目"算作一次访问"的场景使用此方法；
+        与 ``get`` 不同，``peek`` 不会把命中条目移动到 LRU 末尾，因此不会污染
+        缓存的真实使用画像。
+
+        Args:
+            key: 缓存键。
+
+        Returns:
+            命中时返回 Processor 实例；未命中返回 ``None``。
+
+        Raises:
+            RuntimeError: 内部存储异常时抛出。
+        """
+
+        with self._lock:
+            return self._store.get(key)
+
     def put(self, key: ProcessorCacheKey, value: ProcessorT) -> None:
         """写入缓存并按 LRU 规则淘汰。
 
@@ -169,3 +189,22 @@ class ProcessorLRUCache(Generic[ProcessorT]):
 
         with self._lock:
             return len(self._store)
+
+    def keys_snapshot(self) -> tuple[ProcessorCacheKey, ...]:
+        """返回当前缓存键的只读快照。
+
+        快照用于上层做"已缓存条目枚举"等只读诊断；本方法不会改变 LRU 顺序，
+        也不会暴露内部存储引用，调用方拿到的是不可变 tuple。
+
+        Args:
+            无。
+
+        Returns:
+            按当前 LRU 顺序（从最久未使用到最近使用）返回的 ``ProcessorCacheKey`` 元组。
+
+        Raises:
+            RuntimeError: 内部存储异常时抛出。
+        """
+
+        with self._lock:
+            return tuple(self._store.keys())

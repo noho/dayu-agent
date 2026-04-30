@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from threading import Lock, RLock
-from typing import Any, Optional, cast
+from typing import Any, Literal, Optional, cast
 
 from dayu.engine.exceptions import ToolArgumentError
 from dayu.log import Log
@@ -338,11 +338,25 @@ class FinsToolService:
         try:
             section_raw: SectionContent = processor.read_section(normalized_ref)
         except KeyError as exc:
+            suspected_document_id = self._diagnose_cross_document_locator(
+                ticker=normalized_ticker,
+                current_document_id=normalized_document_id,
+                kind="ref",
+                locator=normalized_ref,
+            )
+            if suspected_document_id is not None:
+                hint = (
+                    f"章节不存在；疑似跨文档复用旧 ref——当前 document_id={normalized_document_id}，"
+                    f"该 ref 在 document_id={suspected_document_id} 中存在。"
+                    "请先对当前文档调用 get_document_sections 或 search_document 重新 grounding，再用新文档自己的 ref 调用 read_section。"
+                )
+            else:
+                hint = "章节不存在；请先调用 get_document_sections，并原样复制返回的 ref，不要简写、重编号或自造 ref"
             raise ToolArgumentError(
                 "read_section",
                 "ref",
                 normalized_ref,
-                "章节不存在；请先调用 get_document_sections，并原样复制返回的 ref，不要简写、重编号或自造 ref",
+                hint,
             ) from exc
         content = str(section_raw.get("content", ""))
         # tables 字段不输出给 LLM——content 中 [[t_XXXX]] 占位符已携带 ref + 位置上下文，
@@ -884,11 +898,25 @@ class FinsToolService:
         try:
             table_raw: TableContent = processor.read_table(normalized_table_ref)
         except KeyError as exc:
+            suspected_document_id = self._diagnose_cross_document_locator(
+                ticker=normalized_ticker,
+                current_document_id=normalized_document_id,
+                kind="table_ref",
+                locator=normalized_table_ref,
+            )
+            if suspected_document_id is not None:
+                hint = (
+                    f"表格不存在；疑似跨文档复用旧 table_ref——当前 document_id={normalized_document_id}，"
+                    f"该 table_ref 在 document_id={suspected_document_id} 中存在。"
+                    "请先对当前文档调用 list_tables / get_document_sections / search_document 重新 grounding，再用新文档自己的 table_ref 调用 get_table。"
+                )
+            else:
+                hint = "表格不存在；请先调用 list_tables，并原样复制返回的 table_ref，不要简写、重编号或自造 table_ref"
             raise ToolArgumentError(
                 "get_table",
                 "table_ref",
                 normalized_table_ref,
-                "表格不存在；请先调用 list_tables，并原样复制返回的 table_ref，不要简写、重编号或自造 table_ref",
+                hint,
             ) from exc
         data_payload = _build_table_data_payload(table_raw)
 
@@ -1640,6 +1668,61 @@ class FinsToolService:
             has_structured_financial_statements=processed_meta.get("has_structured_financial_statements"),
             has_financial_statement_sections=processed_meta.get("has_financial_statement_sections"),
         )
+
+    def _diagnose_cross_document_locator(
+        self,
+        *,
+        ticker: str,
+        current_document_id: str,
+        kind: Literal["ref", "table_ref"],
+        locator: str,
+    ) -> Optional[str]:
+        """诊断 locator 是否疑似来自其他已缓存文档。
+
+        当 ``read_section`` / ``get_table`` 在当前 ``document_id`` 下查不到 locator 时，
+        本方法只在 ``ProcessorLRUCache`` 中已经存在的 processor 上做尝试性查询，
+        命中即返回疑似来源 ``document_id``。本方法严格遵守"不主动构建新 processor、
+        不扫描磁盘"的成本约束，仅做零成本的快照只读诊断。
+
+        Args:
+            ticker: 标准化股票代码。
+            current_document_id: 当前调用使用的文档 ID。
+            kind: locator 类型，``"ref"`` 表示章节引用，``"table_ref"`` 表示表格引用。
+            locator: 已经标准化过的 locator 字符串。
+
+        Returns:
+            疑似来源的 ``document_id``；若所有已缓存 processor 都查不到则返回 ``None``。
+
+        Raises:
+            无。
+        """
+
+        for cache_key in self._processor_cache.keys_snapshot():
+            if cache_key.ticker != ticker:
+                continue
+            if cache_key.document_id == current_document_id:
+                continue
+            cached_processor = self._processor_cache.peek(cache_key)
+            if cached_processor is None:
+                continue
+            try:
+                if kind == "ref":
+                    cached_processor.read_section(locator)
+                else:
+                    cached_processor.read_table(locator)
+            except KeyError:
+                continue
+            except Exception as exc:
+                # 复杂逻辑说明：诊断属于尽力而为的辅助路径，任何非 KeyError 的底层异常都
+                # 不应让原始 ToolArgumentError 失真；记录调试日志后直接跳过该候选。
+                Log.debug(
+                    f"cross-document locator 诊断遇到非预期异常: ticker={ticker} "
+                    f"candidate_document_id={cache_key.document_id} kind={kind} exc={exc}",
+                    module=self.MODULE,
+                )
+                continue
+            return cache_key.document_id
+        return None
 
     def _get_or_create_processor(self, *, ticker: str, document_id: str) -> DocumentProcessor:
         """读取或创建 Processor 实例。

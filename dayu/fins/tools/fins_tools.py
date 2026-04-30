@@ -339,7 +339,7 @@ def _create_read_section_tool(
             },
             "ref": {
                 "type": "string",
-                "description": "章节ref。只能来自于 `get_document_sections` 的 `sections[].ref`，`search_document` 的 `next_section_to_read.section.ref`，或 `search_document` 的 `next_section_by_query[*].section.ref`。",
+                "description": "章节ref。只能来自于 `get_document_sections` 的 `sections[].ref`，`search_document` 的 `next_section_to_read.section.ref`，或 `search_document` 的 `next_section_by_query[*].section.ref`。仅在当前 `document_id` 内有效；切换 `document_id` 后必须重新对新文档 grounding，禁止复用其他 `document_id` 的 `ref`。",
             },
         },
         "required": ["ticker", "document_id", "ref"],
@@ -619,7 +619,7 @@ def _create_get_table_tool(
             },
             "table_ref": {
                 "type": "string",
-                "description": "表格ref。只能来自于`list_tables` 的 `tables[].table_ref` 或 `read_section` 正文里的 `[[t_XXXX]]`",
+                "description": "表格ref。只能来自于`list_tables` 的 `tables[].table_ref` 或 `read_section` 正文里的 `[[t_XXXX]]`。仅在当前 `document_id` 内有效；切换 `document_id` 后必须重新对新文档 grounding，禁止复用其他 `document_id` 的 `table_ref`。",
             },
         },
         "required": ["ticker", "document_id", "table_ref"],

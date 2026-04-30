@@ -3303,6 +3303,180 @@ def test_get_table_invalid_table_ref_raises_tool_argument_error_with_hint() -> N
         service.get_table(ticker="AAPL", document_id="fil_1", table_ref="t_9999")
 
 
+def _build_per_document_registry(section_refs: dict[str, set[str]], table_refs: dict[str, set[str]]) -> Any:
+    """构造按 document_id 分流的注册表桩。
+
+    Args:
+        section_refs: ``document_id -> 已知章节 ref 集合`` 的映射。
+        table_refs: ``document_id -> 已知 table_ref 集合`` 的映射。
+
+    Returns:
+        实现 ``create`` / ``create_with_fallback`` 协议的注册表实例。
+
+    Raises:
+        无。
+    """
+
+    @dataclass
+    class _PerDocumentProcessor:
+        """根据所属 document_id 决定 ref/table_ref 是否存在的处理器桩。"""
+
+        document_id: str
+        known_section_refs: set[str]
+        known_table_refs: set[str]
+
+        def list_sections(self) -> list[dict[str, Any]]:
+            """返回章节列表。"""
+
+            return [
+                {"ref": ref, "title": "章节", "level": 1, "parent_ref": None, "preview": "x"}
+                for ref in sorted(self.known_section_refs)
+            ]
+
+        def get_section_title(self, ref: str) -> Optional[str]:
+            """获取章节标题。"""
+
+            return "章节" if ref in self.known_section_refs else None
+
+        def read_section(self, ref: str) -> dict[str, Any]:
+            """读取章节，未命中抛 KeyError。"""
+
+            if ref not in self.known_section_refs:
+                raise KeyError(f"章节不存在: ref={ref} document_id={self.document_id}")
+            return {
+                "ref": ref,
+                "title": "章节",
+                "content": "正文",
+                "tables": [],
+                "contains_full_text": True,
+            }
+
+        def list_tables(self) -> list[dict[str, Any]]:
+            """列表表格。"""
+
+            return [{"table_ref": tref, "section_ref": "s_0001"} for tref in sorted(self.known_table_refs)]
+
+        def read_table(self, table_ref: str) -> dict[str, Any]:
+            """读取表格，未命中抛 KeyError。"""
+
+            if table_ref not in self.known_table_refs:
+                raise KeyError(f"表格不存在: table_ref={table_ref} document_id={self.document_id}")
+            return {
+                "table_ref": table_ref,
+                "data_format": "markdown",
+                "data": "|A|\\n|---|",
+                "columns": None,
+                "row_count": 1,
+                "col_count": 1,
+                "is_financial": False,
+                "section_ref": "s_0001",
+            }
+
+    class _PerDocumentRegistry:
+        """根据 source URI 路由到对应 document 的处理器桩。"""
+
+        def _resolve_document_id(self, source: Source) -> str:
+            """从 source URI 中解析 document_id。
+
+            URI 形如 ``local://filing/fil_1.html``。
+            """
+
+            uri = source.uri
+            tail = uri.rsplit("/", 1)[-1]
+            return tail.rsplit(".", 1)[0]
+
+        def create(self, source: Source, **kwargs: Any) -> Any:
+            """创建按 document_id 分流的处理器。"""
+
+            del kwargs
+            document_id = self._resolve_document_id(source)
+            return _PerDocumentProcessor(
+                document_id=document_id,
+                known_section_refs=set(section_refs.get(document_id, set())),
+                known_table_refs=set(table_refs.get(document_id, set())),
+            )
+
+        def create_with_fallback(self, source: Source, **kwargs: Any) -> Any:
+            """兼容统一回退接口并复用 create。"""
+
+            return self.create(source, **kwargs)
+
+    return _PerDocumentRegistry()
+
+
+@pytest.mark.unit
+def test_read_section_diagnoses_cross_document_ref_reuse() -> None:
+    """验证 read_section 在 ref 命中其他已缓存 processor 时给出跨文档诊断。
+
+    覆盖 issue #102：locator 是 document-local，跨文档复用应在错误消息中显式区分，
+    避免与"模型自造 ref"混为一谈。
+    """
+
+    registry = _build_per_document_registry(
+        section_refs={"fil_1": {"s_0011_c01"}, "fil_2": set()},
+        table_refs={"fil_1": set(), "fil_2": set()},
+    )
+    service = FinsToolService(repository=FakeRepository(), processor_registry=registry)
+
+    # 先把 fil_1 的 processor 拉进缓存：成功读取 s_0011_c01
+    service.read_section(ticker="AAPL", document_id="fil_1", ref="s_0011_c01")
+
+    # 再用同一 ref 调 fil_2，应被诊断为跨文档复用
+    with pytest.raises(ToolArgumentError) as excinfo:
+        service.read_section(ticker="AAPL", document_id="fil_2", ref="s_0011_c01")
+
+    message = str(excinfo.value)
+    assert "疑似跨文档" in message
+    assert "fil_2" in message  # 当前 document_id
+    assert "fil_1" in message  # 疑似来源 document_id
+
+
+@pytest.mark.unit
+def test_get_table_diagnoses_cross_document_table_ref_reuse() -> None:
+    """验证 get_table 对 table_ref 同样能识别跨文档复用。
+
+    覆盖 issue #102 的表格路径。
+    """
+
+    registry = _build_per_document_registry(
+        section_refs={"fil_1": set(), "fil_2": set()},
+        table_refs={"fil_1": {"t_0007"}, "fil_2": set()},
+    )
+    service = FinsToolService(repository=FakeRepository(), processor_registry=registry)
+
+    service.get_table(ticker="AAPL", document_id="fil_1", table_ref="t_0007")
+
+    with pytest.raises(ToolArgumentError) as excinfo:
+        service.get_table(ticker="AAPL", document_id="fil_2", table_ref="t_0007")
+
+    message = str(excinfo.value)
+    assert "疑似跨文档" in message
+    assert "fil_2" in message
+    assert "fil_1" in message
+
+
+@pytest.mark.unit
+def test_read_section_invalid_ref_falls_back_when_no_cached_match() -> None:
+    """验证未命中任何已缓存 processor 时回退到原"请先调用 get_document_sections"提示。
+
+    当不存在任何已缓存的同 ticker 文档可佐证跨文档复用时，错误文案应保持现状，
+    避免误把"模型自造 ref"标成"疑似跨文档"。
+    """
+
+    registry = _build_per_document_registry(
+        section_refs={"fil_1": set()},
+        table_refs={"fil_1": set()},
+    )
+    service = FinsToolService(repository=FakeRepository(), processor_registry=registry)
+
+    with pytest.raises(ToolArgumentError) as excinfo:
+        service.read_section(ticker="AAPL", document_id="fil_1", ref="s_unknown")
+
+    message = str(excinfo.value)
+    assert "疑似跨文档" not in message
+    assert "原样复制返回的 ref" in message
+
+
 @pytest.mark.unit
 def test_read_section_inherits_item_and_topic_from_parent_title() -> None:
     """验证 read_section 会从父章节标题继承 item 与 topic。"""

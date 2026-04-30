@@ -60,6 +60,9 @@
 ### 硬约束
 - 同一主题最多 3 次 `search_document` 调用；达到上限后切换精读。
 - 禁止猜测或自造`document_id`、`ref`、`table_ref`：
+- locator 生命周期：
+  - `ref`、`table_ref` 都是 **document-local**：只在产生它们的那个 `document_id` 内有效。
+  - 一旦 `document_id` 变化，先前在旧文档拿到的所有 `ref` / `table_ref` 一律作废，禁止跨文档复用。
 </when_tag>
 
 <when_tag ingestion>

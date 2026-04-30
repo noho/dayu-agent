@@ -143,7 +143,7 @@ Prompt 装配还遵循一条 Prefix Cache 导向的顺序约束：
 - `tool_call_budget_threshold` 不再进入 prompt context，预算感知统一依赖工具结果里的 `tool_calls_remaining`。
 
 分层原则：
-- `base/fact_rules.md`：只放通用事实/前瞻/证据格式边界。
+- `base/fact_rules.md`：只放通用事实/前瞻/证据格式边界，以及相对时间归一化规则（区分运行时当前时间、信息获取时间、事件发生/报道发布时间、正文局部相对时间词）。
 - `scenes/write.md`：只放写作场景的执行契约与证据锚点动作规则。
 - `scenes/regenerate.md`：只放整章重建场景的执行契约与重建边界。
 - `tasks/write_chapter.md`、`tasks/regenerate_chapter.md`：只放各自任务特有的动作与输入输出要求，不重复 system prompt 中的通用边界；优先保留“当前这轮必须知道的输入与局部约束”，不要把 scene 已声明的通用规则再讲一遍。
@@ -624,7 +624,7 @@ should_compact = window_used > max_context_tokens * compaction_trigger_context_r
 
 - `base/agents.md`：全局行为规范与输出约束；包括 JSON/Markdown 输出硬约束、禁止过程性自述，以及工具调用轮和最终回答都必须“直接行动、直接从目标格式起始字符开始输出”的规则
 - `base/soul.md`：分析人格
-- `base/fact_rules.md`：事实与分析区分、前瞻性表述、会计数字呈现、证据与出处统一格式（含 section path、`Financial Statement:{statement_type}`、`XBRL Facts` 三类合法定位格式）
+- `base/fact_rules.md`：事实与分析区分、前瞻性表述、相对时间归一化（含相对时间词锚定与四类时间锚区分）、会计数字呈现、证据与出处统一格式（含 section path、`Financial Statement:{statement_type}`、`XBRL Facts` 三类合法定位格式）
 - `base/tools.md`：工具使用原则，不承载工具 schema
 - `scenes/*.md`：interactive / write / repair / audit / confirm 等场景覆盖片段
 - `scenes/conversation_compaction.md`：多轮会话阶段摘要压缩场景，只生成严格 JSON，不调用工具
