@@ -133,6 +133,62 @@ class TestRunStateTransitions:
         assert unsettled.error_summary == ORPHAN_RUN_ERROR_SUMMARY
 
     @pytest.mark.unit
+    def test_complete_run_rejects_recovery_when_pid_reused(
+        self, registry: SQLiteRunRegistry, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """同 PID 但 OwnerIdentity 三元组不匹配（PID 复用）时不允许修复 UNSETTLED。"""
+
+        from dayu.host import run_registry as run_registry_module
+        from dayu.process_liveness import OwnerIdentity
+
+        # 注册 run 时记录的"原 owner"身份
+        original_owner = run_registry_module.current_owner_identity()
+        run = registry.register_run(service_type="test")
+        registry.start_run(run.run_id)
+        registry.mark_unsettled(run.run_id, error_summary=ORPHAN_RUN_ERROR_SUMMARY)
+
+        # 模拟"PID 复用"：当前进程身份的 process_start_time 与持久化记录不一致
+        reused_owner = OwnerIdentity(
+            pid=original_owner.pid,
+            process_start_time=(
+                (original_owner.process_start_time or 0.0) + 9999.0
+            ),
+            boot_id=original_owner.boot_id,
+        )
+        monkeypatch.setattr(
+            run_registry_module, "current_owner_identity", lambda: reused_owner
+        )
+
+        with pytest.raises(ValueError, match="非法状态转换"):
+            registry.complete_run(run.run_id)
+
+    @pytest.mark.unit
+    def test_complete_run_rejects_recovery_when_boot_id_changed(
+        self, registry: SQLiteRunRegistry, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """同 PID 但 boot_id 不同（系统重启）时不允许修复 UNSETTLED。"""
+
+        from dayu.host import run_registry as run_registry_module
+        from dayu.process_liveness import OwnerIdentity
+
+        original_owner = run_registry_module.current_owner_identity()
+        run = registry.register_run(service_type="test")
+        registry.start_run(run.run_id)
+        registry.mark_unsettled(run.run_id, error_summary=ORPHAN_RUN_ERROR_SUMMARY)
+
+        rebooted_owner = OwnerIdentity(
+            pid=original_owner.pid,
+            process_start_time=original_owner.process_start_time,
+            boot_id=(original_owner.boot_id or "") + "-rebooted",
+        )
+        monkeypatch.setattr(
+            run_registry_module, "current_owner_identity", lambda: rebooted_owner
+        )
+
+        with pytest.raises(ValueError, match="非法状态转换"):
+            registry.complete_run(run.run_id)
+
+    @pytest.mark.unit
     def test_unsettled_is_absorbing(self, registry: SQLiteRunRegistry) -> None:
         """UNSETTLED 对非当前 owner / 非 SUCCEEDED 转换都是吸收态。"""
 
@@ -315,9 +371,10 @@ class TestQueryAndList:
 
     @pytest.mark.unit
     def test_list_active_runs_for_owner_filters_by_pid(self, registry: SQLiteRunRegistry) -> None:
-        """list_active_runs_for_owner 严格按 PID 过滤。"""
+        """list_active_runs_for_owner 严格按 OwnerIdentity 过滤。"""
 
         import os as _os
+        from dayu.process_liveness import OwnerIdentity, current_owner_identity
 
         r1 = registry.register_run(service_type="a")
         r2 = registry.register_run(service_type="b")
@@ -329,8 +386,10 @@ class TestQueryAndList:
         conn.execute("UPDATE runs SET owner_pid = ? WHERE run_id = ?", (42, r2.run_id))
         conn.commit()
 
-        mine = registry.list_active_runs_for_owner(_os.getpid())
-        other = registry.list_active_runs_for_owner(42)
+        mine = registry.list_active_runs_for_owner(current_owner_identity())
+        other = registry.list_active_runs_for_owner(
+            OwnerIdentity(pid=42, process_start_time=None, boot_id=None)
+        )
 
         mine_ids = {run.run_id for run in mine}
         other_ids = {run.run_id for run in other}
@@ -338,6 +397,42 @@ class TestQueryAndList:
         assert r1.run_id in mine_ids
         assert r2.run_id not in mine_ids
         assert other_ids == {r2.run_id}
+        # 当前进程身份完整三元组等值，r1 仍归我所有
+        assert _os.getpid() == current_owner_identity().pid
+
+    @pytest.mark.unit
+    def test_list_active_runs_for_owner_rejects_pid_reuse(
+        self, registry: SQLiteRunRegistry
+    ) -> None:
+        """同 PID 但 ``OwnerIdentity`` 三元组任一字段不一致时不得被识别为当前 owner。"""
+
+        from dayu.process_liveness import OwnerIdentity, current_owner_identity
+
+        r1 = registry.register_run(service_type="a")
+        registry.start_run(r1.run_id)
+
+        current = current_owner_identity()
+
+        # 模拟 PID 复用：相同 PID，但 process_start_time / boot_id 都不同
+        reused = OwnerIdentity(
+            pid=current.pid,
+            process_start_time=(
+                None
+                if current.process_start_time is None
+                else current.process_start_time + 9999.0
+            ),
+            boot_id=(None if current.boot_id is None else current.boot_id + "-reused"),
+        )
+
+        # 至少一个字段两侧均非 None 时，应被识别为不同 owner
+        if (
+            current.process_start_time is not None
+            or current.boot_id is not None
+        ):
+            assert registry.list_active_runs_for_owner(reused) == []
+        else:
+            # 两端三字段均为 NULL → 退化为仅 PID 匹配，与旧行为一致
+            assert {run.run_id for run in registry.list_active_runs_for_owner(reused)} == {r1.run_id}
 
 
 @pytest.mark.unit

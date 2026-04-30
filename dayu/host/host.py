@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, TypeVar, cast
@@ -69,6 +68,7 @@ from dayu.host.protocols import (
 )
 from dayu.log import Log
 from dayu.host.run_registry import SQLiteRunRegistry
+from dayu.process_liveness import current_owner_identity
 from dayu.host.scene_preparer import DefaultScenePreparer
 from dayu.host.session_registry import SQLiteSessionRegistry
 from dayu.workspace_paths import build_conversation_store_dir
@@ -1142,16 +1142,16 @@ class Host:
             无。
 
         Returns:
-            owner_pid 等于当前进程 PID 的活跃 run_id 列表。
+            owner identity 完整匹配当前进程的活跃 run_id 列表。
 
         Raises:
             无。
         """
 
-        owner_pid = os.getpid()
+        owner = current_owner_identity()
         return [
             record.run_id
-            for record in self._run_registry.list_active_runs_for_owner(owner_pid)
+            for record in self._run_registry.list_active_runs_for_owner(owner)
         ]
 
     def cancel_session_runs(self, session_id: str) -> list[str]:

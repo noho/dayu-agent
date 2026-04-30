@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -28,10 +27,41 @@ from dayu.contracts.run import (
     is_valid_transition,
 )
 from dayu.log import Log
-from dayu.process_liveness import is_pid_alive
+from dayu.process_liveness import OwnerIdentity, current_owner_identity, is_owner_identity_alive
 
 MODULE = "HOST.RUN_REGISTRY"
 _ORPHAN_CLEANUP_MIN_RUN_AGE = timedelta(minutes=10)
+
+
+def _identity_matches(*, stored: OwnerIdentity, current: OwnerIdentity) -> bool:
+    """判断持久化的 ``OwnerIdentity`` 是否与当前进程身份匹配。
+
+    任一字段为 ``None`` 则视为「未采集到」，不参与等值校验，
+    自动退化为剩余字段比对，最差等价于仅 PID 比对。
+
+    Args:
+        stored: 持久化记录里写入的 owner 身份。
+        current: 当前进程身份。
+
+    Returns:
+        ``True`` 表示两者指向同一个 owner；``False`` 表示明确不匹配。
+    """
+
+    if stored.pid != current.pid:
+        return False
+    if (
+        stored.process_start_time is not None
+        and current.process_start_time is not None
+        and stored.process_start_time != current.process_start_time
+    ):
+        return False
+    if (
+        stored.boot_id is not None
+        and current.boot_id is not None
+        and stored.boot_id != current.boot_id
+    ):
+        return False
+    return True
 
 
 from dayu.host._datetime_utils import now_utc as _now_utc, parse_dt_optional as _parse_dt_optional, serialize_dt as _serialize_dt
@@ -135,6 +165,8 @@ def _row_to_record(row: dict[str, Any]) -> RunRecord:
         ),
         cancel_reason=RunCancelReason(row["cancel_reason"]) if row.get("cancel_reason") else None,
         owner_pid=row["owner_pid"],
+        owner_process_start_time=row.get("owner_process_start_time"),
+        owner_boot_id=row.get("owner_boot_id"),
         metadata=metadata,
     )
 
@@ -187,7 +219,8 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         run_id = f"run_{uuid.uuid4().hex[:12]}"
         now = _now_utc()
         now_str = _serialize_dt(now)
-        pid = os.getpid()
+        owner = current_owner_identity()
+        pid = owner.pid
         metadata_typed: ExecutionDeliveryContext = (
             normalize_execution_delivery_context(metadata)
             if metadata is not None
@@ -200,10 +233,23 @@ class SQLiteRunRegistry(RunRegistryProtocol):
             conn.execute(
                 """
                 INSERT INTO runs (run_id, session_id, service_type, scene_name,
-                                  state, created_at, owner_pid, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                  state, created_at, owner_pid,
+                                  owner_process_start_time, owner_boot_id,
+                                  metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (run_id, session_id, service_type, scene_name, RunState.CREATED.value, now_str, pid, metadata_json),
+                (
+                    run_id,
+                    session_id,
+                    service_type,
+                    scene_name,
+                    RunState.CREATED.value,
+                    now_str,
+                    pid,
+                    owner.process_start_time,
+                    owner.boot_id,
+                    metadata_json,
+                ),
             )
 
         Log.debug(
@@ -229,6 +275,8 @@ class SQLiteRunRegistry(RunRegistryProtocol):
             cancel_requested_reason=None,
             cancel_reason=None,
             owner_pid=pid,
+            owner_process_start_time=owner.process_start_time,
+            owner_boot_id=owner.boot_id,
             metadata=metadata_typed,
         )
 
@@ -420,11 +468,17 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         ).fetchall()
         return [_row_to_record(dict(row)) for row in rows]
 
-    def list_active_runs_for_owner(self, owner_pid: int) -> list[RunRecord]:
-        """列出指定 owner_pid 拥有的所有活跃 run。
+    def list_active_runs_for_owner(self, owner: OwnerIdentity) -> list[RunRecord]:
+        """列出指定 ``OwnerIdentity`` 拥有的所有活跃 run。
+
+        匹配规则：以 ``owner_pid`` 作为索引列做等值过滤；其余两列
+        （``owner_process_start_time`` / ``owner_boot_id``）若双方均非
+        ``None`` 则参与等值校验，否则视为不参与（任一方为 ``None``
+        即 fallback 为仅 PID 比对，与 ``is_owner_identity_alive`` 一致），
+        以闭合 PID 复用窗口。
 
         Args:
-            owner_pid: 进程 PID。
+            owner: 当前进程身份。
 
         Returns:
             指定 owner 仍活跃的 run 列表。
@@ -443,9 +497,14 @@ class SQLiteRunRegistry(RunRegistryProtocol):
               AND owner_pid = ?
             ORDER BY created_at DESC
             """,  # noqa: S608
-            (*active_values, int(owner_pid)),
+            (*active_values, int(owner.pid)),
         ).fetchall()
-        return [_row_to_record(dict(row)) for row in rows]
+        records = [_row_to_record(dict(row)) for row in rows]
+        return [
+            record
+            for record in records
+            if _identity_matches(stored=record.owner_identity, current=owner)
+        ]
 
     def cleanup_orphan_runs(self) -> list[str]:
         """清理 owner_pid 已死亡的活跃 run，标记为 UNSETTLED。
@@ -463,7 +522,7 @@ class SQLiteRunRegistry(RunRegistryProtocol):
             reference_time = run.started_at or run.created_at
             if now - reference_time < _ORPHAN_CLEANUP_MIN_RUN_AGE:
                 continue
-            if not is_pid_alive(run.owner_pid):
+            if not is_owner_identity_alive(run.owner_identity):
                 candidate_orphan_ids.append(run.run_id)
 
         if candidate_orphan_ids:
@@ -546,10 +605,17 @@ class SQLiteRunRegistry(RunRegistryProtocol):
             current_state = RunState(row["state"])
             is_owner_unsettled_recovery = False
             if not is_valid_transition(current_state, target_state):
+                stored_owner = OwnerIdentity(
+                    pid=int(row["owner_pid"]),
+                    process_start_time=row["owner_process_start_time"],
+                    boot_id=row["owner_boot_id"],
+                )
                 if (
                     current_state == RunState.UNSETTLED
                     and target_state == RunState.SUCCEEDED
-                    and int(row["owner_pid"]) == os.getpid()
+                    and _identity_matches(
+                        stored=stored_owner, current=current_owner_identity()
+                    )
                 ):
                     is_owner_unsettled_recovery = True
                     Log.warn(

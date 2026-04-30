@@ -18,6 +18,7 @@ from dayu.contracts.run import ACTIVE_STATES, TERMINAL_STATES, RunCancelReason, 
 from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 from dayu.host.host_execution import HostExecutorProtocol
 from dayu.host.pending_turn_store import PendingConversationTurn, PendingConversationTurnState
+from dayu.process_liveness import OwnerIdentity
 
 
 # ---------------------------------------------------------------------------
@@ -642,12 +643,12 @@ class RunRegistryProtocol(Protocol):
         """列出所有活跃 run。"""
         ...
 
-    def list_active_runs_for_owner(self, owner_pid: int) -> list[RunRecord]:
-        """列出指定 owner_pid 拥有的所有活跃 run。"""
+    def list_active_runs_for_owner(self, owner: OwnerIdentity) -> list[RunRecord]:
+        """列出指定 owner identity 拥有的所有活跃 run。"""
         ...
 
     def cleanup_orphan_runs(self) -> list[str]:
-        """清理 owner_pid 已死亡的活跃 run。"""
+        """清理 owner identity 已死亡的活跃 run。"""
         ...
 
 

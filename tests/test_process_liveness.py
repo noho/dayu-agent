@@ -497,3 +497,103 @@ def test_is_pid_alive_dispatches_to_windows_branch_via_reload(
 
     with _reloaded_as_windows(monkeypatch, fake_k32) as win_mod:
         assert win_mod.is_pid_alive(42) is True
+
+
+# ---------------------------------------------------------------------------
+# OwnerIdentity（#106）
+# ---------------------------------------------------------------------------
+
+
+from dayu.process_liveness import (
+    OwnerIdentity,
+    current_owner_identity,
+    is_owner_identity_alive,
+)
+
+
+@pytest.mark.unit
+def test_current_owner_identity_returns_current_pid() -> None:
+    """current_owner_identity 必须返回当前进程的 PID。"""
+
+    identity = current_owner_identity()
+    assert identity.pid == os.getpid()
+
+
+@pytest.mark.unit
+def test_current_owner_identity_collects_at_least_one_field() -> None:
+    """主流平台至少能采集到 process_start_time 或 boot_id 之一。"""
+
+    identity = current_owner_identity()
+    assert (identity.process_start_time is not None) or (identity.boot_id is not None)
+
+
+@pytest.mark.unit
+def test_is_owner_identity_alive_returns_true_for_current_process() -> None:
+    """当前进程身份重新采集后应判活成功。"""
+
+    identity = current_owner_identity()
+    assert is_owner_identity_alive(identity) is True
+
+
+@pytest.mark.unit
+def test_is_owner_identity_alive_returns_false_when_pid_dead(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PID 已死时直接返回 False，不再做后续字段比对。"""
+
+    monkeypatch.setattr(liveness_module, "is_pid_alive", lambda pid: False)
+    identity = OwnerIdentity(pid=99999, process_start_time=1.0, boot_id="b")
+    assert is_owner_identity_alive(identity) is False
+
+
+@pytest.mark.unit
+def test_is_owner_identity_alive_returns_false_when_start_time_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PID 活但 process_start_time 不一致 → PID 复用 → False。"""
+
+    monkeypatch.setattr(liveness_module, "is_pid_alive", lambda pid: True)
+    monkeypatch.setattr(liveness_module, "_get_process_start_time", lambda pid: 222.0)
+    monkeypatch.setattr(liveness_module, "_get_current_boot_id", lambda: None)
+    identity = OwnerIdentity(pid=12345, process_start_time=111.0, boot_id=None)
+    assert is_owner_identity_alive(identity) is False
+
+
+@pytest.mark.unit
+def test_is_owner_identity_alive_returns_false_when_boot_id_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PID 活但 boot_id 不一致 → 重启过 → False。"""
+
+    monkeypatch.setattr(liveness_module, "is_pid_alive", lambda pid: True)
+    monkeypatch.setattr(liveness_module, "_get_process_start_time", lambda pid: None)
+    monkeypatch.setattr(liveness_module, "_get_current_boot_id", lambda: "boot-new")
+    identity = OwnerIdentity(pid=12345, process_start_time=None, boot_id="boot-old")
+    assert is_owner_identity_alive(identity) is False
+
+
+@pytest.mark.unit
+def test_is_owner_identity_alive_degrades_to_pid_when_all_fields_null(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """所有字段都 NULL 时退化为仅 PID 判活，行为等价 is_pid_alive。"""
+
+    monkeypatch.setattr(liveness_module, "is_pid_alive", lambda pid: True)
+    monkeypatch.setattr(liveness_module, "_get_process_start_time", lambda pid: None)
+    monkeypatch.setattr(liveness_module, "_get_current_boot_id", lambda: None)
+    identity = OwnerIdentity(pid=12345, process_start_time=None, boot_id=None)
+    assert is_owner_identity_alive(identity) is True
+
+
+@pytest.mark.unit
+def test_is_owner_identity_alive_skips_field_when_either_side_null(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """任一侧字段 NULL 则该字段不参与等值；剩余字段一致即视为同 owner。"""
+
+    monkeypatch.setattr(liveness_module, "is_pid_alive", lambda pid: True)
+    # stored has start_time but current采集失败 → start_time 不参与
+    monkeypatch.setattr(liveness_module, "_get_process_start_time", lambda pid: None)
+    monkeypatch.setattr(liveness_module, "_get_current_boot_id", lambda: "boot-x")
+    identity = OwnerIdentity(pid=12345, process_start_time=111.0, boot_id="boot-x")
+    assert is_owner_identity_alive(identity) is True

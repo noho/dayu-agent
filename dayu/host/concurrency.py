@@ -5,14 +5,13 @@
 
 from __future__ import annotations
 
-import os
 import time
 import uuid
 
 from dayu.contracts.cancellation import CancelledError, CancellationToken
 from dayu.host.host_store import HostStore, write_transaction
 from dayu.host.protocols import ConcurrencyGovernorProtocol, ConcurrencyPermit, LaneStatus
-from dayu.process_liveness import is_pid_alive
+from dayu.process_liveness import OwnerIdentity, current_owner_identity, is_owner_identity_alive
 
 # Host 自治 lane 名称：所有 Agent 执行路径都会自动叠加该 lane。
 # Service 层禁止使用该字面量，也不允许在 business_concurrency_lane 中写入该值。
@@ -171,15 +170,24 @@ class SQLiteConcurrencyGovernor(ConcurrencyGovernorProtocol):
             if not over_capacity:
                 now = _now_utc()
                 now_iso = now.isoformat()
-                pid = os.getpid()
+                owner = current_owner_identity()
                 for lane_name in lanes:
                     permit_id = f"permit_{uuid.uuid4().hex[:12]}"
                     conn.execute(
                         """
-                        INSERT INTO permits (permit_id, lane, owner_pid, acquired_at)
-                        VALUES (?, ?, ?, ?)
+                        INSERT INTO permits (permit_id, lane, owner_pid,
+                                             owner_process_start_time, owner_boot_id,
+                                             acquired_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
                         """,
-                        (permit_id, lane_name, pid, now_iso),
+                        (
+                            permit_id,
+                            lane_name,
+                            owner.pid,
+                            owner.process_start_time,
+                            owner.boot_id,
+                            now_iso,
+                        ),
                     )
                     permits.append(
                         ConcurrencyPermit(
@@ -212,12 +220,22 @@ class SQLiteConcurrencyGovernor(ConcurrencyGovernorProtocol):
             if current_count < max_concurrent:
                 permit_id = f"permit_{uuid.uuid4().hex[:12]}"
                 now = _now_utc()
+                owner = current_owner_identity()
                 conn.execute(
                     """
-                    INSERT INTO permits (permit_id, lane, owner_pid, acquired_at)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO permits (permit_id, lane, owner_pid,
+                                         owner_process_start_time, owner_boot_id,
+                                         acquired_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (permit_id, lane, os.getpid(), now.isoformat()),
+                    (
+                        permit_id,
+                        lane,
+                        owner.pid,
+                        owner.process_start_time,
+                        owner.boot_id,
+                        now.isoformat(),
+                    ),
                 )
                 permit = ConcurrencyPermit(
                     permit_id=permit_id,
@@ -260,14 +278,25 @@ class SQLiteConcurrencyGovernor(ConcurrencyGovernorProtocol):
         return result
 
     def cleanup_stale_permits(self) -> list[str]:
-        """清理 owner_pid 已死亡的 permit。"""
+        """清理 owner identity 已死亡的 permit。
+
+        以 ``OwnerIdentity`` 三元组判活，闭合 PID 复用窗口；任一字段
+        采集失败为 ``NULL`` 时退化为剩余字段比对，最差等价于仅 PID 判活。
+        """
 
         conn = self._host_store.get_connection()
-        rows = conn.execute("SELECT permit_id, owner_pid FROM permits").fetchall()
+        rows = conn.execute(
+            "SELECT permit_id, owner_pid, owner_process_start_time, owner_boot_id FROM permits"
+        ).fetchall()
 
         stale_ids: list[str] = []
         for row in rows:
-            if not is_pid_alive(row["owner_pid"]):
+            stored = OwnerIdentity(
+                pid=int(row["owner_pid"]),
+                process_start_time=row["owner_process_start_time"],
+                boot_id=row["owner_boot_id"],
+            )
+            if not is_owner_identity_alive(stored):
                 stale_ids.append(row["permit_id"])
 
         if stale_ids:

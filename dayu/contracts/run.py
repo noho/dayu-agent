@@ -14,6 +14,7 @@ from dayu.contracts.execution_metadata import (
     ExecutionDeliveryContext,
     empty_execution_delivery_context,
 )
+from dayu.process_liveness import OwnerIdentity
 
 
 ORPHAN_RUN_ERROR_SUMMARY = "orphan: owner process terminated"
@@ -115,6 +116,11 @@ class RunRecord:
         cancel_requested_reason: 请求取消原因（写入取消意图时填充）。
         cancel_reason: 取消原因（取消时填充）。
         owner_pid: 创建该 run 的进程 PID，用于死进程检测。
+        owner_process_start_time: 创建该 run 的进程的进程创建时间（epoch 秒），
+            与 ``owner_boot_id`` 共同构成 ``OwnerIdentity``，封堵 PID 复用窗口；
+            采集失败时为 ``None``，等值校验自动退化。
+        owner_boot_id: 创建该 run 时的系统 boot 标识，重启后必然变化；
+            采集失败时为 ``None``。
         metadata: 宿主侧交付上下文，仅承载稳定键值（与 ExecutionContract.metadata
             同型 ExecutionDeliveryContext），不作为自由 dict 承载业务字段。
     """
@@ -132,7 +138,24 @@ class RunRecord:
     cancel_requested_reason: RunCancelReason | None = None
     cancel_reason: RunCancelReason | None = None
     owner_pid: int = 0
+    owner_process_start_time: float | None = None
+    owner_boot_id: str | None = None
     metadata: ExecutionDeliveryContext = field(default_factory=empty_execution_delivery_context)
+
+    @property
+    def owner_identity(self) -> OwnerIdentity:
+        """以 ``OwnerIdentity`` 形式暴露 owner 三元组。
+
+        Returns:
+            由 ``owner_pid`` / ``owner_process_start_time`` / ``owner_boot_id``
+            构成的 ``OwnerIdentity``，供 cleanup / 判活逻辑使用。
+        """
+
+        return OwnerIdentity(
+            pid=self.owner_pid,
+            process_start_time=self.owner_process_start_time,
+            boot_id=self.owner_boot_id,
+        )
 
     def is_terminal(self) -> bool:
         """判断是否处于终态。

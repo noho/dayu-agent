@@ -55,6 +55,8 @@ CREATE TABLE IF NOT EXISTS runs (
     cancel_requested_reason TEXT,
     cancel_reason TEXT,
     owner_pid     INTEGER NOT NULL,
+    owner_process_start_time REAL,
+    owner_boot_id TEXT,
     metadata_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id);
@@ -113,6 +115,8 @@ CREATE TABLE IF NOT EXISTS permits (
     permit_id   TEXT PRIMARY KEY,
     lane        TEXT NOT NULL,
     owner_pid   INTEGER NOT NULL,
+    owner_process_start_time REAL,
+    owner_boot_id TEXT,
     acquired_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_permits_lane ON permits(lane);
@@ -247,6 +251,42 @@ class HostStore:
                 "updated_at",
                 "metadata_json",
                 "lease_id",
+            ),
+            db_path=self._db_path,
+        )
+        _require_table_columns(
+            conn,
+            table_name="runs",
+            required_columns=(
+                "run_id",
+                "session_id",
+                "service_type",
+                "scene_name",
+                "state",
+                "created_at",
+                "started_at",
+                "completed_at",
+                "error_summary",
+                "cancel_requested_at",
+                "cancel_requested_reason",
+                "cancel_reason",
+                "owner_pid",
+                "owner_process_start_time",
+                "owner_boot_id",
+                "metadata_json",
+            ),
+            db_path=self._db_path,
+        )
+        _require_table_columns(
+            conn,
+            table_name="permits",
+            required_columns=(
+                "permit_id",
+                "lane",
+                "owner_pid",
+                "owner_process_start_time",
+                "owner_boot_id",
+                "acquired_at",
             ),
             db_path=self._db_path,
         )

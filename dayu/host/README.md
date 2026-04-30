@@ -121,7 +121,7 @@ SUCCEEDED FAILED    CANCELLED       UNSETTLED
 **关键区分**：
 
 - `FAILED` 是"业务失败"：LLM 报错、工具异常、约束违反——由正常代码路径落库。
-- `UNSETTLED` 是"orphan 吸收态"：拥有该 run 的进程没了（kill -9 / OOM / 掉电）。Host 启动时 `cleanup_orphan_runs` 用 `owner_pid` 匹配把这些"没人管的运行中"落到 `UNSETTLED`，避免永远 RUNNING。
+- `UNSETTLED` 是"orphan 吸收态"：拥有该 run 的进程没了（kill -9 / OOM / 掉电）。Host 启动时 `cleanup_orphan_runs` 用 `OwnerIdentity`（`owner_pid` + `owner_process_start_time` + `owner_boot_id` 三元组）匹配把这些"没人管的运行中"落到 `UNSETTLED`，避免永远 RUNNING。`OwnerIdentity` 闭合 PID 复用窗口：旧 PID 即使被新进程复用，因 `process_start_time` / `boot_id` 不匹配也不会被误判为存活；任一字段采集失败为 `NULL` 时退化为剩余字段比对，最差等价于"仅 PID 判活"，不会比旧实现更差。
 - `CANCELLED` 携带 `RunCancelReason`：`USER_CANCELLED` 与 `TIMEOUT` 必须显式区分，决定 pending turn 是否保留（见 §6）。
 
 **取消的两层语义**（稳定契约）：
@@ -325,7 +325,7 @@ Host 内建 `ConcurrencyGovernor`，按 lane 限制同时运行的 run 数。
 
 - **lane 合并顺序**见 §3。
 - **`acquire_many`**：一次申请多条 lane 的 permit，要么全部拿到、要么一个都不拿（事务性）。用于避免"拿到 A、拿不到 B 然后半开状态"造成的局部死锁。
-- **stale permit 回收**：启动恢复阶段会扫描 ``owner_pid`` 已死亡的 permit 残留并直接回收；运行期如果某个 run 在等待 permit 时长期阻塞，governor 也会按节流频率主动回收 dead-PID stale permit，避免把“别的进程刚崩掉”的残留永久留给上层无限等待。
+- **stale permit 回收**：启动恢复阶段会扫描 `OwnerIdentity` 已死亡的 permit 残留并直接回收；运行期如果某个 run 在等待 permit 时长期阻塞，governor 也会按节流频率主动回收 stale permit，避免把"别的进程刚崩掉"的残留永久留给上层无限等待。判活基于 `OwnerIdentity` 三元组（pid + process_start_time + boot_id），闭合 PID 复用窗口。
 - **等待可取消**：Host 在阻塞等待 permit 时会绑定当前 run 的 `CancellationToken`；`cancel_run` / `cancel_session` 一旦落库，等待中的 acquire 也必须尽快退出并把 run 收敛到 `CANCELLED`，不能继续卡在 governor 轮询里。
 
 Host **不**感知业务 lane 的意义（例如"writer"、"retrieval"）；它只按 lane 名字做计数限流。业务层自己决定分 lane 的粒度。
@@ -611,8 +611,8 @@ Service 在收到一次 Agent 输出但发现"格式脏 / 空文本"等纯解析
 
 Host 启动时按固定顺序执行：
 
-1. **`cleanup_orphan_runs`** — 把上轮宿主进程遗留的 RUNNING run 吸收到 `UNSETTLED`（按 owner_pid 精确匹配）；
-2. **`cleanup_stale_permits`** — 回收 ``owner_pid`` 已死亡的 lane permit；
+1. **`cleanup_orphan_runs`** — 把上轮宿主进程遗留的 RUNNING run 吸收到 `UNSETTLED`（按 `OwnerIdentity` 三元组精确匹配，闭合 PID 复用窗口）；
+2. **`cleanup_stale_permits`** — 回收 `OwnerIdentity` 已死亡的 lane permit；
 3. **`cleanup_stale_reply_outbox_deliveries`** — 15 分钟 in-progress 回退到 `FAILED_RETRYABLE`；
 4. **`cleanup_stale_pending_turns`** — 执行 §6.4 的三分支（A → B → C）。
 
@@ -624,7 +624,7 @@ Host 启动时按固定顺序执行：
 
 ### 12.1 进程级优雅退出契约
 
-`dayu.process_lifecycle.ProcessShutdownCoordinator` 是 sync CLI、async daemon、atexit 钩子共用的真源，对外只暴露一个动作 `settle_active_runs(*, trigger)`：先取 observer 通过 `register_active_run` 登记的 run，再合并 `Host.list_active_run_ids_for_current_owner()` 兜底扫描当前 owner_pid 持有的活跃 run（覆盖 `fins` 直接同步执行、interactive/prompt 首事件前窗口等未登记路径），去重后逐个调 `Host.cancel_run_and_settle(run_id)`（同步 cancel + mark_cancelled + cleanup_stale_pending_turns，全部幂等）。该原子操作让退出路径从"协作式取消 + 强收敛"两步幂等补丁简化为一次同步收敛，同时保留 owner 级兜底能力。
+`dayu.process_lifecycle.ProcessShutdownCoordinator` 是 sync CLI、async daemon、atexit 钩子共用的真源，对外只暴露一个动作 `settle_active_runs(*, trigger)`：先取 observer 通过 `register_active_run` 登记的 run，再合并 `Host.list_active_run_ids_for_current_owner()` 兜底扫描当前 `OwnerIdentity` 持有的活跃 run（覆盖 `fins` 直接同步执行、interactive/prompt 首事件前窗口等未登记路径），去重后逐个调 `Host.cancel_run_and_settle(run_id)`（同步 cancel + mark_cancelled + cleanup_stale_pending_turns，全部幂等）。该原子操作让退出路径从"协作式取消 + 强收敛"两步幂等补丁简化为一次同步收敛，同时保留 owner 级兜底能力。
 
 | 触发源 | 覆盖端 | 入口 |
 |---|---|---|
