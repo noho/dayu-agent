@@ -3025,3 +3025,49 @@ class TestPromptDeepSeekSubOption:
         with pytest.raises(SystemExit) as exc_info:
             _prompt_provider_sub_option("deepseek")
         assert exc_info.value.code == 1
+
+
+class TestProviderOptionPostInit:
+    """``_ProviderOption.__post_init__`` 校验逻辑测试。"""
+
+    def test_provider_without_sub_menu_requires_api_key_name(self) -> None:
+        """未挂二级菜单的 provider 若 api_key_name 为空，必须抛 ValueError。"""
+        from dayu.cli.commands.init import _ProviderOption
+
+        with pytest.raises(ValueError, match="必须提供非空 api_key_name"):
+            _ProviderOption(
+                option_key="some_new_provider",
+                display_name="Some New Provider",
+                api_key_name="",
+                non_thinking_model="m",
+                thinking_model="m-thinking",
+            )
+
+    def test_provider_with_sub_menu_allows_empty_api_key_name(self) -> None:
+        """已挂二级菜单的 provider（如 mimo）允许 api_key_name 为空占位。"""
+        from dayu.cli.commands.init import (
+            _PROVIDER_OPTION_MIMO,
+            _ProviderOption,
+        )
+
+        option = _ProviderOption(
+            option_key=_PROVIDER_OPTION_MIMO,
+            display_name="Mimo",
+            api_key_name="",
+            non_thinking_model="mimo",
+            thinking_model="mimo",
+        )
+        assert option.api_key_name == ""
+
+    def test_provider_without_sub_menu_with_non_empty_api_key_passes(self) -> None:
+        """未挂二级菜单的 provider 提供非空 api_key_name 时正常构造。"""
+        from dayu.cli.commands.init import _ProviderOption
+
+        option = _ProviderOption(
+            option_key="some_provider",
+            display_name="Some Provider",
+            api_key_name="SOME_API_KEY",
+            non_thinking_model="m",
+            thinking_model="m-thinking",
+        )
+        assert option.api_key_name == "SOME_API_KEY"

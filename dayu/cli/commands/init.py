@@ -40,6 +40,45 @@ MODULE = "CLI.INIT"
 # --------------------------------------------------------------------------- #
 
 
+_PROVIDER_OPTION_MIMO = "mimo"
+_PROVIDER_OPTION_DEEPSEEK = "deepseek"
+_PROVIDER_OPTION_OPENAI = "openai"
+_PROVIDER_OPTION_ANTHROPIC = "anthropic"
+_PROVIDER_OPTION_GEMINI = "gemini"
+_PROVIDER_OPTION_QWEN = "qwen"
+_PROVIDER_OPTION_OLLAMA = "ollama"
+_PROVIDER_OPTION_CUSTOM_OPENAI = "custom_openai"
+
+
+# 配备二级子型号菜单的一级 provider option key 集合。
+# 这类 provider 在一级 ``_ProviderOption`` 上不直接绑定单一 API Key——
+# 真正的 API Key 由二级 ``_ProviderSubOption.api_key_name_override`` 决定，
+# 因此它们的 ``_ProviderOption.api_key_name`` 允许为空字符串占位。
+_PROVIDERS_WITH_SUB_MENU: frozenset[str] = frozenset(
+    {
+        _PROVIDER_OPTION_MIMO,
+        _PROVIDER_OPTION_DEEPSEEK,
+        _PROVIDER_OPTION_GEMINI,
+    }
+)
+
+# 本地或自托管类 provider，不需要 API Key（如 Ollama）。
+# 这类 provider 也允许 ``_ProviderOption.api_key_name`` 为空。
+_PROVIDERS_WITHOUT_API_KEY: frozenset[str] = frozenset(
+    {
+        _PROVIDER_OPTION_OLLAMA,
+    }
+)
+
+# 允许 ``api_key_name`` 为空字符串的 provider 集合。
+# 不在此集合中的 provider 必须在 ``_ProviderOption`` 上提供非空 ``api_key_name``，
+# 由 ``_ProviderOption.__post_init__`` 强制校验，防止后续新增 provider 时
+# 漏配 API Key 名导致一级菜单流程读到空字符串、写出错误的 dotenv 项。
+_PROVIDERS_ALLOWING_EMPTY_API_KEY: frozenset[str] = (
+    _PROVIDERS_WITH_SUB_MENU | _PROVIDERS_WITHOUT_API_KEY
+)
+
+
 @dataclass(frozen=True)
 class _ProviderOption:
     """`dayu-cli init` 中的单个初始化模型方案定义。"""
@@ -50,15 +89,28 @@ class _ProviderOption:
     non_thinking_model: str
     thinking_model: str
 
+    def __post_init__(self) -> None:
+        """校验一级 provider 选项配置自洽。
 
-_PROVIDER_OPTION_MIMO = "mimo"
-_PROVIDER_OPTION_DEEPSEEK = "deepseek"
-_PROVIDER_OPTION_OPENAI = "openai"
-_PROVIDER_OPTION_ANTHROPIC = "anthropic"
-_PROVIDER_OPTION_GEMINI = "gemini"
-_PROVIDER_OPTION_QWEN = "qwen"
-_PROVIDER_OPTION_OLLAMA = "ollama"
-_PROVIDER_OPTION_CUSTOM_OPENAI = "custom_openai"
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            ValueError: ``option_key`` 未挂二级菜单（不在
+                ``_PROVIDERS_WITH_SUB_MENU`` 中）但 ``api_key_name`` 为空字符串。
+        """
+
+        if (
+            self.option_key not in _PROVIDERS_ALLOWING_EMPTY_API_KEY
+            and not self.api_key_name
+        ):
+            raise ValueError(
+                f"_ProviderOption {self.option_key!r} 未挂二级菜单，"
+                "必须提供非空 api_key_name"
+            )
 
 # 本地 Ollama 模型统一使用的目录键
 _OLLAMA_CATALOG_KEY = "ollama"
