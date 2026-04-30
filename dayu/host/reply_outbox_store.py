@@ -838,6 +838,10 @@ class SQLiteReplyOutboxStore:
                 ),
             )
             rowcount = cursor.rowcount
+        # 事务外的 pre-read（self.get_reply 在函数顶部）只用于"快速路径 + 错误信息"；
+        # 双条件 CAS 在事务内执行后，必须再做一次 post-read 复核 rowcount=0 的真因——
+        # 因为 pre-read 与 UPDATE 之间存在并发窗口，可能被 cleanup 抢占改写 lease 或被
+        # 他人收口为 DELIVERED。复核读取本身轻量，且只在 CAS 失败这一条罕见路径上发生。
         updated = self.get_reply(existing.delivery_id)
         if updated is None:
             raise RuntimeError(f"reply delivery 更新后读取失败: {existing.delivery_id}")

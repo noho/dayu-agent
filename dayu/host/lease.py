@@ -22,17 +22,6 @@ class LeaseExpiredError(RuntimeError):
 
     在 store 层执行 ``state + lease_id`` 双条件 CAS 时，若 lease_id 不再匹配（典型
     场景：cleanup 抢占已分配新 lease；旧持有者迟到回写），抛出该异常。
-
-    Args:
-        message: 错误描述。
-        record_id: 触发该错误的真源 record 标识，便于日志定位。
-        lease_id: 调用方传入的过期 lease_id；为 ``None`` 时表示调用方完全未带 lease。
-
-    Returns:
-        无。
-
-    Raises:
-        无。
     """
 
     def __init__(
@@ -46,8 +35,8 @@ class LeaseExpiredError(RuntimeError):
 
         Args:
             message: 错误描述文本。
-            record_id: 触发该错误的真源 record 标识。
-            lease_id: 调用方传入的过期 lease_id。
+            record_id: 触发该错误的真源 record 标识，便于日志定位。
+            lease_id: 调用方传入的过期 lease_id；为 ``None`` 时表示调用方完全未带 lease。
 
         Returns:
             无。

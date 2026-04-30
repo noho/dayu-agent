@@ -1018,6 +1018,9 @@ class WeChatDaemon:
             # LeaseExpiredError，由下方 except 捕获记录后由后续扫描自然推进。
             recovery_lease_id = record.lease_id
             if recovery_lease_id is None:
+                # 新契约下 DELIVERY_IN_PROGRESS 必有 lease_id（claim 路径强制分配）；
+                # 这里命中 None 表示底层数据被绕过 store CAS 直接改写，属异常态，
+                # 用 warning 暴露给运维而非降级为 info。
                 Log.warning(
                     "微信 reply delivery 启动回收跳过：record 缺少 lease_id"
                     f" delivery_id={record.delivery_id}",
