@@ -556,6 +556,7 @@ def test_host_admin_service_lists_session_recent_turns() -> None:
                 ConversationSessionTurnExcerpt(
                     user_text="上一轮问题",
                     assistant_text="上一轮回答",
+                    reasoning_text="上一轮思考",
                     created_at="2026-04-21T00:01:00+00:00",
                 )
             ]

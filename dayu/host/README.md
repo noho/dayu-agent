@@ -502,6 +502,8 @@ Compaction 有两条触发路径，职责分离：
 - `history_archive` 内容**不进入** prepared snapshot / `resume_source_json` / `restore_prepared_execution` / `to_messages` / compaction 输入；它纯粹是展示侧字段。
 - 模块结构隔离由 `tests/application/test_history_archive_isolation.py` 反射式回归——`dayu/host/conversation_memory.py` / `pending_turn_store.py` / `prepared_turn.py` / `dayu/contracts/agent_execution.py` / `agent_execution_serialization.py` / `agent_types.py` 六处源码不得出现 `assistant_reasoning` / `ConversationHistoryTurnRecord` / `ConversationHistoryArchive` 三个 token。
 
+**历史读 read model（`#116`）**：`Host.list_conversation_session_turn_excerpts(session_id, *, limit)` 是历史展示的**唯一**对外读入口，返回 `ConversationSessionTurnExcerpt(user_text, assistant_text, reasoning_text, created_at)`，按时间从旧到新排列。读源**只**是 `archive.history_archive.turns`——禁止从 `runtime_transcript` 投影"近似历史"。`reasoning_text` 映射自 `assistant_reasoning`，无 reasoning 的轮次为空字符串；archive 缺失 / JSON 损坏 / schema 非法（含旧 transcript 未迁移） / `limit <= 0` 一律降级返回空列表（损坏路径同时打 warning）。`Host.get_conversation_session_digest` 共享同一 fail-soft 加载入口（`_safe_load_archive_for_read`），异常一律按"无 archive"语义处理。**写路径不受此降级影响**，仍走 `archive_store.load` 的 fail-closed 行为，避免静默覆盖损坏数据。`reasoning_text` 命名上刻意区别于内部 `assistant_reasoning`，提示上层这是展示视图，绝不流回送模 / resume / memory / compaction。回归用例见 `tests/application/test_host_list_conversation_excerpts.py`。
+
 **reasoning 的采集与落盘**（`#118` 关键链路）：
 
 1. Engine 层流式产出 `EventType.REASONING_DELTA`。

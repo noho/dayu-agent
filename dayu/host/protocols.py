@@ -747,14 +747,29 @@ class ConversationSessionDigest:
 
 @dataclass(frozen=True)
 class ConversationSessionTurnExcerpt:
-    """Host 暴露给管理面的 conversation 单轮摘录。
+    """Host 暴露给管理面的 conversation 单轮摘录（历史读 read model）。
 
     该对象只承载可安全展示的单轮对话文本，不暴露完整
     ``ConversationTranscript`` 与 derived memory 结构。
+
+    字段语义遵循 ``#116`` 共享设计 §1.3 层 B 契约：
+
+    - ``user_text``：用户输入文本。
+    - ``assistant_text``：助手最终回复文本（与 ``runtime_transcript`` 中
+      ``assistant_final`` 同源同值）。
+    - ``reasoning_text``：助手 reasoning 文本，**仅展示**。映射自
+      ``history_archive.turns[*].assistant_reasoning``；无 reasoning 的轮次
+      为 ``""``。命名上刻意用 ``reasoning_text`` 而非 ``assistant_reasoning``，
+      强调其展示视图属性，避免上层误认作运行态字段。
+    - ``created_at``：ISO 8601 时间字符串，与对应 ``ConversationTurnRecord.created_at``
+      一致。
+
+    不暴露 ``turn_id`` / ``scene_name`` 等内部标识；如需新字段需另立 issue。
     """
 
     user_text: str
     assistant_text: str
+    reasoning_text: str
     created_at: str
 
 

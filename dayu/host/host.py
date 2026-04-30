@@ -20,6 +20,7 @@ from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 from dayu.execution.options import ResolvedExecutionOptions
 from dayu.engine.tool_registry import ToolRegistry
 from dayu.host.concurrency import SQLiteConcurrencyGovernor
+from dayu.host.conversation_session_archive import ConversationSessionArchive
 from dayu.host.conversation_store import (
     ConversationSessionArchiveStore,
     FileConversationSessionArchiveStore,
@@ -438,7 +439,7 @@ class Host:
 
         if self._archive_store is None:
             return _empty_conversation_session_digest()
-        archive = self._archive_store.load(session_id)
+        archive = self._safe_load_archive_for_read(session_id)
         if archive is None or not archive.runtime_transcript.turns:
             return _empty_conversation_session_digest()
         first_turn = archive.runtime_transcript.turns[0]
@@ -457,12 +458,18 @@ class Host:
     ) -> list[ConversationSessionTurnExcerpt]:
         """读取指定 session 的最近 conversation 单轮摘录。
 
+        历史真源是 ``archive.history_archive.turns``（``#116`` 共享设计 §1.1）。
+        本接口仅消费 history 子视图，**不**从 ``runtime_transcript`` 投影历史，
+        ``assistant_reasoning`` 透出为 read model 的 ``reasoning_text`` 字段
+        但绝不流回运行态。
+
         Args:
             session_id: 目标 session ID。
             limit: 最多返回的 turn 数量。
 
         Returns:
-            最近单轮摘录列表，按时间从旧到新排列；若 transcript 不存在则返回空列表。
+            最近单轮摘录列表，按时间从旧到新排列；若 archive 不存在或 history
+            为空则返回空列表（``#116`` 共享设计 §1.5）。
 
         Raises:
             无。
@@ -470,18 +477,51 @@ class Host:
 
         if self._archive_store is None or limit <= 0:
             return []
-        archive = self._archive_store.load(session_id)
-        if archive is None or not archive.runtime_transcript.turns:
+        archive = self._safe_load_archive_for_read(session_id)
+        if archive is None or not archive.history_archive.turns:
             return []
-        recent_turns = archive.runtime_transcript.turns[-limit:]
+        recent_turns = archive.history_archive.turns[-limit:]
         return [
             ConversationSessionTurnExcerpt(
                 user_text=turn.user_text,
-                assistant_text=turn.assistant_final,
+                assistant_text=turn.assistant_text,
+                reasoning_text=turn.assistant_reasoning,
                 created_at=turn.created_at,
             )
             for turn in recent_turns
         ]
+
+    def _safe_load_archive_for_read(
+        self,
+        session_id: str,
+    ) -> ConversationSessionArchive | None:
+        """历史读专用 fail-soft archive 加载。
+
+        ``#116`` 共享设计 §1.7 读路径列：archive 文件不存在 / JSON 损坏 /
+        schema 非法（含旧 transcript 未迁移）一律返回 ``None`` 并 warn，
+        避免把 ``ValueError`` / ``RuntimeError`` 抛给 Service / UI。写路径
+        仍走 ``_archive_store.load`` 的 fail-closed 行为，不受此降级影响。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Returns:
+            archive 或 ``None``。
+
+        Raises:
+            无：所有异常都被记入 warning 日志后吞掉，调用方按"无 archive"语义处理。
+        """
+
+        if self._archive_store is None:
+            return None
+        try:
+            return self._archive_store.load(session_id)
+        except (ValueError, RuntimeError, json.JSONDecodeError, OSError) as exc:
+            Log.warning(
+                f"历史读 archive 损坏或不可读，按空历史降级: session_id={session_id}, error={exc}",
+                module=MODULE,
+            )
+            return None
 
     def run_operation_stream(
         self,
