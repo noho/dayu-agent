@@ -58,9 +58,11 @@ from dayu.host.protocols import (
     RunRegistryProtocol,
     SessionRegistryProtocol,
     SessionWriteBlockedError,
+    ConversationArchiveRevisionConflictError,
     ConversationClearRejectedError,
     ConversationClearStaleError,
     ConversationClearPartiallyAppliedError,
+    SessionStateTransitionError,
 )
 from dayu.log import Log
 from dayu.host.run_registry import SQLiteRunRegistry
@@ -919,13 +921,13 @@ class Host:
             raise KeyError(f"session 不存在: {session_id}")
 
         # 步骤 1：立屏障。begin_clearing 仅允许从 ACTIVE 进入 CLEARING；
-        # CLOSED / 已 CLEARING / CLEARING_FAILED 一律抛 RuntimeError，转换为
-        # 业务级 RejectedError 上抛，五真源完全不变。
+        # CLOSED / 已 CLEARING / CLEARING_FAILED 一律抛 SessionStateTransitionError，
+        # 转换为业务级 RejectedError 上抛，五真源完全不变。基础设施级 RuntimeError
+        # （如 SQLite ``database locked``）不会被这里吞掉，会沿原异常上冒。
         try:
             self._session_registry.begin_clearing(session_id)
-        except RuntimeError as exc:
-            current = self._session_registry.get_session_state(session_id)
-            reason = f"session_state={current.value if current else 'unknown'}"
+        except SessionStateTransitionError as exc:
+            reason = f"session_state={exc.current_state.value}"
             Log.info(
                 f"clear_session_history 屏障拒绝: session_id={session_id}, {reason}, error={exc}",
                 module=MODULE,
@@ -969,17 +971,14 @@ class Host:
             empty_archive = ConversationSessionArchive.create_empty(session_id)
             try:
                 self._archive_store.save(empty_archive, expected_revision=live.revision)
-            except RuntimeError as exc:
-                # 与 ``conversation_store`` 的 revision 冲突错误类型对齐：
-                # 仍是 RuntimeError，依据消息片段映射为 StaleError。
-                msg = str(exc)
-                if "revision 冲突" in msg:
-                    raise ConversationClearStaleError(
-                        session_id,
-                        expected_revision=live.revision,
-                        actual_revision=msg,
-                    ) from exc
-                raise
+            except ConversationArchiveRevisionConflictError as exc:
+                # 与 ``conversation_store`` 的类型化 revision 冲突异常对齐：
+                # 编译期映射到业务级 StaleError，避免依赖错误消息字串匹配。
+                raise ConversationClearStaleError(
+                    session_id,
+                    expected_revision=exc.expected_revision or "",
+                    actual_revision=exc.actual_revision,
+                ) from exc
 
             # 步骤 4：同锁同屏障内做有界 retry 的补偿性 delete。
             residual: tuple[str, ...] = ()

@@ -13,7 +13,7 @@ from typing import Any
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
 from dayu.contracts.session import SessionRecord, SessionSource, SessionState
 from dayu.host.host_store import HostStore, write_transaction
-from dayu.host.protocols import SessionRegistryProtocol
+from dayu.host.protocols import SessionRegistryProtocol, SessionStateTransitionError
 from dayu.log import Log
 
 MODULE = "HOST.SESSION_REGISTRY"
@@ -309,9 +309,11 @@ class SQLiteSessionRegistry(SessionRegistryProtocol):
         existing_state = self.get_session_state(normalized)
         if existing_state is None:
             raise KeyError(f"session 不存在: {normalized}")
-        raise RuntimeError(
-            f"{operation} 前置状态不满足: session_id={normalized}, "
-            f"current_state={existing_state.value}, expected={','.join(expected_values)}"
+        raise SessionStateTransitionError(
+            normalized,
+            operation=operation,
+            current_state=existing_state,
+            expected_states=expected_states,
         )
 
     def begin_clearing(self, session_id: str) -> None:

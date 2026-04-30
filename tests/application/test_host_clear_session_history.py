@@ -287,7 +287,7 @@ def test_clear_stale_when_archive_revision_advanced(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """场景 b：clear 在锁内拿到 live.revision 后，模拟 compaction 写回推进 archive
-    revision。``archive_store.save`` 应抛 RuntimeError（revision 冲突），
+    revision。``archive_store.save`` 应抛 ``ConversationArchiveRevisionConflictError``，
     ``clear_session_history`` 转化为 ``ConversationClearStaleError``，五真源不变。"""
 
     store = FileConversationSessionArchiveStore(tmp_path / "conv")
@@ -301,9 +301,12 @@ def test_clear_stale_when_archive_revision_advanced(
     def conflicting_save(archive, *, expected_revision=None):  # type: ignore[no-untyped-def]
         # 第一次（清空空 archive）注入冲突，后续放行。
         if len(archive.history_archive.turns) == 0 and expected_revision is not None:
-            raise RuntimeError(
-                "conversation session archive revision 冲突："
-                f"session_id={archive.session_id}, expected={expected_revision}, actual=rev_other"
+            from dayu.host.protocols import ConversationArchiveRevisionConflictError
+
+            raise ConversationArchiveRevisionConflictError(
+                archive.session_id,
+                expected_revision=expected_revision,
+                actual_revision="rev_other",
             )
         return real_save(archive, expected_revision=expected_revision)
 

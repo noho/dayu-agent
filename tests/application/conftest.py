@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dataclass_replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Callable, TypeVar
 
@@ -141,15 +141,7 @@ class StubSessionRegistry:
         existing = self._sessions.get(session_id)
         if existing is None:
             raise KeyError(f"session 不存在: {session_id}")
-        replaced = SessionRecord(
-            session_id=existing.session_id,
-            source=existing.source,
-            state=target,
-            scene_name=existing.scene_name,
-            created_at=existing.created_at,
-            last_activity_at=existing.last_activity_at,
-            metadata=existing.metadata,
-        )
+        replaced = dataclass_replace(existing, state=target)
         self._sessions[session_id] = replaced
         return replaced
 
@@ -159,8 +151,13 @@ class StubSessionRegistry:
         if existing is None:
             raise KeyError(f"session 不存在: {session_id}")
         if existing.state != SessionState.ACTIVE:
-            raise RuntimeError(
-                f"begin_clearing 前置状态不满足: session_id={session_id}, current={existing.state.value}"
+            from dayu.host.protocols import SessionStateTransitionError
+
+            raise SessionStateTransitionError(
+                session_id,
+                operation="begin_clearing",
+                current_state=existing.state,
+                expected_states=(SessionState.ACTIVE,),
             )
         self._replace_state(session_id, SessionState.CLEARING)
 
@@ -170,8 +167,13 @@ class StubSessionRegistry:
         if existing is None:
             raise KeyError(f"session 不存在: {session_id}")
         if existing.state != SessionState.CLEARING:
-            raise RuntimeError(
-                f"end_clearing 前置状态不满足: session_id={session_id}, current={existing.state.value}"
+            from dayu.host.protocols import SessionStateTransitionError
+
+            raise SessionStateTransitionError(
+                session_id,
+                operation="end_clearing",
+                current_state=existing.state,
+                expected_states=(SessionState.CLEARING,),
             )
         self._replace_state(session_id, SessionState.ACTIVE)
 
@@ -181,8 +183,13 @@ class StubSessionRegistry:
         if existing is None:
             raise KeyError(f"session 不存在: {session_id}")
         if existing.state != SessionState.CLEARING:
-            raise RuntimeError(
-                f"mark_clearing_failed 前置状态不满足: session_id={session_id}, current={existing.state.value}"
+            from dayu.host.protocols import SessionStateTransitionError
+
+            raise SessionStateTransitionError(
+                session_id,
+                operation="mark_clearing_failed",
+                current_state=existing.state,
+                expected_states=(SessionState.CLEARING,),
             )
         self._replace_state(session_id, SessionState.CLEARING_FAILED)
 

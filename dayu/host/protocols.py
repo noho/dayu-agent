@@ -231,6 +231,93 @@ class ConversationClearPartiallyAppliedError(RuntimeError):
         self.residual_sources = residual_sources
 
 
+class SessionStateTransitionError(RuntimeError):
+    """``SessionRegistry`` 状态机迁移因前置状态不满足而失败。
+
+    `#117` review 反馈：原实现 ``_transition_state`` 抛裸 ``RuntimeError``，
+    与 SQLite ``database locked`` 等基础设施 ``RuntimeError`` 不可区分。
+    引入专用类型让 ``host.clear_session_history`` 的 ``begin_clearing``
+    捕获分支可以收窄到该类型，避免吞掉真正的基础设施错误。
+
+    仅由 ``_transition_state`` 抛出，调用方不应直接构造。
+    """
+
+    def __init__(
+        self,
+        session_id: str,
+        *,
+        operation: str,
+        current_state: SessionState,
+        expected_states: tuple[SessionState, ...],
+    ) -> None:
+        """初始化异常。
+
+        Args:
+            session_id: 触发迁移失败的 session ID。
+            operation: 触发迁移的操作名（如 ``进入 CLEARING 屏障``）。
+            current_state: session 当前状态。
+            expected_states: 操作期望的合法前置状态集合。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        expected_values = ",".join(state.value for state in expected_states)
+        super().__init__(
+            f"{operation} 前置状态不满足: session_id={session_id}, "
+            f"current_state={current_state.value}, expected={expected_values}"
+        )
+        self.session_id = session_id
+        self.operation = operation
+        self.current_state = current_state
+        self.expected_states = expected_states
+
+
+class ConversationArchiveRevisionConflictError(RuntimeError):
+    """``ConversationSessionArchiveStore.save`` 乐观锁冲突。
+
+    `#117` review 反馈：原 ``conversation_store`` 在 revision 冲突时抛
+    裸 ``RuntimeError`` + 消息字串 ``"revision 冲突"``，调用方（如
+    ``host.clear_session_history``）只能用子串匹配辨认，文案变动会静默
+    穿透。引入专用类型让所有冲突捕获分支编译期对齐。
+
+    仅由 archive store 实现抛出；与现有 ``RuntimeError`` 协议契约兼容
+    （子类继承 ``RuntimeError``，旧调用点的 ``except RuntimeError`` 仍能命中）。
+    """
+
+    def __init__(
+        self,
+        session_id: str,
+        *,
+        expected_revision: str | None,
+        actual_revision: str,
+    ) -> None:
+        """初始化异常。
+
+        Args:
+            session_id: 触发冲突的 session ID。
+            expected_revision: ``save`` 调用方期望的旧 archive revision。
+            actual_revision: archive 实际 revision。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        super().__init__(
+            "conversation session archive revision 冲突: "
+            f"session_id={session_id}, expected={expected_revision}, actual={actual_revision}"
+        )
+        self.session_id = session_id
+        self.expected_revision = expected_revision
+        self.actual_revision = actual_revision
+
+
 class SessionActivityQueryProtocol(Protocol):
     """面向仓储层的 session 活性查询协议。
 
@@ -1362,6 +1449,8 @@ __all__ = [
     "ConversationClearRejectedError",
     "ConversationClearStaleError",
     "ConversationClearPartiallyAppliedError",
+    "ConversationArchiveRevisionConflictError",
+    "SessionStateTransitionError",
     "SessionOperationsProtocol",
     "SessionRegistryProtocol",
 ]

@@ -49,7 +49,9 @@ def ensure_session_active(
 
     if session_activity is None:
         return
-    if session_activity.is_session_active(session_id):
+
+    state = session_activity.get_session_state(session_id)
+    if state == SessionState.ACTIVE:
         return
 
     # 延迟 import 避免 Host 私有模块与 protocols 形成包级循环。
@@ -59,7 +61,6 @@ def ensure_session_active(
         SessionClosedError,
     )
 
-    state = session_activity.get_session_state(session_id)
     if state == SessionState.CLEARING:
         Log.verbose(
             f"session 处于 CLEARING 屏障，拒绝 {target_name} 写入: "
@@ -75,6 +76,8 @@ def ensure_session_active(
         )
         raise SessionClearingFailedError(session_id)
 
+    # state is None（session 不存在）或 SessionState.CLOSED：统一按"已关闭"
+    # 语义拒绝写入，保持与 SessionClosedError 文案一致。
     Log.verbose(
         f"session 已关闭或不存在，拒绝 {target_name} 写入: "
         f"session_id={session_id}, operation={operation}",

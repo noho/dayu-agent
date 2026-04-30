@@ -536,7 +536,7 @@ class ConversationSessionArchiveStore(Protocol):
             实际保存后的 archive。
 
         Raises:
-            RuntimeError: revision 冲突时抛出。
+            ConversationArchiveRevisionConflictError: revision 冲突时抛出。
         """
         ...
 
@@ -674,7 +674,7 @@ class FileConversationSessionArchiveStore:
             实际保存后的 archive。
 
         Raises:
-            RuntimeError: revision 冲突时抛出。
+            ConversationArchiveRevisionConflictError: revision 冲突时抛出。
         """
 
         file_path = self._resolve_file_path(archive.session_id)
@@ -691,9 +691,16 @@ class FileConversationSessionArchiveStore:
                         f"session_id={archive.session_id}, expected={expected_revision}, actual={existing.revision}",
                         module=MODULE,
                     )
-                    raise RuntimeError(
-                        "conversation session archive revision 冲突："
-                        f"session_id={archive.session_id}, expected={expected_revision}, actual={existing.revision}"
+                    # 延迟 import 规避 conversation_store -> protocols -> host_execution
+                    # -> prepared_turn -> conversation_store 的包级循环导入。
+                    from dayu.host.protocols import (
+                        ConversationArchiveRevisionConflictError,
+                    )
+
+                    raise ConversationArchiveRevisionConflictError(
+                        archive.session_id,
+                        expected_revision=expected_revision,
+                        actual_revision=existing.revision,
                     )
             # 文件不存在时直接写入：首轮 archive 仅存在于内存，不构成并发冲突
             _atomic_write_text(
