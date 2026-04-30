@@ -101,11 +101,12 @@
 
 - 本小节必须把状态机按**真实运行轨迹完整展开**后再 review，禁止只看状态枚举名、单个转换函数、单个仓储方法或局部单测就下结论。
 - review 状态机时，不要把“状态机”狭义理解成 `Enum`；凡是代码中存在“真源状态 + 触发条件 + 状态写入 + 对外事件 / 副作用 + 后续收敛”的执行闭环，都按状态机审查。
-- 本小节当前必须重点覆盖四类状态机，且四者都必须 review：
+- 本小节当前必须重点覆盖五类状态机，且五者都必须 review：
   - **模型协议/Runner 状态机**：当前重点实现是 `AsyncOpenAIRunner`
   - **Agent iteration 状态机**：当前重点实现是 `AsyncAgent`
   - **宿主恢复状态机**：当前重点实现是 `Host pending turn`
   - **宿主出站交付状态机**：当前重点实现是 `Host reply outbox`
+  - **宿主会话历史状态机**：当前重点实现是 `ConversationSessionArchive` + `Host.list_conversation_session_turn_excerpts` + `Host.clear_session_history`
 - 这里点名当前实现，是为了确保 review 落到真实代码；但产出结论应优先抽象为**状态机类别、状态真源、转换约束、异常收敛规律**，不要把 prompt 写成只适配当前类名和当前字段名的脚本说明。
 - 对每个状态机，先回答这几个原则性问题，再进入具体代码：
   - **状态真源是什么**：哪一个对象 / 仓储 / 事件摘要才是当前状态的唯一真源。
@@ -131,6 +132,7 @@
   - **Agent iteration 状态机**：从消息输入、调用 runner、消费 runner 事件、工具批次闭环、预算/降级/续写/终止判定，到 `final_answer` 或错误/取消结束的轨迹全部展开；重点看 iteration 是否单调推进、是否存在跳步或双重推进。
   - **宿主恢复状态机**：从 accepted / prepared 真源登记、状态推进、run 终态调和、resume 快照恢复、删除或保留 pending 真源的轨迹全部展开；重点看恢复是否依赖稳定快照而非临场反推。
   - **宿主出站交付状态机**：从提交、claim、发送中、ack/nack、retry、terminal failure、stale cleanup 的轨迹全部展开；重点看交付状态是否具备幂等、竞争守卫和吸收态约束。
+  - **宿主会话历史状态机**：从 `history_archive` 持久化、历史读 read model 投影、`clear_session_history` 写屏障（`ACTIVE / CLEARING / CLEARING_FAILED / CLOSED`）、archive 清空切点、补偿 delete、`CLEARING_FAILED` 锁定，到上层只读 / 只清接口的轨迹全部展开；重点看历史展示字段是否与运行态 transcript 严格隔离、清空是否保持五真源一致性语义、以及失败后是否进入单一事实。
 - 重点检查以下原则性问题：
   - 状态转移是否依赖**直接事实**，而不是依赖日志、命名、布尔缓存、临时推断或“看起来像完成了”的间接迹象。
   - 同一事实是否只有一个**状态真源**和一个**最终解释者**；若 Runner、Agent、Host、仓储各自都能“定义当前到了哪一步”，即报告。
@@ -350,14 +352,15 @@
 
 ### 4. 多轮会话 编写最佳实践
 - **4.1 状态真源是否唯一**
-  - 检查多轮会话相关状态（session、run、pending turn、message transcript、resume snapshot）的真源是否唯一。
+- 检查多轮会话相关状态（session、run、pending turn、runtime transcript、history_archive、history read model、resume snapshot）的真源是否唯一。
   - 重点看是否存在两个以上可写状态源同时描述“当前轮进行到哪里”。
   - 判定标准：同一事实若可由 UI 内存、Service 缓存、Host 存储、Agent 上下文中两个或以上位置独立修改 → 报告。
 
 - **4.2 会话状态归属是否正确**
-  - 检查 UI、Service、Host、Agent 各自是否只持有本层应持有的会话信息。
-  - UI 只应持有展示态和用户交互态；Service 只应持有业务受理语义；Host 应拥有执行态、生命周期与恢复态；Agent 只应接收本次执行所需输入。
-  - 判定标准：UI/Service 持有或决定可恢复执行状态，或 Agent 反向决定会话治理策略 → 报告。
+- 检查 UI、Service、Host、Agent 各自是否只持有本层应持有的会话信息。
+- UI 只应持有展示态和用户交互态；Service 只应持有业务受理语义；Host 应拥有执行态、生命周期与恢复态；Agent 只应接收本次执行所需输入。
+- 额外检查 `assistant_reasoning` / `reasoning_text` 是否只作为**历史展示字段**存在：Host 可以持久化到 `history_archive` 并通过 read model 暴露；UI / Service 只能展示或清空，**不得**把它回流到 prompt、resume、memory、compaction、pending turn 或 reply outbox。
+- 判定标准：UI/Service 持有或决定可恢复执行状态，或 Agent 反向决定会话治理策略 → 报告。
 
 - **4.3 恢复 / 重试语义是否稳定**
   - 检查 resume / retry / redelivery 是否基于持久化快照或宿主记录的稳定事实，而不是从当前 UI 输入、当前配置或 transcript 临时反推。
@@ -376,12 +379,14 @@
 
 - **4.6 失败、取消、超时后的会话一致性**
   - 检查 tool 失败、模型失败、用户取消、超时、中断重启后，会话是否保持一致，不出现“用户看见已完成但系统不可恢复”或“系统继续运行但用户侧已结束”的分裂状态。
-  - 检查 reply 是否只在可确认时落库 / 挂起 / 标记待投递，避免半提交。
-  - 判定标准：终态与可恢复态不一致，或失败后 transcript / pending turn / run state 之间出现逻辑冲突 → 报告。
+- 检查 reply 是否只在可确认时落库 / 挂起 / 标记待投递，避免半提交。
+- 检查 `clear_session_history` 是否只通过 Host 稳定接口触发；清空成功后 `history_archive`、`runtime_transcript`、pending turn、reply outbox、replay stash 是否按设计共同收敛；若进入 `CLEARING_FAILED`，上层是否停止新写入并等待人工修复，而不是继续把同一 session 当作可正常写入会话。
+- 判定标准：终态与可恢复态不一致，或失败后 transcript / pending turn / run state 之间出现逻辑冲突 → 报告。
 
 - **4.7 多入口行为是否一致**
-  - 检查 CLI、Web、WeChat 等入口对多轮会话是否复用同一 Service 契约与 Host 能力，而不是各自实现一套 resume、pending、session 管理。
-  - 判定标准：不同 UI 入口对同一会话语义有分叉实现，导致恢复、取消、历史回放行为不一致 → 报告。
+- 检查 CLI、Web、WeChat 等入口对多轮会话是否复用同一 Service 契约与 Host 能力，而不是各自实现一套 resume、pending、session 管理。
+- 历史会话加载与清空也必须走同一 Host 能力：历史读只通过 `Host.list_conversation_session_turn_excerpts(...)`，清空只通过 `Host.clear_session_history(...)`；UI / Service 直接读 `<workspace>/.host/conversations/*.json`、直接碰 `archive_store` / `pending_turn_store` / `reply_outbox_store` 都应报告。
+- 判定标准：不同 UI 入口对同一会话语义有分叉实现，导致恢复、取消、历史回放行为不一致 → 报告。
 
 - **4.8 上下文构造是否服务于多轮稳定性**
   - 检查历史消息裁剪、摘要、system prompt 注入、tool trace 回填是否保持多轮语义连续，不丢失继续执行所需的最小信息。
@@ -397,8 +402,11 @@
   - 判定标准：资源治理规则散落在 UI / Service / Agent 自行判断，或同一限制存在多个不一致实现 → 报告。
 
 - **5.3 Host状态机是否正确**
-  - 检查turn和outbox的：创建、开始、取消、超时、完成、失败、恢复、孤儿 ，状态转换是否正确。
-  - 特别检查异常情况下状态机处理。
+- 检查 `run / pending turn / reply outbox / conversation session archive / clear_session_history` 的：创建、开始、取消、超时、完成、失败、恢复、孤儿 / stale、清空、锁定（`CLEARING_FAILED`）等状态转换是否正确。
+- 特别检查异常情况下状态机处理：
+  - `history_archive` 与 `runtime_transcript` 是否保持既定边界：前者仅展示，后者仅运行态；
+  - 历史读取是否只消费 `history_archive`，而不是从 `runtime_transcript` 投影近似历史；
+  - 清空失败后是否进入 `CLEARING_FAILED` 单一事实，而不是“archive 已清 + 其余真源残留 + 仍继续接新写入”的混合状态。
 
 - **5.4 Agent 是否退化为“消息交互执行器”**
   - 检查 Agent 是否只负责在给定输入和约束内进行消息交互、tool 调用编排与结果返回。
