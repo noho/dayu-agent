@@ -61,13 +61,32 @@ def test_migrate_run_json_missing_file_returns_false(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
-def test_migrate_run_json_invalid_json_returns_false(tmp_path: Path) -> None:
-    """解析失败时返回 False 不抛异常。"""
+def test_migrate_run_json_invalid_json_raises(tmp_path: Path) -> None:
+    """解析失败时显式抛 ``json.JSONDecodeError``，不再吞错返回 False。"""
 
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "run.json").write_text("{not json", encoding="utf-8")
-    assert migrate_run_json_add_write_chapter_lane(config_dir) is False
+    with pytest.raises(json.JSONDecodeError):
+        migrate_run_json_add_write_chapter_lane(config_dir)
+
+
+@pytest.mark.unit
+def test_migrate_run_json_writes_atomically(tmp_path: Path) -> None:
+    """临时文件不应残留；最终文件即为目标 run.json。"""
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    run_json = config_dir / "run.json"
+    run_json.write_text(
+        json.dumps({"host_config": {"lane": {"llm_api": 8}}}),
+        encoding="utf-8",
+    )
+
+    assert migrate_run_json_add_write_chapter_lane(config_dir) is True
+    # 原子写入完成后，目录里只有 run.json，不应残留临时文件。
+    children = sorted(p.name for p in config_dir.iterdir())
+    assert children == ["run.json"]
 
 
 @pytest.mark.unit

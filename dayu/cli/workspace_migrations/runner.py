@@ -7,6 +7,10 @@
 3. 在 :func:`apply_all_workspace_migrations` 里按顺序调用并打印结果。
 
 **不要**把规则写回 ``init.py``；也不要在此文件里做除"调度 + 汇报"以外的事。
+
+失败语义：任一迁移内部抛错（``OSError`` / ``sqlite3.Error`` / ``json.JSONDecodeError``
+等）将原样向上传播，由 ``dayu-cli init`` 命令显式失败。运行 ``init`` 时调用方
+负责持有 workspace advisory lock，确保不会有第二个 init 在同一目录上并发改动。
 """
 
 from __future__ import annotations
@@ -39,7 +43,9 @@ def apply_all_workspace_migrations(*, base_dir: Path, config_dir: Path) -> None:
         无。
 
     Raises:
-        无：单条迁移失败不应阻塞 init 主流程，异常由各迁移自行吞掉。
+        OSError: 文件 I/O 失败时由迁移函数原样抛出。
+        sqlite3.Error: SQLite 操作失败时由迁移函数原样抛出。
+        json.JSONDecodeError: JSON 解析失败时由迁移函数原样抛出。
     """
 
     if migrate_run_json_add_write_chapter_lane(config_dir):

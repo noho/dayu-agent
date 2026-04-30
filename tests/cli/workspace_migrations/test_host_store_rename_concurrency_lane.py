@@ -188,3 +188,30 @@ def test_migration_drops_old_key_when_new_key_already_exists(tmp_path: Path) -> 
     new_payload = json.loads(_read_row(db_path, "p1"))
     assert new_payload["host_policy"].get("concurrency_lane") is None
     assert new_payload["host_policy"]["business_concurrency_lane"] == "NEW"
+
+
+@pytest.mark.unit
+def test_migration_propagates_sqlite_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """底层 SQLite 失败时显式上抛，不再吞错返回 0。
+
+    通过把 ``create_host_store_connection`` 替换成抛 ``sqlite3.OperationalError``
+    的 stub 来构造打开数据库失败的边界。新语义要求 init 命令显式失败而非
+    静默继续，避免旧版本"返回 0 装作什么都没发生"导致 host_store 卡在
+    旧 schema 还自称迁移成功。
+    """
+
+    db_path = tmp_path / "dayu_host.db"
+    _build_pending_turns_db(
+        db_path,
+        [("p1", json.dumps({"host_policy": {"concurrency_lane": "write_chapter"}}))],
+    )
+
+    def boom(_path: Path) -> sqlite3.Connection:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    import dayu.cli.workspace_migrations.host_store_rename_concurrency_lane as module
+
+    monkeypatch.setattr(module, "create_host_store_connection", boom)
+
+    with pytest.raises(sqlite3.OperationalError):
+        migrate_host_store_rename_concurrency_lane(db_path)

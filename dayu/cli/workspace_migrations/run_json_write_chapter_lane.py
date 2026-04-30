@@ -7,11 +7,15 @@
 
 本迁移只做一件事：在 ``host_config.lane`` 缺少 ``write_chapter`` 时补 5；
 存在则一律尊重用户取值，绝不覆写。
+
+写入采用「写临时文件 + ``os.replace`` 原子替换」：在 init 持有 workspace
+advisory lock 的前提下额外抵御进程被强制终止时残留半截写入的边界情况。
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -33,22 +37,17 @@ def migrate_run_json_add_write_chapter_lane(config_dir: Path) -> bool:
         True 表示实际改写了文件；False 表示无需变更或文件不存在。
 
     Raises:
-        无：文件缺失、解析失败或结构不符预期均安静跳过，由上层决定是否告警。
+        OSError: 读取或写入 ``run.json`` 失败时抛出，由 init 命令显式失败。
+        json.JSONDecodeError: ``run.json`` 既存但 JSON 解析失败；不再吞错，
+            由上层决定是否继续。
     """
 
     run_json_path = config_dir / _RUN_JSON_FILENAME
     if not run_json_path.exists():
         return False
 
-    try:
-        raw_text = run_json_path.read_text(encoding="utf-8")
-    except OSError:
-        return False
-
-    try:
-        payload: Any = json.loads(raw_text)
-    except json.JSONDecodeError:
-        return False
+    raw_text = run_json_path.read_text(encoding="utf-8")
+    payload: Any = json.loads(raw_text)
     if not isinstance(payload, dict):
         return False
 
@@ -65,5 +64,34 @@ def migrate_run_json_add_write_chapter_lane(config_dir: Path) -> bool:
 
     lane_section[_WRITE_CHAPTER_LANE] = _DEFAULT_WRITE_CHAPTER_CONCURRENCY
     new_text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    run_json_path.write_text(new_text, encoding="utf-8")
+    _atomic_write_text(run_json_path, new_text)
     return True
+
+
+def _atomic_write_text(target_path: Path, content: str) -> None:
+    """使用临时文件 + ``os.replace`` 原子替换 ``target_path``。
+
+    Args:
+        target_path: 目标文件绝对路径。
+        content: 待写入文本。
+
+    Returns:
+        无。
+
+    Raises:
+        OSError: 写入或重命名失败时抛出。
+    """
+
+    temp_path = target_path.with_name(f".{target_path.name}.migrate.tmp")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as fp:
+            fp.write(content)
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.replace(temp_path, target_path)
+    finally:
+        # 仅清理悬挂临时文件；replace 成功后该路径已不存在，unlink 会 ENOENT。
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass

@@ -1,12 +1,13 @@
 """conversation_archive_init 迁移测试。
 
-覆盖 plan 用例 24-28：
+覆盖：
 
 - 旧 transcript 全量投影到 history_archive，原地写回原文件路径
 - 单文件每条 ``assistant_reasoning == ""``、其余字段全量保留
 - 二次执行幂等
 - 旧目录不存在 → no-op
-- 单文件 JSON 损坏 → warning 跳过、其余文件继续
+- 单文件 JSON 损坏 → 显式上抛 ``json.JSONDecodeError``（fail-fast 语义）
+- 旧 transcript 反序列化失败 → 显式上抛 ValueError/TypeError/KeyError
 """
 
 from __future__ import annotations
@@ -125,26 +126,38 @@ def test_migration_returns_zero_when_target_dir_missing(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
-def test_migration_skips_corrupted_file_and_continues(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """单文件 JSON 损坏只 warning 跳过，不阻塞同目录其他文件。"""
+def test_migration_raises_on_corrupted_file(tmp_path: Path) -> None:
+    """单文件 JSON 损坏必须显式上抛 ``json.JSONDecodeError``，不再吞错继续。
 
-    good_file = _seed_legacy_file(tmp_path, "sess_legacy_good")
-    bad_file = good_file.parent / "sess_legacy_bad.json"
+    新语义要求 ``apply_all_workspace_migrations`` fail-fast：损坏文件
+    意味着工作区状态不一致，必须显式让 ``dayu-cli init`` 退出非 0
+    暴露给运维，而不是 stderr warning 后假装成功。
+    """
+
+    _seed_legacy_file(tmp_path, "sess_legacy_good")
+    target_dir = tmp_path / CONVERSATION_STORE_RELATIVE_DIR
+    bad_file = target_dir / "sess_legacy_bad.json"
     bad_file.write_text("{ this is not valid json", encoding="utf-8")
 
-    rewritten = migrate_conversation_archive_init(tmp_path)
-    assert rewritten == 1
+    with pytest.raises(json.JSONDecodeError):
+        migrate_conversation_archive_init(tmp_path)
 
-    captured = capsys.readouterr()
-    assert "sess_legacy_bad" in captured.err
 
-    # 好文件成功升级
-    good_payload = json.loads(good_file.read_text(encoding="utf-8"))
-    assert "runtime_transcript" in good_payload
-    # 损坏文件保持原样
-    assert bad_file.read_text(encoding="utf-8") == "{ this is not valid json"
+@pytest.mark.unit
+def test_migration_raises_on_legacy_deserialize_failure(tmp_path: Path) -> None:
+    """旧 transcript 反序列化失败时必须显式上抛，不再 warning 跳过。"""
+
+    target_dir = tmp_path / CONVERSATION_STORE_RELATIVE_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    # 顶层有 ``turns`` 但字段类型不对，应当触发 ConversationTranscript.from_dict 抛错
+    bad_file = target_dir / "sess_bad_struct.json"
+    bad_file.write_text(
+        json.dumps({"turns": "not a list"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    with pytest.raises((ValueError, KeyError, TypeError)):
+        migrate_conversation_archive_init(tmp_path)
 
 
 @pytest.mark.unit

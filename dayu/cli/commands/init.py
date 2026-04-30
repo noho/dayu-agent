@@ -24,6 +24,7 @@ import urllib.error
 import urllib.request
 from dayu.cli.workspace_migrations import apply_all_workspace_migrations
 from dayu.startup.config_file_resolver import resolve_package_assets_path, resolve_package_config_path
+from dayu.state_dir_lock import StateDirSingleInstanceLock
 from dayu.contracts.env_keys import (
     FMP_API_KEY_ENV,
     SEC_USER_AGENT_ENV,
@@ -228,6 +229,12 @@ _ROLE_THINKING = "thinking"
 # API Key 的方案（DeepSeek Flash/Pro、Mimo Plan/Plan-SG/Pro）在 re-init 按 Enter
 # 时静默降级到声明顺序靠前的另一档。
 _INIT_PROVIDER_OPTION_ENV = "DAYU_INIT_PROVIDER_OPTION"
+
+# Workspace 级 advisory lock 文件名。dayu-cli init 在执行 _copy_config /
+# _copy_assets / apply_all_workspace_migrations 三段临界区时必须独占持有该锁，
+# 避免双 init 进程并发改动同一 workspace 时迁移脚本互相踩踏。
+_INIT_WORKSPACE_LOCK_FILE_NAME = ".dayu_init.lock"
+_INIT_WORKSPACE_LOCK_NAME = "dayu workspace init"
 
 _THIRD_PARTY_OUTPUT_QUIET_ENV: tuple[tuple[str, str], ...] = (
     ("TRANSFORMERS_VERBOSITY", "error"),
@@ -1479,30 +1486,59 @@ def run_init_command(args: Namespace) -> int:
     base_dir = Path(args.base).resolve()
     overwrite: bool = bool(getattr(args, "overwrite", False))
     reset: bool = bool(getattr(args, "reset", False))
+    # --reset 删除的 .dayu/ / config/ / assets/ 与下面 _copy_config /
+    # _copy_assets / apply_all_workspace_migrations 操作的是同一批 workspace
+    # 产物；如果 reset 在锁外执行，另一个 dayu-cli init 进程仍可能在我们
+    # 删除 → 复制的中间窗口进入临界区，导致"我刚写进去你又删掉"或
+    # "迁移跑到一半目录被 reset 清空"的竞态。所以 reset 也必须在 advisory
+    # lock 之内。但 reset 之前的交互确认（input/y/N）应当在锁外完成，
+    # 避免长时间持锁阻塞其他 init 进程。
     if reset:
         if not _confirm_workspace_reset(base_dir):
             print("已取消工作区重置。")
             return 1
-        removed_targets = _reset_workspace_init_targets(base_dir)
-        if removed_targets:
-            removed_names = "、".join(path.name for path in removed_targets)
-            print(f"✓ 已重置工作区初始化目录: {removed_names}")
-        else:
-            target_names = "、".join(path.name for path in _build_workspace_reset_targets(base_dir))
-            print(f"✓ 已执行工作区重置：未发现需要删除的 {target_names}")
 
     is_first_workspace_init = reset or not (base_dir / "config").exists()
-    # 1. 复制配置
-    config_dir = _copy_config(base_dir, overwrite=overwrite)
-    print(f"✓ 配置已复制到: {config_dir}")
+    # 1. 复制配置 / assets 与跑工作区迁移属于 workspace 级临界区：双 init
+    # 并发会互相踩踏 SQLite 写事务、run.json 原子替换以及 config 目录复制。
+    # 用 advisory lock 排他独占。base_dir 在 `_resolve_workspace_root` 中
+    # 已确保存在，可直接落锁文件 `.dayu_init.lock`。
+    base_dir.mkdir(parents=True, exist_ok=True)
+    workspace_init_lock = StateDirSingleInstanceLock(
+        state_dir=base_dir,
+        lock_file_name=_INIT_WORKSPACE_LOCK_FILE_NAME,
+        lock_name=_INIT_WORKSPACE_LOCK_NAME,
+    )
+    try:
+        workspace_init_lock.acquire()
+    except RuntimeError as exc:
+        print(f"\n❌ {exc}")
+        print("   同一 workspace 已有另一个 dayu-cli init 进程在运行，请等待其完成后重试。")
+        return 1
+    try:
+        if reset:
+            removed_targets = _reset_workspace_init_targets(base_dir)
+            if removed_targets:
+                removed_names = "、".join(path.name for path in removed_targets)
+                print(f"✓ 已重置工作区初始化目录: {removed_names}")
+            else:
+                target_names = "、".join(
+                    path.name for path in _build_workspace_reset_targets(base_dir)
+                )
+                print(f"✓ 已执行工作区重置：未发现需要删除的 {target_names}")
 
-    # 1b. 复制 assets（定性分析模板等）
-    assets_dir = _copy_assets(base_dir, overwrite=overwrite)
-    print(f"✓ assets 已复制到: {assets_dir}")
+        config_dir = _copy_config(base_dir, overwrite=overwrite)
+        print(f"✓ 配置已复制到: {config_dir}")
 
-    # 1c. 对旧工作区应用一次性迁移（run.json、Host SQLite）。
-    # 具体规则集中在 dayu.cli.workspace_migrations，避免混入 init 常规流程。
-    apply_all_workspace_migrations(base_dir=base_dir, config_dir=config_dir)
+        # 1b. 复制 assets（定性分析模板等）
+        assets_dir = _copy_assets(base_dir, overwrite=overwrite)
+        print(f"✓ assets 已复制到: {assets_dir}")
+
+        # 1c. 对旧工作区应用一次性迁移（run.json、Host SQLite）。
+        # 具体规则集中在 dayu.cli.workspace_migrations，避免混入 init 常规流程。
+        apply_all_workspace_migrations(base_dir=base_dir, config_dir=config_dir)
+    finally:
+        workspace_init_lock.release()
 
     # 2. 选择初始化模型方案 + 输入 API Key（已有则跳过）
     chosen_option_key = _prompt_provider_selection()

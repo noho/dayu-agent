@@ -149,3 +149,24 @@ def test_migration_invalid_json_is_skipped(tmp_path: Path) -> None:
     good_payload = json.loads(_read_row(db_path, "p_good"))
     assert "max_output_tokens" not in good_payload["agent_create_args"]
     assert good_payload["agent_create_args"]["model_name"] == "m"
+
+
+@pytest.mark.unit
+def test_migration_propagates_sqlite_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """底层 SQLite 失败时显式上抛，不再吞错返回 0。"""
+
+    db_path = tmp_path / "dayu_host.db"
+    _build_pending_turns_db(
+        db_path,
+        [("p1", json.dumps({"agent_create_args": {"max_output_tokens": 1024}}))],
+    )
+
+    def boom(_path: Path) -> sqlite3.Connection:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    import dayu.cli.workspace_migrations.host_store_strip_max_output_tokens as module
+
+    monkeypatch.setattr(module, "create_host_store_connection", boom)
+
+    with pytest.raises(sqlite3.OperationalError):
+        migrate_host_store_strip_max_output_tokens(db_path)

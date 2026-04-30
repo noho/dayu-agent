@@ -195,7 +195,7 @@ class HostStore:
         if conn is not None:
             return conn
 
-        conn = _create_connection(self._db_path)
+        conn = create_host_store_connection(self._db_path)
         Log.debug(
             _build_connection_debug_message(db_path=self._db_path, conn=conn),
             module=MODULE,
@@ -308,7 +308,7 @@ class HostStore:
             self._local.conn = None
 
 
-def _create_connection(db_path: Path) -> sqlite3.Connection:
+def create_host_store_connection(db_path: Path) -> sqlite3.Connection:
     """创建一个配置好的 SQLite 连接。
 
     Args:
@@ -444,7 +444,7 @@ def _require_table_columns(
         return
     missing_columns_text = ", ".join(missing_columns)
     raise RuntimeError(
-        "HostStore 检测到旧版 SQLite schema 与当前实现不兼容: "
-        f"table={table_name}, missing_columns=[{missing_columns_text}], db_path={db_path}. "
-        "当前项目默认不做数据库 schema 升级兼容，请删除该数据库后重建。"
+        "HostStore 检测到旧版 SQLite schema 与当前实现不兼容（"
+        f"table={table_name}, missing_columns=[{missing_columns_text}], db_path={db_path}），"
+        f"请删除 {db_path} 后重启（或运行 `dayu-cli init --reset` 完整重建工作区）。"
     )

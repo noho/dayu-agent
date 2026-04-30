@@ -19,6 +19,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from dayu.host.host_store import create_host_store_connection, write_transaction
+
 
 _STRIP_KEY = "max_output_tokens"
 # 作为 JSON 文本里的"键"出现时必然带双引号；加引号短路才能避免误匹配。
@@ -36,29 +38,25 @@ def migrate_host_store_strip_max_output_tokens(host_db_path: Path) -> int:
             通常由 :func:`dayu.workspace_paths.build_host_store_default_path` 解析。
 
     Returns:
-        实际被改写的行数；数据库不存在、表不存在或没有该 key 时返回 0。
+        实际被改写的行数；数据库不存在或表不存在时返回 0。
 
     Raises:
-        无：打开失败、SQL 异常由本函数吞掉并返回 0，避免阻塞 init 流程。
+        sqlite3.Error: 底层 SQLite 操作失败时由调用方决定如何处理；
+            不再吞错，由 ``apply_all_workspace_migrations`` 上抛 init 命令。
     """
 
     if not host_db_path.exists():
         return 0
 
+    conn = create_host_store_connection(host_db_path)
     try:
-        conn = sqlite3.connect(str(host_db_path))
-    except sqlite3.Error:
-        return 0
-
-    try:
-        conn.row_factory = sqlite3.Row
         if not _table_exists(conn, _TABLE_NAME):
             return 0
 
-        rewritten = 0
         rows = conn.execute(
             f"SELECT {_ID_COLUMN}, {_JSON_COLUMN} FROM {_TABLE_NAME}"  # noqa: S608
         ).fetchall()
+        pending_updates: list[tuple[str, str]] = []
         for row in rows:
             raw = row[_JSON_COLUMN]
             if not isinstance(raw, str) or not raw:
@@ -72,20 +70,15 @@ def migrate_host_store_strip_max_output_tokens(host_db_path: Path) -> int:
             if not _strip_key_in_place(payload):
                 continue
             new_text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-            conn.execute(
+            pending_updates.append((new_text, row[_ID_COLUMN]))
+        if not pending_updates:
+            return 0
+        with write_transaction(conn):
+            conn.executemany(
                 f"UPDATE {_TABLE_NAME} SET {_JSON_COLUMN} = ? WHERE {_ID_COLUMN} = ?",  # noqa: S608
-                (new_text, row[_ID_COLUMN]),
+                pending_updates,
             )
-            rewritten += 1
-        if rewritten:
-            conn.commit()
-        return rewritten
-    except sqlite3.Error:
-        try:
-            conn.rollback()
-        except sqlite3.Error:
-            pass
-        return 0
+        return len(pending_updates)
     finally:
         conn.close()
 

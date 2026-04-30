@@ -16,13 +16,14 @@
 - **原地** 覆盖旧文件路径（``CONVERSATION_STORE_RELATIVE_DIR``），
   不换目录、不双写、不留兼容读取路径。
 - **幂等**：识别到顶层已有 ``runtime_transcript`` 的新 schema 直接跳过。
-- 单文件失败仅 stderr warning 跳过，不阻塞整体迁移。
+- **fail-fast**：任一文件 ``OSError`` / ``json.JSONDecodeError`` /
+  旧 schema 反序列化异常都向上传播，由 runner 显式上抛到
+  ``dayu-cli init``，避免"半迁移"被静默吞掉。
 """
 
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 from dayu.host.conversation_session_archive import (
@@ -48,7 +49,11 @@ def migrate_conversation_archive_init(workspace_root: Path) -> int:
         实际被改写的文件数量。
 
     Raises:
-        无：单文件失败仅 stderr warning 跳过；目录不存在则返回 0。
+        OSError: 单文件读取或回写失败时上抛。
+        json.JSONDecodeError: 单文件 JSON 解析失败时上抛。
+        ValueError: 旧 transcript 反序列化失败、或顶层非对象时上抛。
+        TypeError: 旧 transcript 字段类型异常时上抛。
+        KeyError: 旧 transcript 必需字段缺失时上抛。
     """
 
     target_dir = workspace_root / CONVERSATION_STORE_RELATIVE_DIR
@@ -69,49 +74,30 @@ def _migrate_single_file(json_path: Path) -> bool:
         json_path: 目标文件绝对路径。
 
     Returns:
-        True 表示实际重写了文件；False 表示已是新 schema 或异常跳过。
+        True 表示实际重写了文件；False 表示已是新 schema 或本就不是旧
+        schema（无 ``turns`` key），无需动文件。
 
     Raises:
-        无：所有异常都被吞掉并 stderr warning。
+        OSError: 读取或写回文件失败。
+        json.JSONDecodeError: 文件内容不是合法 JSON。
+        ValueError: 顶层不是 JSON 对象，或旧 transcript 反序列化失败。
+        TypeError: 旧 transcript 字段类型异常。
+        KeyError: 旧 transcript 必需字段缺失。
     """
 
-    try:
-        raw_text = json_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        print(
-            f"⚠ 工作区迁移: 跳过 {json_path.name}（读取失败：{exc}）",
-            file=sys.stderr,
-        )
-        return False
-
-    try:
-        payload: object = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        print(
-            f"⚠ 工作区迁移: 跳过 {json_path.name}（JSON 解析失败：{exc}）",
-            file=sys.stderr,
-        )
-        return False
+    raw_text = json_path.read_text(encoding="utf-8")
+    payload: object = json.loads(raw_text)
     if not isinstance(payload, dict):
-        print(
-            f"⚠ 工作区迁移: 跳过 {json_path.name}（顶层不是对象）",
-            file=sys.stderr,
+        raise ValueError(
+            f"工作区迁移: {json_path.name} 顶层不是 JSON 对象，无法识别为旧 transcript schema"
         )
-        return False
 
     if _NEW_SCHEMA_KEY in payload:
         return False
     if _LEGACY_TURNS_KEY not in payload:
         return False
 
-    try:
-        runtime_transcript = ConversationTranscript.from_dict(payload)
-    except (ValueError, KeyError, TypeError) as exc:
-        print(
-            f"⚠ 工作区迁移: 跳过 {json_path.name}（旧 transcript 反序列化失败：{exc}）",
-            file=sys.stderr,
-        )
-        return False
+    runtime_transcript = ConversationTranscript.from_dict(payload)
 
     history_records = tuple(
         ConversationHistoryTurnRecord(
@@ -139,14 +125,7 @@ def _migrate_single_file(json_path: Path) -> bool:
     )
 
     new_text = json.dumps(archive.to_dict(), ensure_ascii=False, indent=2) + "\n"
-    try:
-        json_path.write_text(new_text, encoding="utf-8")
-    except OSError as exc:
-        print(
-            f"⚠ 工作区迁移: 跳过 {json_path.name}（写回失败：{exc}）",
-            file=sys.stderr,
-        )
-        return False
+    json_path.write_text(new_text, encoding="utf-8")
     return True
 
 

@@ -201,6 +201,7 @@ API Key 申请地址：
 - 如需接入 OpenRouter 等聚合服务，可在 `init` 中选择”自定义 OpenAI 兼容 API”，填写 `CUSTOM_OPENAI_API_KEY`、Base URL、模型 ID 与最大上下文 tokens。
 - 本地 Ollama 模型和自定义 OpenAI 兼容 API 在 `init` 时会根据最大上下文 tokens 自动配置 `conversation_memory`（>= 100 万 tokens 扩大工作记忆上限，< 100 万收紧情景记忆预算）；Ollama 的 `write_chapter` 并发 lane 默认设为 2。
 - `--reset` 确认后会删除 `workspace/.dayu/`、`workspace/config/`、`workspace/assets/`，再按首次初始化流程重建；它比 `--overwrite` 更彻底，会一并清空运行时状态。
+- 升级 dayu 后若运行命令时看到 `HostStore 检测到旧版 SQLite schema 与当前实现不兼容` 报错，按提示处理：优先删除报错信息里 `db_path` 指向的数据库文件后重启（仅丢失 host 运行状态，保留 conversation 历史与 `run.json`）；如果不方便定位也可以直接跑 `dayu-cli init --reset` 完整重建工作区。
 - 联网搜索默认可走 `auto`，若配置了 Tavily / Serper，会优先使用对应 provider。
 - 若运行环境需要访问 `localhost`、私网 IP 或内网域名，可在 `workspace/config/run.json` 的 `web_tools_config.allow_private_network_url` 中显式打开内网访问开关。
 - 修改默认模型请参考 [8. 模型配置](#model-config)。
