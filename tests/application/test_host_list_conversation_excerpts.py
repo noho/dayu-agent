@@ -421,3 +421,23 @@ def test_session_digest_returns_empty_for_corrupt_archive(tmp_path: Path) -> Non
     assert digest.turn_count == 0
     assert digest.first_question_preview == ""
     assert digest.last_question_preview == ""
+
+
+@pytest.mark.unit
+def test_session_digest_reads_from_history_archive(tmp_path: Path) -> None:
+    """``get_conversation_session_digest`` 与历史读共享 ``history_archive``
+    真源（§1.1：运行态子视图不得被任何"读历史"代码路径直接消费）。"""
+
+    store = FileConversationSessionArchiveStore(tmp_path / "conv")
+    _seed_archive_with_turns(
+        store,
+        session_id="sess_dg_hist",
+        turns=[("第一问", "第一答", ""), ("第二问", "第二答", "")],
+    )
+    host = _build_host(store)
+
+    digest = host.get_conversation_session_digest("sess_dg_hist")
+
+    assert digest.turn_count == 2
+    assert digest.first_question_preview == "第一问"
+    assert digest.last_question_preview == "第二问"

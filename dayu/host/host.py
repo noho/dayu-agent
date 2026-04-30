@@ -440,12 +440,12 @@ class Host:
         if self._archive_store is None:
             return _empty_conversation_session_digest()
         archive = self._safe_load_archive_for_read(session_id)
-        if archive is None or not archive.runtime_transcript.turns:
+        if archive is None or not archive.history_archive.turns:
             return _empty_conversation_session_digest()
-        first_turn = archive.runtime_transcript.turns[0]
-        last_turn = archive.runtime_transcript.turns[-1]
+        first_turn = archive.history_archive.turns[0]
+        last_turn = archive.history_archive.turns[-1]
         return ConversationSessionDigest(
-            turn_count=len(archive.runtime_transcript.turns),
+            turn_count=len(archive.history_archive.turns),
             first_question_preview=_truncate_conversation_preview(first_turn.user_text),
             last_question_preview=_truncate_conversation_preview(last_turn.user_text),
         )
@@ -516,7 +516,7 @@ class Host:
             return None
         try:
             return self._archive_store.load(session_id)
-        except (ValueError, RuntimeError, json.JSONDecodeError, OSError) as exc:
+        except (ValueError, RuntimeError, KeyError, TypeError, json.JSONDecodeError, OSError) as exc:
             Log.warning(
                 f"历史读 archive 损坏或不可读，按空历史降级: session_id={session_id}, error={exc}",
                 module=MODULE,
