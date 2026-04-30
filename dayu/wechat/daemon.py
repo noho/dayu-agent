@@ -21,10 +21,9 @@ import webbrowser
 from dayu.text import strip_markdown_fence
 from dayu.execution.options import ExecutionOptions
 from dayu.log import Log
-from dayu.contracts.reply_outbox import ReplyOutboxState
+from dayu.contracts.reply_outbox import ReplyOutboxDeliveryKeyConflictError, ReplyOutboxState
 from dayu.contracts.events import AppEvent, AppEventType
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext
-from dayu.contracts.reply_outbox import ReplyOutboxDeliveryKeyConflictError
 from dayu.services.pending_turns import has_resumable_pending_turn
 from dayu.state_dir_lock import StateDirSingleInstanceLock
 from dayu.services.contracts import (

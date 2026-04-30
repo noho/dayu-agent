@@ -103,14 +103,6 @@ class ReplyOutboxRecord:
     lease_id: str | None = None
 
 
-__all__ = [
-    "ReplyOutboxDeliveryKeyConflictError",
-    "ReplyOutboxRecord",
-    "ReplyOutboxState",
-    "ReplyOutboxSubmitRequest",
-]
-
-
 class ReplyOutboxDeliveryKeyConflictError(ValueError):
     """同 ``delivery_key`` 二次 submit 携带的 payload 与已落库记录不一致。
 
@@ -155,3 +147,11 @@ class ReplyOutboxDeliveryKeyConflictError(ValueError):
         self.delivery_key = delivery_key
         self.existing_payload = existing_payload
         self.attempted_payload = attempted_payload
+
+
+__all__ = [
+    "ReplyOutboxDeliveryKeyConflictError",
+    "ReplyOutboxRecord",
+    "ReplyOutboxState",
+    "ReplyOutboxSubmitRequest",
+]
