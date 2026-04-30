@@ -14,6 +14,8 @@ from dayu.cli.commands.init import (
     _CUSTOM_CATALOG_KEY,
     _CUSTOM_OPENAI_DEFAULT_MAX_CONTEXT_TOKENS,
     _CustomOpenAIConfig,
+    _GEMINI_SUB_OPTIONS,
+    _GeminiSubOption,
     _HF_MIRROR_URL,
     _INIT_ROLE_KEY,
     _OLLAMA_CATALOG_KEY,
@@ -2570,3 +2572,173 @@ class TestInitConversationMemoryAndLane:
         runtime_hints = llm_models[_CUSTOM_CATALOG_KEY]["runtime_hints"]
         # default 一份打天下：runtime_hints 不再写入 conversation_memory 覆盖
         assert "conversation_memory" not in runtime_hints
+
+
+# --------------------------------------------------------------------------- #
+#  Gemini 二级菜单
+# --------------------------------------------------------------------------- #
+
+
+class TestPromptGeminiSubOption:
+    """Gemini 二级子型号菜单交互测试。"""
+
+    def test_default_options_are_complete(self) -> None:
+        """常量 _GEMINI_SUB_OPTIONS 应覆盖 issue #103 中列出的 5 个型号。"""
+        sub_keys = {sub.sub_key for sub in _GEMINI_SUB_OPTIONS}
+        assert sub_keys == {
+            "2.5-flash",
+            "2.5-pro",
+            "2.5-flash-lite",
+            "3.1-pro-preview",
+            "3.1-flash-lite-preview",
+        }
+        # 每个子型号都有对应 thinking 变体目录条目名
+        for sub in _GEMINI_SUB_OPTIONS:
+            assert sub.thinking_model.endswith("-thinking")
+            assert sub.non_thinking_model
+
+    def test_default_first_option_is_2_5_flash(self) -> None:
+        """默认推荐保持 gemini-2.5-flash，与现状对齐。"""
+        assert _GEMINI_SUB_OPTIONS[0].non_thinking_model == "gemini-2.5-flash"
+        assert _GEMINI_SUB_OPTIONS[0].thinking_model == "gemini-2.5-flash-thinking"
+
+    def test_empty_input_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """直接回车选中默认（第一项）。"""
+        from dayu.cli.commands.init import _prompt_gemini_sub_option
+
+        monkeypatch.setattr("builtins.input", lambda *_args: "")
+        sub = _prompt_gemini_sub_option()
+        assert sub == _GEMINI_SUB_OPTIONS[0]
+
+    def test_explicit_choice(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """输入 4 选中 gemini-3.1-pro-preview。"""
+        from dayu.cli.commands.init import _prompt_gemini_sub_option
+
+        monkeypatch.setattr("builtins.input", lambda *_args: "4")
+        sub = _prompt_gemini_sub_option()
+        assert sub.non_thinking_model == "gemini-3.1-pro-preview"
+        assert sub.thinking_model == "gemini-3.1-pro-preview-thinking"
+
+    def test_invalid_non_integer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """非整数输入触发 sys.exit(1)。"""
+        from dayu.cli.commands.init import _prompt_gemini_sub_option
+
+        monkeypatch.setattr("builtins.input", lambda *_args: "abc")
+        with pytest.raises(SystemExit) as exc_info:
+            _prompt_gemini_sub_option()
+        assert exc_info.value.code == 1
+
+    def test_out_of_range(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """编号超出范围触发 sys.exit(1)。"""
+        from dayu.cli.commands.init import _prompt_gemini_sub_option
+
+        monkeypatch.setattr("builtins.input", lambda *_args: "999")
+        with pytest.raises(SystemExit) as exc_info:
+            _prompt_gemini_sub_option()
+        assert exc_info.value.code == 1
+
+    def test_eof_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """EOFError 触发 sys.exit(1)。"""
+        from dayu.cli.commands.init import _prompt_gemini_sub_option
+
+        monkeypatch.setattr(
+            "builtins.input",
+            lambda *_args: (_ for _ in ()).throw(EOFError),
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            _prompt_gemini_sub_option()
+        assert exc_info.value.code == 1
+
+
+class TestGeminiCatalogEntries:
+    """``llm_models.json`` 中 Gemini 条目结构校验。"""
+
+    def test_all_five_models_have_thinking_pair(self) -> None:
+        """5 个型号 + 5 个 thinking 变体共 10 条目录条目齐全。"""
+        catalog_path = Path(__file__).resolve().parents[2] / "dayu" / "config" / "llm_models.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+
+        expected = {sub.non_thinking_model for sub in _GEMINI_SUB_OPTIONS} | {
+            sub.thinking_model for sub in _GEMINI_SUB_OPTIONS
+        }
+        for name in expected:
+            assert name in catalog, f"缺失 {name}"
+            entry = catalog[name]
+            assert entry["max_context_tokens"] == 1048576
+            assert entry["endpoint_url"].startswith(
+                "https://generativelanguage.googleapis.com/"
+            )
+            assert "Bearer {{GEMINI_API_KEY}}" in entry["headers"]["Authorization"]
+
+    def test_temperature_profiles_match_issue_recommendation(self) -> None:
+        """所有 Gemini 条目温度档严格按 issue #103 推荐表取值。"""
+        catalog_path = Path(__file__).resolve().parents[2] / "dayu" / "config" / "llm_models.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+
+        expected_profiles = {
+            "audit": 0.1,
+            "infer": 0.1,
+            "decision": 0.2,
+            "overview": 0.4,
+            "conversation_compaction": 0.3,
+            "prompt": 0.6,
+            "interactive": 0.7,
+            "write": 1.0,
+        }
+        names = {sub.non_thinking_model for sub in _GEMINI_SUB_OPTIONS} | {
+            sub.thinking_model for sub in _GEMINI_SUB_OPTIONS
+        }
+        for name in names:
+            profiles = catalog[name]["runtime_hints"]["temperature_profiles"]
+            for scene, expected_temp in expected_profiles.items():
+                actual = profiles[scene]["temperature"]
+                assert actual == expected_temp, f"{name}.{scene} = {actual}，期望 {expected_temp}"
+
+    def test_thinking_config_split_by_variant(self) -> None:
+        """非 thinking 用 thinking_budget=0；thinking 用 -1 + include_thoughts=true。"""
+        catalog_path = Path(__file__).resolve().parents[2] / "dayu" / "config" / "llm_models.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+
+        for sub in _GEMINI_SUB_OPTIONS:
+            non_thinking_config = catalog[sub.non_thinking_model]["extra_payloads"][
+                "extra_body"
+            ]["google"]["thinking_config"]
+            assert non_thinking_config == {"thinking_budget": 0}
+
+            thinking_config = catalog[sub.thinking_model]["extra_payloads"]["extra_body"][
+                "google"
+            ]["thinking_config"]
+            assert thinking_config == {
+                "thinking_budget": -1,
+                "include_thoughts": True,
+            }
+
+
+class TestGeminiSubOptionDataclass:
+    """``_GeminiSubOption`` 数据类基本不变量。"""
+
+    def test_immutable_fields(self) -> None:
+        """frozen dataclass 字段不可变。"""
+        sub = _GeminiSubOption(
+            sub_key="x",
+            display_name="X",
+            non_thinking_model="m",
+            thinking_model="m-thinking",
+        )
+        with pytest.raises(Exception):  # FrozenInstanceError 派生自 Exception
+            sub.sub_key = "y"  # type: ignore[misc]
+
+    def test_placeholder_keys_excluded_from_role_sets(self) -> None:
+        """Gemini/Ollama/自定义 OpenAI 的占位键不应混入合法模型名集合，
+        避免被 _classify_model_role 当成真实模型识别。"""
+        from dayu.cli.commands.init import (
+            _ALL_NON_THINKING_MODELS,
+            _ALL_THINKING_MODELS,
+            _CUSTOM_CATALOG_KEY,
+            _GEMINI_CATALOG_KEY,
+            _OLLAMA_CATALOG_KEY,
+        )
+
+        for placeholder in (_GEMINI_CATALOG_KEY, _OLLAMA_CATALOG_KEY, _CUSTOM_CATALOG_KEY):
+            assert placeholder not in _ALL_NON_THINKING_MODELS
+            assert placeholder not in _ALL_THINKING_MODELS

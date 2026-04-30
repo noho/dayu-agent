@@ -446,28 +446,28 @@
     "runtime_hints": {
       "temperature_profiles": {
         "write": {
-          "temperature": 0.8
+          "temperature": 1.0
         },
         "overview": {
-          "temperature": 0.2
+          "temperature": 0.4
         },
         "audit": {
-          "temperature": 0.2
+          "temperature": 0.1
         },
         "decision": {
-          "temperature": 0.6
+          "temperature": 0.2
         },
         "interactive": {
-          "temperature": 0.6
+          "temperature": 0.7
         },
         "prompt": {
           "temperature": 0.6
         },
         "infer": {
-          "temperature": 0.2
+          "temperature": 0.1
         },
         "conversation_compaction": {
-          "temperature": 0.2
+          "temperature": 0.3
         }
       }
     }
@@ -503,28 +503,480 @@
     "runtime_hints": {
       "temperature_profiles": {
         "write": {
-          "temperature": 0.8
+          "temperature": 1.0
         },
         "overview": {
-          "temperature": 0.2
+          "temperature": 0.4
         },
         "audit": {
-          "temperature": 0.2
+          "temperature": 0.1
         },
         "decision": {
-          "temperature": 0.6
+          "temperature": 0.2
         },
         "interactive": {
-          "temperature": 0.6
+          "temperature": 0.7
         },
         "prompt": {
           "temperature": 0.6
         },
         "infer": {
-          "temperature": 0.2
+          "temperature": 0.1
         },
         "conversation_compaction": {
+          "temperature": 0.3
+        }
+      }
+    }
+  },
+  "gemini-2.5-pro": {
+    "runner_type": "openai_compatible",
+    "name": "gemini-2.5-pro",
+    "endpoint_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    "model": "gemini-2.5-pro",
+    "headers": {
+      "Authorization": "Bearer {{GEMINI_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "thinking_budget": 0
+          }
+        }
+      }
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": false,
+    "max_context_tokens": 1048576,
+    "description": "Google Gemini 2.5 Pro - 官方 1,048,576 context / 65,536 output；非 thinking 变体，thinking_budget=0 是否完全关闭 thinking 待官方接口验证",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "write": {
+          "temperature": 1.0
+        },
+        "overview": {
+          "temperature": 0.4
+        },
+        "audit": {
+          "temperature": 0.1
+        },
+        "decision": {
           "temperature": 0.2
+        },
+        "interactive": {
+          "temperature": 0.7
+        },
+        "prompt": {
+          "temperature": 0.6
+        },
+        "infer": {
+          "temperature": 0.1
+        },
+        "conversation_compaction": {
+          "temperature": 0.3
+        }
+      }
+    }
+  },
+  "gemini-2.5-pro-thinking": {
+    "runner_type": "openai_compatible",
+    "name": "gemini-2.5-pro-thinking",
+    "endpoint_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    "model": "gemini-2.5-pro",
+    "headers": {
+      "Authorization": "Bearer {{GEMINI_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "thinking_budget": -1,
+            "include_thoughts": true
+          }
+        }
+      }
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": false,
+    "max_context_tokens": 1048576,
+    "description": "Google Gemini 2.5 Pro thinking - thinking_budget=-1（动态） + include_thoughts=true；适合复杂推理与代理核心",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "write": {
+          "temperature": 1.0
+        },
+        "overview": {
+          "temperature": 0.4
+        },
+        "audit": {
+          "temperature": 0.1
+        },
+        "decision": {
+          "temperature": 0.2
+        },
+        "interactive": {
+          "temperature": 0.7
+        },
+        "prompt": {
+          "temperature": 0.6
+        },
+        "infer": {
+          "temperature": 0.1
+        },
+        "conversation_compaction": {
+          "temperature": 0.3
+        }
+      }
+    }
+  },
+  "gemini-2.5-flash-lite": {
+    "runner_type": "openai_compatible",
+    "name": "gemini-2.5-flash-lite",
+    "endpoint_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    "model": "gemini-2.5-flash-lite",
+    "headers": {
+      "Authorization": "Bearer {{GEMINI_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "thinking_budget": 0
+          }
+        }
+      }
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": false,
+    "max_context_tokens": 1048576,
+    "description": "Google Gemini 2.5 Flash-Lite - 官方 1,048,576 context / 65,536 output；thinking_budget=0 关闭 thinking；定位极致响应、低延迟、低成本",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "write": {
+          "temperature": 1.0
+        },
+        "overview": {
+          "temperature": 0.4
+        },
+        "audit": {
+          "temperature": 0.1
+        },
+        "decision": {
+          "temperature": 0.2
+        },
+        "interactive": {
+          "temperature": 0.7
+        },
+        "prompt": {
+          "temperature": 0.6
+        },
+        "infer": {
+          "temperature": 0.1
+        },
+        "conversation_compaction": {
+          "temperature": 0.3
+        }
+      }
+    }
+  },
+  "gemini-2.5-flash-lite-thinking": {
+    "runner_type": "openai_compatible",
+    "name": "gemini-2.5-flash-lite-thinking",
+    "endpoint_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    "model": "gemini-2.5-flash-lite",
+    "headers": {
+      "Authorization": "Bearer {{GEMINI_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "thinking_budget": -1,
+            "include_thoughts": true
+          }
+        }
+      }
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": false,
+    "max_context_tokens": 1048576,
+    "description": "Google Gemini 2.5 Flash-Lite thinking - thinking_budget=-1（动态） + include_thoughts=true",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "write": {
+          "temperature": 1.0
+        },
+        "overview": {
+          "temperature": 0.4
+        },
+        "audit": {
+          "temperature": 0.1
+        },
+        "decision": {
+          "temperature": 0.2
+        },
+        "interactive": {
+          "temperature": 0.7
+        },
+        "prompt": {
+          "temperature": 0.6
+        },
+        "infer": {
+          "temperature": 0.1
+        },
+        "conversation_compaction": {
+          "temperature": 0.3
+        }
+      }
+    }
+  },
+  "gemini-3.1-pro-preview": {
+    "runner_type": "openai_compatible",
+    "name": "gemini-3.1-pro-preview",
+    "endpoint_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    "model": "gemini-3.1-pro-preview",
+    "headers": {
+      "Authorization": "Bearer {{GEMINI_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "thinking_budget": 0
+          }
+        }
+      }
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": false,
+    "max_context_tokens": 1048576,
+    "description": "Google Gemini 3.1 Pro Preview - 官方 1,048,576 context / 65,536 output；非 thinking 变体，thinking_budget=0 是否完全关闭 thinking 待官方接口验证",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "write": {
+          "temperature": 1.0
+        },
+        "overview": {
+          "temperature": 0.4
+        },
+        "audit": {
+          "temperature": 0.1
+        },
+        "decision": {
+          "temperature": 0.2
+        },
+        "interactive": {
+          "temperature": 0.7
+        },
+        "prompt": {
+          "temperature": 0.6
+        },
+        "infer": {
+          "temperature": 0.1
+        },
+        "conversation_compaction": {
+          "temperature": 0.3
+        }
+      }
+    }
+  },
+  "gemini-3.1-pro-preview-thinking": {
+    "runner_type": "openai_compatible",
+    "name": "gemini-3.1-pro-preview-thinking",
+    "endpoint_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    "model": "gemini-3.1-pro-preview",
+    "headers": {
+      "Authorization": "Bearer {{GEMINI_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "thinking_budget": -1,
+            "include_thoughts": true
+          }
+        }
+      }
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": false,
+    "max_context_tokens": 1048576,
+    "description": "Google Gemini 3.1 Pro Preview thinking - thinking_budget=-1（动态） + include_thoughts=true；最强推理与代理核心（预览版）",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "write": {
+          "temperature": 1.0
+        },
+        "overview": {
+          "temperature": 0.4
+        },
+        "audit": {
+          "temperature": 0.1
+        },
+        "decision": {
+          "temperature": 0.2
+        },
+        "interactive": {
+          "temperature": 0.7
+        },
+        "prompt": {
+          "temperature": 0.6
+        },
+        "infer": {
+          "temperature": 0.1
+        },
+        "conversation_compaction": {
+          "temperature": 0.3
+        }
+      }
+    }
+  },
+  "gemini-3.1-flash-lite-preview": {
+    "runner_type": "openai_compatible",
+    "name": "gemini-3.1-flash-lite-preview",
+    "endpoint_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    "model": "gemini-3.1-flash-lite-preview",
+    "headers": {
+      "Authorization": "Bearer {{GEMINI_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "thinking_budget": 0
+          }
+        }
+      }
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": false,
+    "max_context_tokens": 1048576,
+    "description": "Google Gemini 3.1 Flash-Lite Preview - 官方 1,048,576 context / 65,536 output；thinking_budget=0 关闭 thinking；定位毫秒级响应（预览版）",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "write": {
+          "temperature": 1.0
+        },
+        "overview": {
+          "temperature": 0.4
+        },
+        "audit": {
+          "temperature": 0.1
+        },
+        "decision": {
+          "temperature": 0.2
+        },
+        "interactive": {
+          "temperature": 0.7
+        },
+        "prompt": {
+          "temperature": 0.6
+        },
+        "infer": {
+          "temperature": 0.1
+        },
+        "conversation_compaction": {
+          "temperature": 0.3
+        }
+      }
+    }
+  },
+  "gemini-3.1-flash-lite-preview-thinking": {
+    "runner_type": "openai_compatible",
+    "name": "gemini-3.1-flash-lite-preview-thinking",
+    "endpoint_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    "model": "gemini-3.1-flash-lite-preview",
+    "headers": {
+      "Authorization": "Bearer {{GEMINI_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "extra_payloads": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "thinking_budget": -1,
+            "include_thoughts": true
+          }
+        }
+      }
+    },
+    "timeout": 3600,
+    "stream_idle_timeout": 120.0,
+    "stream_idle_heartbeat_sec": 10.0,
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "supports_usage": true,
+    "supports_stream_usage": false,
+    "max_context_tokens": 1048576,
+    "description": "Google Gemini 3.1 Flash-Lite Preview thinking - thinking_budget=-1（动态） + include_thoughts=true（预览版）",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "write": {
+          "temperature": 1.0
+        },
+        "overview": {
+          "temperature": 0.4
+        },
+        "audit": {
+          "temperature": 0.1
+        },
+        "decision": {
+          "temperature": 0.2
+        },
+        "interactive": {
+          "temperature": 0.7
+        },
+        "prompt": {
+          "temperature": 0.6
+        },
+        "infer": {
+          "temperature": 0.1
+        },
+        "conversation_compaction": {
+          "temperature": 0.3
         }
       }
     }

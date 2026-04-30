@@ -110,6 +110,59 @@ def _prompt_max_context_tokens(default: int) -> int:
         sys.exit(1)
 
 
+# Google Gemini 模型在 ProviderOption 中使用的占位键。
+# Gemini 通过二级菜单选择具体子型号，ProviderOption 自身不直接对应单一模型。
+_GEMINI_CATALOG_KEY = "gemini"
+
+
+@dataclass(frozen=True)
+class _GeminiSubOption:
+    """Gemini 二级菜单中的单个子型号定义。
+
+    每个子型号对应一个非 thinking 模型与对应的 thinking 变体目录条目名。
+    """
+
+    sub_key: str
+    display_name: str
+    non_thinking_model: str
+    thinking_model: str
+
+
+# Gemini 二级菜单选项，第一个为默认推荐（直接回车即选中）。
+_GEMINI_SUB_OPTIONS: tuple[_GeminiSubOption, ...] = (
+    _GeminiSubOption(
+        sub_key="2.5-flash",
+        display_name="Gemini 2.5 Flash（默认 / 性价比之王）",
+        non_thinking_model="gemini-2.5-flash",
+        thinking_model="gemini-2.5-flash-thinking",
+    ),
+    _GeminiSubOption(
+        sub_key="2.5-pro",
+        display_name="Gemini 2.5 Pro（稳定旗舰）",
+        non_thinking_model="gemini-2.5-pro",
+        thinking_model="gemini-2.5-pro-thinking",
+    ),
+    _GeminiSubOption(
+        sub_key="2.5-flash-lite",
+        display_name="Gemini 2.5 Flash-Lite（极致响应）",
+        non_thinking_model="gemini-2.5-flash-lite",
+        thinking_model="gemini-2.5-flash-lite-thinking",
+    ),
+    _GeminiSubOption(
+        sub_key="3.1-pro-preview",
+        display_name="Gemini 3.1 Pro Preview（最强性能 / 预览）",
+        non_thinking_model="gemini-3.1-pro-preview",
+        thinking_model="gemini-3.1-pro-preview-thinking",
+    ),
+    _GeminiSubOption(
+        sub_key="3.1-flash-lite-preview",
+        display_name="Gemini 3.1 Flash-Lite Preview（毫秒级 / 预览）",
+        non_thinking_model="gemini-3.1-flash-lite-preview",
+        thinking_model="gemini-3.1-flash-lite-preview-thinking",
+    ),
+)
+
+
 # 自定义 OpenAI 兼容 API（OpenRouter 等）统一使用的目录键
 _CUSTOM_CATALOG_KEY = "custom-openai"
 _CUSTOM_OPENAI_DEFAULT_MAX_CONTEXT_TOKENS = 131072
@@ -178,8 +231,8 @@ _PROVIDER_OPTIONS: tuple[_ProviderOption, ...] = (
         option_key=_PROVIDER_OPTION_GEMINI,
         display_name="Google Gemini",
         api_key_name="GEMINI_API_KEY",
-        non_thinking_model="gemini-2.5-flash",
-        thinking_model="gemini-2.5-flash-thinking",
+        non_thinking_model=_GEMINI_CATALOG_KEY,
+        thinking_model=_GEMINI_CATALOG_KEY,
     ),
     _ProviderOption(
         option_key=_PROVIDER_OPTION_QWEN,
@@ -206,11 +259,23 @@ _PROVIDER_OPTIONS: tuple[_ProviderOption, ...] = (
 
 _PROVIDER_OPTIONS_BY_KEY: dict[str, _ProviderOption] = {option.option_key: option for option in _PROVIDER_OPTIONS}
 
-# 从初始化方案推导：所有可能出现在 manifest default_name 中的 non-thinking 模型名集合
-_ALL_NON_THINKING_MODELS: frozenset[str] = frozenset(option.non_thinking_model for option in _PROVIDER_OPTIONS)
+# 从初始化方案推导：所有可能出现在 manifest default_name 中的 non-thinking 模型名集合。
+# Gemini / Ollama / 自定义 OpenAI 在 ProviderOption 上使用占位键（如 "gemini"），
+# 真正的模型名在 Gemini 子菜单或 catalog 写入逻辑中才确定，因此从两个集合中显式
+# 剔除占位键，避免污染 manifest 角色分类的合法模型名集合。
+_PROVIDER_PLACEHOLDER_KEYS: frozenset[str] = frozenset(
+    {_GEMINI_CATALOG_KEY, _OLLAMA_CATALOG_KEY, _CUSTOM_CATALOG_KEY}
+)
+_ALL_NON_THINKING_MODELS: frozenset[str] = (
+    frozenset(option.non_thinking_model for option in _PROVIDER_OPTIONS)
+    | frozenset(sub.non_thinking_model for sub in _GEMINI_SUB_OPTIONS)
+) - _PROVIDER_PLACEHOLDER_KEYS
 
 # 所有可能出现的 thinking 模型名集合
-_ALL_THINKING_MODELS: frozenset[str] = frozenset(option.thinking_model for option in _PROVIDER_OPTIONS)
+_ALL_THINKING_MODELS: frozenset[str] = (
+    frozenset(option.thinking_model for option in _PROVIDER_OPTIONS)
+    | frozenset(sub.thinking_model for sub in _GEMINI_SUB_OPTIONS)
+) - _PROVIDER_PLACEHOLDER_KEYS
 
 # 仅出现在 non-thinking 集合而不在 thinking 集合中的模型名
 _ONLY_NON_THINKING: frozenset[str] = _ALL_NON_THINKING_MODELS - _ALL_THINKING_MODELS
@@ -912,6 +977,49 @@ def _prompt_provider_selection() -> str:
     return _PROVIDER_OPTIONS[idx - 1].option_key
 
 
+def _prompt_gemini_sub_option() -> _GeminiSubOption:
+    """交互式让用户选择 Gemini 子型号。
+
+    在用户已选定 Google Gemini 作为初始化方案后，从 ``_GEMINI_SUB_OPTIONS``
+    中挑选具体型号。直接回车采用列表第一项作为默认推荐。
+
+    Returns:
+        选中的 ``_GeminiSubOption``。
+
+    Raises:
+        SystemExit: 用户输入无效或 EOF 时退出。
+    """
+
+    print("\n请选择 Gemini 子型号（输入编号）：\n")
+    default_idx = 0
+    for i, sub in enumerate(_GEMINI_SUB_OPTIONS, 1):
+        marker = "（默认）" if (i - 1) == default_idx else ""
+        print(f"  {i}. {sub.display_name}{marker}")
+
+    print()
+    default_num = default_idx + 1
+    try:
+        raw = input(f"选择 [{default_num}]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        sys.exit(1)
+
+    if raw == "":
+        return _GEMINI_SUB_OPTIONS[default_idx]
+
+    try:
+        idx = int(raw)
+    except ValueError:
+        print(f"无效输入: {raw}")
+        sys.exit(1)
+
+    if idx < 1 or idx > len(_GEMINI_SUB_OPTIONS):
+        print(f"编号超出范围: {idx}")
+        sys.exit(1)
+
+    return _GEMINI_SUB_OPTIONS[idx - 1]
+
+
 def _prompt_api_key(api_key_name: str) -> str:
     """交互式获取 API Key 值。
 
@@ -1548,6 +1656,9 @@ def run_init_command(args: Namespace) -> int:
     _persist_env_var(_INIT_PROVIDER_OPTION_ENV, chosen_option_key)
     env_vars_written = False
     main_key_persist_failed = False
+    # Gemini 二级菜单选定的子型号；非 Gemini 方案保持 None，
+    # 后续在 manifest 更新阶段决定是否覆盖默认模型名。
+    gemini_sub_option: _GeminiSubOption | None = None
 
     if chosen_option_key == _PROVIDER_OPTION_OLLAMA:
         effective_api_key_name = ""
@@ -1588,6 +1699,10 @@ def run_init_command(args: Namespace) -> int:
                 print(f"   请手动配置环境变量后重新运行 dayu-cli init。")
     else:
         effective_api_key_name = chosen_option.api_key_name
+        # Gemini 在写入 API Key 前先弹出二级菜单挑选子型号，
+        # 子型号决定后续 manifest 中写入的 default_name。
+        if chosen_option_key == _PROVIDER_OPTION_GEMINI:
+            gemini_sub_option = _prompt_gemini_sub_option()
         existing_value = os.environ.get(chosen_option.api_key_name)
         if existing_value:
             masked = existing_value[:4] + "***" + existing_value[-4:] if len(existing_value) > 8 else "***"
@@ -1611,8 +1726,13 @@ def run_init_command(args: Namespace) -> int:
         )
 
     # 3. 更新 manifest 默认模型（仅在主 key 持久化成功或已存在时执行）
-    non_thinking = chosen_option.non_thinking_model
-    thinking = chosen_option.thinking_model
+    # 对 Gemini，使用二级菜单选中的子型号覆盖 ProviderOption 中的占位键。
+    if gemini_sub_option is not None:
+        non_thinking = gemini_sub_option.non_thinking_model
+        thinking = gemini_sub_option.thinking_model
+    else:
+        non_thinking = chosen_option.non_thinking_model
+        thinking = chosen_option.thinking_model
     if main_key_persist_failed:
         key_label = effective_api_key_name or "API Key"
         print(f"\n⚠️  跳过 manifest 更新（{key_label} 未持久化）")
