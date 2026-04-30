@@ -240,7 +240,7 @@ class ReplyDeliveryServiceProtocol(BaseServiceProtocol, Protocol):
         """把交付记录推进到发送中状态。"""
         ...
 
-    def mark_delivery_delivered(self, delivery_id: str) -> ReplyDeliveryView:
+    def mark_delivery_delivered(self, delivery_id: str, *, lease_id: str) -> ReplyDeliveryView:
         """标记交付完成。"""
         ...
 

@@ -1017,7 +1017,7 @@ def test_wechat_main_noop_services_raise_for_all_operations() -> None:
     with pytest.raises(RuntimeError, match="ReplyDeliveryService"):
         reply_service.claim_delivery("delivery-1")
     with pytest.raises(RuntimeError, match="ReplyDeliveryService"):
-        reply_service.mark_delivery_delivered("delivery-1")
+        reply_service.mark_delivery_delivered("delivery-1", lease_id="lease-1")
     with pytest.raises(RuntimeError, match="ReplyDeliveryService"):
         reply_service.mark_delivery_failed(cast(object, object()))
 

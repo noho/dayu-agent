@@ -66,14 +66,18 @@ def test_reply_delivery_service_claim_fail_and_deliver() -> None:
     )
 
     claimed = service.claim_delivery(created.delivery_id)
+    assert claimed.lease_id is not None
     failed = service.mark_delivery_failed(
         ReplyDeliveryFailureRequest(
             delivery_id=claimed.delivery_id,
             retryable=True,
             error_message="网络抖动",
+            lease_id=claimed.lease_id,
         )
     )
-    delivered = service.mark_delivery_delivered(service.claim_delivery(failed.delivery_id).delivery_id)
+    reclaimed = service.claim_delivery(failed.delivery_id)
+    assert reclaimed.lease_id is not None
+    delivered = service.mark_delivery_delivered(reclaimed.delivery_id, lease_id=reclaimed.lease_id)
 
     assert claimed.state == ReplyOutboxState.DELIVERY_IN_PROGRESS
     assert failed.state == ReplyOutboxState.FAILED_RETRYABLE

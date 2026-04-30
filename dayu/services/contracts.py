@@ -197,6 +197,20 @@ class ReplyDeliverySubmitRequest:
 
 
 @dataclass(frozen=True)
+class ReplyDeliveryAckRequest:
+    """reply delivery 成功回写请求。
+
+    路径中已携带 ``delivery_id``，body 仅承载 ack 必需的 fence token，避免
+    path/body 双真源。
+
+    Attributes:
+        lease_id: ``claim_reply_delivery`` 返回的 fence token；必填。
+    """
+
+    lease_id: str
+
+
+@dataclass(frozen=True)
 class ReplyDeliveryFailureRequest:
     """reply delivery 失败回写请求。
 
@@ -204,16 +218,27 @@ class ReplyDeliveryFailureRequest:
         delivery_id: 交付记录 ID。
         retryable: 是否允许后续重试。
         error_message: 失败说明。
+        lease_id: ``claim_reply_delivery`` 返回的 fence token；必填。
     """
 
     delivery_id: str
     retryable: bool
     error_message: str
+    lease_id: str
 
 
 @dataclass(frozen=True)
 class ReplyDeliveryView:
-    """渠道层可见的交付视图。"""
+    """渠道层可见的交付视图。
+
+    ``lease_id`` 是 record 级 fence token，由 ``claim_delivery`` 在 acquire 路径
+    分配并随 view 透传给渠道。渠道侧必须在同一调用栈内把它原样回传给
+    ``ack``/``nack``，完成 fence token 闭环。lease 在 ``DELIVERY_IN_PROGRESS``
+    与 ``DELIVERED`` / ``FAILED_TERMINAL`` 三态下都保留，吸收态的幂等返回靠
+    lease 等值校验来过滤"旧 holder 写入已被接管的记录"；``PENDING_DELIVERY``
+    与 ``FAILED_RETRYABLE`` 下 ``lease_id`` 为 ``None``，此时 ownership 等待
+    下一次 ``claim_delivery`` 重新分配。
+    """
 
     delivery_id: str
     delivery_key: str
@@ -227,6 +252,7 @@ class ReplyDeliveryView:
     updated_at: str
     delivery_attempt_count: int
     last_error_message: str | None = None
+    lease_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -399,6 +425,7 @@ __all__ = [
     "LaneStatusView",
     "PromptRequest",
     "PromptSubmission",
+    "ReplyDeliveryAckRequest",
     "ReplyDeliveryFailureRequest",
     "ReplyDeliverySubmitRequest",
     "ReplyDeliveryView",

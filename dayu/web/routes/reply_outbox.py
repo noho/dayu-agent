@@ -6,6 +6,7 @@ from typing import Any
 
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.contracts.reply_outbox import ReplyOutboxState
+from dayu.host.lease import LeaseExpiredError
 from dayu.services.contracts import ReplyDeliveryFailureRequest, ReplyDeliveryView
 from dayu.services.protocols import ReplyDeliveryServiceProtocol
 
@@ -44,6 +45,7 @@ def _build_reply_delivery_payload(record: ReplyDeliveryView) -> dict[str, Any]:
         "updated_at": record.updated_at,
         "delivery_attempt_count": record.delivery_attempt_count,
         "last_error_message": record.last_error_message,
+        "lease_id": record.lease_id,
     }
 
 
@@ -66,7 +68,14 @@ def create_reply_outbox_router(reply_delivery_service: ReplyDeliveryServiceProto
     router = APIRouter(prefix="/api/reply-outbox", tags=["reply-outbox"])
 
     class ReplyDeliveryResponse(BaseModel):
-        """reply delivery 响应。"""
+        """reply delivery 响应。
+
+        ``lease_id`` 在 ``DELIVERY_IN_PROGRESS`` 与 ``DELIVERED`` /
+        ``FAILED_TERMINAL`` 三态下都会原样透传到响应体；渠道侧必须把它原样
+        回传给后续 ack/nack 才能通过 fence token 双条件 CAS。
+        ``PENDING_DELIVERY`` / ``FAILED_RETRYABLE`` 下为 ``None``，等待下次
+        ``claim`` 重新分配 ownership。
+        """
 
         delivery_id: str
         delivery_key: str
@@ -80,12 +89,23 @@ def create_reply_outbox_router(reply_delivery_service: ReplyDeliveryServiceProto
         updated_at: str
         delivery_attempt_count: int
         last_error_message: str | None = None
+        lease_id: str | None = None
+
+    class DeliveryAckRequest(BaseModel):
+        """delivery ack 请求。
+
+        path 中已携带 ``delivery_id``，body 仅承载 ack 必需的 fence token，
+        避免 path/body 双真源。
+        """
+
+        lease_id: str
 
     class DeliveryNackRequest(BaseModel):
         """delivery nack 请求。"""
 
         retryable: bool = True
         error_message: str
+        lease_id: str
 
     def _to_response(record: ReplyDeliveryView) -> ReplyDeliveryResponse:
         """把交付视图转换为响应。"""
@@ -143,20 +163,47 @@ def create_reply_outbox_router(reply_delivery_service: ReplyDeliveryServiceProto
         return _to_response(record)
 
     @router.post("/{delivery_id}/ack", response_model=ReplyDeliveryResponse)
-    async def ack_reply_outbox(delivery_id: str) -> ReplyDeliveryResponse:
-        """标记 reply outbox 已送达。"""
+    async def ack_reply_outbox(delivery_id: str, body: DeliveryAckRequest) -> ReplyDeliveryResponse:
+        """标记 reply outbox 已送达。
+
+        Args:
+            delivery_id: path 参数；交付记录 ID。
+            body: 必填 ``lease_id``，必须与 claim 时返回的 fence token 完全匹配。
+
+        Returns:
+            已 DELIVERED 的交付记录。
+
+        Raises:
+            HTTPException: 记录不存在 (404)、状态不允许 (409) 或 lease 已被抢占 (409) 时抛出。
+        """
 
         try:
-            record = reply_delivery_service.mark_delivery_delivered(delivery_id)
+            record = reply_delivery_service.mark_delivery_delivered(
+                delivery_id, lease_id=body.lease_id
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="reply delivery not found") from exc
+        except LeaseExpiredError as exc:
+            raise HTTPException(status_code=409, detail=f"reply delivery lease expired: {exc}") from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _to_response(record)
 
     @router.post("/{delivery_id}/nack", response_model=ReplyDeliveryResponse)
     async def nack_reply_outbox(delivery_id: str, body: DeliveryNackRequest) -> ReplyDeliveryResponse:
-        """标记 reply outbox 发送失败。"""
+        """标记 reply outbox 发送失败。
+
+        Args:
+            delivery_id: path 参数；交付记录 ID。
+            body: 必填 ``lease_id`` / ``retryable`` / ``error_message``；
+                ``lease_id`` 必须与 claim 时返回的 fence token 完全匹配。
+
+        Returns:
+            已转入 FAILED_RETRYABLE / FAILED_TERMINAL 的交付记录。
+
+        Raises:
+            HTTPException: 记录不存在 (404)、参数非法 (400) 或 lease 已被抢占 (409) 时抛出。
+        """
 
         try:
             record = reply_delivery_service.mark_delivery_failed(
@@ -164,10 +211,13 @@ def create_reply_outbox_router(reply_delivery_service: ReplyDeliveryServiceProto
                     delivery_id=delivery_id,
                     retryable=body.retryable,
                     error_message=body.error_message,
+                    lease_id=body.lease_id,
                 )
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="reply delivery not found") from exc
+        except LeaseExpiredError as exc:
+            raise HTTPException(status_code=409, detail=f"reply delivery lease expired: {exc}") from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _to_response(record)

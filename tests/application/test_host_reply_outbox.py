@@ -81,12 +81,16 @@ def test_host_reply_outbox_facade_round_trip() -> None:
         )
     )
     claimed = host.claim_reply_delivery(created.delivery_id)
+    assert claimed.lease_id is not None
     failed = host.mark_reply_delivery_failed(
         claimed.delivery_id,
         retryable=True,
         error_message="网络重试",
+        lease_id=claimed.lease_id,
     )
-    delivered = host.mark_reply_delivered(host.claim_reply_delivery(failed.delivery_id).delivery_id)
+    reclaimed = host.claim_reply_delivery(failed.delivery_id)
+    assert reclaimed.lease_id is not None
+    delivered = host.mark_reply_delivered(reclaimed.delivery_id, lease_id=reclaimed.lease_id)
 
     listed = host.list_reply_outbox(session_id="session_1")
 

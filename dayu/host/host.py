@@ -1863,20 +1863,22 @@ class Host:
 
         return self._reply_outbox_store.claim_reply(delivery_id)
 
-    def mark_reply_delivered(self, delivery_id: str) -> ReplyOutboxRecord:
+    def mark_reply_delivered(self, delivery_id: str, *, lease_id: str) -> ReplyOutboxRecord:
         """标记 reply outbox 记录已交付完成。
 
         Args:
             delivery_id: 交付记录 ID。
+            lease_id: ``claim_reply_delivery`` 返回的 fence token；必填。
 
         Returns:
             更新后的交付记录。
 
         Raises:
             KeyError: 记录不存在时抛出。
+            LeaseExpiredError: 持有的 lease 已被 cleanup 抢占。
         """
 
-        return self._reply_outbox_store.mark_delivered(delivery_id)
+        return self._reply_outbox_store.mark_delivered(delivery_id, lease_id=lease_id)
 
     def mark_reply_delivery_failed(
         self,
@@ -1884,6 +1886,7 @@ class Host:
         *,
         retryable: bool,
         error_message: str,
+        lease_id: str,
     ) -> ReplyOutboxRecord:
         """标记 reply outbox 记录交付失败。
 
@@ -1891,6 +1894,7 @@ class Host:
             delivery_id: 交付记录 ID。
             retryable: 是否允许后续再次 claim。
             error_message: 失败消息。
+            lease_id: ``claim_reply_delivery`` 返回的 fence token；必填。
 
         Returns:
             更新后的交付记录。
@@ -1898,12 +1902,14 @@ class Host:
         Raises:
             KeyError: 记录不存在时抛出。
             ValueError: 已完成交付的记录重复标记失败时抛出。
+            LeaseExpiredError: 持有的 lease 已被 cleanup 抢占。
         """
 
         return self._reply_outbox_store.mark_failed(
             delivery_id,
             retryable=retryable,
             error_message=error_message,
+            lease_id=lease_id,
         )
 
 class _DefaultHostComponents:

@@ -818,8 +818,21 @@ class ReplyOutboxStoreProtocol(Protocol):
         """把记录推进到发送中状态。"""
         ...
 
-    def mark_delivered(self, delivery_id: str) -> ReplyOutboxRecord:
-        """标记记录已完成交付。"""
+    def mark_delivered(self, delivery_id: str, *, lease_id: str) -> ReplyOutboxRecord:
+        """标记记录已完成交付。
+
+        Args:
+            delivery_id: 交付记录 ID。
+            lease_id: claim 时返回的 fence token，必须与当前 record 的 lease_id 完全一致。
+
+        Returns:
+            DELIVERED 终态的记录。
+
+        Raises:
+            LeaseExpiredError: 传入 lease 与记录当前 lease 不一致 (已被 cleanup 抢占)。
+            ValueError: 状态机不允许 mark_delivered。
+            KeyError: 记录不存在。
+        """
         ...
 
     def mark_failed(
@@ -828,8 +841,24 @@ class ReplyOutboxStoreProtocol(Protocol):
         *,
         retryable: bool,
         error_message: str,
+        lease_id: str,
     ) -> ReplyOutboxRecord:
-        """标记记录交付失败。"""
+        """标记记录交付失败。
+
+        Args:
+            delivery_id: 交付记录 ID。
+            retryable: 是否可重试。
+            error_message: 错误描述。
+            lease_id: claim 时返回的 fence token，必须与记录当前 lease 一致。
+
+        Returns:
+            FAILED_RETRYABLE / FAILED_TERMINAL 状态的记录。
+
+        Raises:
+            LeaseExpiredError: 传入 lease 与记录当前 lease 不一致。
+            ValueError: 参数非法或状态机不允许失败标记。
+            KeyError: 记录不存在。
+        """
         ...
 
     def delete_by_session_id(self, session_id: str) -> int:
@@ -1229,7 +1258,7 @@ class ReplyOutboxOperationsProtocol(Protocol):
         """把记录推进到发送中状态。"""
         ...
 
-    def mark_reply_delivered(self, delivery_id: str) -> ReplyOutboxRecord:
+    def mark_reply_delivered(self, delivery_id: str, *, lease_id: str) -> ReplyOutboxRecord:
         """标记交付完成。"""
         ...
 
@@ -1239,6 +1268,7 @@ class ReplyOutboxOperationsProtocol(Protocol):
         *,
         retryable: bool,
         error_message: str,
+        lease_id: str,
     ) -> ReplyOutboxRecord:
         """标记交付失败。"""
         ...

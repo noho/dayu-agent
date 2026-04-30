@@ -310,11 +310,12 @@ class NoOpReplyDeliveryService:
         del delivery_id
         raise RuntimeError("login 模式不应调用 ReplyDeliveryService")
 
-    def mark_delivery_delivered(self, delivery_id: str) -> ReplyDeliveryView:
+    def mark_delivery_delivered(self, delivery_id: str, *, lease_id: str) -> ReplyDeliveryView:
         """login 模式不应调用交付逻辑。
 
         Args:
             delivery_id: delivery 标识。
+            lease_id: claim 时获得的 fence token。
 
         Returns:
             无。
@@ -323,7 +324,7 @@ class NoOpReplyDeliveryService:
             RuntimeError: 始终抛出，提示 login 路径不应消费 delivered 标记能力。
         """
 
-        del delivery_id
+        del delivery_id, lease_id
         raise RuntimeError("login 模式不应调用 ReplyDeliveryService")
 
     def mark_delivery_failed(self, request: ReplyDeliveryFailureRequest) -> ReplyDeliveryView:

@@ -455,13 +455,23 @@ def test_reply_outbox_ack_route_marks_claimed_delivery_as_delivered(monkeypatch:
         ),
     )
     claimed = service.claim_delivery(created.delivery_id)
+    assert claimed.lease_id is not None
     router = _build_reply_outbox_router_for_test(monkeypatch, service)
     ack_handler = cast(
-        Callable[[str], Coroutine[Any, Any, object]],
+        Callable[[str, object], Coroutine[Any, Any, object]],
         router.handlers[("POST", "/{delivery_id}/ack")],
     )
 
-    acknowledged = cast(ReplyDeliveryView, asyncio.run(ack_handler(claimed.delivery_id)))
+    class _AckBody:
+        """ack 请求体测试桩。"""
+
+        def __init__(self, lease_id: str) -> None:
+            self.lease_id = lease_id
+
+    acknowledged = cast(
+        ReplyDeliveryView,
+        asyncio.run(ack_handler(claimed.delivery_id, _AckBody(claimed.lease_id))),
+    )
 
     assert acknowledged.delivery_id == created.delivery_id
     assert acknowledged.state == ReplyOutboxState.DELIVERED.value
@@ -487,12 +497,18 @@ def test_reply_outbox_ack_route_returns_conflict_without_claim(
     )
     router = _build_reply_outbox_router_for_test(monkeypatch, service)
     ack_handler = cast(
-        Callable[[str], Coroutine[Any, Any, object]],
+        Callable[[str, object], Coroutine[Any, Any, object]],
         router.handlers[("POST", "/{delivery_id}/ack")],
     )
 
+    class _AckBody:
+        """ack 请求体测试桩。"""
+
+        def __init__(self, lease_id: str) -> None:
+            self.lease_id = lease_id
+
     with pytest.raises(_FakeHTTPException) as exc_info:
-        asyncio.run(ack_handler(created.delivery_id))
+        asyncio.run(ack_handler(created.delivery_id, _AckBody("any-lease")))
 
     assert exc_info.value.status_code == 409
 
@@ -560,7 +576,8 @@ def test_reply_outbox_nack_route_marks_failed_and_validates_errors(monkeypatch: 
             metadata={"delivery_channel": "web", "delivery_target": "session_nack_1"},
         ),
     )
-    service.claim_delivery(created.delivery_id)
+    claimed = service.claim_delivery(created.delivery_id)
+    assert claimed.lease_id is not None
     router = _build_reply_outbox_router_for_test(monkeypatch, service)
     nack_handler = cast(
         Callable[[str, object], Coroutine[Any, Any, object]],
@@ -573,11 +590,17 @@ def test_reply_outbox_nack_route_marks_failed_and_validates_errors(monkeypatch: 
         retryable = True
         error_message = "network failed"
 
-    failed = cast(ReplyDeliveryView, asyncio.run(nack_handler(created.delivery_id, _Body())))
+        def __init__(self, lease_id: str) -> None:
+            self.lease_id = lease_id
+
+    failed = cast(
+        ReplyDeliveryView,
+        asyncio.run(nack_handler(created.delivery_id, _Body(claimed.lease_id))),
+    )
 
     assert failed.state == ReplyOutboxState.FAILED_RETRYABLE.value
 
     with pytest.raises(_FakeHTTPException) as missing_exc:
-        asyncio.run(nack_handler("missing_delivery", _Body()))
+        asyncio.run(nack_handler("missing_delivery", _Body("any-lease")))
 
     assert missing_exc.value.status_code == 404

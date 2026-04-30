@@ -72,6 +72,10 @@ class ReplyOutboxRecord:
         updated_at: 最近更新时间。
         delivery_attempt_count: 已进入发送中的次数。
         last_error_message: 最近一次失败消息。
+        lease_id: 当前持有者的 fence token。仅在 ``DELIVERY_IN_PROGRESS`` 状态下有
+            意义，由 ``claim_reply`` 在成功 acquire 时分配；mark_delivered/mark_failed
+            必须携带本字段做双条件 CAS，cleanup 抢占时分配新 lease_id 让旧持有者
+            迟到回写必失败；其他状态下为 ``None``。
 
     Returns:
         无。
@@ -92,6 +96,7 @@ class ReplyOutboxRecord:
     updated_at: datetime
     delivery_attempt_count: int = 0
     last_error_message: str | None = None
+    lease_id: str | None = None
 
 
 __all__ = [

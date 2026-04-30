@@ -22,6 +22,7 @@ from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normaliz
 from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, ReplyOutboxSubmitRequest
 from dayu.host._session_barrier import ensure_session_active
 from dayu.host.host_store import HostStore, write_transaction
+from dayu.host.lease import LeaseExpiredError, generate_lease_id
 from dayu.log import Log
 
 if TYPE_CHECKING:
@@ -280,13 +281,13 @@ class InMemoryReplyOutboxStore:
         return sorted(records, key=lambda record: (record.updated_at, record.created_at), reverse=True)
 
     def claim_reply(self, delivery_id: str) -> ReplyOutboxRecord:
-        """把记录推进到发送中状态。
+        """把记录推进到发送中状态，并分配新的 ``lease_id``。
 
         Args:
             delivery_id: 交付记录 ID。
 
         Returns:
-            更新后的交付记录。
+            更新后的交付记录，``lease_id`` 为本次 acquire 分配的新 fence token。
 
         Raises:
             KeyError: 记录不存在时抛出。
@@ -302,6 +303,7 @@ class InMemoryReplyOutboxStore:
                 "reply delivery 当前状态不允许 claim: "
                 f"delivery_id={delivery_id}, state={existing.state.value}"
             )
+        new_lease_id = generate_lease_id()
         updated = ReplyOutboxRecord(
             delivery_id=existing.delivery_id,
             delivery_key=existing.delivery_key,
@@ -315,15 +317,17 @@ class InMemoryReplyOutboxStore:
             updated_at=_now_utc(),
             delivery_attempt_count=existing.delivery_attempt_count + 1,
             last_error_message=None,
+            lease_id=new_lease_id,
         )
         self._records[updated.delivery_id] = updated
         return updated
 
-    def mark_delivered(self, delivery_id: str) -> ReplyOutboxRecord:
+    def mark_delivered(self, delivery_id: str, *, lease_id: str) -> ReplyOutboxRecord:
         """标记记录已完成交付。
 
         Args:
             delivery_id: 交付记录 ID。
+            lease_id: claim 时返回的 fence token；必须与当前持有 lease 完全匹配。
 
         Returns:
             更新后的交付记录。
@@ -331,18 +335,37 @@ class InMemoryReplyOutboxStore:
         Raises:
             KeyError: 记录不存在时抛出。
             ValueError: 当前状态不允许 delivered 时抛出。
+            LeaseExpiredError: 持有的 lease 已被抢占（cleanup 抢占改写）。
         """
 
         normalized_delivery_id = _normalize_text(delivery_id, field_name="delivery_id")
+        normalized_lease_id = _normalize_text(lease_id, field_name="lease_id")
         existing = self.get_reply(normalized_delivery_id)
         if existing is None:
             raise KeyError(f"reply delivery 不存在: {delivery_id}")
         if existing.state == ReplyOutboxState.DELIVERED:
-            return existing
+            # DELIVERED 是吸收态：仅当持有者用同一 lease 重试时才幂等返回；
+            # 任何 lease mismatch（含旧 holder 在 cleanup 抢占后迟到）必须暴露
+            # 为 LeaseExpiredError，避免把"写入未生效、ownership 已变化"伪装成成功。
+            if existing.lease_id == normalized_lease_id:
+                return existing
+            raise LeaseExpiredError(
+                "reply delivery lease 已失效: "
+                f"delivery_id={delivery_id}",
+                record_id=existing.delivery_id,
+                lease_id=normalized_lease_id,
+            )
         if existing.state != ReplyOutboxState.DELIVERY_IN_PROGRESS:
             raise ValueError(
                 "reply delivery 当前状态不允许 delivered: "
                 f"delivery_id={delivery_id}, state={existing.state.value}"
+            )
+        if existing.lease_id != normalized_lease_id:
+            raise LeaseExpiredError(
+                "reply delivery lease 已失效: "
+                f"delivery_id={delivery_id}",
+                record_id=existing.delivery_id,
+                lease_id=normalized_lease_id,
             )
         updated = ReplyOutboxRecord(
             delivery_id=existing.delivery_id,
@@ -357,6 +380,9 @@ class InMemoryReplyOutboxStore:
             updated_at=_now_utc(),
             delivery_attempt_count=existing.delivery_attempt_count,
             last_error_message=None,
+            # 终态保留 lease_id，使后续合法 holder 自重试可幂等返回；
+            # 旧 holder 拿不同 lease 重试时则在上面的吸收态分支被识别为 mismatch。
+            lease_id=existing.lease_id,
         )
         self._records[updated.delivery_id] = updated
         return updated
@@ -367,6 +393,7 @@ class InMemoryReplyOutboxStore:
         *,
         retryable: bool,
         error_message: str,
+        lease_id: str,
     ) -> ReplyOutboxRecord:
         """标记记录交付失败。
 
@@ -374,6 +401,7 @@ class InMemoryReplyOutboxStore:
             delivery_id: 交付记录 ID。
             retryable: 是否允许后续再次 claim。
             error_message: 失败消息。
+            lease_id: claim 时返回的 fence token；必须与当前持有 lease 完全匹配。
 
         Returns:
             更新后的交付记录。
@@ -381,9 +409,11 @@ class InMemoryReplyOutboxStore:
         Raises:
             KeyError: 记录不存在时抛出。
             ValueError: 已完成交付的记录重复标记失败时抛出。
+            LeaseExpiredError: 持有的 lease 已被抢占（cleanup 抢占改写）。
         """
 
         normalized_delivery_id = _normalize_text(delivery_id, field_name="delivery_id")
+        normalized_lease_id = _normalize_text(lease_id, field_name="lease_id")
         existing = self.get_reply(normalized_delivery_id)
         if existing is None:
             raise KeyError(f"reply delivery 不存在: {delivery_id}")
@@ -393,8 +423,24 @@ class InMemoryReplyOutboxStore:
                 f"delivery_id={delivery_id}"
             )
         if existing.state == ReplyOutboxState.FAILED_TERMINAL:
-            # FAILED_TERMINAL 为吸收态，重复调用幂等返回现有记录
-            return existing
+            # FAILED_TERMINAL 为吸收态：仅当持有者用同一 lease 重试时才幂等返回；
+            # lease mismatch（旧 holder 已被 cleanup 抢占失去 lease 之后又看到他人收口为 terminal）
+            # 必须抛 LeaseExpiredError，避免把"写入未生效、ownership 已变化"伪装成失败回写成功。
+            if existing.lease_id == normalized_lease_id:
+                return existing
+            raise LeaseExpiredError(
+                "reply delivery lease 已失效: "
+                f"delivery_id={delivery_id}",
+                record_id=existing.delivery_id,
+                lease_id=normalized_lease_id,
+            )
+        if existing.lease_id != normalized_lease_id:
+            raise LeaseExpiredError(
+                "reply delivery lease 已失效: "
+                f"delivery_id={delivery_id}",
+                record_id=existing.delivery_id,
+                lease_id=normalized_lease_id,
+            )
         normalized_error_message = _normalize_text(error_message, field_name="error_message")
         updated = ReplyOutboxRecord(
             delivery_id=existing.delivery_id,
@@ -412,6 +458,10 @@ class InMemoryReplyOutboxStore:
             updated_at=_now_utc(),
             delivery_attempt_count=existing.delivery_attempt_count,
             last_error_message=normalized_error_message,
+            # FAILED_RETRYABLE 释放 lease（置 NULL）：本次 attempt 已失败，ownership 必须
+            # 在下一次 claim 重新分配前释放，旧 holder 不得再用旧 lease 改写记录；
+            # FAILED_TERMINAL 保留 lease 作为吸收态幂等校验依据（同 holder 自重试可幂等返回）。
+            lease_id=(None if retryable else existing.lease_id),
         )
         self._records[updated.delivery_id] = updated
         return updated
@@ -422,6 +472,11 @@ class InMemoryReplyOutboxStore:
         max_age: timedelta,
     ) -> list[str]:
         """把超过 max_age 的 DELIVERY_IN_PROGRESS 回退为 FAILED_RETRYABLE。
+
+        回退时 ``lease_id`` 一并置 NULL，与 ``mark_failed(retryable=True)`` 路径
+        保持一致："FAILED_RETRYABLE 不持 lease"是 record 级 fence token 的契约。
+        旧持有者后续 ack/nack 用旧 lease 撞 ``state='delivery_in_progress' AND
+        lease_id = ?`` 双条件 CAS 仍然必然 mismatch，``LeaseExpiredError`` 语义不变。
 
         Args:
             max_age: 超过多久未收到终态的 IN_PROGRESS 视为 stale；
@@ -456,6 +511,7 @@ class InMemoryReplyOutboxStore:
                 updated_at=_now_utc(),
                 delivery_attempt_count=record.delivery_attempt_count,
                 last_error_message=STALE_IN_PROGRESS_ERROR_MESSAGE,
+                lease_id=None,
             )
             stale_ids.append(delivery_id)
         if stale_ids:
@@ -548,8 +604,8 @@ class SQLiteReplyOutboxStore:
                 INSERT OR IGNORE INTO reply_outbox (
                     delivery_id, delivery_key, session_id, scene_name, source_run_id,
                     reply_content, state, delivery_attempt_count, last_error_message,
-                    created_at, updated_at, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, metadata_json, lease_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     delivery_id,
@@ -564,6 +620,7 @@ class SQLiteReplyOutboxStore:
                     _serialize_dt(now),
                     _serialize_dt(now),
                     _serialize_metadata(normalized_request.metadata),
+                    None,
                 ),
             )
             rowcount = cursor.rowcount
@@ -669,13 +726,13 @@ class SQLiteReplyOutboxStore:
         return [_row_to_reply_outbox_record(row) for row in rows]
 
     def claim_reply(self, delivery_id: str) -> ReplyOutboxRecord:
-        """把记录推进到发送中状态。
+        """把记录推进到发送中状态，并分配新的 ``lease_id``。
 
         Args:
             delivery_id: 交付记录 ID。
 
         Returns:
-            更新后的交付记录。
+            更新后的交付记录，``lease_id`` 为本次 acquire 分配的新 fence token。
 
         Raises:
             KeyError: 记录不存在时抛出。
@@ -684,6 +741,7 @@ class SQLiteReplyOutboxStore:
         """
 
         normalized_delivery_id = _normalize_text(delivery_id, field_name="delivery_id")
+        new_lease_id = generate_lease_id()
         conn = self._host_store.get_connection()
         with write_transaction(conn):
             cursor = conn.execute(
@@ -692,7 +750,8 @@ class SQLiteReplyOutboxStore:
                 SET state = ?,
                     delivery_attempt_count = delivery_attempt_count + 1,
                     last_error_message = ?,
-                    updated_at = ?
+                    updated_at = ?,
+                    lease_id = ?
                 WHERE delivery_id = ?
                   AND state IN (?, ?)
                 """,
@@ -700,6 +759,7 @@ class SQLiteReplyOutboxStore:
                     ReplyOutboxState.DELIVERY_IN_PROGRESS.value,
                     None,
                     _serialize_dt(_now_utc()),
+                    new_lease_id,
                     normalized_delivery_id,
                     ReplyOutboxState.PENDING_DELIVERY.value,
                     ReplyOutboxState.FAILED_RETRYABLE.value,
@@ -718,11 +778,16 @@ class SQLiteReplyOutboxStore:
             )
         return updated
 
-    def mark_delivered(self, delivery_id: str) -> ReplyOutboxRecord:
+    def mark_delivered(self, delivery_id: str, *, lease_id: str) -> ReplyOutboxRecord:
         """标记记录已完成交付。
+
+        采用 ``state + lease_id`` 双条件 CAS：当 lease_id mismatch 时（典型场景：
+        cleanup 抢占已分配新 lease），rowcount=0 且当前状态非 DELIVERED，抛
+        ``LeaseExpiredError``，让旧持有者明确感知交付权已被抢占。
 
         Args:
             delivery_id: 交付记录 ID。
+            lease_id: claim 时返回的 fence token；必须与当前持有 lease 完全匹配。
 
         Returns:
             更新后的交付记录。
@@ -730,15 +795,27 @@ class SQLiteReplyOutboxStore:
         Raises:
             KeyError: 记录不存在时抛出。
             ValueError: 当前状态不允许 delivered 时抛出。
+            LeaseExpiredError: 持有的 lease 已被抢占。
             RuntimeError: 更新后读取失败时抛出。
         """
 
         normalized_delivery_id = _normalize_text(delivery_id, field_name="delivery_id")
+        normalized_lease_id = _normalize_text(lease_id, field_name="lease_id")
         existing = self.get_reply(normalized_delivery_id)
         if existing is None:
             raise KeyError(f"reply delivery 不存在: {delivery_id}")
         if existing.state == ReplyOutboxState.DELIVERED:
-            return existing
+            # DELIVERED 是吸收态：仅当持有者用同一 lease 重试时才幂等返回；
+            # lease mismatch 必须抛 LeaseExpiredError，避免把旧 holder 在
+            # cleanup 抢占之后又看到他人收口的场景伪装成本次写入成功。
+            if existing.lease_id == normalized_lease_id:
+                return existing
+            raise LeaseExpiredError(
+                "reply delivery lease 已失效: "
+                f"delivery_id={delivery_id}",
+                record_id=existing.delivery_id,
+                lease_id=normalized_lease_id,
+            )
         conn = self._host_store.get_connection()
         with write_transaction(conn):
             cursor = conn.execute(
@@ -749,6 +826,7 @@ class SQLiteReplyOutboxStore:
                     updated_at = ?
                 WHERE delivery_id = ?
                   AND state = ?
+                  AND lease_id = ?
                 """,
                 (
                     ReplyOutboxState.DELIVERED.value,
@@ -756,6 +834,7 @@ class SQLiteReplyOutboxStore:
                     _serialize_dt(_now_utc()),
                     existing.delivery_id,
                     ReplyOutboxState.DELIVERY_IN_PROGRESS.value,
+                    normalized_lease_id,
                 ),
             )
             rowcount = cursor.rowcount
@@ -764,10 +843,26 @@ class SQLiteReplyOutboxStore:
             raise RuntimeError(f"reply delivery 更新后读取失败: {existing.delivery_id}")
         if rowcount == 0:
             if updated.state == ReplyOutboxState.DELIVERED:
-                return updated
-            raise ValueError(
-                "reply delivery 当前状态不允许 delivered: "
-                f"delivery_id={delivery_id}, state={updated.state.value}"
+                # 进入吸收态：再次按 lease 等值校验，旧 holder 撞上他人收口时也要 fail-loud。
+                if updated.lease_id == normalized_lease_id:
+                    return updated
+                raise LeaseExpiredError(
+                    "reply delivery lease 已失效: "
+                    f"delivery_id={delivery_id}",
+                    record_id=existing.delivery_id,
+                    lease_id=normalized_lease_id,
+                )
+            if updated.state != ReplyOutboxState.DELIVERY_IN_PROGRESS:
+                raise ValueError(
+                    "reply delivery 当前状态不允许 delivered: "
+                    f"delivery_id={delivery_id}, state={updated.state.value}"
+                )
+            # state 仍是 IN_PROGRESS 但 CAS 失败 → lease_id mismatch
+            raise LeaseExpiredError(
+                "reply delivery lease 已失效: "
+                f"delivery_id={delivery_id}",
+                record_id=existing.delivery_id,
+                lease_id=normalized_lease_id,
             )
         return updated
 
@@ -777,13 +872,18 @@ class SQLiteReplyOutboxStore:
         *,
         retryable: bool,
         error_message: str,
+        lease_id: str,
     ) -> ReplyOutboxRecord:
         """标记记录交付失败。
+
+        采用 ``state + lease_id`` 双条件 CAS。lease_id mismatch 时抛
+        ``LeaseExpiredError``；已 DELIVERED 的记录仍按现有 ``ValueError`` 报错。
 
         Args:
             delivery_id: 交付记录 ID。
             retryable: 是否允许后续再次 claim。
             error_message: 失败消息。
+            lease_id: claim 时返回的 fence token；必须与当前持有 lease 完全匹配。
 
         Returns:
             更新后的交付记录。
@@ -791,10 +891,12 @@ class SQLiteReplyOutboxStore:
         Raises:
             KeyError: 记录不存在时抛出。
             ValueError: 已完成交付的记录重复标记失败时抛出。
+            LeaseExpiredError: 持有的 lease 已被抢占。
             RuntimeError: 更新后读取失败时抛出。
         """
 
         normalized_delivery_id = _normalize_text(delivery_id, field_name="delivery_id")
+        normalized_lease_id = _normalize_text(lease_id, field_name="lease_id")
         existing = self.get_reply(normalized_delivery_id)
         if existing is None:
             raise KeyError(f"reply delivery 不存在: {delivery_id}")
@@ -804,8 +906,17 @@ class SQLiteReplyOutboxStore:
                 f"delivery_id={delivery_id}"
             )
         if existing.state == ReplyOutboxState.FAILED_TERMINAL:
-            # FAILED_TERMINAL 为吸收态，重复调用幂等返回现有记录
-            return existing
+            # FAILED_TERMINAL 是吸收态：仅当 lease 与当前持有者一致时幂等返回；
+            # lease mismatch（旧 holder 在 cleanup 抢占之后又看到他人收口为 terminal）
+            # 必须抛 LeaseExpiredError，避免把"写入未生效、ownership 已变化"伪装成成功。
+            if existing.lease_id == normalized_lease_id:
+                return existing
+            raise LeaseExpiredError(
+                "reply delivery lease 已失效: "
+                f"delivery_id={delivery_id}",
+                record_id=existing.delivery_id,
+                lease_id=normalized_lease_id,
+            )
         normalized_error_message = _normalize_text(error_message, field_name="error_message")
         conn = self._host_store.get_connection()
         with write_transaction(conn):
@@ -814,28 +925,47 @@ class SQLiteReplyOutboxStore:
                 UPDATE reply_outbox
                 SET state = ?,
                     last_error_message = ?,
-                    updated_at = ?
-                WHERE delivery_id = ? AND state != ?
+                    updated_at = ?,
+                    lease_id = CASE WHEN ? = 1 THEN NULL ELSE lease_id END
+                WHERE delivery_id = ?
+                  AND state != ?
+                  AND lease_id = ?
                 """,
                 (
                     ReplyOutboxState.FAILED_RETRYABLE.value if retryable else ReplyOutboxState.FAILED_TERMINAL.value,
                     normalized_error_message,
                     _serialize_dt(_now_utc()),
+                    1 if retryable else 0,
                     existing.delivery_id,
                     ReplyOutboxState.DELIVERED.value,
+                    normalized_lease_id,
                 ),
             )
             rowcount = cursor.rowcount
         if rowcount == 0:
-            # SQL 守卫命中：record 已被并发推进到 DELIVERED，等价于 Python 层的检查失败
             current = self.get_reply(existing.delivery_id)
             if current is not None and current.state == ReplyOutboxState.DELIVERED:
                 raise ValueError(
                     "已完成交付的 reply delivery 不能再标记失败: "
                     f"delivery_id={delivery_id}"
                 )
-            raise RuntimeError(
-                f"reply delivery 状态守卫意外失败: delivery_id={existing.delivery_id}"
+            if current is not None and current.state == ReplyOutboxState.FAILED_TERMINAL:
+                # 并发情形下，本地预读还是非 terminal，但 SQL 锁排队后已被他人收口为 terminal；
+                # 此时必须按"lease 等值"复核：与持有者一致幂等返回，否则抛 LeaseExpiredError。
+                if current.lease_id == normalized_lease_id:
+                    return current
+                raise LeaseExpiredError(
+                    "reply delivery lease 已失效: "
+                    f"delivery_id={delivery_id}",
+                    record_id=existing.delivery_id,
+                    lease_id=normalized_lease_id,
+                )
+            # 排除 DELIVERED / FAILED_TERMINAL 后仍 mismatch → lease_id 失效
+            raise LeaseExpiredError(
+                "reply delivery lease 已失效: "
+                f"delivery_id={delivery_id}",
+                record_id=existing.delivery_id,
+                lease_id=normalized_lease_id,
             )
         updated = self.get_reply(existing.delivery_id)
         if updated is None:
@@ -848,6 +978,11 @@ class SQLiteReplyOutboxStore:
         max_age: timedelta,
     ) -> list[str]:
         """把超过 max_age 的 DELIVERY_IN_PROGRESS 回退为 FAILED_RETRYABLE。
+
+        回退时 ``lease_id`` 一并置 NULL，与 ``mark_failed(retryable=True)`` 路径
+        保持一致："FAILED_RETRYABLE 不持 lease"是 record 级 fence token 的契约。
+        旧持有者后续 ack/nack 用旧 lease 撞 ``state='delivery_in_progress' AND
+        lease_id = ?`` 双条件 CAS 仍然必然 mismatch，``LeaseExpiredError`` 语义不变。
 
         Args:
             max_age: 超过多久未收到终态的 IN_PROGRESS 视为 stale；
@@ -872,33 +1007,42 @@ class SQLiteReplyOutboxStore:
             """,
             (ReplyOutboxState.DELIVERY_IN_PROGRESS.value, cutoff),
         ).fetchall()
-        stale_ids = [str(row["delivery_id"]) for row in rows]
-        if not stale_ids:
+        candidate_ids = [str(row["delivery_id"]) for row in rows]
+        if not candidate_ids:
             return []
-        placeholders = ",".join(["?"] * len(stale_ids))
+        # 仅返回事务内 rowcount=1 的 delivery_id：候选 id 在事务外被读出，与 UPDATE
+        # 之间存在窗口，期间记录可能被并发推进到 DELIVERED / FAILED_*；那种 id 不应
+        # 计入"本次实际回退"列表，以免日志与回收统计出现假阳性。
+        rotated_ids: list[str] = []
         with write_transaction(conn):
-            conn.execute(
-                f"""
-                UPDATE reply_outbox
-                SET state = ?,
-                    last_error_message = ?,
-                    updated_at = ?
-                WHERE delivery_id IN ({placeholders})
-                  AND state = ?
-                """,
-                (
-                    ReplyOutboxState.FAILED_RETRYABLE.value,
-                    STALE_IN_PROGRESS_ERROR_MESSAGE,
-                    now_ts,
-                    *stale_ids,
-                    ReplyOutboxState.DELIVERY_IN_PROGRESS.value,
-                ),
-            )
+            for stale_id in candidate_ids:
+                cursor = conn.execute(
+                    """
+                    UPDATE reply_outbox
+                    SET state = ?,
+                        last_error_message = ?,
+                        updated_at = ?,
+                        lease_id = NULL
+                    WHERE delivery_id = ?
+                      AND state = ?
+                    """,
+                    (
+                        ReplyOutboxState.FAILED_RETRYABLE.value,
+                        STALE_IN_PROGRESS_ERROR_MESSAGE,
+                        now_ts,
+                        stale_id,
+                        ReplyOutboxState.DELIVERY_IN_PROGRESS.value,
+                    ),
+                )
+                if cursor.rowcount == 1:
+                    rotated_ids.append(stale_id)
+        if not rotated_ids:
+            return []
         Log.warn(
-            f"reply outbox 清理 stale in_progress: count={len(stale_ids)}, ids={','.join(stale_ids)}",
+            f"reply outbox 清理 stale in_progress: count={len(rotated_ids)}, ids={','.join(rotated_ids)}",
             module=MODULE,
         )
-        return stale_ids
+        return rotated_ids
 
     def delete_by_session_id(self, session_id: str) -> int:
         """删除指定 session 的所有交付记录。
@@ -942,6 +1086,8 @@ def _row_to_reply_outbox_record(row: sqlite3.Row) -> ReplyOutboxRecord:
     if not isinstance(metadata_payload, dict):
         raise ValueError("reply outbox metadata_json 必须是 JSON object")
     metadata = normalize_execution_delivery_context(metadata_payload)
+    raw_lease_id = row["lease_id"]
+    lease_id = str(raw_lease_id) if raw_lease_id is not None else None
     return ReplyOutboxRecord(
         delivery_id=str(row["delivery_id"]),
         delivery_key=str(row["delivery_key"]),
@@ -955,6 +1101,7 @@ def _row_to_reply_outbox_record(row: sqlite3.Row) -> ReplyOutboxRecord:
         updated_at=_parse_dt(str(row["updated_at"])),
         delivery_attempt_count=int(row["delivery_attempt_count"]),
         last_error_message=_normalize_error_message(str(row["last_error_message"] or "")),
+        lease_id=lease_id,
     )
 
 

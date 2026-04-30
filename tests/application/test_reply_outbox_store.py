@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from dayu.contracts.reply_outbox import ReplyOutboxState, ReplyOutboxSubmitRequest
+from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, ReplyOutboxSubmitRequest
 from dayu.host.host_store import HostStore
+from dayu.host.lease import LeaseExpiredError
 from dayu.host.protocols import ReplyOutboxStoreProtocol
 from dayu.host.reply_outbox_store import (
     InMemoryReplyOutboxStore,
@@ -215,9 +216,16 @@ def test_sqlite_reply_outbox_claim_fail_and_deliver_state_machine(tmp_path: Path
 
     created = store.submit_reply(_build_submit_request())
     claimed = store.claim_reply(created.delivery_id)
-    failed = store.mark_failed(claimed.delivery_id, retryable=True, error_message="网络抖动")
+    assert claimed.lease_id is not None
+    failed = store.mark_failed(
+        claimed.delivery_id,
+        retryable=True,
+        error_message="网络抖动",
+        lease_id=claimed.lease_id,
+    )
     reclaimed = store.claim_reply(failed.delivery_id)
-    delivered = store.mark_delivered(reclaimed.delivery_id)
+    assert reclaimed.lease_id is not None
+    delivered = store.mark_delivered(reclaimed.delivery_id, lease_id=reclaimed.lease_id)
 
     assert claimed.state == ReplyOutboxState.DELIVERY_IN_PROGRESS
     assert claimed.delivery_attempt_count == 1
@@ -238,7 +246,7 @@ def test_in_memory_reply_outbox_rejects_ack_before_claim() -> None:
     created = store.submit_reply(_build_submit_request())
 
     with pytest.raises(ValueError, match="当前状态不允许 delivered"):
-        store.mark_delivered(created.delivery_id)
+        store.mark_delivered(created.delivery_id, lease_id="ignored")
 
 
 @pytest.mark.unit
@@ -251,7 +259,7 @@ def test_sqlite_reply_outbox_rejects_ack_before_claim(tmp_path: Path) -> None:
     created = store.submit_reply(_build_submit_request())
 
     with pytest.raises(ValueError, match="当前状态不允许 delivered"):
-        store.mark_delivered(created.delivery_id)
+        store.mark_delivered(created.delivery_id, lease_id="ignored")
 
 
 @pytest.mark.unit
@@ -263,10 +271,16 @@ def test_sqlite_reply_outbox_rejects_ack_from_failed_retryable_without_reclaim(t
     store = SQLiteReplyOutboxStore(host_store)
     created = store.submit_reply(_build_submit_request())
     claimed = store.claim_reply(created.delivery_id)
-    failed = store.mark_failed(claimed.delivery_id, retryable=True, error_message="网络抖动")
+    assert claimed.lease_id is not None
+    failed = store.mark_failed(
+        claimed.delivery_id,
+        retryable=True,
+        error_message="网络抖动",
+        lease_id=claimed.lease_id,
+    )
 
     with pytest.raises(ValueError, match="当前状态不允许 delivered"):
-        store.mark_delivered(failed.delivery_id)
+        store.mark_delivered(failed.delivery_id, lease_id=claimed.lease_id)
 
 
 @pytest.mark.unit
@@ -278,9 +292,10 @@ def test_sqlite_reply_outbox_ack_is_idempotent_after_delivered(tmp_path: Path) -
     store = SQLiteReplyOutboxStore(host_store)
     created = store.submit_reply(_build_submit_request())
     claimed = store.claim_reply(created.delivery_id)
-    delivered = store.mark_delivered(claimed.delivery_id)
+    assert claimed.lease_id is not None
+    delivered = store.mark_delivered(claimed.delivery_id, lease_id=claimed.lease_id)
 
-    repeated = store.mark_delivered(delivered.delivery_id)
+    repeated = store.mark_delivered(delivered.delivery_id, lease_id=claimed.lease_id)
 
     assert repeated.delivery_id == delivered.delivery_id
     assert repeated.state == ReplyOutboxState.DELIVERED
@@ -312,10 +327,10 @@ def test_sqlite_reply_outbox_ack_accepts_stale_in_progress_snapshot_when_already
             return claimed
         return original_get_reply(delivery_id)
 
-    delivered = store.mark_delivered(claimed.delivery_id)
+    delivered = store.mark_delivered(claimed.delivery_id, lease_id=claimed.lease_id or "")
     monkeypatch.setattr(store, "get_reply", _stale_then_actual)
 
-    repeated = store.mark_delivered(claimed.delivery_id)
+    repeated = store.mark_delivered(claimed.delivery_id, lease_id=claimed.lease_id or "")
 
     assert delivered.state == ReplyOutboxState.DELIVERED
     assert repeated.delivery_id == delivered.delivery_id
@@ -402,12 +417,24 @@ def test_inmemory_mark_failed_is_idempotent_on_failed_terminal() -> None:
 
     store = InMemoryReplyOutboxStore()
     submitted = store.submit_reply(_build_submit_request())
-    store.claim_reply(submitted.delivery_id)
-    failed = store.mark_failed(submitted.delivery_id, retryable=False, error_message="fatal")
+    claimed = store.claim_reply(submitted.delivery_id)
+    assert claimed.lease_id is not None
+    failed = store.mark_failed(
+        submitted.delivery_id,
+        retryable=False,
+        error_message="fatal",
+        lease_id=claimed.lease_id,
+    )
     assert failed.state == ReplyOutboxState.FAILED_TERMINAL
 
-    # 再次 mark_failed：不改 last_error_message、不抛错、不改 state
-    again = store.mark_failed(submitted.delivery_id, retryable=True, error_message="second try")
+    # 再次 mark_failed：不改 last_error_message、不抛错、不改 state；
+    # FAILED_TERMINAL 在写路径前就被吸收态拦截，无需校验 lease_id。
+    again = store.mark_failed(
+        submitted.delivery_id,
+        retryable=True,
+        error_message="second try",
+        lease_id=claimed.lease_id,
+    )
     assert again.state == ReplyOutboxState.FAILED_TERMINAL
     assert again.last_error_message == "fatal"
 
@@ -420,11 +447,22 @@ def test_sqlite_mark_failed_is_idempotent_on_failed_terminal(tmp_path: Path) -> 
     host_store.initialize_schema()
     store = SQLiteReplyOutboxStore(host_store)
     submitted = store.submit_reply(_build_submit_request())
-    store.claim_reply(submitted.delivery_id)
-    failed = store.mark_failed(submitted.delivery_id, retryable=False, error_message="fatal")
+    claimed = store.claim_reply(submitted.delivery_id)
+    assert claimed.lease_id is not None
+    failed = store.mark_failed(
+        submitted.delivery_id,
+        retryable=False,
+        error_message="fatal",
+        lease_id=claimed.lease_id,
+    )
     assert failed.state == ReplyOutboxState.FAILED_TERMINAL
 
-    again = store.mark_failed(submitted.delivery_id, retryable=True, error_message="second try")
+    again = store.mark_failed(
+        submitted.delivery_id,
+        retryable=True,
+        error_message="second try",
+        lease_id=claimed.lease_id,
+    )
     assert again.state == ReplyOutboxState.FAILED_TERMINAL
     assert again.last_error_message == "fatal"
 
@@ -451,6 +489,7 @@ def test_inmemory_cleanup_stale_in_progress_reverts_old_records() -> None:
         updated_at=old_record.updated_at - timedelta(hours=1),
         delivery_attempt_count=old_record.delivery_attempt_count,
         last_error_message=old_record.last_error_message,
+        lease_id=old_record.lease_id,
     )
 
     stale = store.cleanup_stale_in_progress_deliveries(max_age=timedelta(minutes=15))
@@ -459,6 +498,9 @@ def test_inmemory_cleanup_stale_in_progress_reverts_old_records() -> None:
     assert refreshed is not None
     assert refreshed.state == ReplyOutboxState.FAILED_RETRYABLE
     assert refreshed.last_error_message == STALE_IN_PROGRESS_ERROR_MESSAGE
+    # cleanup 把 FAILED_RETRYABLE 的 lease 一并释放（置 NULL）：旧持有者后续
+    # ack/nack 用旧 lease 撞 state+lease 双条件 CAS 必失败。
+    assert refreshed.lease_id is None
 
 
 @pytest.mark.unit
@@ -486,6 +528,9 @@ def test_sqlite_cleanup_stale_in_progress_reverts_old_records(tmp_path: Path) ->
     assert refreshed is not None
     assert refreshed.state == ReplyOutboxState.FAILED_RETRYABLE
     assert refreshed.last_error_message == STALE_IN_PROGRESS_ERROR_MESSAGE
+    # cleanup 把 FAILED_RETRYABLE 的 lease 一并释放（置 NULL）：旧持有者后续
+    # ack/nack 用旧 lease 撞 state+lease 双条件 CAS 必失败。
+    assert refreshed.lease_id is None
 
 
 @pytest.mark.unit
@@ -572,7 +617,8 @@ def test_sqlite_mark_failed_sql_guard_prevents_overwriting_delivered(tmp_path: P
 
     # 模拟 TOCTOU 窗口：让 get_reply 返回 IN_PROGRESS 旧 snapshot，
     # 但实际数据库已被并发推进到 DELIVERED。
-    delivered = store.mark_delivered(claimed.delivery_id)
+    assert claimed.lease_id is not None
+    delivered = store.mark_delivered(claimed.delivery_id, lease_id=claimed.lease_id)
     assert delivered.state == ReplyOutboxState.DELIVERED
 
     stale_snapshot = claimed
@@ -588,7 +634,12 @@ def test_sqlite_mark_failed_sql_guard_prevents_overwriting_delivered(tmp_path: P
     store.get_reply = fake_get_reply  # type: ignore[method-assign]
     try:
         with pytest.raises(ValueError, match="已完成交付"):
-            store.mark_failed(claimed.delivery_id, retryable=True, error_message="late failure")
+            store.mark_failed(
+                claimed.delivery_id,
+                retryable=True,
+                error_message="late failure",
+                lease_id=claimed.lease_id,
+            )
     finally:
         store.get_reply = real_get_reply  # type: ignore[method-assign]
 
@@ -596,3 +647,419 @@ def test_sqlite_mark_failed_sql_guard_prevents_overwriting_delivered(tmp_path: P
     assert final is not None
     assert final.state == ReplyOutboxState.DELIVERED
     assert final.last_error_message is None
+
+
+@pytest.mark.unit
+def test_inmemory_cleanup_invalidates_old_lease_for_ack_and_nack() -> None:
+    """cleanup 重新分配 lease 后，旧持有者 ack/nack 必抛 LeaseExpiredError。"""
+
+    store = InMemoryReplyOutboxStore()
+    submitted = store.submit_reply(_build_submit_request())
+    claimed = store.claim_reply(submitted.delivery_id)
+    assert claimed.lease_id is not None
+    old_lease_id: str = claimed.lease_id
+
+    # 手工把 updated_at 调到很久以前以触发 cleanup。
+    old_record = claimed
+    store._records[old_record.delivery_id] = type(old_record)(
+        delivery_id=old_record.delivery_id,
+        delivery_key=old_record.delivery_key,
+        session_id=old_record.session_id,
+        scene_name=old_record.scene_name,
+        source_run_id=old_record.source_run_id,
+        reply_content=old_record.reply_content,
+        metadata=old_record.metadata,
+        state=old_record.state,
+        created_at=old_record.created_at,
+        updated_at=old_record.updated_at - timedelta(hours=1),
+        delivery_attempt_count=old_record.delivery_attempt_count,
+        last_error_message=old_record.last_error_message,
+        lease_id=old_record.lease_id,
+    )
+    stale = store.cleanup_stale_in_progress_deliveries(max_age=timedelta(minutes=15))
+    assert stale == [old_record.delivery_id]
+
+    # 新 holder 重新 claim，拿到新 lease。
+    reclaimed = store.claim_reply(old_record.delivery_id)
+    assert reclaimed.lease_id is not None
+    assert reclaimed.lease_id != old_lease_id
+
+    # 旧 holder 用旧 lease 走 mark_delivered → LeaseExpiredError（state=IN_PROGRESS，但 lease 不匹配）。
+    with pytest.raises(LeaseExpiredError):
+        store.mark_delivered(old_record.delivery_id, lease_id=old_lease_id)
+
+    # 旧 holder 用旧 lease 走 mark_failed → LeaseExpiredError。
+    with pytest.raises(LeaseExpiredError):
+        store.mark_failed(
+            old_record.delivery_id,
+            retryable=True,
+            error_message="stale",
+            lease_id=old_lease_id,
+        )
+
+    # 新 holder 仍可正常 ack。
+    delivered = store.mark_delivered(reclaimed.delivery_id, lease_id=reclaimed.lease_id)
+    assert delivered.state == ReplyOutboxState.DELIVERED
+
+
+@pytest.mark.unit
+def test_sqlite_cleanup_invalidates_old_lease_under_threading(tmp_path: Path) -> None:
+    """SQLite 跨连接 cleanup 改写 lease 后，旧 holder ack/nack 必失败；新 holder 成功。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLiteReplyOutboxStore(host_store)
+    submitted = store.submit_reply(_build_submit_request())
+    claimed = store.claim_reply(submitted.delivery_id)
+    assert claimed.lease_id is not None
+
+    # 直接通过 SQL 把 updated_at 调到很久以前。
+    from dayu.host._datetime_utils import serialize_dt
+    conn = host_store.get_connection()
+    conn.execute(
+        "UPDATE reply_outbox SET updated_at = ? WHERE delivery_id = ?",
+        (serialize_dt(claimed.updated_at - timedelta(hours=1)), claimed.delivery_id),
+    )
+    conn.commit()
+
+    # 在另一个线程里跑 cleanup（独立连接），验证跨连接 CAS。
+    cleanup_result: list[list[str]] = []
+    cleanup_error: list[BaseException] = []
+
+    def cleanup_in_thread() -> None:
+        try:
+            cleanup_result.append(
+                store.cleanup_stale_in_progress_deliveries(max_age=timedelta(minutes=15))
+            )
+        except BaseException as exc:  # pragma: no cover - defensive
+            cleanup_error.append(exc)
+
+    t = threading.Thread(target=cleanup_in_thread)
+    t.start()
+    t.join()
+    assert cleanup_error == []
+    assert cleanup_result == [[claimed.delivery_id]]
+
+    # cleanup 把记录回退为 FAILED_RETRYABLE 并分配了新 lease；新 holder 重新 claim 后再次进入 IN_PROGRESS。
+    reclaimed = store.claim_reply(claimed.delivery_id)
+    assert reclaimed.lease_id is not None
+    assert reclaimed.lease_id != claimed.lease_id
+    old_lease_id: str = claimed.lease_id
+
+    # 旧 holder 用旧 lease 在 IN_PROGRESS 状态下 mark_delivered，state 通过但 lease 不匹配 → LeaseExpiredError。
+    with pytest.raises(LeaseExpiredError):
+        store.mark_delivered(claimed.delivery_id, lease_id=old_lease_id)
+    with pytest.raises(LeaseExpiredError):
+        store.mark_failed(
+            claimed.delivery_id,
+            retryable=True,
+            error_message="stale",
+            lease_id=old_lease_id,
+        )
+
+    # 新 holder 用新 lease 仍能正常 ack。
+    delivered = store.mark_delivered(reclaimed.delivery_id, lease_id=reclaimed.lease_id)
+    assert delivered.state == ReplyOutboxState.DELIVERED
+
+
+@pytest.mark.unit
+def test_inmemory_mark_failed_rejects_stale_lease_when_record_already_failed_terminal() -> None:
+    """旧 holder 在 cleanup 抢占后又看到他人收口为 FAILED_TERMINAL 时必须抛 LeaseExpiredError。"""
+
+    store = InMemoryReplyOutboxStore()
+    submitted = store.submit_reply(_build_submit_request())
+    claimed = store.claim_reply(submitted.delivery_id)
+    assert claimed.lease_id is not None
+    old_lease_id: str = claimed.lease_id
+
+    # 模拟 cleanup 抢占：手工把 updated_at 提前 + 触发 cleanup。
+    old_record = claimed
+    store._records[old_record.delivery_id] = type(old_record)(
+        delivery_id=old_record.delivery_id,
+        delivery_key=old_record.delivery_key,
+        session_id=old_record.session_id,
+        scene_name=old_record.scene_name,
+        source_run_id=old_record.source_run_id,
+        reply_content=old_record.reply_content,
+        metadata=old_record.metadata,
+        state=old_record.state,
+        created_at=old_record.created_at,
+        updated_at=old_record.updated_at - timedelta(hours=1),
+        delivery_attempt_count=old_record.delivery_attempt_count,
+        last_error_message=old_record.last_error_message,
+        lease_id=old_record.lease_id,
+    )
+    store.cleanup_stale_in_progress_deliveries(max_age=timedelta(minutes=15))
+    new_holder = store.claim_reply(old_record.delivery_id)
+    assert new_holder.lease_id is not None
+    # 新 holder 把记录收口为 FAILED_TERMINAL。
+    new_holder_terminal = store.mark_failed(
+        new_holder.delivery_id,
+        retryable=False,
+        error_message="dropped",
+        lease_id=new_holder.lease_id,
+    )
+    assert new_holder_terminal.state == ReplyOutboxState.FAILED_TERMINAL
+
+    # 旧 holder 拿旧 lease 撞上吸收态：必须 fail-loud。
+    with pytest.raises(LeaseExpiredError):
+        store.mark_failed(
+            old_record.delivery_id,
+            retryable=True,
+            error_message="stale write after preemption",
+            lease_id=old_lease_id,
+        )
+    # 新 holder 用同一 lease 仍可幂等返回。
+    repeated = store.mark_failed(
+        new_holder.delivery_id,
+        retryable=True,
+        error_message="ignored on absorber",
+        lease_id=new_holder.lease_id,
+    )
+    assert repeated.state == ReplyOutboxState.FAILED_TERMINAL
+    assert repeated.last_error_message == "dropped"
+
+
+@pytest.mark.unit
+def test_sqlite_mark_failed_rejects_stale_lease_when_record_already_failed_terminal(
+    tmp_path: Path,
+) -> None:
+    """SQLite 路径同样要拒绝旧 lease 撞上他人 FAILED_TERMINAL 收口。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLiteReplyOutboxStore(host_store)
+    submitted = store.submit_reply(_build_submit_request())
+    claimed = store.claim_reply(submitted.delivery_id)
+    assert claimed.lease_id is not None
+    old_lease_id: str = claimed.lease_id
+
+    from dayu.host._datetime_utils import serialize_dt
+    conn = host_store.get_connection()
+    conn.execute(
+        "UPDATE reply_outbox SET updated_at = ? WHERE delivery_id = ?",
+        (serialize_dt(claimed.updated_at - timedelta(hours=1)), claimed.delivery_id),
+    )
+    conn.commit()
+    store.cleanup_stale_in_progress_deliveries(max_age=timedelta(minutes=15))
+    new_holder = store.claim_reply(claimed.delivery_id)
+    assert new_holder.lease_id is not None
+    terminal = store.mark_failed(
+        new_holder.delivery_id,
+        retryable=False,
+        error_message="dropped",
+        lease_id=new_holder.lease_id,
+    )
+    assert terminal.state == ReplyOutboxState.FAILED_TERMINAL
+
+    with pytest.raises(LeaseExpiredError):
+        store.mark_failed(
+            claimed.delivery_id,
+            retryable=True,
+            error_message="stale write after preemption",
+            lease_id=old_lease_id,
+        )
+    # 新 holder 用同一 lease 仍可幂等返回。
+    repeated = store.mark_failed(
+        claimed.delivery_id,
+        retryable=True,
+        error_message="ignored on absorber",
+        lease_id=new_holder.lease_id,
+    )
+    assert repeated.state == ReplyOutboxState.FAILED_TERMINAL
+
+
+@pytest.mark.unit
+def test_inmemory_mark_delivered_rejects_stale_lease_when_record_already_delivered() -> None:
+    """旧 holder 在抢占后撞上他人已 DELIVERED 的吸收态时必须抛 LeaseExpiredError。"""
+
+    store = InMemoryReplyOutboxStore()
+    submitted = store.submit_reply(_build_submit_request())
+    claimed = store.claim_reply(submitted.delivery_id)
+    assert claimed.lease_id is not None
+    old_lease_id: str = claimed.lease_id
+
+    old_record = claimed
+    store._records[old_record.delivery_id] = type(old_record)(
+        delivery_id=old_record.delivery_id,
+        delivery_key=old_record.delivery_key,
+        session_id=old_record.session_id,
+        scene_name=old_record.scene_name,
+        source_run_id=old_record.source_run_id,
+        reply_content=old_record.reply_content,
+        metadata=old_record.metadata,
+        state=old_record.state,
+        created_at=old_record.created_at,
+        updated_at=old_record.updated_at - timedelta(hours=1),
+        delivery_attempt_count=old_record.delivery_attempt_count,
+        last_error_message=old_record.last_error_message,
+        lease_id=old_record.lease_id,
+    )
+    store.cleanup_stale_in_progress_deliveries(max_age=timedelta(minutes=15))
+    new_holder = store.claim_reply(old_record.delivery_id)
+    assert new_holder.lease_id is not None
+    delivered = store.mark_delivered(new_holder.delivery_id, lease_id=new_holder.lease_id)
+    assert delivered.state == ReplyOutboxState.DELIVERED
+
+    with pytest.raises(LeaseExpiredError):
+        store.mark_delivered(old_record.delivery_id, lease_id=old_lease_id)
+
+    repeated = store.mark_delivered(new_holder.delivery_id, lease_id=new_holder.lease_id)
+    assert repeated.state == ReplyOutboxState.DELIVERED
+
+
+@pytest.mark.unit
+def test_sqlite_mark_delivered_rejects_stale_lease_when_record_already_delivered(
+    tmp_path: Path,
+) -> None:
+    """SQLite 路径同样要拒绝旧 lease 撞上他人 DELIVERED 吸收态。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLiteReplyOutboxStore(host_store)
+    submitted = store.submit_reply(_build_submit_request())
+    claimed = store.claim_reply(submitted.delivery_id)
+    assert claimed.lease_id is not None
+    old_lease_id: str = claimed.lease_id
+
+    from dayu.host._datetime_utils import serialize_dt
+    conn = host_store.get_connection()
+    conn.execute(
+        "UPDATE reply_outbox SET updated_at = ? WHERE delivery_id = ?",
+        (serialize_dt(claimed.updated_at - timedelta(hours=1)), claimed.delivery_id),
+    )
+    conn.commit()
+    store.cleanup_stale_in_progress_deliveries(max_age=timedelta(minutes=15))
+    new_holder = store.claim_reply(claimed.delivery_id)
+    assert new_holder.lease_id is not None
+    delivered = store.mark_delivered(new_holder.delivery_id, lease_id=new_holder.lease_id)
+    assert delivered.state == ReplyOutboxState.DELIVERED
+
+    with pytest.raises(LeaseExpiredError):
+        store.mark_delivered(claimed.delivery_id, lease_id=old_lease_id)
+
+    repeated = store.mark_delivered(claimed.delivery_id, lease_id=new_holder.lease_id)
+    assert repeated.state == ReplyOutboxState.DELIVERED
+
+
+@pytest.mark.unit
+def test_inmemory_mark_failed_retryable_releases_lease_so_old_holder_cannot_remark() -> None:
+    """In-memory: FAILED_RETRYABLE 后必须释放 lease，旧 holder 不得继续改写记录。"""
+
+    store = InMemoryReplyOutboxStore()
+    submitted = store.submit_reply(_build_submit_request())
+    claimed = store.claim_reply(submitted.delivery_id)
+    assert claimed.lease_id is not None
+    old_lease_id: str = claimed.lease_id
+    failed = store.mark_failed(
+        claimed.delivery_id,
+        retryable=True,
+        error_message="transient",
+        lease_id=old_lease_id,
+    )
+    assert failed.state == ReplyOutboxState.FAILED_RETRYABLE
+    assert failed.lease_id is None
+
+    with pytest.raises(LeaseExpiredError):
+        store.mark_failed(
+            claimed.delivery_id,
+            retryable=False,
+            error_message="should not escalate",
+            lease_id=old_lease_id,
+        )
+    with pytest.raises(LeaseExpiredError):
+        store.mark_failed(
+            claimed.delivery_id,
+            retryable=True,
+            error_message="should not rewrite",
+            lease_id=old_lease_id,
+        )
+
+    reclaimed = store.claim_reply(claimed.delivery_id)
+    assert reclaimed.lease_id is not None
+    assert reclaimed.lease_id != old_lease_id
+
+
+@pytest.mark.unit
+def test_sqlite_mark_failed_retryable_releases_lease_so_old_holder_cannot_remark(
+    tmp_path: Path,
+) -> None:
+    """SQLite: FAILED_RETRYABLE 后必须释放 lease，旧 holder 不得继续改写记录。"""
+
+    host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
+    host_store.initialize_schema()
+    store = SQLiteReplyOutboxStore(host_store)
+    submitted = store.submit_reply(_build_submit_request())
+    claimed = store.claim_reply(submitted.delivery_id)
+    assert claimed.lease_id is not None
+    old_lease_id: str = claimed.lease_id
+    failed = store.mark_failed(
+        claimed.delivery_id,
+        retryable=True,
+        error_message="transient",
+        lease_id=old_lease_id,
+    )
+    assert failed.state == ReplyOutboxState.FAILED_RETRYABLE
+    assert failed.lease_id is None
+
+    with pytest.raises(LeaseExpiredError):
+        store.mark_failed(
+            claimed.delivery_id,
+            retryable=False,
+            error_message="should not escalate",
+            lease_id=old_lease_id,
+        )
+    with pytest.raises(LeaseExpiredError):
+        store.mark_failed(
+            claimed.delivery_id,
+            retryable=True,
+            error_message="should not rewrite",
+            lease_id=old_lease_id,
+        )
+
+    reclaimed = store.claim_reply(claimed.delivery_id)
+    assert reclaimed.lease_id is not None
+    assert reclaimed.lease_id != old_lease_id
+
+
+@pytest.mark.unit
+def test_inmemory_cleanup_stale_releases_lease_so_old_holder_cannot_remark() -> None:
+    """In-memory: cleanup 抢占将记录回退到 FAILED_RETRYABLE 后 lease 必须为 NULL。"""
+
+    store = InMemoryReplyOutboxStore()
+    submitted = store.submit_reply(_build_submit_request())
+    claimed = store.claim_reply(submitted.delivery_id)
+    assert claimed.lease_id is not None
+    old_lease_id: str = claimed.lease_id
+    # 强制将 updated_at 置回过去以触发 cleanup
+    aged = ReplyOutboxRecord(
+        delivery_id=claimed.delivery_id,
+        delivery_key=claimed.delivery_key,
+        session_id=claimed.session_id,
+        scene_name=claimed.scene_name,
+        source_run_id=claimed.source_run_id,
+        reply_content=claimed.reply_content,
+        metadata=claimed.metadata,
+        state=claimed.state,
+        created_at=claimed.created_at,
+        updated_at=claimed.updated_at - timedelta(hours=1),
+        delivery_attempt_count=claimed.delivery_attempt_count,
+        last_error_message=claimed.last_error_message,
+        lease_id=claimed.lease_id,
+    )
+    store._records[claimed.delivery_id] = aged  # type: ignore[attr-defined]
+
+    rotated = store.cleanup_stale_in_progress_deliveries(max_age=timedelta(minutes=15))
+    assert rotated == [claimed.delivery_id]
+    after = store.get_reply(claimed.delivery_id)
+    assert after is not None
+    assert after.state == ReplyOutboxState.FAILED_RETRYABLE
+    assert after.lease_id is None
+
+    with pytest.raises(LeaseExpiredError):
+        store.mark_failed(
+            claimed.delivery_id,
+            retryable=False,
+            error_message="should not escalate",
+            lease_id=old_lease_id,
+        )

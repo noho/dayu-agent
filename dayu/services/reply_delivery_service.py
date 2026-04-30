@@ -63,6 +63,7 @@ def _to_reply_delivery_view(record: ReplyOutboxRecord) -> ReplyDeliveryView:
         updated_at=record.updated_at.isoformat(),
         delivery_attempt_count=record.delivery_attempt_count,
         last_error_message=record.last_error_message,
+        lease_id=record.lease_id,
     )
 
 
@@ -127,19 +128,46 @@ class ReplyDeliveryService(ReplyDeliveryServiceProtocol):
 
         return _to_reply_delivery_view(self.host.claim_reply_delivery(delivery_id))
 
-    def mark_delivery_delivered(self, delivery_id: str) -> ReplyDeliveryView:
-        """标记交付完成。"""
+    def mark_delivery_delivered(self, delivery_id: str, *, lease_id: str) -> ReplyDeliveryView:
+        """标记交付完成。
 
-        return _to_reply_delivery_view(self.host.mark_reply_delivered(delivery_id))
+        Args:
+            delivery_id: 交付记录 ID。
+            lease_id: ``claim_delivery`` 返回视图中的 fence token。
+
+        Returns:
+            更新后的交付视图。
+
+        Raises:
+            KeyError: 记录不存在时抛出。
+            LeaseExpiredError: 持有的 lease 已被 cleanup 抢占。
+        """
+
+        return _to_reply_delivery_view(
+            self.host.mark_reply_delivered(delivery_id, lease_id=lease_id)
+        )
 
     def mark_delivery_failed(self, request: ReplyDeliveryFailureRequest) -> ReplyDeliveryView:
-        """标记交付失败。"""
+        """标记交付失败。
+
+        Args:
+            request: 失败回写请求；其 ``lease_id`` 必须与 claim 返回 lease 一致。
+
+        Returns:
+            更新后的交付视图。
+
+        Raises:
+            KeyError: 记录不存在时抛出。
+            ValueError: 已完成交付时抛出。
+            LeaseExpiredError: 持有的 lease 已被 cleanup 抢占。
+        """
 
         return _to_reply_delivery_view(
             self.host.mark_reply_delivery_failed(
                 request.delivery_id,
                 retryable=request.retryable,
                 error_message=request.error_message,
+                lease_id=request.lease_id,
             )
         )
 

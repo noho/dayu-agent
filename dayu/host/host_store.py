@@ -97,7 +97,8 @@ CREATE TABLE IF NOT EXISTS reply_outbox (
     last_error_message TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}'
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    lease_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_reply_outbox_session_scene
     ON reply_outbox(session_id, scene_name);
@@ -223,6 +224,26 @@ class HostStore:
                 "resume_attempt_count",
                 "last_resume_error_message",
                 "metadata_json",
+            ),
+            db_path=self._db_path,
+        )
+        _require_table_columns(
+            conn,
+            table_name="reply_outbox",
+            required_columns=(
+                "delivery_id",
+                "delivery_key",
+                "session_id",
+                "scene_name",
+                "source_run_id",
+                "reply_content",
+                "state",
+                "delivery_attempt_count",
+                "last_error_message",
+                "created_at",
+                "updated_at",
+                "metadata_json",
+                "lease_id",
             ),
             db_path=self._db_path,
         )

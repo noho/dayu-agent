@@ -1012,12 +1012,25 @@ class WeChatDaemon:
                 continue
             if record.metadata.get("wechat_runtime_identity") != runtime_identity:
                 continue
+            # 复用 record 中持有的 lease_id 完成 fence token 双条件 CAS：本进程接续
+            # 同一渠道 identity 的旧 record，lease_id 是同一血脉的前序持有者写入；
+            # 若期间被 cleanup 抢占改写过新 lease，这里 mark_delivery_failed 会抛
+            # LeaseExpiredError，由下方 except 捕获记录后由后续扫描自然推进。
+            recovery_lease_id = record.lease_id
+            if recovery_lease_id is None:
+                Log.warning(
+                    "微信 reply delivery 启动回收跳过：record 缺少 lease_id"
+                    f" delivery_id={record.delivery_id}",
+                    module=MODULE,
+                )
+                continue
             try:
                 self.reply_delivery_service.mark_delivery_failed(
                     ReplyDeliveryFailureRequest(
                         delivery_id=record.delivery_id,
                         retryable=True,
                         error_message="上一进程在发送阶段退出，启动时回收为可重试 delivery",
+                        lease_id=recovery_lease_id,
                     )
                 )
             except Exception as exc:
@@ -1446,12 +1459,22 @@ class WeChatDaemon:
                 claimed = self.reply_delivery_service.claim_delivery(record.delivery_id)
             except (KeyError, ValueError):
                 continue
+            # claim 成功后 lease_id 必非空（store 在 acquire 路径分配）。
+            # 后续 ack/nack 必须在同一调用栈带上同一 lease_id；在该栈帧外不持久化
+            # lease 状态，因为微信投递路径无独立 webhook 阶段，全程同步收口。
+            claimed_lease_id = claimed.lease_id
+            if claimed_lease_id is None:
+                raise RuntimeError(
+                    "ReplyDeliveryService.claim_delivery 必须返回带 lease_id 的视图: "
+                    f"delivery_id={claimed.delivery_id}"
+                )
             if claimed.delivery_attempt_count > self.config.delivery_max_attempts:
                 self.reply_delivery_service.mark_delivery_failed(
                     ReplyDeliveryFailureRequest(
                         delivery_id=claimed.delivery_id,
                         retryable=False,
                         error_message="delivery retries exhausted",
+                        lease_id=claimed_lease_id,
                     )
                 )
                 Log.warning(
@@ -1471,6 +1494,7 @@ class WeChatDaemon:
                         delivery_id=claimed.delivery_id,
                         retryable=False,
                         error_message="缺少 delivery_target 或 delivery_thread_id",
+                        lease_id=claimed_lease_id,
                     )
                 )
                 continue
@@ -1481,7 +1505,9 @@ class WeChatDaemon:
                     text=claimed.reply_content,
                     group_id=group_id,
                 )
-                self.reply_delivery_service.mark_delivery_delivered(claimed.delivery_id)
+                self.reply_delivery_service.mark_delivery_delivered(
+                    claimed.delivery_id, lease_id=claimed_lease_id
+                )
                 Log.info(
                     "发送微信回复"
                     f" user={to_user_id}"
@@ -1495,6 +1521,7 @@ class WeChatDaemon:
                         delivery_id=claimed.delivery_id,
                         retryable=_is_retryable_delivery_error(exc),
                         error_message=str(exc),
+                        lease_id=claimed_lease_id,
                     )
                 )
                 Log.warning(f"微信 reply delivery 发送失败: {exc}", module=MODULE)
