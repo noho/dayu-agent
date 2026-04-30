@@ -1644,10 +1644,16 @@ class Host:
                         f"pending_turn_id={pending_turn_id}, session_id={session_id}"
                     ) from exc
                 try:
+                    # acquire 阶段（record_resume_attempt 成功）后 store 已写入
+                    # uuid4 hex lease_id；此处必为非空，否则属于 store 实现 bug，
+                    # 让 AssertionError 直接冒泡而不是用 ``or ""`` 静默送一个永远
+                    # 失配的空 lease 进 CAS（与 executor 中 _ensure_resume_lease_pair_consistent
+                    # 保证后的 assert 同构）。
+                    assert pending_turn_record.resume_lease_id is not None
                     self._pending_turn_store.record_resume_failure(
                         pending_turn_id,
                         error_message=str(exc),
-                        lease_id=pending_turn_record.resume_lease_id or "",
+                        lease_id=pending_turn_record.resume_lease_id,
                     )
                 except SessionWriteBlockedError as failure_exc:
                     # session 已不再接受写入（CLOSED / CLEARING / CLEARING_FAILED），
