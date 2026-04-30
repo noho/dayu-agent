@@ -54,7 +54,7 @@
 ### 贡献者
 
 感谢以下贡献者参与本次发布（按字母序）：
-@deanbear、@Leo Liu (noho)、@xingren23、@Zx55
+@dearbear、@Leo Liu (noho)、@xingren23、@Zx55
 
 -- 
 
