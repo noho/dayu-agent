@@ -5125,8 +5125,12 @@ def test_load_or_create_manifest_purges_stale_artifacts_when_signature_changes(
 
 
 @pytest.mark.unit
-def test_purge_chapter_artifacts_removes_final_md_and_phase_dir(tmp_path: Path) -> None:
-    """验证单章重写清理同时删除最终正文与阶段产物子目录。"""
+def test_purge_chapter_artifacts_removes_final_md_and_phase_files(tmp_path: Path) -> None:
+    """验证章节清理同时删除最终正文与平铺在 chapters/ 下的阶段产物。
+
+    阶段产物布局口径：``{display_index:02d}_{slug}.{phase}.{ext}`` 直接平铺
+    在 ``chapters/`` 目录，没有同名子目录；purge 必须按文件名前缀清理。
+    """
 
     runner = _build_runner(tmp_path)
     task = ChapterTask(
@@ -5137,14 +5141,35 @@ def test_purge_chapter_artifacts_removes_final_md_and_phase_dir(tmp_path: Path) 
     chapter_path = runner._store._chapter_file_path(task.index, task.title)
     chapter_path.parent.mkdir(parents=True, exist_ok=True)
     chapter_path.write_text("old final", encoding="utf-8")
-    phase_dir = chapter_path.parent / chapter_path.stem
-    phase_dir.mkdir(parents=True, exist_ok=True)
-    (phase_dir / "initial_write.md").write_text("draft", encoding="utf-8")
+    chapters_dir = chapter_path.parent
+    prefix = chapter_path.stem
+    phase_initial_write = chapters_dir / f"{prefix}.initial_write.md"
+    phase_initial_audit = chapters_dir / f"{prefix}.initial_audit.json"
+    phase_repair_write = chapters_dir / f"{prefix}.repair_1_write.md"
+    phase_repair_audit = chapters_dir / f"{prefix}.repair_1_audit.json"
+    for path in (
+        phase_initial_write,
+        phase_initial_audit,
+        phase_repair_write,
+        phase_repair_audit,
+    ):
+        path.write_text("stale", encoding="utf-8")
+
+    # 同目录下、属于其它章节的产物必须保留，避免误伤。
+    other_path = chapters_dir / "03_商业模式的关键机制与约束.md"
+    other_phase = chapters_dir / "03_商业模式的关键机制与约束.initial_write.md"
+    other_path.write_text("other final", encoding="utf-8")
+    other_phase.write_text("other draft", encoding="utf-8")
 
     runner._store.purge_chapter_artifacts(task)
 
     assert not chapter_path.exists()
-    assert not phase_dir.exists()
+    assert not phase_initial_write.exists()
+    assert not phase_initial_audit.exists()
+    assert not phase_repair_write.exists()
+    assert not phase_repair_audit.exists()
+    assert other_path.exists()
+    assert other_phase.exists()
 
 
 @pytest.mark.unit

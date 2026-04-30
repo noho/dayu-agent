@@ -376,11 +376,18 @@ class ArtifactStore:
         self._persist_chapter_artifacts(result)
 
     def purge_chapter_artifacts(self, task: ChapterTask) -> None:
-        """清除指定章节的全部历史产物（最终正文 + 阶段产物 + 章节子目录）。
+        """清除指定章节在 ``chapters/`` 目录下的全部历史产物。
 
         触发时机：
-        - 单章重写（``cli write --chapter``）显式重跑某章前，先把旧产物删除，
-          避免后续 fallback 路径读到陈旧的最终正文或中间稿。
+        - 单章重写（``cli write --chapter``）、并行中段章节重跑、决策章重跑、
+          概览章重跑前，先把旧产物删除，避免后续 fallback 路径读到陈旧最终正文
+          或阶段中间稿。
+
+        清理口径：
+        - 章节相关产物全部以 ``{display_index:02d}_{slug}.`` 为文件名前缀
+          平铺在 ``chapters/`` 目录下（最终正文 ``.md``、阶段产物
+          ``.{phase}.{ext}``）；按前缀一次性清理，与 ``_chapter_file_path`` /
+          ``_chapter_phase_artifact_path`` 的写入口径保持一致。
 
         Args:
             task: 待清理章节任务。
@@ -698,7 +705,16 @@ class ArtifactStore:
             )
 
     def _purge_chapter_artifacts(self, task: ChapterTask) -> None:
-        """清除指定章节的最终正文与阶段产物子目录。
+        """清除指定章节在 ``chapters/`` 目录下的所有平铺产物。
+
+        清理策略：
+        - 章节最终正文与所有阶段产物均以 ``{display_index:02d}_{slug}.``
+          为文件名前缀直接平铺在 ``chapters/`` 目录下；按前缀枚举该目录、
+          删除所有匹配文件，覆盖最终正文 ``.md``、阶段中间稿
+          (``initial_write.md``、``repair_N_*.md``/``json``、
+          ``regenerate_N_*.md``/``json`` 等)。
+        - 单文件删除失败降级为 warning，不阻塞主流程：清理是恢复保证，
+          失败时由后续阶段继续覆盖写入。
 
         Args:
             task: 待清理章节任务。
@@ -710,21 +726,27 @@ class ArtifactStore:
             无。
         """
 
-        chapter_path = self._chapter_file_path(task.index, task.title)
+        if not self._chapters_dir.exists():
+            return
+        display_index = self._chapter_display_index(index=task.index, title=task.title)
+        slug = _slugify_title(task.title)
+        prefix = f"{display_index:02d}_{slug}."
         try:
-            chapter_path.unlink(missing_ok=True)
+            entries = list(self._chapters_dir.iterdir())
         except OSError as exc:
             Log.warning(
-                f"清理章节最终正文失败: path={chapter_path} error={exc}",
+                f"枚举 chapters 目录失败，跳过章节产物清理: dir={self._chapters_dir} error={exc}",
                 module=MODULE,
             )
-        chapter_dir = chapter_path.parent / chapter_path.stem
-        if chapter_dir.exists():
+            return
+        for entry in entries:
+            if not entry.is_file() or not entry.name.startswith(prefix):
+                continue
             try:
-                shutil.rmtree(chapter_dir)
+                entry.unlink(missing_ok=True)
             except OSError as exc:
                 Log.warning(
-                    f"清理章节阶段产物目录失败: dir={chapter_dir} error={exc}",
+                    f"清理章节产物失败: path={entry} error={exc}",
                     module=MODULE,
                 )
 
