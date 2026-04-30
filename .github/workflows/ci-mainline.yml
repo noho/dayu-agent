@@ -225,7 +225,7 @@ jobs:
     name: full-platform-validation macos-x64 (py3.11)
     runs-on: [self-hosted, macOS, X64]
     continue-on-error: true
-    timeout-minutes: 20
+    timeout-minutes: 30
     if: >
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||

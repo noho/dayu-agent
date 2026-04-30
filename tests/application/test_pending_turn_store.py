@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
@@ -34,6 +35,33 @@ from dayu.host.prepared_turn import (
 from dayu.host.protocols import PendingConversationTurnStoreProtocol
 from dayu.host.run_registry import SQLiteRunRegistry
 from dayu.execution.options import ConversationMemorySettings
+
+
+def _install_strict_monotonic_now_utc(monkeypatch: pytest.MonkeyPatch) -> None:
+    """注入严格单调的 ``_now_utc``，让两次连续调用必返回不同值。
+
+    Windows 上 ``datetime.now(timezone.utc)`` 的分辨率约 15.6ms，连续调用容易
+    返回完全相同的 ``datetime``；当 store 把 ``updated_at`` 当作 fence token 的
+    一部分参与 CAS 时，相同时间戳会被误判为"快照仍然有效"。把
+    ``pending_turn_store._now_utc`` 替换成"基准时间 + 自增微秒"的实现，
+    彻底从被测路径里隔离时钟分辨率，但仍然返回与 datetime 同语义的对象，
+    保证 ``serialize_dt`` / ``parse_dt`` round-trip 不变。
+
+    Args:
+        monkeypatch: pytest 的 monkeypatch fixture。
+
+    Returns:
+        无。
+    """
+
+    counter = {"n": 0}
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def _fake_now_utc() -> datetime:
+        counter["n"] += 1
+        return base + timedelta(microseconds=counter["n"])
+
+    monkeypatch.setattr(pending_turn_store_module, "_now_utc", _fake_now_utc)
 
 
 @pytest.mark.unit
@@ -1107,12 +1135,22 @@ def test_sqlite_lease_threading_double_connection(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
-def test_inmemory_cleanup_stale_resuming_skips_when_updated_at_advanced() -> None:
+def test_inmemory_cleanup_stale_resuming_skips_when_updated_at_advanced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """InMemory：cleanup 带 stale ``expected_updated_at`` 时不得抢占 fresh lease。
 
     覆盖"Host snapshot 判 stale → 期间被合法新 holder 重新 acquire → cleanup 必须 no-op"
     的 TOCTOU 窗口。
+
+    Windows 上 ``datetime.now(timezone.utc)`` 分辨率约 15.6ms，连续调用可能
+    返回完全相同的值，会让 ``stale_record.updated_at == fresh_record.updated_at``
+    意外让最后一次 cleanup CAS 命中并抹掉 fresh lease。本测试关心的是 store
+    的 CAS 语义而非真实墙钟，因此注入严格单调的 fake 时钟，让每次写入都拿到
+    不同的 ``updated_at``，把 Windows 时钟分辨率从被测变量里隔离出去。
     """
+
+    _install_strict_monotonic_now_utc(monkeypatch)
 
     store = InMemoryPendingConversationTurnStore()
     created = store.upsert_pending_turn(
@@ -1151,8 +1189,17 @@ def test_inmemory_cleanup_stale_resuming_skips_when_updated_at_advanced() -> Non
 
 
 @pytest.mark.unit
-def test_sqlite_cleanup_stale_resuming_skips_when_updated_at_advanced(tmp_path: Path) -> None:
-    """SQLite：同结构 TOCTOU 防御：stale snapshot 不得抹掉 fresh lease。"""
+def test_sqlite_cleanup_stale_resuming_skips_when_updated_at_advanced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SQLite：同结构 TOCTOU 防御：stale snapshot 不得抹掉 fresh lease。
+
+    Windows ``datetime.now(timezone.utc)`` 分辨率约 15.6ms，与 InMemory 同因；
+    见 ``test_inmemory_cleanup_stale_resuming_skips_when_updated_at_advanced``。
+    """
+
+    _install_strict_monotonic_now_utc(monkeypatch)
 
     host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
     host_store.initialize_schema()

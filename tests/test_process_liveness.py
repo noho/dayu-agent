@@ -237,6 +237,11 @@ def _reloaded_as_windows(
 
     # 备份当前模块。
     original_module = sys.modules["dayu.process_liveness"]
+    # 备份当前 sys.platform 真值——在真实 Windows 上 finally 必须把
+    # platform 还原为 "win32"（而不是硬编码 "darwin"），否则后续 reload
+    # 会让 OwnerIdentity / is_pid_alive 等 Windows 分支符号残留为
+    # "POSIX 视角下的旧值"，跨测试污染。
+    original_platform = sys.platform
 
     import ctypes  # pyright: ignore[reportRedeclaration]
 
@@ -283,15 +288,23 @@ def _reloaded_as_windows(
         reloaded = importlib.reload(liveness_module)
         yield reloaded
     finally:
-        # 恢复原始模块。
-        monkeypatch.setattr(sys, "platform", "darwin")
-        sys.modules["dayu.process_liveness"] = original_module
-        importlib.reload(liveness_module)
-        # 恢复 ctypes 属性。
+        # 模块状态回滚，两个关键点（PR-130 在 Windows CI 挂掉的根因）：
+        # 1. ``sys.platform`` 必须还原为 *进入前的真值*（不能硬编码
+        #    "darwin"）。在真实 Windows 上若把 platform 强行改成 darwin
+        #    再 reload，模块体走 POSIX 分支不会重新绑定 ``_kernel32`` /
+        #    ``_is_pid_alive_windows``——而 ``importlib.reload`` 不会清空
+        #    模块字典，本上下文内被覆写为 fake 的这些名字会原样残留，
+        #    污染后续测试。
+        # 2. ``ctypes`` 属性必须在 reload *之前* 恢复，确保真实 Windows
+        #    上 reload 时 ``_kernel32 = ctypes.WinDLL("kernel32", ...)``
+        #    拿到的是真 WinDLL 而不是本上下文注入的 fake。
         for name in _added_attrs:
             delattr(ctypes, name)
         for name, orig_value in _saved_attrs.items():
             setattr(ctypes, name, orig_value)
+        monkeypatch.setattr(sys, "platform", original_platform)
+        sys.modules["dayu.process_liveness"] = original_module
+        importlib.reload(liveness_module)
 
 
 @pytest.mark.unit
