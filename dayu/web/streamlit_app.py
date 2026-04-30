@@ -82,9 +82,10 @@ def _prepare_host_runtime() -> PreparedHostRuntimeDependencies | None:
     """
 
     workspace_root = _resolve_workspace_root()
+    if not workspace_root.exists():
+        workspace_root.mkdir(parents=True, exist_ok=True)
 
     from dayu.log import Log
-
     Log.info(f"工作区根目录: {workspace_root}", module=MODULE)
 
     from dayu.services.startup_preparation import prepare_host_runtime_dependencies

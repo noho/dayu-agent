@@ -21,6 +21,7 @@ from dayu.contracts.events import AppEvent, AppEventType
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.contracts.reply_outbox import ReplyOutboxState
 from dayu.host.host import Host
+from dayu.host.protocols import ConversationSessionTurnExcerpt
 from dayu.host.reply_outbox_store import InMemoryReplyOutboxStore
 from dayu.state_dir_lock import StateDirSingleInstanceLock
 from dayu.services.reply_delivery_service import ReplyDeliveryService
@@ -181,6 +182,22 @@ class _FakeChatService:
 
         del session_id
         return []
+
+    def list_conversation_session_turn_excerpts(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+    ) -> list[ConversationSessionTurnExcerpt]:
+        """基础测试桩默认不暴露历史摘录。"""
+
+        del session_id, limit
+        return []
+
+    def clear_session_history(self, session_id: str) -> None:
+        """测试桩不执行会话清空。"""
+
+        del session_id
 
 
 def _filtered_flag(metadata: Mapping[str, object]) -> bool | None:

@@ -31,6 +31,7 @@ from dayu.startup.prompt_assets import FilePromptAssetStore
 from dayu.contracts.events import AppEvent, AppEventType
 from dayu.execution.options import ExecutionOptions
 from dayu.engine.events import EventType, StreamEvent
+from dayu.host.protocols import ConversationSessionTurnExcerpt
 from dayu.log import Log, LogLevel
 from dayu.services.contracts import (
     ChatPendingTurnView,
@@ -1163,6 +1164,22 @@ def _build_event_session(*event_sequences: list[StreamEvent], fail_with: Excepti
 
             del session_id
             return []
+
+        def list_conversation_session_turn_excerpts(
+            self,
+            session_id: str,
+            *,
+            limit: int,
+        ) -> list[ConversationSessionTurnExcerpt]:
+            """返回空的会话历史摘录列表。"""
+
+            del session_id, limit
+            return []
+
+        def clear_session_history(self, session_id: str) -> None:
+            """测试桩不执行会话清空。"""
+
+            del session_id
 
     _FakeSession.call_log = call_log
     _FakeSession.request_log = request_log

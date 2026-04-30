@@ -1354,6 +1354,54 @@ class ConversationalExecutionGatewayProtocol(
 
 
 @runtime_checkable
+class ChatServiceHostProtocol(
+    ConversationalExecutionGatewayProtocol,
+    Protocol,
+):
+    """ChatService 可见的宿主能力完整协议。
+
+    在 ``ConversationalExecutionGatewayProtocol`` 基础上追加历史读取与
+    会话清空能力。
+    """
+
+    def list_conversation_session_turn_excerpts(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+    ) -> list[ConversationSessionTurnExcerpt]:
+        """读取指定 session 的最近 conversation 单轮摘录。
+
+        Args:
+            session_id: 目标 session ID。
+            limit: 最多返回的 turn 数量。
+
+        Returns:
+            最近单轮摘录列表，按时间从旧到新排列；archive 缺失或 history
+            为空则返回空列表。
+
+        Raises:
+            无。
+        """
+        ...
+
+    def clear_session_history(self, session_id: str) -> None:
+        """清空指定 session 的对话历史与五真源。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Raises:
+            KeyError: session 不存在时抛出。
+            ConversationClearRejectedError: 预检命中拒绝条件。
+            ConversationClearStaleError: archive 乐观锁冲突。
+            ConversationClearPartiallyAppliedError: archive 写已生效但补偿
+                delete 仍未收敛。
+        """
+        ...
+
+
+@runtime_checkable
 class ReplyDeliveryGatewayProtocol(
     HostedExecutionGatewayProtocol,
     ReplyOutboxOperationsProtocol,
@@ -1423,6 +1471,7 @@ class HostAdminOperationsProtocol(
 __all__ = [
     "ConversationSessionDigest",
     "ConversationSessionTurnExcerpt",
+    "ChatServiceHostProtocol",
     "ConversationalExecutionGatewayProtocol",
     "ConcurrencyGovernorProtocol",
     "ConcurrencyPermit",

@@ -10,7 +10,11 @@ from typing import AsyncIterator, Callable
 from dayu.contracts.agent_execution import ExecutionContract
 from dayu.contracts.events import AppEvent
 from dayu.contracts.session import SessionSource
-from dayu.host.protocols import ConversationalExecutionGatewayProtocol, PendingTurnSummary
+from dayu.host.protocols import (
+    ChatServiceHostProtocol,
+    ConversationSessionTurnExcerpt,
+    PendingTurnSummary,
+)
 from dayu.contracts.execution_metadata import normalize_execution_delivery_context
 from dayu.prompting.scene_definition import PromptManifestError
 from dayu.services.concurrency_lanes import resolve_contract_concurrency_lane
@@ -43,7 +47,7 @@ class _PreparedChatTurnContext:
 class ChatService(ChatServiceProtocol):
     """聊天服务。"""
 
-    host: ConversationalExecutionGatewayProtocol
+    host: ChatServiceHostProtocol
     scene_execution_acceptance_preparer: SceneExecutionAcceptancePreparer
     default_scene_name: str
     company_name_resolver: Callable[[str], str] | None = None
@@ -174,6 +178,49 @@ class ChatService(ChatServiceProtocol):
         """
 
         return self.host.cleanup_stale_pending_turns(session_id=session_id)
+
+    def list_conversation_session_turn_excerpts(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+    ) -> list[ConversationSessionTurnExcerpt]:
+        """读取指定 session 的最近 conversation 单轮摘录。
+
+        委托 ``Host.list_conversation_session_turn_excerpts``，返回含
+        ``reasoning_text`` 的稳定 read model。
+
+        Args:
+            session_id: 目标 session ID。
+            limit: 最多返回的 turn 数量。
+
+        Returns:
+            最近单轮摘录列表，按时间从旧到新排列；archive 缺失或 history
+            为空则返回空列表。
+
+        Raises:
+            无。
+        """
+
+        return self.host.list_conversation_session_turn_excerpts(session_id=session_id, limit=limit)
+
+    def clear_session_history(self, session_id: str) -> None:
+        """清空指定 session 的对话历史与五真源。
+
+        委托 ``Host.clear_session_history``，异常直接透传，由 UI 层按语义
+        分支处置。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Raises:
+            KeyError: session 不存在。
+            ConversationClearRejectedError: 预检命中拒绝条件。
+            ConversationClearStaleError: archive 乐观锁冲突。
+            ConversationClearPartiallyAppliedError: 部分生效。
+        """
+
+        self.host.clear_session_history(session_id)
 
     def _session_coordinator(self) -> ServiceSessionCoordinator:
         """构造当前服务使用的会话协调器。"""

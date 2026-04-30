@@ -6,6 +6,7 @@ from typing import AsyncIterator, Protocol, runtime_checkable
 
 from dayu.contracts.events import AppEvent, PublishedRunEventProtocol
 from dayu.fins.domain.document_models import FilingSummary
+from dayu.host.protocols import ConversationSessionTurnExcerpt
 from dayu.services.contracts import (
     ChatPendingTurnView,
     ChatResumeRequest,
@@ -76,6 +77,41 @@ class ChatServiceProtocol(BaseServiceProtocol, Protocol):
 
         Raises:
             无。
+        """
+        ...
+
+    def list_conversation_session_turn_excerpts(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+    ) -> list[ConversationSessionTurnExcerpt]:
+        """读取指定 session 的最近 conversation 单轮摘录。
+
+        Args:
+            session_id: 目标 session ID。
+            limit: 最多返回的 turn 数量。
+
+        Returns:
+            最近单轮摘录列表，按时间从旧到新排列；archive 缺失或 history
+            为空则返回空列表。
+
+        Raises:
+            无。
+        """
+        ...
+
+    def clear_session_history(self, session_id: str) -> None:
+        """清空指定 session 的对话历史与五真源。
+
+        Args:
+            session_id: 目标 session ID。
+
+        Raises:
+            KeyError: session 不存在。
+            ConversationClearRejectedError: 预检命中拒绝条件。
+            ConversationClearStaleError: archive 乐观锁冲突。
+            ConversationClearPartiallyAppliedError: 部分生效。
         """
         ...
 
