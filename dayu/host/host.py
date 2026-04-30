@@ -1836,7 +1836,9 @@ class Host:
             持久化后的交付记录。
 
         Raises:
-            ValueError: 提交参数非法或 delivery_key 负载冲突时抛出。
+            ValueError: 提交参数非法时抛出。
+            ReplyOutboxDeliveryKeyConflictError: ``delivery_key`` 已存在但负载与既有
+                记录不一致时抛出（``ValueError`` 子类，调用方可按精确类型识别）。
         """
 
         return self._reply_outbox_store.submit_reply(request)

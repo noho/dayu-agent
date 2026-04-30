@@ -19,7 +19,12 @@ from typing import TYPE_CHECKING
 
 
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normalize_execution_delivery_context
-from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, ReplyOutboxSubmitRequest
+from dayu.contracts.reply_outbox import (
+    ReplyOutboxDeliveryKeyConflictError,
+    ReplyOutboxRecord,
+    ReplyOutboxState,
+    ReplyOutboxSubmitRequest,
+)
 from dayu.host._session_barrier import ensure_session_active
 from dayu.host.host_store import HostStore, write_transaction
 from dayu.host.lease import LeaseExpiredError, generate_lease_id
@@ -120,8 +125,26 @@ def _normalize_submit_request(request: ReplyOutboxSubmitRequest) -> ReplyOutboxS
     )
 
 
+
 def _ensure_submit_request_matches(existing: ReplyOutboxRecord, request: ReplyOutboxSubmitRequest) -> None:
-    """校验相同 delivery_key 的提交负载一致。"""
+    """校验相同 delivery_key 的提交负载一致。
+
+    Args:
+        existing: 已落库的 reply outbox 记录。
+        request: 当前 submit 提交的归一化请求。
+
+    Returns:
+        无；负载一致时静默通过，调用方按幂等处理。
+
+    Raises:
+        ReplyOutboxDeliveryKeyConflictError: 同一 ``delivery_key`` 已存在的记录
+            与本次 submit payload 不一致时抛出，异常携带 ``existing_payload`` /
+            ``attempted_payload`` 用于结构化日志与告警。语义：``delivery_key``
+            当前由 ``source_run_id`` 派生（``web:{run_id}`` / ``wechat:{run_id}``），
+            同 key 不同 payload 表示同一 run 产出了分叉的回复，本质是"重复执行 /
+            业务一致性事故"，不是幂等成功；调用方静默接受会让用户视角"以为提交成功，
+            实际发的是另一份回复"。
+    """
 
     if (
         existing.delivery_key != request.delivery_key
@@ -131,9 +154,26 @@ def _ensure_submit_request_matches(existing: ReplyOutboxRecord, request: ReplyOu
         or existing.reply_content != request.reply_content
         or existing.metadata != request.metadata
     ):
-        raise ValueError(
-            "delivery_key 已存在且负载不一致: "
-            f"delivery_key={request.delivery_key}"
+        existing_payload: dict[str, object] = {
+            "delivery_key": existing.delivery_key,
+            "session_id": existing.session_id,
+            "scene_name": existing.scene_name,
+            "source_run_id": existing.source_run_id,
+            "reply_content": existing.reply_content,
+            "metadata": existing.metadata,
+        }
+        attempted_payload: dict[str, object] = {
+            "delivery_key": request.delivery_key,
+            "session_id": request.session_id,
+            "scene_name": request.scene_name,
+            "source_run_id": request.source_run_id,
+            "reply_content": request.reply_content,
+            "metadata": request.metadata,
+        }
+        raise ReplyOutboxDeliveryKeyConflictError(
+            delivery_key=request.delivery_key,
+            existing_payload=existing_payload,
+            attempted_payload=attempted_payload,
         )
 
 

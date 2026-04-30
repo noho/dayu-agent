@@ -218,6 +218,87 @@ def test_wechat_process_once_uses_reply_outbox_and_marks_delivered(tmp_path: Pat
 
 
 @pytest.mark.unit
+def test_wechat_process_once_logs_delivery_key_conflict_without_breaking_main_flow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """delivery_key 冲突应通过结构化日志告警，主处理流程不被打断，既有 record 不动。"""
+
+    from dayu.services.contracts import ReplyDeliverySubmitRequest
+
+    store = FileWeChatStateStore(tmp_path / ".wechat")
+    store.save(WeChatDaemonState(bot_token="token-1", base_url="https://ilink.example"))
+    reply_delivery_service = _build_reply_delivery_service()
+
+    session_id = build_wechat_session_id("user@im.wechat")
+    seeded = reply_delivery_service.submit_reply_for_delivery(
+        ReplyDeliverySubmitRequest(
+            delivery_key="wechat:run_wechat_conflict",
+            session_id=session_id,
+            scene_name="wechat",
+            source_run_id="run_wechat_conflict",
+            reply_content="先到的答复",
+            metadata={
+                "delivery_channel": "wechat",
+                "delivery_target": "user@im.wechat",
+                "delivery_thread_id": "ctx-conflict",
+                "filtered": False,
+            },
+        )
+    )
+
+    chat_service = _FakeChatService(
+        scripted_turns=[
+            _ScriptedTurn(
+                events=(
+                    AppEvent(
+                        type=AppEventType.FINAL_ANSWER,
+                        payload={"content": "分叉答复", "degraded": False},
+                        meta={"run_id": "run_wechat_conflict"},
+                    ),
+                )
+            )
+        ]
+    )
+    client = _FakeIlinkClient(
+        updates_payloads=[
+            {
+                "ret": 0,
+                "msgs": [_build_text_message(text="问题", context_token="ctx-conflict")],
+                "get_updates_buf": "cursor-1",
+            }
+        ]
+    )
+    daemon = WeChatDaemon(
+        chat_service=chat_service,
+        reply_delivery_service=reply_delivery_service,
+        state_store=store,
+        client=client,
+    )
+
+    errors: list[str] = []
+    from dayu.log import Log as _Log
+
+    monkeypatch.setattr(
+        _Log,
+        "error",
+        lambda message, exc_info=False, *, module=None: errors.append(str(message)),
+    )
+
+    # 主处理流程不应抛错；冲突被显式吞掉并记日志。
+    asyncio.run(daemon.process_once())
+
+    assert any("REPLY_OUTBOX_DELIVERY_KEY_CONFLICT" in entry for entry in errors)
+    assert any("wechat:run_wechat_conflict" in entry for entry in errors)
+
+    # 既有 record 不被改成 FAILED_TERMINAL（冲突发生在 submit 阶段，不应误改既有 record 状态）。
+    # 正常 cleanup / claim / deliver 链路可以自然推进既有 record；reply_content 一定保持原 payload。
+    persisted = reply_delivery_service.get_delivery(seeded.delivery_id)
+    assert persisted is not None
+    assert persisted.state != ReplyOutboxState.FAILED_TERMINAL
+    assert persisted.reply_content == "先到的答复"
+
+
+@pytest.mark.unit
 def test_wechat_process_once_marks_retryable_failure_when_delivery_errors(tmp_path: Path) -> None:
     """WeChat daemon 发送失败时应把 outbox 标记为可重试失败。"""
 

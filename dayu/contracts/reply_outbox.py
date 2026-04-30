@@ -72,10 +72,14 @@ class ReplyOutboxRecord:
         updated_at: 最近更新时间。
         delivery_attempt_count: 已进入发送中的次数。
         last_error_message: 最近一次失败消息。
-        lease_id: 当前持有者的 fence token。仅在 ``DELIVERY_IN_PROGRESS`` 状态下有
-            意义，由 ``claim_reply`` 在成功 acquire 时分配；mark_delivered/mark_failed
-            必须携带本字段做双条件 CAS，cleanup 抢占时分配新 lease_id 让旧持有者
-            迟到回写必失败；其他状态下为 ``None``。
+        lease_id: 当前持有者的 fence token，由 ``claim_reply`` 在成功 acquire 时
+            分配。``DELIVERY_IN_PROGRESS`` 与 ``DELIVERED`` / ``FAILED_TERMINAL``
+            （吸收态）下保留 lease：mark_delivered / mark_failed 必须携带本字段做
+            双条件 CAS，吸收态的幂等返回也用 lease 等值校验，过滤"旧持有者写入
+            已被接管的记录"。``PENDING_DELIVERY`` / ``FAILED_RETRYABLE`` 下为
+            ``None``——这两个状态意味着"等待下一次 claim 重新分配 ownership"，
+            ``mark_failed(retryable=True)`` 与 ``cleanup_stale_in_progress_deliveries``
+            在落库时把 lease 显式置 ``None``，旧持有者持有的旧 lease 因此立即失效。
 
     Returns:
         无。
@@ -100,7 +104,54 @@ class ReplyOutboxRecord:
 
 
 __all__ = [
+    "ReplyOutboxDeliveryKeyConflictError",
     "ReplyOutboxRecord",
     "ReplyOutboxState",
     "ReplyOutboxSubmitRequest",
 ]
+
+
+class ReplyOutboxDeliveryKeyConflictError(ValueError):
+    """同 ``delivery_key`` 二次 submit 携带的 payload 与已落库记录不一致。
+
+    该异常是 reply outbox 的稳定契约面：上游通道（Web / WeChat）允许从
+    Service / Host 链路接收并 fail-closed 处理；放在 ``dayu.contracts.reply_outbox``
+    可以让 UI 层只依赖契约模块，不被 Host 内部仓储实现的模块结构变更绑死。
+
+    继承自 ``ValueError`` 以保持向上层 service / web / wechat 的兼容契约
+    （Host 文档与 Service docstring 长期声明 submit 失败抛 ``ValueError``），
+    同时通过精确类型让调用方能够 fail-closed 显式 catch、写结构化告警，
+    避免与"参数非法 / 字段为空"这类普通 ValueError 混在一起静默吞掉。
+
+    携带 ``existing_payload`` 与 ``attempted_payload`` 字段，便于调用方在
+    日志中输出 payload diff，定位"同一 run 产生分叉回复"的业务事故源头。
+    """
+
+    def __init__(
+        self,
+        *,
+        delivery_key: str,
+        existing_payload: dict[str, object],
+        attempted_payload: dict[str, object],
+    ) -> None:
+        """构造冲突异常。
+
+        Args:
+            delivery_key: 触发冲突的幂等键。
+            existing_payload: 已落库记录的 payload 快照。
+            attempted_payload: 本次 submit 提交的 payload 快照。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        super().__init__(
+            "delivery_key 已存在且负载不一致: "
+            f"delivery_key={delivery_key}"
+        )
+        self.delivery_key = delivery_key
+        self.existing_payload = existing_payload
+        self.attempted_payload = attempted_payload

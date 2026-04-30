@@ -235,6 +235,67 @@ def test_chat_stream_consumer_submits_web_reply_outbox() -> None:
 
 
 @pytest.mark.unit
+def test_chat_stream_consumer_logs_delivery_key_conflict_without_breaking_existing_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """delivery_key 冲突应通过结构化日志告警，且既有 record 状态不被改写。"""
+
+    service = _build_reply_delivery_service()
+
+    # 先种入一条 PENDING_DELIVERY 记录。
+    seeded = service.submit_reply_for_delivery(
+        ReplyDeliverySubmitRequest(
+            delivery_key="web:run_conflict_1",
+            session_id="session_web_conflict",
+            scene_name="web_chat",
+            source_run_id="run_conflict_1",
+            reply_content="先到的答案",
+            metadata={
+                "delivery_channel": "web",
+                "delivery_target": "session_web_conflict",
+                "delivery_thread_id": "session_web_conflict",
+                "filtered": False,
+            },
+        )
+    )
+
+    async def _stream():
+        yield AppEvent(
+            type=AppEventType.FINAL_ANSWER,
+            payload={"content": "分叉答案", "filtered": False},
+            meta={"run_id": "run_conflict_1"},
+        )
+
+    errors: list[str] = []
+    from dayu.log import Log as _Log
+
+    monkeypatch.setattr(
+        _Log,
+        "error",
+        lambda message, exc_info=False, *, module=None: errors.append(str(message)),
+    )
+
+    asyncio.run(
+        _consume_stream(
+            _stream(),
+            reply_delivery_service=service,
+            session_id="session_web_conflict",
+            scene_name="web_chat",
+        )
+    )
+
+    # 既有记录状态保持原样，未被改成 FAILED_TERMINAL，也未被覆盖 reply_content。
+    persisted = service.get_delivery(seeded.delivery_id)
+    assert persisted is not None
+    assert persisted.state == ReplyOutboxState.PENDING_DELIVERY
+    assert persisted.reply_content == "先到的答案"
+
+    # 结构化日志带 grep tag 与冲突字段。
+    assert any("REPLY_OUTBOX_DELIVERY_KEY_CONFLICT" in entry for entry in errors)
+    assert any("web:run_conflict_1" in entry for entry in errors)
+
+
+@pytest.mark.unit
 def test_chat_stream_consumer_warns_when_reply_ready_but_run_id_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

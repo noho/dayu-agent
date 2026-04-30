@@ -6,11 +6,13 @@ import asyncio
 from typing import Any
 
 from dayu.contracts.events import AppEventType
+from dayu.contracts.reply_outbox import ReplyOutboxDeliveryKeyConflictError
 from dayu.log import Log
 from dayu.services.contracts import ChatResumeRequest, ChatTurnRequest, ChatTurnSubmission, ReplyDeliverySubmitRequest
 from dayu.services.protocols import ChatServiceProtocol, ReplyDeliveryServiceProtocol
 
 MODULE = "WEB.CHAT"
+DELIVERY_KEY_CONFLICT_TAG = "REPLY_OUTBOX_DELIVERY_KEY_CONFLICT"
 
 
 class _InvalidChatSubmissionError(Exception):
@@ -215,7 +217,9 @@ async def _consume_stream(
 
     Raises:
         无：所有内部异常被记录后吞掉，避免 asyncio Task 静默存储异常导致
-        线上问题难以定位。
+        线上问题难以定位。``ReplyOutboxDeliveryKeyConflictError`` 单独分支
+        记录结构化日志（带 ``DELIVERY_KEY_CONFLICT_TAG``），既有 record
+        状态保持原样，由正常 cleanup / claim 链路自然推进。
     """
 
     try:
@@ -224,6 +228,16 @@ async def _consume_stream(
             reply_delivery_service=reply_delivery_service,
             session_id=session_id,
             scene_name=scene_name,
+        )
+    except ReplyOutboxDeliveryKeyConflictError as conflict:
+        # delivery_key 由 source_run_id 派生，同 key 不同 payload 表示同一 run 产出了分叉的回复，
+        # 属于业务一致性事故而非幂等成功；显式失败并通过结构化日志驱动告警，既有 record 不动。
+        Log.error(
+            f"{DELIVERY_KEY_CONFLICT_TAG}: chat reply 提交冲突 "
+            f"session={session_id} delivery_key={conflict.delivery_key} "
+            f"existing_payload={conflict.existing_payload} "
+            f"attempted_payload={conflict.attempted_payload}",
+            module=MODULE,
         )
     except Exception as exc:
         Log.error(

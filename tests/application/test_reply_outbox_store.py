@@ -8,7 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from dayu.contracts.reply_outbox import ReplyOutboxRecord, ReplyOutboxState, ReplyOutboxSubmitRequest
+from dayu.contracts.reply_outbox import (
+    ReplyOutboxDeliveryKeyConflictError,
+    ReplyOutboxRecord,
+    ReplyOutboxState,
+    ReplyOutboxSubmitRequest,
+)
 from dayu.host.host_store import HostStore
 from dayu.host.lease import LeaseExpiredError
 from dayu.host.protocols import ReplyOutboxStoreProtocol
@@ -67,9 +72,41 @@ def test_sqlite_reply_outbox_rejects_conflicting_payload_for_same_delivery_key(t
     host_store = HostStore(tmp_path / ".host" / "dayu_host.db")
     host_store.initialize_schema()
     store = SQLiteReplyOutboxStore(host_store)
-    store.submit_reply(_build_submit_request())
+    existing_record = store.submit_reply(_build_submit_request())
 
-    with pytest.raises(ValueError, match="delivery_key 已存在且负载不一致"):
+    conflicting_request = ReplyOutboxSubmitRequest(
+        delivery_key="wechat:run_1",
+        session_id="session_1",
+        scene_name="wechat",
+        source_run_id="run_1",
+        reply_content="另一个答案",
+        metadata={"delivery_channel": "wechat", "delivery_target": "user_1"},
+    )
+
+    with pytest.raises(ReplyOutboxDeliveryKeyConflictError) as excinfo:
+        store.submit_reply(conflicting_request)
+
+    error = excinfo.value
+    assert isinstance(error, ValueError)
+    assert error.delivery_key == "wechat:run_1"
+    assert error.attempted_payload["reply_content"] == "另一个答案"
+    assert error.existing_payload["reply_content"] == "分析结论"
+
+    # 既有 record 状态保持原样：冲突发生在 submit 阶段，不应误改 PENDING_DELIVERY 至 FAILED_TERMINAL。
+    persisted = store.get_reply(existing_record.delivery_id)
+    assert persisted is not None
+    assert persisted.state == ReplyOutboxState.PENDING_DELIVERY
+    assert persisted.reply_content == "分析结论"
+
+
+@pytest.mark.unit
+def test_in_memory_reply_outbox_rejects_conflicting_payload_for_same_delivery_key() -> None:
+    """In-Memory 替身需与 SQLite 同源抛出精确冲突类型。"""
+
+    store = InMemoryReplyOutboxStore()
+    existing_record = store.submit_reply(_build_submit_request())
+
+    with pytest.raises(ReplyOutboxDeliveryKeyConflictError) as excinfo:
         store.submit_reply(
             ReplyOutboxSubmitRequest(
                 delivery_key="wechat:run_1",
@@ -80,6 +117,12 @@ def test_sqlite_reply_outbox_rejects_conflicting_payload_for_same_delivery_key(t
                 metadata={"delivery_channel": "wechat", "delivery_target": "user_1"},
             )
         )
+
+    assert excinfo.value.delivery_key == "wechat:run_1"
+    persisted = store.get_reply(existing_record.delivery_id)
+    assert persisted is not None
+    assert persisted.state == ReplyOutboxState.PENDING_DELIVERY
+    assert persisted.reply_content == "分析结论"
 
 
 @pytest.mark.unit

@@ -83,7 +83,9 @@ class ReplyDeliveryService(ReplyDeliveryServiceProtocol):
             交付视图。
 
         Raises:
-            ValueError: 提交参数非法或幂等键负载冲突时抛出。
+            ValueError: 提交参数非法时抛出。
+            ReplyOutboxDeliveryKeyConflictError: ``delivery_key`` 已存在但负载与
+                既有记录不一致时抛出（``ValueError`` 子类）。
         """
 
         record = self.host.submit_reply_for_delivery(

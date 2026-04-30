@@ -24,6 +24,7 @@ from dayu.log import Log
 from dayu.contracts.reply_outbox import ReplyOutboxState
 from dayu.contracts.events import AppEvent, AppEventType
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext
+from dayu.contracts.reply_outbox import ReplyOutboxDeliveryKeyConflictError
 from dayu.services.pending_turns import has_resumable_pending_turn
 from dayu.state_dir_lock import StateDirSingleInstanceLock
 from dayu.services.contracts import (
@@ -45,6 +46,7 @@ from dayu.wechat.state_store import (
 )
 
 MODULE = "APP.WECHAT"
+DELIVERY_KEY_CONFLICT_TAG = "REPLY_OUTBOX_DELIVERY_KEY_CONFLICT"
 ResultType = TypeVar("ResultType")
 _WECHAT_DAEMON_LOCK_FILE_NAME = ".daemon.lock"
 _WECHAT_DAEMON_LOCK_REGION_BYTES = 1
@@ -1233,14 +1235,26 @@ class WeChatDaemon:
             )
             return True
 
-        self._submit_reply_for_delivery(
-            session_id=session_id,
-            scene_name=self.config.scene_name,
-            source_run_id=reply.source_run_id,
-            reply_text=reply_text,
-            metadata=_rebuild_wechat_delivery_context(delivery_context, filtered=reply.filtered),
-            filtered=reply.filtered,
-        )
+        try:
+            self._submit_reply_for_delivery(
+                session_id=session_id,
+                scene_name=self.config.scene_name,
+                source_run_id=reply.source_run_id,
+                reply_text=reply_text,
+                metadata=_rebuild_wechat_delivery_context(delivery_context, filtered=reply.filtered),
+                filtered=reply.filtered,
+            )
+        except ReplyOutboxDeliveryKeyConflictError as conflict:
+            # delivery_key 由 source_run_id 派生，同 key 不同 payload 表示同一 run 产出了
+            # 分叉的回复；显式日志告警，既有 record 不动，由正常 cleanup / claim 链路推进。
+            Log.error(
+                f"{DELIVERY_KEY_CONFLICT_TAG}: 微信 reply 提交冲突 "
+                f"session={session_id} delivery_key={conflict.delivery_key} "
+                f"existing_payload={conflict.existing_payload} "
+                f"attempted_payload={conflict.attempted_payload}",
+                module=MODULE,
+            )
+            return True
         await self._deliver_pending_replies(session_id=session_id)
         return True
 
@@ -1391,14 +1405,25 @@ class WeChatDaemon:
                 module=MODULE,
             )
             return
-        self._submit_reply_for_delivery(
-            session_id=submission.session_id,
-            scene_name=self.config.scene_name,
-            source_run_id=reply.source_run_id,
-            reply_text=reply_text,
-            metadata=_rebuild_wechat_delivery_context(pending_turn.metadata, filtered=reply.filtered),
-            filtered=reply.filtered,
-        )
+        try:
+            self._submit_reply_for_delivery(
+                session_id=submission.session_id,
+                scene_name=self.config.scene_name,
+                source_run_id=reply.source_run_id,
+                reply_text=reply_text,
+                metadata=_rebuild_wechat_delivery_context(pending_turn.metadata, filtered=reply.filtered),
+                filtered=reply.filtered,
+            )
+        except ReplyOutboxDeliveryKeyConflictError as conflict:
+            Log.error(
+                f"{DELIVERY_KEY_CONFLICT_TAG}: 微信 pending turn reply 提交冲突 "
+                f"session={submission.session_id} pending_turn={pending_turn_id} "
+                f"delivery_key={conflict.delivery_key} "
+                f"existing_payload={conflict.existing_payload} "
+                f"attempted_payload={conflict.attempted_payload}",
+                module=MODULE,
+            )
+            return
         await self._deliver_pending_replies(session_id=submission.session_id)
 
     def _submit_reply_for_delivery(
