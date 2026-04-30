@@ -15,7 +15,9 @@ from dayu.cli.commands.init import (
     _CUSTOM_OPENAI_DEFAULT_MAX_CONTEXT_TOKENS,
     _CustomOpenAIConfig,
     _GEMINI_SUB_OPTIONS,
-    _GeminiSubOption,
+    _MIMO_SUB_OPTIONS,
+    _DEEPSEEK_SUB_OPTIONS,
+    _ProviderSubOption,
     _HF_MIRROR_URL,
     _INIT_ROLE_KEY,
     _OLLAMA_CATALOG_KEY,
@@ -26,9 +28,8 @@ from dayu.cli.commands.init import (
     _build_ollama_catalog_entry,
     _set_write_chapter_lane,
     _PROVIDER_OPTION_CUSTOM_OPENAI,
-    _PROVIDER_OPTION_DEEPSEEK_FLASH,
-    _PROVIDER_OPTION_DEEPSEEK_PRO,
-    _PROVIDER_OPTION_MIMO_PRO,
+    _PROVIDER_OPTION_DEEPSEEK,
+    _PROVIDER_OPTION_MIMO,
     _PROVIDER_OPTION_OLLAMA,
     _ROLE_NON_THINKING,
     _ROLE_THINKING,
@@ -841,7 +842,11 @@ class TestRunInit:
         # Mock 交互输入: 输入 key，跳过可选 key x3，HF 镜像回车(默认Y)，HF_TOKEN 跳过
         inputs = iter(["sk-test-key-123", "", "", "", "", "", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_sub_option",
+            lambda _provider_key: _DEEPSEEK_SUB_OPTIONS[1],
+        )
 
         # Mock 环境变量持久化
         monkeypatch.setattr(
@@ -917,7 +922,11 @@ class TestRunInit:
             "dayu.cli.commands.init._run_init_prewarm",
             lambda **_kwargs: (True, ""),
         )
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_sub_option",
+            lambda _provider_key: _DEEPSEEK_SUB_OPTIONS[1],
+        )
 
         base = tmp_path / "workspace"
         base.mkdir()
@@ -934,6 +943,158 @@ class TestRunInit:
             (base / "config" / "prompts" / "manifests" / "write.json").read_text(encoding="utf-8")
         )
         assert result_manifest["model"]["default_name"] == "deepseek-v4-flash"
+
+    def test_mimo_sub_option_overrides_api_key_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Mimo 端到端：一级 ProviderOption.api_key_name="" 时，二级 sub_option
+        的 ``api_key_name_override`` 必须被用作 effective_api_key_name 持久化。
+
+        关键不变量：
+        - persist_env_var 收到的 key 必须是 ``MIMO_PLAN_API_KEY``，不能为空字符串
+        - manifest 写入 ``mimo-v2.5-pro-plan`` / ``mimo-v2.5-pro-thinking-plan``
+        """
+        src = tmp_path / "pkg_config"
+        src.mkdir()
+        (src / "run.json").write_text("{}", encoding="utf-8")
+        manifests = src / "prompts" / "manifests"
+        manifests.mkdir(parents=True)
+        (manifests / "write.json").write_text(
+            json.dumps({"model": {"default_name": "mimo-v2.5-pro-plan"}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            "dayu.cli.commands.init.resolve_package_config_path",
+            lambda: src,
+        )
+        pkg_assets = tmp_path / "pkg_assets"
+        pkg_assets.mkdir()
+        (pkg_assets / "定性分析模板.md").write_text("# 模板", encoding="utf-8")
+        monkeypatch.setattr(
+            "dayu.cli.commands.init.resolve_package_assets_path",
+            lambda: pkg_assets,
+        )
+
+        _clear_provider_env_vars(monkeypatch)
+        for k in ("TAVILY_API_KEY", "SERPER_API_KEY", "FMP_API_KEY"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.delenv(SEC_USER_AGENT_ENV, raising=False)
+        monkeypatch.delenv("HF_ENDPOINT", raising=False)
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.setattr("dayu.cli.commands.init._is_hf_hub_reachable", lambda: True)
+
+        # 输入: API Key、3 个可选 search key 跳过、HF 镜像跳过、HF_TOKEN 跳过、SEC UA 跳过
+        inputs = iter(["sk-mimo-plan-test", "", "", "", "", "", ""])
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_selection",
+            lambda: _PROVIDER_OPTION_MIMO,
+        )
+        # 二级菜单返回 Plan（_MIMO_SUB_OPTIONS[0]，api_key_name_override=MIMO_PLAN_API_KEY）
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_sub_option",
+            lambda _provider_key: _MIMO_SUB_OPTIONS[0],
+        )
+
+        persist_calls: list[tuple[str, str]] = []
+
+        def _record_persist(key: str, value: str) -> tuple[str, bool]:
+            persist_calls.append((key, value))
+            return "~/.zshrc", True
+
+        monkeypatch.setattr("dayu.cli.commands.init._persist_env_var", _record_persist)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._run_init_prewarm",
+            lambda **_kwargs: (True, ""),
+        )
+
+        base = tmp_path / "workspace"
+        base.mkdir()
+        exit_code = run_init_command(Namespace(base=str(base), overwrite=False))
+        assert exit_code == 0
+
+        # 验证 effective_api_key_name 被覆盖：persist_calls 中必须有 MIMO_PLAN_API_KEY，
+        # 且绝不能出现空字符串键（一级 ProviderOption.api_key_name="" 的回退缺陷标记）。
+        persisted_keys = {key for key, _ in persist_calls}
+        assert "MIMO_PLAN_API_KEY" in persisted_keys
+        assert "" not in persisted_keys
+        assert ("MIMO_PLAN_API_KEY", "sk-mimo-plan-test") in persist_calls
+
+        result_manifest = json.loads(
+            (base / "config" / "prompts" / "manifests" / "write.json").read_text(encoding="utf-8")
+        )
+        assert result_manifest["model"]["default_name"] == "mimo-v2.5-pro-plan"
+
+    def test_gemini_sub_option_full_flow(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Gemini 端到端：二级菜单选 2.5-pro 时 manifest 写入 gemini-2.5-pro。"""
+        src = tmp_path / "pkg_config"
+        src.mkdir()
+        (src / "run.json").write_text("{}", encoding="utf-8")
+        manifests = src / "prompts" / "manifests"
+        manifests.mkdir(parents=True)
+        (manifests / "write.json").write_text(
+            json.dumps({"model": {"default_name": "mimo-v2.5-pro-plan"}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            "dayu.cli.commands.init.resolve_package_config_path",
+            lambda: src,
+        )
+        pkg_assets = tmp_path / "pkg_assets"
+        pkg_assets.mkdir()
+        (pkg_assets / "定性分析模板.md").write_text("# 模板", encoding="utf-8")
+        monkeypatch.setattr(
+            "dayu.cli.commands.init.resolve_package_assets_path",
+            lambda: pkg_assets,
+        )
+
+        _clear_provider_env_vars(monkeypatch)
+        for k in ("TAVILY_API_KEY", "SERPER_API_KEY", "FMP_API_KEY"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.delenv(SEC_USER_AGENT_ENV, raising=False)
+        monkeypatch.delenv("HF_ENDPOINT", raising=False)
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.setattr("dayu.cli.commands.init._is_hf_hub_reachable", lambda: True)
+
+        inputs = iter(["gemini-key-xxx", "", "", "", "", "", ""])
+        monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_selection",
+            lambda: "gemini",
+        )
+        # 选第 2 项：gemini-2.5-pro
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_sub_option",
+            lambda _provider_key: _GEMINI_SUB_OPTIONS[1],
+        )
+
+        persist_calls: list[tuple[str, str]] = []
+
+        def _record_persist(key: str, value: str) -> tuple[str, bool]:
+            persist_calls.append((key, value))
+            return "~/.zshrc", True
+
+        monkeypatch.setattr("dayu.cli.commands.init._persist_env_var", _record_persist)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._run_init_prewarm",
+            lambda **_kwargs: (True, ""),
+        )
+
+        base = tmp_path / "workspace"
+        base.mkdir()
+        exit_code = run_init_command(Namespace(base=str(base), overwrite=False))
+        assert exit_code == 0
+
+        persisted_keys = {key for key, _ in persist_calls}
+        assert "GEMINI_API_KEY" in persisted_keys
+        assert ("GEMINI_API_KEY", "gemini-key-xxx") in persist_calls
+
+        result_manifest = json.loads(
+            (base / "config" / "prompts" / "manifests" / "write.json").read_text(encoding="utf-8")
+        )
+        assert result_manifest["model"]["default_name"] == "gemini-2.5-pro"
 
     def test_custom_openai_flow(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """选择 custom-openai 时应写入 catalog、持久化 key 并更新 manifest。"""
@@ -1666,29 +1827,23 @@ class TestPromptProviderSelection:
         assert exc_info.value.code == 1
 
     def test_empty_input_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """空输入时选择默认供应商（第一个已配置的）。"""
+        """空输入时选择默认供应商（无任何 API Key 时落到声明顺序首项 Mimo）。
+
+        Mimo / DeepSeek 现在合并为单一一级入口，二级菜单决定子型号；
+        本测试只验证一级默认推荐落在 Mimo（声明顺序首项）。
+        """
+        _clear_provider_env_vars(monkeypatch)
         monkeypatch.delenv("DAYU_INIT_PROVIDER_OPTION", raising=False)
-        monkeypatch.setenv("MIMO_API_KEY", "existing")
-        for k in (
-            "MIMO_PLAN_API_KEY",
-            "MIMO_PLAN_SG_API_KEY",
-            "DEEPSEEK_API_KEY",
-            "OPENAI_API_KEY",
-            "ANTHROPIC_API_KEY",
-            "GEMINI_API_KEY",
-            "QWEN_API_KEY",
-        ):
-            monkeypatch.delenv(k, raising=False)
         monkeypatch.setattr("builtins.input", lambda *_args: "")
         result = _prompt_provider_selection()
-        assert result == _PROVIDER_OPTION_MIMO_PRO
+        assert result == _PROVIDER_OPTION_MIMO
 
-    def test_select_deepseek_flash_option(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """显式选择 DeepSeek Flash 方案（菜单第 5 项）时返回对应方案 key。"""
+    def test_select_deepseek_option(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """显式选择 DeepSeek 方案（菜单第 2 项）时返回 DeepSeek 一级 key。"""
         _clear_provider_env_vars(monkeypatch)
-        monkeypatch.setattr("builtins.input", lambda *_args: "5")
+        monkeypatch.setattr("builtins.input", lambda *_args: "2")
         result = _prompt_provider_selection()
-        assert result == _PROVIDER_OPTION_DEEPSEEK_FLASH
+        assert result == _PROVIDER_OPTION_DEEPSEEK
 
     def test_invalid_non_integer(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """非整数输入时调用 sys.exit(1)。"""
@@ -1713,31 +1868,32 @@ class TestPromptProviderSelection:
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-already")
         monkeypatch.setattr("builtins.input", lambda *_args: "")
         result = _prompt_provider_selection()
-        # DeepSeek Pro 在 Flash 之前声明，共享同一 DEEPSEEK_API_KEY 时 Pro 先命中。
-        assert result == _PROVIDER_OPTION_DEEPSEEK_PRO
+        # DeepSeek 一级 ProviderOption 配置 api_key_name=DEEPSEEK_API_KEY，
+        # 是第一个能命中环境变量的方案。
+        assert result == _PROVIDER_OPTION_DEEPSEEK
 
     def test_saved_option_overrides_first_configured(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """DAYU_INIT_PROVIDER_OPTION 环境变量优先于「第一个已配置」作为默认推荐。
+        """``DAYU_INIT_PROVIDER_OPTION`` 优先于「第一个已配置」作为默认推荐。
 
-        场景：用户上次显式选了 DeepSeek Flash（值被记在 DAYU_INIT_PROVIDER_OPTION），
-        同时环境变量里已有 DEEPSEEK_API_KEY；按 Enter 不应被 DeepSeek Pro（声明顺序
-        靠前）静默抢走，而应保留 Flash。
+        场景：用户上次显式选了 Gemini，DAYU_INIT_PROVIDER_OPTION 记下；
+        即便 DEEPSEEK_API_KEY 已存在，也不能被 first_configured 抢走默认项。
         """
         _clear_provider_env_vars(monkeypatch)
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-already")
-        monkeypatch.setenv("DAYU_INIT_PROVIDER_OPTION", _PROVIDER_OPTION_DEEPSEEK_FLASH)
+        monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+        monkeypatch.setenv("DAYU_INIT_PROVIDER_OPTION", "gemini")
         monkeypatch.setattr("builtins.input", lambda *_args: "")
         result = _prompt_provider_selection()
-        assert result == _PROVIDER_OPTION_DEEPSEEK_FLASH
+        assert result == "gemini"
 
     def test_stale_saved_option_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """DAYU_INIT_PROVIDER_OPTION 为失效 option_key 时回退到第一个已配置方案。"""
+        """``DAYU_INIT_PROVIDER_OPTION`` 为失效 option_key 时回退到第一个已配置方案。"""
         _clear_provider_env_vars(monkeypatch)
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-already")
         monkeypatch.setenv("DAYU_INIT_PROVIDER_OPTION", "mimo_flash_removed")
         monkeypatch.setattr("builtins.input", lambda *_args: "")
         result = _prompt_provider_selection()
-        assert result == _PROVIDER_OPTION_DEEPSEEK_PRO
+        assert result == _PROVIDER_OPTION_DEEPSEEK
 
 
 # --------------------------------------------------------------------------- #
@@ -1920,7 +2076,11 @@ class TestRunInitFailurePaths:
 
         inputs = iter(["sk-test", "", "", "", "n", "", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_sub_option",
+            lambda _provider_key: _DEEPSEEK_SUB_OPTIONS[1],
+        )
         monkeypatch.setattr(
             "dayu.cli.commands.init._persist_env_var",
             lambda _k, _v: ("setx", False),
@@ -1943,7 +2103,11 @@ class TestRunInitFailurePaths:
 
         inputs = iter(["sk-test", "tvly-test", "", "", "n", "", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_sub_option",
+            lambda _provider_key: _DEEPSEEK_SUB_OPTIONS[1],
+        )
 
         call_count = 0
 
@@ -2023,7 +2187,11 @@ class TestInitPrewarm:
         monkeypatch.setattr("dayu.cli.commands.init._is_hf_hub_reachable", lambda: True)
         init_inputs = iter(["sk-test", "", "", "", "n", "", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(init_inputs))
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_sub_option",
+            lambda _provider_key: _DEEPSEEK_SUB_OPTIONS[1],
+        )
         monkeypatch.setattr(
             "dayu.cli.commands.init._persist_env_var",
             lambda _k, _v: ("~/.zshrc", True),
@@ -2132,7 +2300,11 @@ class TestInitPrewarm:
         monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com")
         monkeypatch.setenv("HF_TOKEN", "hf-test-xxx")
         monkeypatch.setenv(SEC_USER_AGENT_ENV, "Demo demo@example.com")
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_sub_option",
+            lambda _provider_key: _DEEPSEEK_SUB_OPTIONS[1],
+        )
         assert run_init_command(Namespace(base=str(base), overwrite=False)) == 0
         assert prewarm_calls == [(base.resolve(), (base / "config").resolve())]
 
@@ -2163,7 +2335,11 @@ class TestInitPrewarm:
         monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com")
         monkeypatch.setenv("HF_TOKEN", "hf-test-xxx")
         monkeypatch.setenv(SEC_USER_AGENT_ENV, "Demo demo@example.com")
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_sub_option",
+            lambda _provider_key: _DEEPSEEK_SUB_OPTIONS[1],
+        )
         assert run_init_command(Namespace(base=str(base), overwrite=True)) == 0
         assert len(prewarm_calls) == 1
 
@@ -2200,7 +2376,11 @@ class TestInitPrewarm:
         monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com")
         monkeypatch.setenv("HF_TOKEN", "hf-test-xxx")
         monkeypatch.setenv(SEC_USER_AGENT_ENV, "Demo demo@example.com")
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_sub_option",
+            lambda _provider_key: _DEEPSEEK_SUB_OPTIONS[1],
+        )
 
         assert run_init_command(Namespace(base=str(base), overwrite=False, reset=True)) == 0
         assert prewarm_calls == [(base.resolve(), (base / "config").resolve())]
@@ -2252,7 +2432,11 @@ class TestInitPrewarm:
         monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com")
         monkeypatch.setenv("HF_TOKEN", "hf-test-xxx")
         monkeypatch.setenv(SEC_USER_AGENT_ENV, "Demo demo@example.com")
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_sub_option",
+            lambda _provider_key: _DEEPSEEK_SUB_OPTIONS[1],
+        )
         monkeypatch.setattr(
             "dayu.cli.commands.init._run_init_prewarm",
             lambda **_kwargs: (True, ""),
@@ -2292,7 +2476,11 @@ class TestInitPrewarm:
         """主 API Key 持久化失败时不执行 prewarm。"""
 
         base = self._prepare_run_init_environment(tmp_path, monkeypatch)
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_sub_option",
+            lambda _provider_key: _DEEPSEEK_SUB_OPTIONS[1],
+        )
         monkeypatch.setattr("dayu.cli.commands.init._prompt_api_key", lambda _key: "sk-test")
         monkeypatch.setattr("dayu.cli.commands.init._persist_env_var", lambda _k, _v: ("~/.zshrc", False))
         monkeypatch.setattr("dayu.cli.commands.init._prompt_optional_search_keys", lambda: [])
@@ -2320,7 +2508,11 @@ class TestInitPrewarm:
 
         inputs = iter(["sk-test", "", "", "", "n", "", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_sub_option",
+            lambda _provider_key: _DEEPSEEK_SUB_OPTIONS[1],
+        )
         monkeypatch.setattr(
             "dayu.cli.commands.init._persist_env_var",
             lambda _k, _v: ("setx（重开终端生效）", True),
@@ -2340,7 +2532,11 @@ class TestInitPrewarm:
 
         inputs = iter(["sk-test", "", "", "", "y", "hf-token-val", ""])
         monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
-        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK_FLASH)
+        monkeypatch.setattr("dayu.cli.commands.init._prompt_provider_selection", lambda: _PROVIDER_OPTION_DEEPSEEK)
+        monkeypatch.setattr(
+            "dayu.cli.commands.init._prompt_provider_sub_option",
+            lambda _provider_key: _DEEPSEEK_SUB_OPTIONS[1],
+        )
 
         call_count = 0
 
@@ -2604,49 +2800,49 @@ class TestPromptGeminiSubOption:
 
     def test_empty_input_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """直接回车选中默认（第一项）。"""
-        from dayu.cli.commands.init import _prompt_gemini_sub_option
+        from dayu.cli.commands.init import _prompt_provider_sub_option
 
         monkeypatch.setattr("builtins.input", lambda *_args: "")
-        sub = _prompt_gemini_sub_option()
+        sub = _prompt_provider_sub_option("gemini")
         assert sub == _GEMINI_SUB_OPTIONS[0]
 
     def test_explicit_choice(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """输入 4 选中 gemini-3.1-pro-preview。"""
-        from dayu.cli.commands.init import _prompt_gemini_sub_option
+        from dayu.cli.commands.init import _prompt_provider_sub_option
 
         monkeypatch.setattr("builtins.input", lambda *_args: "4")
-        sub = _prompt_gemini_sub_option()
+        sub = _prompt_provider_sub_option("gemini")
         assert sub.non_thinking_model == "gemini-3.1-pro-preview"
         assert sub.thinking_model == "gemini-3.1-pro-preview-thinking"
 
     def test_invalid_non_integer(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """非整数输入触发 sys.exit(1)。"""
-        from dayu.cli.commands.init import _prompt_gemini_sub_option
+        from dayu.cli.commands.init import _prompt_provider_sub_option
 
         monkeypatch.setattr("builtins.input", lambda *_args: "abc")
         with pytest.raises(SystemExit) as exc_info:
-            _prompt_gemini_sub_option()
+            _prompt_provider_sub_option("gemini")
         assert exc_info.value.code == 1
 
     def test_out_of_range(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """编号超出范围触发 sys.exit(1)。"""
-        from dayu.cli.commands.init import _prompt_gemini_sub_option
+        from dayu.cli.commands.init import _prompt_provider_sub_option
 
         monkeypatch.setattr("builtins.input", lambda *_args: "999")
         with pytest.raises(SystemExit) as exc_info:
-            _prompt_gemini_sub_option()
+            _prompt_provider_sub_option("gemini")
         assert exc_info.value.code == 1
 
     def test_eof_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """EOFError 触发 sys.exit(1)。"""
-        from dayu.cli.commands.init import _prompt_gemini_sub_option
+        from dayu.cli.commands.init import _prompt_provider_sub_option
 
         monkeypatch.setattr(
             "builtins.input",
             lambda *_args: (_ for _ in ()).throw(EOFError),
         )
         with pytest.raises(SystemExit) as exc_info:
-            _prompt_gemini_sub_option()
+            _prompt_provider_sub_option("gemini")
         assert exc_info.value.code == 1
 
 
@@ -2715,11 +2911,11 @@ class TestGeminiCatalogEntries:
 
 
 class TestGeminiSubOptionDataclass:
-    """``_GeminiSubOption`` 数据类基本不变量。"""
+    """``_ProviderSubOption`` 数据类基本不变量（沿用 Gemini 样例）。"""
 
     def test_immutable_fields(self) -> None:
         """frozen dataclass 字段不可变。"""
-        sub = _GeminiSubOption(
+        sub = _ProviderSubOption(
             sub_key="x",
             display_name="X",
             non_thinking_model="m",
@@ -2729,16 +2925,103 @@ class TestGeminiSubOptionDataclass:
             sub.sub_key = "y"  # type: ignore[misc]
 
     def test_placeholder_keys_excluded_from_role_sets(self) -> None:
-        """Gemini/Ollama/自定义 OpenAI 的占位键不应混入合法模型名集合，
+        """Gemini/Mimo/DeepSeek/Ollama/自定义 OpenAI 的占位键不应混入合法模型名集合，
         避免被 _classify_model_role 当成真实模型识别。"""
         from dayu.cli.commands.init import (
             _ALL_NON_THINKING_MODELS,
             _ALL_THINKING_MODELS,
             _CUSTOM_CATALOG_KEY,
+            _DEEPSEEK_CATALOG_KEY,
             _GEMINI_CATALOG_KEY,
+            _MIMO_CATALOG_KEY,
             _OLLAMA_CATALOG_KEY,
         )
 
-        for placeholder in (_GEMINI_CATALOG_KEY, _OLLAMA_CATALOG_KEY, _CUSTOM_CATALOG_KEY):
+        for placeholder in (
+            _GEMINI_CATALOG_KEY,
+            _MIMO_CATALOG_KEY,
+            _DEEPSEEK_CATALOG_KEY,
+            _OLLAMA_CATALOG_KEY,
+            _CUSTOM_CATALOG_KEY,
+        ):
             assert placeholder not in _ALL_NON_THINKING_MODELS
             assert placeholder not in _ALL_THINKING_MODELS
+
+
+class TestPromptMimoSubOption:
+    """Mimo 二级子型号菜单交互测试。"""
+
+    def test_three_sub_options_cover_plan_plan_sg_pro(self) -> None:
+        """``_MIMO_SUB_OPTIONS`` 覆盖 Plan / Plan SG / Pro 三档独立 API Key。"""
+        keys = {sub.sub_key for sub in _MIMO_SUB_OPTIONS}
+        assert keys == {"plan", "plan-sg", "pro"}
+        # 三档 API Key 均独立
+        api_keys = {sub.api_key_name_override for sub in _MIMO_SUB_OPTIONS}
+        assert api_keys == {"MIMO_PLAN_API_KEY", "MIMO_PLAN_SG_API_KEY", "MIMO_API_KEY"}
+
+    def test_default_first_option_is_plan(self) -> None:
+        """默认推荐保持 Plan（声明顺序首项）。"""
+        assert _MIMO_SUB_OPTIONS[0].sub_key == "plan"
+
+    def test_empty_input_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """直接回车选中默认（第一项）。"""
+        from dayu.cli.commands.init import _prompt_provider_sub_option
+
+        monkeypatch.setattr("builtins.input", lambda *_args: "")
+        sub = _prompt_provider_sub_option("mimo")
+        assert sub == _MIMO_SUB_OPTIONS[0]
+
+    def test_explicit_choice_pro(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """输入 3 选中 Mimo Pro 且 api_key_name_override 为 MIMO_API_KEY。"""
+        from dayu.cli.commands.init import _prompt_provider_sub_option
+
+        monkeypatch.setattr("builtins.input", lambda *_args: "3")
+        sub = _prompt_provider_sub_option("mimo")
+        assert sub.sub_key == "pro"
+        assert sub.api_key_name_override == "MIMO_API_KEY"
+
+    def test_invalid_non_integer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """非整数输入触发 sys.exit(1)。"""
+        from dayu.cli.commands.init import _prompt_provider_sub_option
+
+        monkeypatch.setattr("builtins.input", lambda *_args: "abc")
+        with pytest.raises(SystemExit) as exc_info:
+            _prompt_provider_sub_option("mimo")
+        assert exc_info.value.code == 1
+
+
+class TestPromptDeepSeekSubOption:
+    """DeepSeek 二级子型号菜单交互测试。"""
+
+    def test_two_sub_options_share_deepseek_api_key(self) -> None:
+        """Pro / Flash 两档共享 DEEPSEEK_API_KEY，``api_key_name_override`` 留空。"""
+        keys = {sub.sub_key for sub in _DEEPSEEK_SUB_OPTIONS}
+        assert keys == {"pro", "flash"}
+        for sub in _DEEPSEEK_SUB_OPTIONS:
+            assert sub.api_key_name_override == ""
+
+    def test_default_first_option_is_pro(self) -> None:
+        """默认推荐保持 Pro（声明顺序首项，模型质量更高）。"""
+        assert _DEEPSEEK_SUB_OPTIONS[0].sub_key == "pro"
+
+    def test_explicit_choice_flash(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """输入 2 选中 DeepSeek Flash。"""
+        from dayu.cli.commands.init import _prompt_provider_sub_option
+
+        monkeypatch.setattr("builtins.input", lambda *_args: "2")
+        sub = _prompt_provider_sub_option("deepseek")
+        assert sub.sub_key == "flash"
+        assert sub.non_thinking_model == "deepseek-v4-flash"
+        assert sub.thinking_model == "deepseek-v4-flash-thinking"
+
+    def test_eof_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """EOFError 触发 sys.exit(1)。"""
+        from dayu.cli.commands.init import _prompt_provider_sub_option
+
+        monkeypatch.setattr(
+            "builtins.input",
+            lambda *_args: (_ for _ in ()).throw(EOFError),
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            _prompt_provider_sub_option("deepseek")
+        assert exc_info.value.code == 1

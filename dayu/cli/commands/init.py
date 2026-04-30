@@ -51,11 +51,8 @@ class _ProviderOption:
     thinking_model: str
 
 
-_PROVIDER_OPTION_MIMO_PLAN = "mimo_plan"
-_PROVIDER_OPTION_MIMO_PLAN_SG = "mimo_plan_sg"
-_PROVIDER_OPTION_MIMO_PRO = "mimo_pro"
-_PROVIDER_OPTION_DEEPSEEK_FLASH = "deepseek_flash"
-_PROVIDER_OPTION_DEEPSEEK_PRO = "deepseek_pro"
+_PROVIDER_OPTION_MIMO = "mimo"
+_PROVIDER_OPTION_DEEPSEEK = "deepseek"
 _PROVIDER_OPTION_OPENAI = "openai"
 _PROVIDER_OPTION_ANTHROPIC = "anthropic"
 _PROVIDER_OPTION_GEMINI = "gemini"
@@ -110,57 +107,111 @@ def _prompt_max_context_tokens(default: int) -> int:
         sys.exit(1)
 
 
-# Google Gemini 模型在 ProviderOption 中使用的占位键。
-# Gemini 通过二级菜单选择具体子型号，ProviderOption 自身不直接对应单一模型。
+# Mimo / DeepSeek / Gemini 等多型号供应商在 ProviderOption 中使用的占位键。
+# 这类供应商通过二级菜单选具体子型号，ProviderOption 自身不直接对应单一模型。
 _GEMINI_CATALOG_KEY = "gemini"
+_MIMO_CATALOG_KEY = "mimo"
+_DEEPSEEK_CATALOG_KEY = "deepseek"
 
 
 @dataclass(frozen=True)
-class _GeminiSubOption:
-    """Gemini 二级菜单中的单个子型号定义。
+class _ProviderSubOption:
+    """二级菜单中的单个子型号定义。
 
-    每个子型号对应一个非 thinking 模型与对应的 thinking 变体目录条目名。
+    对应一个具体模型（``non_thinking_model`` / ``thinking_model``）。
+    若该子型号需要使用与一级 ``_ProviderOption.api_key_name`` 不同的 API Key
+    （例如 Mimo 的 Plan / Plan SG / Pro 各自一套），通过 ``api_key_name_override``
+    覆盖；空字符串表示沿用一级 API Key。
     """
 
     sub_key: str
     display_name: str
     non_thinking_model: str
     thinking_model: str
+    api_key_name_override: str = ""
 
 
-# Gemini 二级菜单选项，第一个为默认推荐（直接回车即选中）。
-_GEMINI_SUB_OPTIONS: tuple[_GeminiSubOption, ...] = (
-    _GeminiSubOption(
+# Mimo 二级菜单：Plan / Plan SG / Pro 各自独立 API Key，第一个为默认推荐。
+_MIMO_SUB_OPTIONS: tuple[_ProviderSubOption, ...] = (
+    _ProviderSubOption(
+        sub_key="plan",
+        display_name="Mimo Token Plan",
+        non_thinking_model="mimo-v2.5-pro-plan",
+        thinking_model="mimo-v2.5-pro-thinking-plan",
+        api_key_name_override="MIMO_PLAN_API_KEY",
+    ),
+    _ProviderSubOption(
+        sub_key="plan-sg",
+        display_name="Mimo Token Plan (海外)",
+        non_thinking_model="mimo-v2.5-pro-plan-sg",
+        thinking_model="mimo-v2.5-pro-thinking-plan-sg",
+        api_key_name_override="MIMO_PLAN_SG_API_KEY",
+    ),
+    _ProviderSubOption(
+        sub_key="pro",
+        display_name="Mimo Pro（常规 API）",
+        non_thinking_model="mimo-v2.5-pro",
+        thinking_model="mimo-v2.5-pro-thinking",
+        api_key_name_override="MIMO_API_KEY",
+    ),
+)
+
+# DeepSeek 二级菜单：Pro / Flash 共享 DEEPSEEK_API_KEY。
+_DEEPSEEK_SUB_OPTIONS: tuple[_ProviderSubOption, ...] = (
+    _ProviderSubOption(
+        sub_key="pro",
+        display_name="DeepSeek Pro",
+        non_thinking_model="deepseek-v4-pro",
+        thinking_model="deepseek-v4-pro-thinking",
+    ),
+    _ProviderSubOption(
+        sub_key="flash",
+        display_name="DeepSeek Flash",
+        non_thinking_model="deepseek-v4-flash",
+        thinking_model="deepseek-v4-flash-thinking",
+    ),
+)
+
+# Gemini 二级菜单：5 个型号共享 GEMINI_API_KEY。
+_GEMINI_SUB_OPTIONS: tuple[_ProviderSubOption, ...] = (
+    _ProviderSubOption(
         sub_key="2.5-flash",
         display_name="Gemini 2.5 Flash（默认 / 性价比之王）",
         non_thinking_model="gemini-2.5-flash",
         thinking_model="gemini-2.5-flash-thinking",
     ),
-    _GeminiSubOption(
+    _ProviderSubOption(
         sub_key="2.5-pro",
         display_name="Gemini 2.5 Pro（稳定旗舰）",
         non_thinking_model="gemini-2.5-pro",
         thinking_model="gemini-2.5-pro-thinking",
     ),
-    _GeminiSubOption(
+    _ProviderSubOption(
         sub_key="2.5-flash-lite",
         display_name="Gemini 2.5 Flash-Lite（极致响应）",
         non_thinking_model="gemini-2.5-flash-lite",
         thinking_model="gemini-2.5-flash-lite-thinking",
     ),
-    _GeminiSubOption(
+    _ProviderSubOption(
         sub_key="3.1-pro-preview",
         display_name="Gemini 3.1 Pro Preview（最强性能 / 预览）",
         non_thinking_model="gemini-3.1-pro-preview",
         thinking_model="gemini-3.1-pro-preview-thinking",
     ),
-    _GeminiSubOption(
+    _ProviderSubOption(
         sub_key="3.1-flash-lite-preview",
         display_name="Gemini 3.1 Flash-Lite Preview（毫秒级 / 预览）",
         non_thinking_model="gemini-3.1-flash-lite-preview",
         thinking_model="gemini-3.1-flash-lite-preview-thinking",
     ),
 )
+
+# 一级 ProviderOption -> 二级子选项映射；不在表中表示该 provider 没有二级菜单。
+_PROVIDER_SUB_OPTIONS: dict[str, tuple[_ProviderSubOption, ...]] = {
+    _PROVIDER_OPTION_MIMO: _MIMO_SUB_OPTIONS,
+    _PROVIDER_OPTION_DEEPSEEK: _DEEPSEEK_SUB_OPTIONS,
+    _PROVIDER_OPTION_GEMINI: _GEMINI_SUB_OPTIONS,
+}
 
 
 # 自定义 OpenAI 兼容 API（OpenRouter 等）统一使用的目录键
@@ -179,39 +230,18 @@ _CUSTOM_OPENAI_TEMPERATURE_PROFILES: dict[str, dict[str, float]] = {
 
 _PROVIDER_OPTIONS: tuple[_ProviderOption, ...] = (
     _ProviderOption(
-        option_key=_PROVIDER_OPTION_MIMO_PLAN,
-        display_name="Mimo Token Plan",
-        api_key_name="MIMO_PLAN_API_KEY",
-        non_thinking_model="mimo-v2.5-pro-plan",
-        thinking_model="mimo-v2.5-pro-thinking-plan",
+        option_key=_PROVIDER_OPTION_MIMO,
+        display_name="Mimo",
+        api_key_name="",  # 由二级子型号通过 api_key_name_override 决定
+        non_thinking_model=_MIMO_CATALOG_KEY,
+        thinking_model=_MIMO_CATALOG_KEY,
     ),
     _ProviderOption(
-        option_key=_PROVIDER_OPTION_MIMO_PLAN_SG,
-        display_name="Mimo Token Plan (海外)",
-        api_key_name="MIMO_PLAN_SG_API_KEY",
-        non_thinking_model="mimo-v2.5-pro-plan-sg",
-        thinking_model="mimo-v2.5-pro-thinking-plan-sg",
-    ),
-    _ProviderOption(
-        option_key=_PROVIDER_OPTION_MIMO_PRO,
-        display_name="Mimo Pro（常规 API）",
-        api_key_name="MIMO_API_KEY",
-        non_thinking_model="mimo-v2.5-pro",
-        thinking_model="mimo-v2.5-pro-thinking",
-    ),
-    _ProviderOption(
-        option_key=_PROVIDER_OPTION_DEEPSEEK_PRO,
-        display_name="DeepSeek Pro",
+        option_key=_PROVIDER_OPTION_DEEPSEEK,
+        display_name="DeepSeek",
         api_key_name="DEEPSEEK_API_KEY",
-        non_thinking_model="deepseek-v4-pro",
-        thinking_model="deepseek-v4-pro-thinking",
-    ),
-    _ProviderOption(
-        option_key=_PROVIDER_OPTION_DEEPSEEK_FLASH,
-        display_name="DeepSeek Flash",
-        api_key_name="DEEPSEEK_API_KEY",
-        non_thinking_model="deepseek-v4-flash",
-        thinking_model="deepseek-v4-flash-thinking",
+        non_thinking_model=_DEEPSEEK_CATALOG_KEY,
+        thinking_model=_DEEPSEEK_CATALOG_KEY,
     ),
     _ProviderOption(
         option_key=_PROVIDER_OPTION_OPENAI,
@@ -264,17 +294,59 @@ _PROVIDER_OPTIONS_BY_KEY: dict[str, _ProviderOption] = {option.option_key: optio
 # 真正的模型名在 Gemini 子菜单或 catalog 写入逻辑中才确定，因此从两个集合中显式
 # 剔除占位键，避免污染 manifest 角色分类的合法模型名集合。
 _PROVIDER_PLACEHOLDER_KEYS: frozenset[str] = frozenset(
-    {_GEMINI_CATALOG_KEY, _OLLAMA_CATALOG_KEY, _CUSTOM_CATALOG_KEY}
+    {
+        _GEMINI_CATALOG_KEY,
+        _MIMO_CATALOG_KEY,
+        _DEEPSEEK_CATALOG_KEY,
+        _OLLAMA_CATALOG_KEY,
+        _CUSTOM_CATALOG_KEY,
+    }
 )
+
+
+def _all_sub_option_non_thinking_models() -> frozenset[str]:
+    """收集 ``_PROVIDER_SUB_OPTIONS`` 所有子选项的 non-thinking 模型名集合。
+
+    Returns:
+        所有子选项 ``non_thinking_model`` 字段去重后的模型名集合。
+
+    Raises:
+        无。
+    """
+
+    names: set[str] = set()
+    for subs in _PROVIDER_SUB_OPTIONS.values():
+        for sub in subs:
+            names.add(sub.non_thinking_model)
+    return frozenset(names)
+
+
+def _all_sub_option_thinking_models() -> frozenset[str]:
+    """收集 ``_PROVIDER_SUB_OPTIONS`` 所有子选项的 thinking 模型名集合。
+
+    Returns:
+        所有子选项 ``thinking_model`` 字段去重后的模型名集合。
+
+    Raises:
+        无。
+    """
+
+    names: set[str] = set()
+    for subs in _PROVIDER_SUB_OPTIONS.values():
+        for sub in subs:
+            names.add(sub.thinking_model)
+    return frozenset(names)
+
+
 _ALL_NON_THINKING_MODELS: frozenset[str] = (
     frozenset(option.non_thinking_model for option in _PROVIDER_OPTIONS)
-    | frozenset(sub.non_thinking_model for sub in _GEMINI_SUB_OPTIONS)
+    | _all_sub_option_non_thinking_models()
 ) - _PROVIDER_PLACEHOLDER_KEYS
 
 # 所有可能出现的 thinking 模型名集合
 _ALL_THINKING_MODELS: frozenset[str] = (
     frozenset(option.thinking_model for option in _PROVIDER_OPTIONS)
-    | frozenset(sub.thinking_model for sub in _GEMINI_SUB_OPTIONS)
+    | _all_sub_option_thinking_models()
 ) - _PROVIDER_PLACEHOLDER_KEYS
 
 # 仅出现在 non-thinking 集合而不在 thinking 集合中的模型名
@@ -977,22 +1049,28 @@ def _prompt_provider_selection() -> str:
     return _PROVIDER_OPTIONS[idx - 1].option_key
 
 
-def _prompt_gemini_sub_option() -> _GeminiSubOption:
-    """交互式让用户选择 Gemini 子型号。
+def _prompt_provider_sub_option(provider_key: str) -> _ProviderSubOption:
+    """交互式让用户在已选定一级供应商的二级菜单中挑选具体子型号。
 
-    在用户已选定 Google Gemini 作为初始化方案后，从 ``_GEMINI_SUB_OPTIONS``
-    中挑选具体型号。直接回车采用列表第一项作为默认推荐。
+    Args:
+        provider_key: 一级 ProviderOption 的 ``option_key``，必须存在于
+            ``_PROVIDER_SUB_OPTIONS`` 字典中。
 
     Returns:
-        选中的 ``_GeminiSubOption``。
+        选中的 ``_ProviderSubOption``。直接回车采用列表第一项作为默认推荐；
+        二级选择不在 ``DAYU_INIT_PROVIDER_OPTION`` 中持久化，re-init 时始终
+        回到默认项。
 
     Raises:
         SystemExit: 用户输入无效或 EOF 时退出。
+        KeyError: ``provider_key`` 没有配置二级菜单时抛出（调用方责任，正常流程不应发生）。
     """
 
-    print("\n请选择 Gemini 子型号（输入编号）：\n")
+    sub_options = _PROVIDER_SUB_OPTIONS[provider_key]
+    provider_display = _PROVIDER_OPTIONS_BY_KEY[provider_key].display_name
+    print(f"\n请选择 {provider_display} 子型号（输入编号）：\n")
     default_idx = 0
-    for i, sub in enumerate(_GEMINI_SUB_OPTIONS, 1):
+    for i, sub in enumerate(sub_options, 1):
         marker = "（默认）" if (i - 1) == default_idx else ""
         print(f"  {i}. {sub.display_name}{marker}")
 
@@ -1005,7 +1083,7 @@ def _prompt_gemini_sub_option() -> _GeminiSubOption:
         sys.exit(1)
 
     if raw == "":
-        return _GEMINI_SUB_OPTIONS[default_idx]
+        return sub_options[default_idx]
 
     try:
         idx = int(raw)
@@ -1013,11 +1091,11 @@ def _prompt_gemini_sub_option() -> _GeminiSubOption:
         print(f"无效输入: {raw}")
         sys.exit(1)
 
-    if idx < 1 or idx > len(_GEMINI_SUB_OPTIONS):
+    if idx < 1 or idx > len(sub_options):
         print(f"编号超出范围: {idx}")
         sys.exit(1)
 
-    return _GEMINI_SUB_OPTIONS[idx - 1]
+    return sub_options[idx - 1]
 
 
 def _prompt_api_key(api_key_name: str) -> str:
@@ -1656,9 +1734,10 @@ def run_init_command(args: Namespace) -> int:
     _persist_env_var(_INIT_PROVIDER_OPTION_ENV, chosen_option_key)
     env_vars_written = False
     main_key_persist_failed = False
-    # Gemini 二级菜单选定的子型号；非 Gemini 方案保持 None，
-    # 后续在 manifest 更新阶段决定是否覆盖默认模型名。
-    gemini_sub_option: _GeminiSubOption | None = None
+    # 一级供应商若配置了二级菜单（Mimo/DeepSeek/Gemini），由 _PROVIDER_SUB_OPTIONS
+    # 直接驱动；命中后选定的子型号覆盖 ProviderOption 中的占位键，并可通过
+    # api_key_name_override 决定 effective_api_key_name（Mimo 三档独立 Key）。
+    sub_option: _ProviderSubOption | None = None
 
     if chosen_option_key == _PROVIDER_OPTION_OLLAMA:
         effective_api_key_name = ""
@@ -1698,22 +1777,26 @@ def run_init_command(args: Namespace) -> int:
                 print(f"   为避免切换模型后下次启动找不到 API Key，跳过 manifest 更新。")
                 print(f"   请手动配置环境变量后重新运行 dayu-cli init。")
     else:
-        effective_api_key_name = chosen_option.api_key_name
-        # Gemini 在写入 API Key 前先弹出二级菜单挑选子型号，
-        # 子型号决定后续 manifest 中写入的 default_name。
-        if chosen_option_key == _PROVIDER_OPTION_GEMINI:
-            gemini_sub_option = _prompt_gemini_sub_option()
-        existing_value = os.environ.get(chosen_option.api_key_name)
+        # 若该一级供应商挂了二级菜单，则先弹出子型号选择；
+        # api_key_name_override 不空表示该子型号使用独立 API Key（如 Mimo 三档）。
+        if chosen_option_key in _PROVIDER_SUB_OPTIONS:
+            sub_option = _prompt_provider_sub_option(chosen_option_key)
+            effective_api_key_name = (
+                sub_option.api_key_name_override or chosen_option.api_key_name
+            )
+        else:
+            effective_api_key_name = chosen_option.api_key_name
+        existing_value = os.environ.get(effective_api_key_name)
         if existing_value:
             masked = existing_value[:4] + "***" + existing_value[-4:] if len(existing_value) > 8 else "***"
-            print(f"\n✓ {chosen_option.api_key_name} 已在环境变量中配置（{masked}），跳过写入。")
+            print(f"\n✓ {effective_api_key_name} 已在环境变量中配置（{masked}），跳过写入。")
         else:
-            api_key_value = _prompt_api_key(chosen_option.api_key_name)
-            _target, ok = _persist_env_var(chosen_option.api_key_name, api_key_value)
+            api_key_value = _prompt_api_key(effective_api_key_name)
+            _target, ok = _persist_env_var(effective_api_key_name, api_key_value)
             env_vars_written = True
             if not ok:
                 main_key_persist_failed = True
-                print(f"\n❌ {chosen_option.api_key_name} 无法持久化到系统环境变量。")
+                print(f"\n❌ {effective_api_key_name} 无法持久化到系统环境变量。")
                 print(f"   已为当前进程设置，但重开终端后会丢失。")
                 print(f"   为避免切换模型后下次启动找不到 API Key，跳过 manifest 更新。")
                 print(f"   请手动配置环境变量后重新运行 dayu-cli init。")
@@ -1726,10 +1809,10 @@ def run_init_command(args: Namespace) -> int:
         )
 
     # 3. 更新 manifest 默认模型（仅在主 key 持久化成功或已存在时执行）
-    # 对 Gemini，使用二级菜单选中的子型号覆盖 ProviderOption 中的占位键。
-    if gemini_sub_option is not None:
-        non_thinking = gemini_sub_option.non_thinking_model
-        thinking = gemini_sub_option.thinking_model
+    # 选定二级子型号时（Mimo/DeepSeek/Gemini），用其模型名覆盖 ProviderOption 中的占位键。
+    if sub_option is not None:
+        non_thinking = sub_option.non_thinking_model
+        thinking = sub_option.thinking_model
     else:
         non_thinking = chosen_option.non_thinking_model
         thinking = chosen_option.thinking_model
