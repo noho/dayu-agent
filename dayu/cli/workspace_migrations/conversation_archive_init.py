@@ -24,7 +24,6 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
 from dayu.host.conversation_session_archive import (
     ConversationHistoryArchive,
@@ -86,7 +85,7 @@ def _migrate_single_file(json_path: Path) -> bool:
         return False
 
     try:
-        payload: Any = json.loads(raw_text)
+        payload: object = json.loads(raw_text)
     except json.JSONDecodeError as exc:
         print(
             f"⚠ 工作区迁移: 跳过 {json_path.name}（JSON 解析失败：{exc}）",

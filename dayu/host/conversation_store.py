@@ -1,4 +1,20 @@
-"""通用会话 transcript 存储抽象与默认实现。"""
+"""会话 transcript 数据类与 archive store 抽象 / 默认实现。
+
+本模块同时承载三类职责：
+
+1. ``ConversationTranscript`` / ``ConversationTurnRecord`` /
+   ``ConversationPinnedState`` / ``ConversationEpisodeSummary``：运行态送模真源
+   的数据结构。
+2. ``ConversationSessionArchiveStore`` Protocol：archive 聚合根的存储抽象。
+3. ``FileConversationSessionArchiveStore``：基于文件系统的默认实现，封装文件
+   锁、原子写、fsync 等 IO 工具。
+
+把 store 抽象与运行态数据类放在同一模块，是因为
+``ConversationSessionArchive``（定义于 ``conversation_session_archive``）依赖
+``ConversationTranscript``；如果再让 store 反过来依赖 archive 模块，会形成
+循环导入。当前组织把 transcript 数据类与 store 抽象同住、archive 聚合根
+单独成模块，是务实的边界划分。
+"""
 
 from __future__ import annotations
 
@@ -9,7 +25,6 @@ import tempfile
 import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator, Protocol, TextIO
 
@@ -22,37 +37,16 @@ if TYPE_CHECKING:
 import dayu.file_lock as file_lock_module
 
 from dayu.log import Log
-from dayu.host._coercion import _coerce_string_tuple
+from dayu.host._coercion import (
+    _coerce_string_tuple,
+    _normalize_session_id,
+    _utc_now_iso,
+)
 
 _SESSION_FILE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 MODULE = "HOST.CONVERSATION_STORE"
 _CONVERSATION_LOCK_REGION_BYTES = 1
 _LOCK_FILE_SUFFIX = ".lock"
-
-
-def _utc_now_iso() -> str:
-    """返回当前 UTC 时间的 ISO 字符串。"""
-
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _normalize_session_id(session_id: str) -> str:
-    """规范化 session_id。
-
-    Args:
-        session_id: 原始会话 ID。
-
-    Returns:
-        去除首尾空白后的会话 ID。
-
-    Raises:
-        ValueError: 当会话 ID 为空时抛出。
-    """
-
-    normalized = str(session_id or "").strip()
-    if not normalized:
-        raise ValueError("session_id 不能为空")
-    return normalized
 
 
 def _coerce_non_negative_int(value: object, *, default: int = 0) -> int:

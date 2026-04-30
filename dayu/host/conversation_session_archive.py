@@ -21,47 +21,15 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
 
+from dayu.host._coercion import _normalize_session_id, _utc_now_iso
 from dayu.host.conversation_store import (
     ConversationTranscript,
     ConversationTurnRecord,
 )
+from dayu.log import Log
 
-
-def _utc_now_iso() -> str:
-    """返回当前 UTC 时间的 ISO 字符串。
-
-    Args:
-        无。
-
-    Returns:
-        ISO 8601 字符串。
-
-    Raises:
-        无。
-    """
-
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _normalize_session_id(session_id: str) -> str:
-    """规范化 session_id。
-
-    Args:
-        session_id: 原始会话 ID。
-
-    Returns:
-        去除首尾空白后的会话 ID。
-
-    Raises:
-        ValueError: 当 ID 为空时抛出。
-    """
-
-    normalized = str(session_id or "").strip()
-    if not normalized:
-        raise ValueError("session_id 不能为空")
-    return normalized
+_MODULE = "HOST.CONVERSATION_SESSION_ARCHIVE"
 
 
 class ConversationArchiveMissingError(RuntimeError):
@@ -188,6 +156,10 @@ class ConversationHistoryArchive:
         if isinstance(raw_turns, list):
             for raw_turn in raw_turns:
                 if not isinstance(raw_turn, dict):
+                    Log.warning(
+                        f"history_archive 跳过非法 turn 元素（非对象）: session_id={session_id}",
+                        module=_MODULE,
+                    )
                     continue
                 turns.append(
                     ConversationHistoryTurnRecord(
