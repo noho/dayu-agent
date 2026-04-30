@@ -18,7 +18,7 @@ PR-2 在 store 事务层完成了 fence token 强一致改造，回归测试覆�
     第二个 worker 用主进程已经"过期"的 ``A`` lease 去触发 release/cleanup
     必须 no-op，不会抢走 ``B`` 的合法 lease。
 
-不依赖外部 fixture：通过 ``subprocess.Popen`` 起 ``python -c '<inline>'`` 子
+不依赖外部 fixture：通过 ``subprocess.run`` 起 ``python -c '<inline>'`` 子
 进程，子进程在自身 ``sys.path`` 里 import 真实 dayu 模块，对同一个
 SQLite 文件做 ``cleanup_stale_resuming``；事件同步走 stdout 行（worker
 干完写一行 ``DONE``）。
@@ -40,6 +40,12 @@ from dayu.host.pending_turn_store import (
 )
 
 
+# 用 ``__file__`` 反推项目根而不是 ``Path.cwd()``：CI / 运维从任意目录
+# 直接跑 ``pytest /abs/path/to/tests/...`` 时 cwd 不一定是项目根，子进程
+# inline 脚本必须显式 import dayu，所以把项目根钉在编译期已知的常量上。
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
 def _build_worker_script(db_path: Path, pending_turn_id: str, expected_updated_at_iso: str) -> str:
     """构造 worker 子进程要 ``python -c`` 执行的源码字符串。
 
@@ -55,7 +61,7 @@ def _build_worker_script(db_path: Path, pending_turn_id: str, expected_updated_a
 
     return (
         "import sys\n"
-        f"sys.path.insert(0, {str(Path.cwd())!r})\n"
+        f"sys.path.insert(0, {str(_PROJECT_ROOT)!r})\n"
         "from datetime import datetime\n"
         "from pathlib import Path\n"
         "from dayu.host.host_store import HostStore\n"
