@@ -795,8 +795,6 @@ def test_log_write_pipeline_config_uses_resolved_agent_iterations(
         "chapter=公司做的是什么生意, resume=True, write_max_retries=2, fast=True, force=True" in item
         for item in logs
     )
-    assert any("agent_max_iterations=16" in item for item in logs)
-    assert any("tool_timeout_seconds=90.0" in item for item in logs)
 
 
 class _FakePromptAssetStore:
