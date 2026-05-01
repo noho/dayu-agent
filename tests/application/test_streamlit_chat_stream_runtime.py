@@ -334,7 +334,7 @@ def test_run_stream_worker_emits_error_and_done_on_exception(monkeypatch: pytest
         _ = (chat_service, user_text, session_id, ticker, event_queue, cancel_event, trace_id)
         raise RuntimeError("worker failed")
 
-    monkeypatch.setattr(stream_runtime, "_consume_chat_event_stream", _raise_in_consumer)
+    monkeypatch.setattr(stream_runtime, "consume_chat_event_stream", _raise_in_consumer)
 
     run_stream_worker(
         chat_service=_StubChatService(
