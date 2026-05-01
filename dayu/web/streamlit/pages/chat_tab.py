@@ -17,7 +17,7 @@ from dayu.host.protocols import (
 )
 from dayu.log import Log
 from dayu.services.protocols import ChatServiceProtocol
-from dayu.web.streamlit.components.sidebar import WatchlistItem
+from dayu.web.streamlit.components.watchlist import WatchlistItem
 from dayu.web.streamlit.pages.chat.stream_runtime import (
     ChatStreamFrameState,
     read_stream_frame_state,
@@ -178,6 +178,7 @@ def _render_stream_frame(*, title, state: ChatStreamFrameState) -> None:
     """渲染当前流式帧的思考与正文。
 
     参数:
+        title: 思考内容折叠面板标题。
         state: 流式渲染帧状态。
 
     返回值:
@@ -222,7 +223,6 @@ def load_history_for_ticker(
         if not turns:
             return []
 
-
         messages: list[ChatMessage] = []
         for turn in turns:
             messages.append(ChatMessage(role="user", content=turn.user_text))
@@ -241,6 +241,7 @@ def load_history_for_ticker(
     except Exception as e:
         Log.error(f"加载历史会话失败: ticker={ticker}, session_id={session_id}, error={e}", module=MODULE)
         return []
+    
 
 def perform_clear_session_history(
     *,
