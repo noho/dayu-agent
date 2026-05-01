@@ -116,6 +116,7 @@ class AsyncRunner(Protocol):
 - 取消信号不是只在 iteration 首尾观察；Runner 必须在 `session.post(...)` 建连等待、`response.json()` / `response.text()` 读取、429/5xx 重试 sleep，以及 SSE 流的下一块等待期间协作式响应取消
 - 取消一旦命中，上层看到的稳定事实是抛出 `dayu.contracts.cancellation.CancelledError`；不能把这类路径降级成 `error_event`、普通超时重试或吞掉后继续产出 `final_answer`
 - Runner 为取消观察临时注册到 `CancellationToken` 的回调必须在本轮调用结束后注销；复用同一 token 的多轮调用不允许累积历史 loop/future 闭包
+- `await_or_cancel` 在等待业务 awaitable 时，对内层抛出的 `RuntimeError` 走双门控收口：仅当 `cancellation_token` 已取消，且错误文本严格匹配 `"cannot schedule new futures after shutdown"` 时（双 Ctrl-C 后 asyncio 默认 executor shutdown，DNS `getaddrinfo` 等路径仍 `executor.submit` 撞上的固定异常），才将其映射成 `CancelledError` 并以单行 warn 收口；其余情形原样上抛，禁止误吞业务异常
 
 历史残留实现：
 - `AsyncCliRunner`：已禁用，仅保留源码以便迁移旧实现，不允许再通过配置或 Host 主链路使用；已从 `dayu.engine` 包级公共导出移除，测试等内部使用方须通过 `dayu.engine.async_cli_runner` 直接导入

@@ -24,7 +24,12 @@ except ImportError:  # pragma: no cover - Windows 不提供 fcntl
 
 from dayu.contracts.cancellation import CancelledError, CancellationToken
 from dayu.host import HostExecutorProtocol
-from dayu.host.protocols import HostGovernanceProtocol
+from dayu.host.protocols import (
+    HostGovernanceProtocol,
+    SessionClearingError,
+    SessionClosedError,
+    SessionWriteBlockedError,
+)
 from dayu.execution.options import ExecutionOptions, ResolvedExecutionOptions
 from dayu.log import Log
 from dayu.services.concurrency_lanes import LANE_WRITE_CHAPTER
@@ -94,6 +99,17 @@ MODULE = "APP.WRITE_PIPELINE"
 _INFER_COMPANY_META_EXCLUDED_FIELDS = frozenset({"company_id"})
 
 
+# Cancel-induced session barrier 白名单：仅这两个子类会在"cancel_run_and_settle
+# 触发后下一次 register_run / scene 启动"路径上抛，且语义等价于"运行已被取消"，
+# 可在外层 token 已置位的双门控下映射成 CancelledError。
+# SessionClearingFailedError 是持久锁定故障态、需人工恢复，刻意排除：即使
+# 外层 token 已取消也原样上抛，避免把 host 侧 actionable 故障掩盖成普通取消。
+_CANCEL_INDUCED_BARRIERS: tuple[type[SessionWriteBlockedError], ...] = (
+    SessionClosedError,
+    SessionClearingError,
+)
+
+
 class _HostScenePromptContractExecutor:
     """适配 ``Host`` 与 ``ScenePromptContractExecutorProtocol`` 的薄壳。
 
@@ -102,13 +118,60 @@ class _HostScenePromptContractExecutor:
     避免在 helper 中泄漏 ``Host`` 类型，也避免回退到无历史的
     ``run_agent_and_wait``——所有 scene 调用都通过 replayable 入口拿到
     ``ReplayHandle``，统一了 helper 内的两条路径。
+
+    取消语义（issue #114）：
+
+    - 调用前一次 ``raise_if_cancelled`` 作为 fast path：仅收口"进入本方法
+      时 token 已置位"这一种情况——典型场景是上一次 LLM 调用返回到本次
+      调用入口之间，外层 token 已被 ``ProcessShutdownCoordinator.
+      settle_active_runs`` 置位。命中即抛 ``CancelledError``，不发起 host
+      调用。**此检查并不能关闭** "preflight 通过 → host 内部 ``register_run``
+      注册 child run 之间" 的 race 窗口（见下）。
+    - 仅捕获 cancel-induced 的 ``SessionClosedError`` /
+      ``SessionClearingError`` 子类（白名单见 ``_CANCEL_INDUCED_BARRIERS``）；
+      在外层 token 已置位的双门控下映射成 ``CancelledError``，避免
+      pipeline fallback 路径把"取消导致的 session 关闭"误判成普通失败、
+      产出 fallback ``chapter.md``。``SessionClearingFailedError`` 是持久
+      锁定故障态、需人工恢复，**不**进白名单——即便外层 token 已取消也
+      原样上抛，避免把 host 侧 actionable 故障掩盖成普通用户取消。
+
+    已知未关闭的 race 窗口（issue #114 后续工作，**不在本 PR 范围**）：
+
+    ``ProcessShutdownCoordinator.settle_active_runs`` 在开始 settle 前对
+    ``Host.list_active_run_ids_for_current_owner()`` 做一次 owner snapshot；
+    每个 child LLM 调用在 ``HostExecutor._start_run`` 内部独立 ``register_run``
+    并拿到自己的全新 ``CancellationToken``，与外层 Service 层 token 之间
+    **没有桥接**。若 SIGINT 落在"本方法 ``_check_cancellation`` 已通过 →
+    host 内部 ``register_run`` 完成"之间，新登记的 child run 不在 settle
+    snapshot 内、也无人会对它调 ``cancel_run_and_settle``，本次 LLM 调用
+    会跑到自然返回（audit/repair 等可能继续追下一次）。彻底关闭该窗口
+    需要 Host 侧把 Service 层外层 token 桥接到每个 child run 的 token
+    （或在 ``register_run`` 入口与外层 token 联动），属 Host 改造，
+    不在本 PR 引入。
+
+    本 executor 也**不**在 await 边界对 host 子任务做强制取消：
+    若改用 ``task.cancel()`` 强制注入 ``asyncio.CancelledError``，会跳过
+    host 的 cancelled 终态分支留下孤儿 active run，并掩盖 host 真实异常
+    （含 ``SessionClearingFailedError`` 这类 actionable 故障）。
+    ``ProcessShutdownCoordinator.settle_active_runs`` 通过
+    ``cancel_run_and_settle`` → ``request_cancel`` → ``CancellationBridge``
+    触达 child run token 才是 settle in-flight child run 的真源，会沿
+    协程栈抛 ``dayu.contracts.cancellation.CancelledError``，进而被 host
+    的 ``_settle_agent_cancelled`` / ``_finalize_cancelled`` 正常收口。
     """
 
-    def __init__(self, *, host_executor: HostExecutorProtocol) -> None:
+    def __init__(
+        self,
+        *,
+        host_executor: HostExecutorProtocol,
+        cancellation_token: CancellationToken | None = None,
+    ) -> None:
         """初始化适配器。
 
         Args:
             host_executor: 已组装好的 Host 执行入口。
+            cancellation_token: 协作式取消令牌；为 ``None`` 时退化为不做
+                LLM 入口自查与 cancel-induced 异常映射，行为与旧版一致。
 
         Returns:
             无。
@@ -118,6 +181,65 @@ class _HostScenePromptContractExecutor:
         """
 
         self._host_executor = host_executor
+        self._cancellation_token = cancellation_token
+
+    def _check_cancellation(self) -> None:
+        """LLM 调用入口 fast path checkpoint。
+
+        仅检查"进入本方法时 token 是否已置位"——命中即抛，不发起 host 调用。
+        **不能**关闭"本检查通过 → host 内部 ``register_run`` 之间"的 race
+        窗口（详见类 docstring）。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            CancelledError: ``cancellation_token`` 已触发时抛出。
+        """
+
+        token = self._cancellation_token
+        if token is not None:
+            token.raise_if_cancelled()
+
+    def _maybe_map_cancel_induced_barrier(
+        self, exc: SessionWriteBlockedError
+    ) -> CancelledError | None:
+        """将 cancel-induced session barrier 异常映射成 ``CancelledError``。
+
+        当 ``cancel_run_and_settle`` 触发 session 关闭后，下一次
+        ``register_run`` 入口可能撞上 ``SessionClosedError`` /
+        ``SessionClearingError``；这些异常本身不是 ``CancelledError``，若沿
+        调用栈传到 pipeline fallback 会被当作普通失败、产出 fallback
+        ``chapter.md``。本方法在 token 已取消的双门控下、仅针对白名单
+        子类把这些异常折叠成 ``CancelledError``。
+
+        ``SessionClearingFailedError`` 是 host 持久锁定故障态、需人工恢复，
+        不进白名单：本方法对其返回 ``None``，由调用方原样上抛，保留
+        actionable 信号。
+
+        Args:
+            exc: 捕获到的 ``SessionWriteBlockedError`` 子类异常实例。
+
+        Returns:
+            映射后的 ``CancelledError`` 实例（保留原异常作 ``__cause__``）；
+            若 token 未置位、或异常类型不在白名单内，则返回 ``None``，由
+            调用方原样上抛。
+
+        Raises:
+            无。
+        """
+
+        token = self._cancellation_token
+        if token is None or not token.is_cancelled():
+            return None
+        if not isinstance(exc, _CANCEL_INDUCED_BARRIERS):
+            return None
+        cancelled = CancelledError("操作已被取消")
+        cancelled.__cause__ = exc
+        return cancelled
 
     async def run_replayable(
         self,
@@ -132,10 +254,20 @@ class _HostScenePromptContractExecutor:
             ``(AppResult, ReplayHandle)`` 二元组。
 
         Raises:
-            无。
+            CancelledError: 调用前 token 已取消，或 cancel-induced 白名单
+                barrier 异常被双门控映射后抛出。
         """
 
-        return await self._host_executor.run_agent_and_wait_replayable(execution_contract)
+        self._check_cancellation()
+        try:
+            return await self._host_executor.run_agent_and_wait_replayable(
+                execution_contract
+            )
+        except SessionWriteBlockedError as exc:
+            mapped = self._maybe_map_cancel_induced_barrier(exc)
+            if mapped is not None:
+                raise mapped from exc
+            raise
 
     async def replay(
         self,
@@ -152,10 +284,20 @@ class _HostScenePromptContractExecutor:
             ``(AppResult, ReplayHandle)`` 二元组；新句柄可继续追加 replay。
 
         Raises:
-            无。
+            CancelledError: 调用前 token 已取消，或 cancel-induced 白名单
+                barrier 异常被双门控映射后抛出。
         """
 
-        return await self._host_executor.replay_agent_and_wait(handle, execution_contract)
+        self._check_cancellation()
+        try:
+            return await self._host_executor.replay_agent_and_wait(
+                handle, execution_contract
+            )
+        except SessionWriteBlockedError as exc:
+            mapped = self._maybe_map_cancel_induced_barrier(exc)
+            if mapped is not None:
+                raise mapped from exc
+            raise
 
     def discard(self, handle: ReplayHandle) -> None:
         """释放未消费的 replay 句柄；转交给 ``Host.discard_replay_state``。
@@ -313,7 +455,10 @@ class WritePipelineRunner:
         )
         self._prompt_runner = ScenePromptRunner(
             preparer=self._preparer,
-            contract_executor=_HostScenePromptContractExecutor(host_executor=host_executor),
+            contract_executor=_HostScenePromptContractExecutor(
+                host_executor=host_executor,
+                cancellation_token=cancellation_token,
+            ),
             write_config=write_config,
         )
 

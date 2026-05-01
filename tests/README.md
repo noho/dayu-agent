@@ -463,6 +463,9 @@ Fins 相关改动时，至少同步更新：
 - `test_conversation_store.py`
 - `test_conversation_memory.py`
 - `test_write_pipeline.py`
+- `test_write_pipeline_cancellation.py`
+- `test_write_pipeline_drain_settle.py`
+- `test_await_or_cancel_shutdown.py`
 - `test_report_assembler.py`
 - `test_execution_summary_builder.py`
 

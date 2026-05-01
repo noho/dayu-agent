@@ -12,6 +12,13 @@ from dayu.log import Log
 
 MODULE = "ENGINE.CANCELLATION"
 
+# 双 Ctrl-C 收口：CPython asyncio 在默认 executor shutdown 后再
+# ``executor.submit``（典型路径：DNS ``getaddrinfo``）抛出的 RuntimeError
+# 错误文本是 ``RuntimeError: cannot schedule new futures after shutdown``，
+# 即 ``str(exc)`` 严格等于下面常量。用全等匹配而非子串匹配，避免任何含此
+# 短语但根因不同的 RuntimeError 在取消窗口期被误折叠成 CancelledError。
+_EXECUTOR_SHUTDOWN_RUNTIME_ERROR_MESSAGE = "cannot schedule new futures after shutdown"
+
 _AwaitableResult = TypeVar("_AwaitableResult")
 
 
@@ -123,7 +130,25 @@ async def await_or_cancel(
                 module=log_module,
             )
             raise EngineCancelledError(f"operation cancelled: {operation_name}")
-        return await task
+        try:
+            return await task
+        except RuntimeError as exc:
+            # 双 Ctrl-C 收口：第二次 SIGINT 后 asyncio 默认 executor shutdown，
+            # DNS getaddrinfo 等路径仍 ``executor.submit`` → 撞上
+            # ``RuntimeError: cannot schedule new futures after shutdown``。
+            # 双门控（token 已取消 + 错误文本严格全等）下转 CancelledError，
+            # 单行警告收口；其它情形原样上抛，避免误吞业务异常。
+            if (
+                cancellation_token is not None
+                and cancellation_token.is_cancelled()
+                and str(exc) == _EXECUTOR_SHUTDOWN_RUNTIME_ERROR_MESSAGE
+            ):
+                Log.warn(
+                    f"{log_prefix} 取消窗口期 executor 已关停: {operation_name}",
+                    module=log_module,
+                )
+                raise EngineCancelledError(f"operation cancelled: {operation_name}") from exc
+            raise
     except asyncio.CancelledError:
         await cancel_task_and_wait(task)
         raise
