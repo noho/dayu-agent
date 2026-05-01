@@ -23,6 +23,8 @@
 
 ## 架构硬约束
 
+- Dayu 的架构定位是：宿主强约束下的 `LLM in the loop`，不是 `LLM on the loop`。
+- Host 对 Agent / AsyncAgent / AsyncOpenAIRunner 的生命周期、取消、治理是强约束真源。
 - 严格遵守分层架构：`UI -> Service -> Host -> Agent`。
 - 禁止反向依赖。
 - 设计下层组件接口时，必须假设上层组件不存在，只考虑上层调用需求，不向上泄漏实现细节。
