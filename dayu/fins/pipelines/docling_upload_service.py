@@ -21,10 +21,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
-from dayu.docling_runtime import (
-    DoclingRuntimeInitializationError,
-    convert_pdf_bytes_with_docling,
-)
+from dayu.fins.docling_export import convert_pdf_bytes_to_docling_payload
 from dayu.fins.domain.document_models import (
     SourceHandle,
     SourceDocumentStateChangeRequest,
@@ -570,7 +567,9 @@ class DoclingUploadService:
 def _convert_bytes_with_docling(raw_data: bytes, stream_name: str) -> dict[str, Any]:
     """使用 Docling 将字节流转换为结构化 JSON。
 
-    走 ``DocumentStream`` 输入，规避 Windows 上 ``Path`` mbcs 编码问题。
+    本函数作为兼容入口保留，对外签名保持向后兼容；实际实现 delegate 到
+    :func:`dayu.fins.docling_export.convert_pdf_bytes_to_docling_payload`，让
+    docling-runtime 调用点收敛到 ``dayu.fins.docling_export`` 单一真源。
 
     Args:
         raw_data: 文件原始字节内容。
@@ -584,20 +583,7 @@ def _convert_bytes_with_docling(raw_data: bytes, stream_name: str) -> dict[str, 
         RuntimeError: Docling 转换失败时抛出。
     """
 
-    try:
-        result = convert_pdf_bytes_with_docling(
-            raw_data,
-            stream_name=stream_name,
-            do_ocr=True,
-            do_table_structure=True,
-            table_mode="accurate",
-            do_cell_matching=True,
-        )
-    except DoclingRuntimeInitializationError:
-        raise
-    except Exception as exc:  # pragma: no cover - 第三方异常兜底
-        raise RuntimeError(f"Docling 转换失败: {stream_name}") from exc
-    return result.document.export_to_dict()
+    return convert_pdf_bytes_to_docling_payload(raw_data, stream_name=stream_name)
 
 
 def _validate_source_files(files: list[Path]) -> list[Path]:
