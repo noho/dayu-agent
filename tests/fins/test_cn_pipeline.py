@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from dayu.fins.domain.enums import SourceKind
+from dayu.fins.downloaders.hkexnews_downloader import HkexnewsDiscoveryClient
 from dayu.fins.pipelines.cn_download_models import (
     CnCompanyProfile,
     CnReportCandidate,
@@ -142,6 +143,94 @@ class _PipelineDownloadFakeConverter:
         return _DOCLING_BYTES
 
 
+@dataclass
+class _PipelineDownloadFakeHkDiscoveryClient:
+    """CnPipeline HK wrapper 测试用 fake discovery client。"""
+
+    temp_dir: Path
+    download_calls: int = 0
+
+    def resolve_company(self, query: CnReportQuery) -> CnCompanyProfile:
+        """返回固定 HK 公司元数据。
+
+        Args:
+            query: 下载查询。
+
+        Returns:
+            公司基础元数据。
+
+        Raises:
+            无。
+        """
+
+        return CnCompanyProfile(
+            provider="hkexnews",
+            company_id="HKEX:7609",
+            company_name="騰訊控股",
+            ticker=query.normalized_ticker,
+        )
+
+    def list_report_candidates(
+        self,
+        query: CnReportQuery,
+        profile: CnCompanyProfile,
+    ) -> tuple[CnReportCandidate, ...]:
+        """返回一份固定 HK FY 候选。
+
+        Args:
+            query: 下载查询。
+            profile: 公司元数据。
+
+        Returns:
+            候选 tuple。
+
+        Raises:
+            无。
+        """
+
+        del profile
+        return (
+            CnReportCandidate(
+                provider="hkexnews",
+                source_id="HK1",
+                source_url="https://www1.hkexnews.hk/listedco/listconews/sehk/2025/0408/hk1.pdf",
+                title="ANNUAL REPORT 2024",
+                language="en",
+                filing_date="2025-04-08",
+                fiscal_year=2024,
+                fiscal_period="FY",
+                amended=False,
+                content_length=len(_PDF_BYTES),
+                etag='"hk-v1"',
+                last_modified="Tue, 08 Apr 2025 00:00:00 GMT",
+            ),
+        )
+
+    def download_report_pdf(self, candidate: CnReportCandidate) -> DownloadedReportAsset:
+        """返回本地临时 PDF 资产。
+
+        Args:
+            candidate: 远端候选。
+
+        Returns:
+            已下载 PDF 资产。
+
+        Raises:
+            OSError: 临时文件写入失败时抛出。
+        """
+
+        self.download_calls += 1
+        pdf_path = self.temp_dir / f"{candidate.source_id}_{self.download_calls}.pdf"
+        pdf_path.write_bytes(_PDF_BYTES)
+        return DownloadedReportAsset(
+            candidate=candidate,
+            pdf_path=pdf_path,
+            sha256=hashlib.sha256(_PDF_BYTES).hexdigest(),
+            content_length=len(_PDF_BYTES),
+            downloaded_at="2026-05-02T00:00:00+00:00",
+        )
+
+
 def test_download_runs_cn_workflow_with_injected_discovery_client(tmp_path: Path) -> None:
     """验证同步 `download` wrapper 会调用真实 CN workflow 且不访问网络。
 
@@ -176,6 +265,67 @@ def test_download_runs_cn_workflow_with_injected_discovery_client(tmp_path: Path
     assert result["action"] == "download"
     assert result["status"] == "ok"
     assert result["ticker"] == "000001"
+    assert result["summary"]["downloaded"] == 1
+    assert discovery.download_calls == 1
+    assert converter.calls == 1
+
+
+def test_default_hk_discovery_client_is_hkexnews(tmp_path: Path) -> None:
+    """验证 CnPipeline 默认 HK discovery client 已接入披露易。
+
+    Args:
+        tmp_path: 临时目录。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    pipeline = CnPipeline(
+        workspace_root=tmp_path,
+        processor_registry=build_fins_processor_registry(),
+    )
+
+    assert isinstance(pipeline.hk_discovery_client, HkexnewsDiscoveryClient)
+
+
+def test_download_runs_hk_workflow_with_injected_discovery_client(tmp_path: Path) -> None:
+    """验证 HK ticker 会经同一 CN/HK workflow 完成下载闭环。
+
+    Args:
+        tmp_path: 临时目录。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    discovery = _PipelineDownloadFakeHkDiscoveryClient(temp_dir=tmp_path)
+    converter = _PipelineDownloadFakeConverter()
+    pipeline = CnPipeline(
+        workspace_root=tmp_path,
+        processor_registry=build_fins_processor_registry(),
+        hk_discovery_client=discovery,
+        convert_pdf_to_docling_json=converter,
+    )
+
+    result = pipeline.download(
+        ticker="0700",
+        form_type="FY",
+        start_date="2024-01-01",
+        end_date="2025-12-31",
+        overwrite=True,
+    )
+
+    assert result["pipeline"] == "cn"
+    assert result["action"] == "download"
+    assert result["status"] == "ok"
+    assert result["ticker"] == "0700"
+    assert result["company_info"]["company_id"] == "HKEX:7609"
     assert result["summary"]["downloaded"] == 1
     assert discovery.download_calls == 1
     assert converter.calls == 1

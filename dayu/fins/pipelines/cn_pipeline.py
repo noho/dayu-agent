@@ -17,17 +17,12 @@ from dayu.fins.docling_export import PdfToDoclingJsonBytes, convert_pdf_bytes_to
 from dayu.fins.domain.document_models import ProcessedHandle
 from dayu.fins.domain.enums import SourceKind
 from dayu.fins.downloaders.cninfo_downloader import CninfoDiscoveryClient
+from dayu.fins.downloaders.hkexnews_downloader import HkexnewsDiscoveryClient
 from dayu.fins.ingestion.pipeline_backends import PipelineIngestionBackend
 from dayu.fins.ingestion.process_events import ProcessEvent, ProcessEventType
 from dayu.fins.ingestion.service import FinsIngestionService
 from dayu.fins.pipelines.cn_download_protocols import CnReportDiscoveryClientProtocol
 from dayu.fins.pipelines.cn_download_workflow import run_cn_download_stream_impl
-from dayu.fins.pipelines.cn_download_models import (
-    CnCompanyProfile,
-    CnReportCandidate,
-    CnReportQuery,
-    DownloadedReportAsset,
-)
 from dayu.fins.storage import (
     CompanyMetaRepositoryProtocol,
     DocumentBlobRepositoryProtocol,
@@ -99,67 +94,11 @@ def _raise_if_cancelled(
     raise CancelledError("操作已被取消")
 
 
-class _UnsupportedHkDiscoveryClient:
-    """B 阶段接入披露易前的 HK discovery 显式未支持实现。"""
-
-    def resolve_company(self, query: CnReportQuery) -> CnCompanyProfile:
-        """拒绝 HK 公司解析。
-
-        Args:
-            query: 下载查询。
-
-        Returns:
-            不返回。
-
-        Raises:
-            ValueError: 始终抛出，提示 HK 下载尚未接入。
-        """
-
-        raise ValueError(f"HK download 尚未接入披露易 downloader: ticker={query.normalized_ticker}")
-
-    def list_report_candidates(
-        self,
-        query: CnReportQuery,
-        profile: CnCompanyProfile,
-    ) -> tuple[CnReportCandidate, ...]:
-        """拒绝 HK 候选发现。
-
-        Args:
-            query: 下载查询。
-            profile: 公司基础元数据。
-
-        Returns:
-            不返回。
-
-        Raises:
-            ValueError: 始终抛出，提示 HK 下载尚未接入。
-        """
-
-        del profile
-        raise ValueError(f"HK download 尚未接入披露易 downloader: ticker={query.normalized_ticker}")
-
-    def download_report_pdf(self, candidate: CnReportCandidate) -> DownloadedReportAsset:
-        """拒绝 HK PDF 下载。
-
-        Args:
-            candidate: 远端候选。
-
-        Returns:
-            不返回。
-
-        Raises:
-            RuntimeError: 始终抛出，提示 HK 下载尚未接入。
-        """
-
-        raise RuntimeError(f"HK download 尚未接入披露易 downloader: source_id={candidate.source_id}")
-
-
 class CnPipeline(PipelineProtocol):
     """港A股管线骨架实现。"""
 
     PIPELINE_NAME = "cn"
     MODULE = "FINS.CN_PIPELINE"
-    NOT_IMPLEMENTED_STATUS = "not_implemented"
 
     def __init__(
         self,
@@ -185,7 +124,7 @@ class CnPipeline(PipelineProtocol):
             blob_repository: 可选文件对象仓储实现。
             filing_maintenance_repository: 可选 filing 维护治理仓储实现。
             cn_discovery_client: 可选 CN 巨潮 discovery client。
-            hk_discovery_client: 可选 HK 披露易 discovery client；当前默认实现显式返回未接入错误，测试可注入 fake。
+            hk_discovery_client: 可选 HK 披露易 discovery client。
             convert_pdf_to_docling_json: 可选 PDF 到 Docling JSON 转换函数。
             workspace_root: 工作区根目录。
         Returns:
@@ -224,7 +163,7 @@ class CnPipeline(PipelineProtocol):
             )
         )
         self._cn_discovery_client = cn_discovery_client or CninfoDiscoveryClient()
-        self._hk_discovery_client = hk_discovery_client or _UnsupportedHkDiscoveryClient()
+        self._hk_discovery_client = hk_discovery_client or HkexnewsDiscoveryClient()
         self._convert_pdf_to_docling_json = (
             convert_pdf_to_docling_json or convert_pdf_bytes_to_docling_json_bytes
         )
@@ -1694,26 +1633,6 @@ class CnPipeline(PipelineProtocol):
             "status": payload.pop("status", "placeholder"),
             **payload,
         }
-
-    def _build_not_implemented_result(self, action: str, **payload: Any) -> dict[str, Any]:
-        """构建未实现结果。
-
-        Args:
-            action: 动作名称。
-            **payload: 结果负载字段。
-
-        Returns:
-            `status=not_implemented` 的统一结果字典。
-
-        Raises:
-            无。
-        """
-
-        return self._build_result(
-            action=action,
-            status=self.NOT_IMPLEMENTED_STATUS,
-            **payload,
-        )
 
     def _safe_get_document_meta(
         self,

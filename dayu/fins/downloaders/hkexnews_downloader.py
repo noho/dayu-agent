@@ -923,7 +923,7 @@ def _infer_fiscal_period_from_text(
     """
 
     combined = f"{title} {category_text}".upper()
-    for period in ("FY", "H1", "Q1", "Q3"):
+    for period in ("H1", "Q1", "Q3", "FY"):
         tokens = _PERIOD_INFERENCE_TOKENS[period]
         if any(token.upper() in combined for token in tokens):
             return period

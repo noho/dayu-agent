@@ -437,6 +437,45 @@ def test_list_report_candidates_maps_hk_period_codes_and_allows_empty_quarters()
     assert t2codes == ["40100", "40100", "40200", "40200", "40300", "40300", "40300", "40300"]
 
 
+def test_list_report_candidates_treats_traditional_half_year_as_h1() -> None:
+    """真实繁体 ``中期/半年度報告`` 分类必须归入 H1 而非 FY。"""
+
+    h1_url = f"{HKEXNEWS_BASE_URL}/listedco/listconews/sehk/2025/0826/h1.pdf"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url).startswith(HKEXNEWS_TITLE_SEARCH_URL) and request.method == "GET":
+            form = _query_from_request(request)
+            if form["lang"] == ("E",):
+                return httpx.Response(200, json={"result": "[]"})
+            return httpx.Response(
+                200,
+                json=_title_search_payload(
+                    [
+                        _announcement(
+                            document_id="H1_2025",
+                            title="中期報告 2025",
+                            file_link="/listedco/listconews/sehk/2025/0826/h1.pdf",
+                            date_time="26/08/2025 16:30",
+                            category_text="財務報表/環境、社會及管治資料 - [中期/半年度報告]",
+                        ),
+                    ]
+                ),
+            )
+        if str(request.url) == h1_url and request.method == "HEAD":
+            return httpx.Response(200, headers={})
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    client = _build_client(handler)
+    candidates = client.list_report_candidates(
+        _query(periods=("FY", "H1")),
+        _profile(),
+    )
+
+    assert [(candidate.source_id, candidate.fiscal_period) for candidate in candidates] == [
+        ("H1_2025", "H1"),
+    ]
+
+
 def test_list_report_candidates_filters_q1_q3_by_title_period() -> None:
     """同一 ``40300`` 结果必须按标题区分 Q1/Q3，不能互相误标。"""
 
