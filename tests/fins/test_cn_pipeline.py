@@ -325,7 +325,7 @@ def test_download_runs_hk_workflow_with_injected_discovery_client(tmp_path: Path
     assert result["action"] == "download"
     assert result["status"] == "ok"
     assert result["ticker"] == "0700"
-    assert result["company_info"]["company_id"] == "HKEX:7609"
+    assert result["company_info"]["company_id"] == "0700_HKEX"
     assert result["summary"]["downloaded"] == 1
     assert discovery.download_calls == 1
     assert converter.calls == 1
@@ -440,7 +440,7 @@ async def test_upload_filing_stream_uploads_files_with_docling(tmp_path: Path) -
     assert str(result["document_id"]).startswith("fil_cn_")
     assert str(result["internal_document_id"]).startswith("cn_")
     company_meta = pipeline._company_repository.get_company_meta("000001")  # type: ignore[attr-defined]
-    assert company_meta.company_id == "000001"
+    assert company_meta.company_id == "000001_SZSE"
     assert company_meta.company_name == "平安银行"
     meta = pipeline._source_repository.get_source_meta("000001", result["document_id"], SourceKind.FILING)  # type: ignore[attr-defined]
     assert str(meta["primary_document"]).endswith("_docling.json")
@@ -503,7 +503,7 @@ async def test_upload_material_stream_uploads_files_with_docling(tmp_path: Path)
     assert result["status"] == "ok"
     assert str(result["document_id"]).startswith("mat_")
     company_meta = pipeline._company_repository.get_company_meta("000001")  # type: ignore[attr-defined]
-    assert company_meta.company_id == "000001"
+    assert company_meta.company_id == "000001_SZSE"
     assert company_meta.company_name == "平安银行"
     meta = pipeline._source_repository.get_source_meta("000001", result["document_id"], SourceKind.MATERIAL)  # type: ignore[attr-defined]
     assert str(meta["primary_document"]).endswith("_docling.json")

@@ -13,7 +13,7 @@ from typing import Optional
 
 from dayu.log import Log
 from dayu.fins.domain.document_models import CompanyMeta, now_iso8601
-from dayu.fins.ticker_normalization import normalize_ticker
+from dayu.fins.ticker_normalization import normalize_ticker, ticker_to_company_id
 from dayu.fins.storage import CompanyMetaRepositoryProtocol
 
 UPLOAD_ACTIONS_REQUIRING_COMPANY_META = frozenset({"create", "update"})
@@ -36,7 +36,7 @@ def upsert_company_meta_for_upload(
         repository: 公司元数据仓储实现。
         ticker: 股票代码。
         action: 上传动作。
-        company_id: 公司 ID。
+        company_id: 兼容既有调用方的可选字段；上传链路不会把它作为身份真源。
         company_name: 公司名称。
         ticker_aliases: 可选 ticker alias 列表；缺失时仅使用规范 ticker。
 
@@ -44,7 +44,7 @@ def upsert_company_meta_for_upload(
         无。
 
     Raises:
-        ValueError: create/update 场景在缺少可用 company meta 时抛出。
+        ValueError: create/update 场景在缺少公司名称时抛出。
         OSError: 仓储写入失败时抛出。
     """
 
@@ -61,15 +61,12 @@ def upsert_company_meta_for_upload(
         )
         return
 
-    normalized_company_id = _require_company_meta_field(
-        value=company_id,
-        option_name="--company-id",
-    )
+    profile = normalize_ticker(ticker)
+    normalized_company_id = ticker_to_company_id(profile)
     normalized_company_name = _require_company_meta_field(
         value=company_name,
         option_name="--company-name",
     )
-    profile = normalize_ticker(ticker)
     normalized_ticker_aliases = _normalize_ticker_aliases(
         canonical_ticker=profile.canonical,
         ticker_aliases=ticker_aliases,
@@ -85,6 +82,22 @@ def upsert_company_meta_for_upload(
             ticker_aliases=normalized_ticker_aliases,
         )
     )
+
+
+def build_upload_company_id(ticker: str) -> str:
+    """按上传链路稳定规则生成公司 ID。
+
+    Args:
+        ticker: 股票代码，可为原始输入或 canonical ticker。
+
+    Returns:
+        由 ``ticker_to_company_id`` 推导出的公司 ID。
+
+    Raises:
+        ValueError: ticker 为空或无法归一化时抛出。
+    """
+
+    return ticker_to_company_id(normalize_ticker(ticker))
 
 
 def _require_company_meta_field(*, value: Optional[str], option_name: str) -> str:
@@ -189,7 +202,7 @@ def _warn_ignored_company_meta_args(
     Log.warn(
         (
             f"ticker={ticker} 已存在公司元数据，"
-            "将忽略本次上传传入的 --company-id/--company-name，继续使用现有 meta.json"
+            "将忽略本次上传传入的 company_id/company_name，继续使用现有 meta.json"
         ),
         module=MODULE,
     )

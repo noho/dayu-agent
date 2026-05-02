@@ -27,25 +27,25 @@
 - `upload_filing` 支持可选 `--action`（`create|update|delete`）：
   - 不传时按稳定 `document_id` 自动判定 `create/update`。
   - `create/update/自动判定` 都必须提供 `--files`。
-    - 若 `meta.json` 不存在，则必须提供 `--company-id`；`--company-name` 可由 `--infer` 成功后补齐。
-    - 若 `meta.json` 已存在，则重复传入 `--company-id/--company-name` 会被忽略并告警。
+    - 若 `meta.json` 不存在，则必须提供 `--company-name` 或通过 `--infer` 补齐；公司 ID 由 ticker 归一化结果自动生成。
+    - 若 `meta.json` 已存在，则重复传入 `--company-name` 会被忽略并告警。
 - `upload_material` 需要 `--forms` 与 `--material-name`，`--action` 可选：
   - 不传时按稳定 `document_id` 自动判定 `create/update`。
   - `create/update/自动判定` 都必须提供 `--files`。
   - `--fiscal-year/--fiscal-period` 为可选项，提供时参与 material 稳定 `document_id` 生成。
-  - 若 `meta.json` 不存在，则必须提供 `--company-id`；`--company-name` 可由 `--infer` 成功后补齐。
-  - 若 `meta.json` 已存在，则重复传入 `--company-id/--company-name` 会被忽略并告警。
+  - 若 `meta.json` 不存在，则必须提供 `--company-name` 或通过 `--infer` 补齐；公司 ID 由 ticker 归一化结果自动生成。
+  - 若 `meta.json` 已存在，则重复传入 `--company-name` 会被忽略并告警。
 - `upload_filings_from`：
   - 扫描目录并从文件名中识别 `fiscal_year/fiscal_period`。
-    - 若 `meta.json` 不存在，则仅首条生成命令附带 `--company-id` 与 `--company-name` 以初始化公司元数据；`--infer` 成功时会把“显式 CSV alias + FMP alias”的合并结果，以及最终公司名 bake 到脚本正文。
-    - 若 `meta.json` 已存在，则生成脚本不再附带 `--company-id/--company-name`，重复传入会被忽略并告警。
+    - 若 `meta.json` 不存在，则仅首条生成命令附带 `--company-name` 以初始化公司元数据；`--infer` 成功时会把“显式 CSV alias + FMP alias”的合并结果，以及最终公司名 bake 到脚本正文。
+    - 若 `meta.json` 已存在，则生成脚本不再附带 `--company-name`，重复传入会被忽略并告警。
   - 仅生成批量上传脚本，不直接执行上传；脚本格式跟随当前运行平台，且头部附带可复制的重生成命令注释。
 
 示例：
 - `python -m dayu.cli download --ticker AAPL --forms 10Q 10K DEF14A --start 2024 --end 2025-02`
-- `python -m dayu.cli upload_filing --ticker 0300 --files ./tmp/a.pdf --fiscal-year 2025 --fiscal-period FY --company-id 000333 --company-name 美的集团`
+- `python -m dayu.cli upload_filing --ticker 0300 --files ./tmp/a.pdf --fiscal-year 2025 --fiscal-period FY --company-name 美的集团`
 - `python -m dayu.cli upload_filings_from --ticker 0300 --from ./workspace/source --output ./workspace/upload_0300.sh`
-- `python -m dayu.cli upload_material --ticker AAPL --forms MATERIAL_OTHER --material-name deck --files ./tmp/deck.pdf --company-id 320193 --company-name "Apple Inc."`
+- `python -m dayu.cli upload_material --ticker AAPL --forms MATERIAL_OTHER --material-name deck --files ./tmp/deck.pdf --company-name "Apple Inc."`
 - `python -m dayu.cli process --ticker AAPL --overwrite`
 """
 
@@ -379,12 +379,7 @@ def _add_upload_filing_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--amended", action="store_true", help="财报是否修订版")
     parser.add_argument("--filing-date", dest="filing_date", default=None, help="可选披露日期")
     parser.add_argument("--report-date", dest="report_date", default=None, help="可选报告日期")
-    parser.add_argument(
-        "--company-id",
-        dest="company_id",
-        default=None,
-        help="公司 ID（仅在 meta.json 不存在时 create/update 必填）",
-    )
+    parser.set_defaults(company_id=None)
     parser.add_argument(
         "--company-name",
         dest="company_name",
@@ -444,12 +439,7 @@ def _add_upload_material_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--fiscal-period", dest="fiscal_period", default=None, help="可选财期")
     parser.add_argument("--filing-date", dest="filing_date", default=None, help="可选披露日期")
     parser.add_argument("--report-date", dest="report_date", default=None, help="可选报告日期")
-    parser.add_argument(
-        "--company-id",
-        dest="company_id",
-        default=None,
-        help="公司 ID（仅在 meta.json 不存在时 create/update 必填）",
-    )
+    parser.set_defaults(company_id=None)
     parser.add_argument(
         "--company-name",
         dest="company_name",
@@ -506,12 +496,7 @@ def _add_upload_filings_from_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--amended", action="store_true", help="生成命令时附加 --amended")
     parser.add_argument("--filing-date", dest="filing_date", default=None, help="批量附加披露日期")
     parser.add_argument("--report-date", dest="report_date", default=None, help="批量附加报告日期")
-    parser.add_argument(
-        "--company-id",
-        dest="company_id",
-        default=None,
-        help="公司 ID（仅在工作区缺少 meta.json 时用于首条生成命令）",
-    )
+    parser.set_defaults(company_id=None)
     parser.add_argument(
         "--company-name",
         dest="company_name",
@@ -917,7 +902,6 @@ def _prepare_upload_like_args(args: argparse.Namespace) -> None:
         return
     _validate_company_meta_args(
         action_name=getattr(args, "action", None),
-        company_id=getattr(args, "company_id", None),
         company_name=getattr(args, "company_name", None),
         command_name=args.command,
     )
@@ -1415,15 +1399,13 @@ def _validate_upload_filing_args(args: argparse.Namespace) -> None:
 def _validate_company_meta_args(
     *,
     action_name: Optional[str],
-    company_id: Optional[str],
     company_name: Optional[str],
     command_name: str,
 ) -> None:
-    """校验 create/update 场景下的 company meta 参数。
+    """校验 create/update 场景下的公司名称参数。
 
     Args:
         action_name: 动作名称。
-        company_id: 公司 ID 参数。
         company_name: 公司名称参数。
         command_name: 子命令名称（用于错误信息）。
 
@@ -1431,14 +1413,12 @@ def _validate_company_meta_args(
         无。
 
     Raises:
-        ValueError: create/update 缺失 company meta 时抛出。
+        ValueError: create/update 缺失公司名称时抛出。
     """
 
     normalized_action = str(action_name or "").strip().lower()
     if normalized_action == "delete":
         return
-    if not str(company_id or "").strip():
-        raise ValueError(f"{command_name} 在自动判定/create/update 时必须提供 --company-id")
     if not str(company_name or "").strip():
         raise ValueError(f"{command_name} 在自动判定/create/update 时必须提供 --company-name")
 
@@ -1484,7 +1464,6 @@ def _generate_upload_filings_script(args: UploadFilingsScriptArgsProtocol) -> di
     if include_company_meta_once:
         _validate_company_meta_args(
             action_name=args.action,
-            company_id=args.company_id,
             company_name=args.company_name,
             command_name="upload_filings_from",
         )
@@ -1768,10 +1747,7 @@ def _build_upload_filings_from_regenerate_command(
     report_date = getattr(args, "report_date", None)
     if report_date:
         parts.extend(["--report-date", str(report_date)])
-    company_id = getattr(args, "company_id", None)
     company_name = args.original_company_name if args.original_company_name is not None else args.company_name
-    if include_company_meta_args and company_id:
-        parts.extend(["--company-id", str(company_id)])
     if include_company_meta_args and company_name:
         parts.extend(["--company-name", str(company_name)])
     if bool(getattr(args, "overwrite", False)):
@@ -1808,7 +1784,7 @@ def _build_upload_material_command(
         fiscal_period: 可选财期。
         filing_date: 披露日期。
         report_date: 报告日期。
-        company_id: 公司 ID。
+        company_id: 可选兼容字段；上传链路不会把它作为身份真源。
         company_name: 公司名称。
         overwrite: 是否覆盖。
 
@@ -1839,8 +1815,6 @@ def _build_upload_material_command(
         parts.extend(["--fiscal-year", str(fiscal_year)])
     if fiscal_period:
         parts.extend(["--fiscal-period", fiscal_period])
-    if company_id:
-        parts.extend(["--company-id", company_id])
     if company_name:
         parts.extend(["--company-name", company_name])
     if filing_date:
@@ -1879,7 +1853,7 @@ def _build_upload_filing_command(
         amended: 是否修订版。
         filing_date: 披露日期。
         report_date: 报告日期。
-        company_id: 公司 ID。
+        company_id: 可选兼容字段；上传链路不会把它作为身份真源。
         company_name: 公司名称。
         overwrite: 是否覆盖。
 
@@ -1906,8 +1880,6 @@ def _build_upload_filing_command(
     ]
     if action:
         parts.extend(["--action", action])
-    if company_id:
-        parts.extend(["--company-id", company_id])
     if company_name:
         parts.extend(["--company-name", company_name])
     if amended:
@@ -1947,7 +1919,7 @@ def _attach_upload_commands(
         amended: 是否修订版。
         filing_date: 披露日期。
         report_date: 报告日期。
-        company_id: 公司 ID。
+        company_id: 可选兼容字段；上传链路不会把它作为身份真源。
         company_name: 公司名称。
         overwrite: 是否覆盖。
         include_company_meta_once: 是否仅在首条命令里注入 company meta。
@@ -2035,7 +2007,7 @@ def _warn_ignored_company_meta_args(
 
     Args:
         ticker: 股票代码。
-        company_id: 公司 ID 参数。
+        company_id: 可选兼容字段。
         company_name: 公司名称参数。
         command_name: 子命令名称。
 
@@ -2053,7 +2025,7 @@ def _warn_ignored_company_meta_args(
     Log.warn(
         (
             f"{command_name}: ticker={ticker} 已存在公司元数据，"
-            "将忽略本次传入的 --company-id/--company-name，并在生成脚本时复用现有 meta.json"
+            "将忽略本次传入的 company_id/company_name，并在生成脚本时复用现有 meta.json"
         ),
         module=MODULE,
     )

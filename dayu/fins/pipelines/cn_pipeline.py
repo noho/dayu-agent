@@ -72,7 +72,7 @@ from .upload_progress_helpers import (
 )
 from .upload_filing_events import UploadFilingEvent, UploadFilingEventType
 from .upload_material_events import UploadMaterialEvent, UploadMaterialEventType
-from .upload_company_meta import upsert_company_meta_for_upload
+from .upload_company_meta import build_upload_company_id, upsert_company_meta_for_upload
 
 
 def _raise_if_cancelled(
@@ -418,8 +418,8 @@ class CnPipeline(PipelineProtocol):
             amended: 是否修订版。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
-            company_id: 公司 ID（create/update 必填）。
-            company_name: 公司名称（create/update 必填）。
+            company_id: 可选兼容字段；公司 ID 会由 ticker 归一化结果自动生成。
+            company_name: 公司名称（create/update 在公司级 meta 缺失时必填，可由 infer 补齐）。
             ticker_aliases: 可选 ticker alias 列表；用于初始化公司级 meta。
             overwrite: 是否强制覆盖。
 
@@ -476,8 +476,8 @@ class CnPipeline(PipelineProtocol):
             amended: 是否修订版。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
-            company_id: 公司 ID（create/update 必填）。
-            company_name: 公司名称（create/update 必填）。
+            company_id: 可选兼容字段；公司 ID 会由 ticker 归一化结果自动生成。
+            company_name: 公司名称（create/update 在公司级 meta 缺失时必填，可由 infer 补齐）。
             ticker_aliases: 可选 ticker alias 列表；用于初始化公司级 meta。
             overwrite: 是否强制覆盖。
 
@@ -489,6 +489,7 @@ class CnPipeline(PipelineProtocol):
         """
 
         normalized_ticker = _normalize_ticker(ticker)
+        normalized_company_id = build_upload_company_id(normalized_ticker)
         normalized_period = normalize_cn_fiscal_period(fiscal_period)
         form_type = normalized_period
         requested_action = str(action or "").strip().lower() or None
@@ -518,7 +519,7 @@ class CnPipeline(PipelineProtocol):
                 "amended": amended,
                 "filing_date": filing_date,
                 "report_date": report_date,
-                "company_id": company_id,
+                "company_id": normalized_company_id,
                 "company_name": company_name,
                 "ticker_aliases": ticker_aliases,
                 "overwrite": overwrite,
@@ -534,7 +535,6 @@ class CnPipeline(PipelineProtocol):
                 company_name=company_name,
                 ticker_aliases=ticker_aliases,
             )
-            normalized_company_id = str(company_id or normalized_ticker).strip() or normalized_ticker
             reset_upload_target_for_overwrite(
                 source_repository=self._source_repository,
                 ticker=normalized_ticker,
@@ -583,7 +583,7 @@ class CnPipeline(PipelineProtocol):
                 amended=amended,
                 filing_date=filing_date,
                 report_date=report_date,
-                company_id=company_id,
+                company_id=normalized_company_id,
                 company_name=company_name,
                 overwrite=overwrite,
                 **upload_result.payload,
@@ -608,7 +608,7 @@ class CnPipeline(PipelineProtocol):
                 amended=amended,
                 filing_date=filing_date,
                 report_date=report_date,
-                company_id=company_id,
+                company_id=normalized_company_id,
                 company_name=company_name,
                 overwrite=overwrite,
                 document_id=document_id,
@@ -654,8 +654,8 @@ class CnPipeline(PipelineProtocol):
             fiscal_period: 可选财期；提供时参与稳定 document_id 生成。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
-            company_id: 公司 ID（create/update 必填）。
-            company_name: 公司名称（create/update 必填）。
+            company_id: 可选兼容字段；公司 ID 会由 ticker 归一化结果自动生成。
+            company_name: 公司名称（create/update 在公司级 meta 缺失时必填，可由 infer 补齐）。
             ticker_aliases: 可选 ticker alias 列表；用于初始化公司级 meta。
             overwrite: 是否强制覆盖。
 
@@ -721,8 +721,8 @@ class CnPipeline(PipelineProtocol):
             fiscal_period: 可选财期；提供时参与稳定 document_id 生成。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
-            company_id: 公司 ID（create/update 必填）。
-            company_name: 公司名称（create/update 必填）。
+            company_id: 可选兼容字段；公司 ID 会由 ticker 归一化结果自动生成。
+            company_name: 公司名称（create/update 在公司级 meta 缺失时必填，可由 infer 补齐）。
             ticker_aliases: 可选 ticker alias 列表；用于初始化公司级 meta。
             overwrite: 是否强制覆盖。
 
@@ -735,6 +735,7 @@ class CnPipeline(PipelineProtocol):
 
         file_list = files or []
         normalized_ticker = _normalize_ticker(ticker)
+        normalized_company_id = build_upload_company_id(normalized_ticker)
         normalized_fiscal_period = str(fiscal_period or "").strip().upper() or None
         stable_document_id, stable_internal_document_id = build_material_ids(
             form_type=form_type,
@@ -770,7 +771,7 @@ class CnPipeline(PipelineProtocol):
                 "fiscal_period": normalized_fiscal_period,
                 "filing_date": filing_date,
                 "report_date": report_date,
-                "company_id": company_id,
+                "company_id": normalized_company_id,
                 "company_name": company_name,
                 "ticker_aliases": ticker_aliases,
                 "overwrite": overwrite,
@@ -786,7 +787,6 @@ class CnPipeline(PipelineProtocol):
                 company_name=company_name,
                 ticker_aliases=ticker_aliases,
             )
-            normalized_company_id = str(company_id or normalized_ticker).strip() or normalized_ticker
             reset_upload_target_for_overwrite(
                 source_repository=self._source_repository,
                 ticker=normalized_ticker,
@@ -835,7 +835,7 @@ class CnPipeline(PipelineProtocol):
                 fiscal_period=normalized_fiscal_period,
                 filing_date=filing_date,
                 report_date=report_date,
-                company_id=company_id,
+                company_id=normalized_company_id,
                 company_name=company_name,
                 overwrite=overwrite,
                 **upload_result.payload,
@@ -863,7 +863,7 @@ class CnPipeline(PipelineProtocol):
                 fiscal_period=normalized_fiscal_period,
                 filing_date=filing_date,
                 report_date=report_date,
-                company_id=company_id,
+                company_id=normalized_company_id,
                 company_name=company_name,
                 overwrite=overwrite,
                 status="failed",

@@ -149,9 +149,10 @@ def try_normalize_ticker(raw: str) -> Optional[NormalizedTicker]:
 def ticker_to_company_id(ticker: NormalizedTicker) -> str:
     """由 ``NormalizedTicker`` 推导公司 ID。
 
-    当前实现直接返回 ``ticker.canonical``；保留该接口以便后续接入更精细的
-    公司主体映射（跨市场上市折叠、CIK、统一社会信用代码等），属稳定契约、
-    实现可演进。
+    当前实现返回 ``{ticker.canonical}_{exchange_or_market}``，例如
+    ``600519_SSE`` / ``000333_SZSE`` / ``0700_HKEX`` / ``AAPL_US``。
+    保留该接口以便后续接入更精细的公司主体映射（跨市场上市折叠、CIK、
+    统一社会信用代码等），属稳定契约、实现可演进。
 
     Args:
         ticker: 已归一化的 ticker。
@@ -163,7 +164,8 @@ def ticker_to_company_id(ticker: NormalizedTicker) -> str:
         无。
     """
 
-    return ticker.canonical
+    exchange_or_market = ticker.exchange or ticker.market
+    return f"{ticker.canonical}_{exchange_or_market}"
 
 
 # ---------- 模块级私有辅助 ----------

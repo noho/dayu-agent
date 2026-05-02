@@ -333,7 +333,7 @@ def test_runtime_download_sync_uses_cn_pipeline_and_builds_contract_result(
     assert result.data.pipeline == "cn"
     assert result.data.status == "ok"
     assert result.data.ticker == "000001"
-    assert result.data.company_info.company_id == "CNINFO:runtime-org"
+    assert result.data.company_info.company_id == "000001_SZSE"
     assert result.data.filters.forms == ("FY",)
     assert result.data.filters.end_date == "2025-12-31"
     assert result.data.filters.overwrite is True

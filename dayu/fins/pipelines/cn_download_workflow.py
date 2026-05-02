@@ -129,7 +129,7 @@ async def run_cn_download_stream_impl(
     notes = list(periods.notes)
     try:
         profile = discovery.resolve_company(query)
-        upsert_company_meta_for_cn_download(
+        company_meta = upsert_company_meta_for_cn_download(
             repository=host.company_meta_repository,
             profile=profile,
             normalized_ticker=normalized_ticker,
@@ -139,7 +139,7 @@ async def run_cn_download_stream_impl(
             event_type=DownloadEventType.COMPANY_RESOLVED,
             ticker=normalized_ticker,
             payload={
-                "company_id": profile.company_id,
+                "company_id": company_meta.company_id,
                 "company_name": profile.company_name,
                 "market": market,
             },
@@ -235,7 +235,7 @@ async def run_cn_download_stream_impl(
         status="cancelled" if cancelled or (cancel_checker is not None and cancel_checker()) else "ok",
         ticker=normalized_ticker,
         company_info={
-            "company_id": profile.company_id,
+            "company_id": company_meta.company_id,
             "company_name": profile.company_name,
             "market": market,
         },

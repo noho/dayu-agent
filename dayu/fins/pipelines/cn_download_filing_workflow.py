@@ -104,6 +104,11 @@ async def run_cn_download_single_filing_stream(
         ticker=ticker,
         document_id=document_id,
     )
+    previous_completed_meta = _resolve_previous_completed_meta(
+        previous_meta=previous_meta,
+        overwrite=overwrite,
+    )
+    source_meta_exists = previous_meta is not None
     remote_fingerprint = build_remote_fingerprint(candidate)
     skip_result = _resolve_fast_skip_result(
         previous_meta=previous_meta,
@@ -122,8 +127,9 @@ async def run_cn_download_single_filing_stream(
     if _should_reset_before_download(previous_meta=previous_meta, remote_fingerprint=remote_fingerprint, overwrite=overwrite):
         source_repository.reset_source_document(ticker, document_id, SourceKind.FILING)
         previous_meta = None
+        previous_completed_meta = None
+        source_meta_exists = False
 
-    created_document = False
     if previous_meta is None:
         update_cn_staging_source_document(
             source_repository=source_repository,
@@ -139,7 +145,7 @@ async def run_cn_download_single_filing_stream(
             remote_fingerprint=remote_fingerprint,
             previous_meta_exists=False,
         )
-        created_document = True
+        source_meta_exists = True
     handle = source_repository.get_source_handle(ticker, document_id, SourceKind.FILING)
 
     reusable_pdf = _resolve_reusable_pdf(
@@ -191,6 +197,23 @@ async def run_cn_download_single_filing_stream(
         handle=handle,
         docling_filename=docling_filename,
     ):
+        commit_cn_filing_source_document(
+            source_repository=source_repository,
+            processed_repository=processed_repository,
+            ticker=ticker,
+            document_id=document_id,
+            internal_document_id=internal_document_id,
+            form_type=candidate.fiscal_period,
+            primary_document=_read_required_text(previous_meta, "primary_document"),
+            file_entries=_read_file_entries(previous_meta),
+            candidate=candidate,
+            profile=profile,
+            pdf_sha256=pdf_sha256,
+            remote_fingerprint=remote_fingerprint,
+            source_fingerprint=_read_required_text(previous_meta, "source_fingerprint"),
+            previous_completed_meta=previous_completed_meta,
+            source_meta_exists=True,
+        )
         skipped = _build_filing_result(
             document_id=document_id,
             status="skipped",
@@ -225,7 +248,7 @@ async def run_cn_download_single_filing_stream(
             previous_meta_exists=False,
         )
         previous_meta = None
-        created_document = True
+        source_meta_exists = True
         handle = source_repository.get_source_handle(ticker, document_id, SourceKind.FILING)
 
     if reused_pdf:
@@ -354,11 +377,8 @@ async def run_cn_download_single_filing_stream(
         pdf_sha256=pdf_sha256,
         remote_fingerprint=remote_fingerprint,
         source_fingerprint=source_fingerprint,
-        previous_meta=previous_meta if not created_document else _safe_get_source_meta(
-            source_repository=source_repository,
-            ticker=ticker,
-            document_id=document_id,
-        ),
+        previous_completed_meta=previous_completed_meta,
+        source_meta_exists=source_meta_exists,
     )
     downloaded = _build_filing_result(
         document_id=document_id,
@@ -423,6 +443,31 @@ def _resolve_fast_skip_result(
         "reason_message": "远端 fingerprint 与本地完成态一致，跳过下载",
         "skip_reason": "remote_fingerprint_matched",
     }
+
+
+def _resolve_previous_completed_meta(
+    *,
+    previous_meta: JsonObject | None,
+    overwrite: bool,
+) -> JsonObject | None:
+    """解析可用于版本计算的上一版完成态 meta。
+
+    Args:
+        previous_meta: 当前 source meta。
+        overwrite: 是否强制覆盖。
+
+    Returns:
+        可用于版本计算和审计字段保留的完成态 meta；不存在时返回 ``None``。
+
+    Raises:
+        无。
+    """
+
+    if overwrite or previous_meta is None:
+        return None
+    if previous_meta.get("ingest_complete") is not True:
+        return None
+    return previous_meta
 
 
 def _should_reset_before_download(
@@ -525,6 +570,32 @@ def _find_file_meta(
         if item.uri.rsplit("/", 1)[-1] == filename:
             return item
     raise FileNotFoundError(f"文件不存在: {filename}")
+
+
+def _read_file_entries(meta: JsonObject | None) -> list[JsonObject]:
+    """读取完成态 meta 中的文件条目。
+
+    Args:
+        meta: source meta。
+
+    Returns:
+        可传给 source upsert 的文件条目列表。
+
+    Raises:
+        CnDownloadFilingError: meta 缺失或 ``files`` 字段不是对象列表时抛出。
+    """
+
+    if meta is None:
+        raise CnDownloadFilingError("缺少 source meta，无法读取 files")
+    raw_files = meta.get("files")
+    if not isinstance(raw_files, list):
+        raise CnDownloadFilingError("source meta.files 必须为 list")
+    entries: list[JsonObject] = []
+    for raw_item in raw_files:
+        if not isinstance(raw_item, dict):
+            raise CnDownloadFilingError("source meta.files 条目必须为 object")
+        entries.append({str(key): _coerce_json_value(value) for key, value in raw_item.items()})
+    return entries
 
 
 def _build_filing_result(

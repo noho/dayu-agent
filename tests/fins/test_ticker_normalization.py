@@ -189,12 +189,16 @@ def test_try_normalize_failure_returns_none() -> None:
 # ---------- ticker_to_company_id ----------
 
 
-def test_ticker_to_company_id_returns_canonical() -> None:
-    """当前实现：公司 ID 即 canonical。"""
+def test_ticker_to_company_id_returns_canonical_with_exchange_suffix() -> None:
+    """公司 ID 由 canonical ticker 与交易所/市场后缀组成。"""
+
     ticker = NormalizedTicker(
         canonical="AAPL", market="US", exchange=None, raw="AAPL.US"
     )
-    assert ticker_to_company_id(ticker) == "AAPL"
+    assert ticker_to_company_id(ticker) == "AAPL_US"
+    assert ticker_to_company_id(normalize_ticker("600519.SH")) == "600519_SSE"
+    assert ticker_to_company_id(normalize_ticker("000333.SZ")) == "000333_SZSE"
+    assert ticker_to_company_id(normalize_ticker("0700.HK")) == "0700_HKEX"
 
 
 # ---------- 回退路径 ----------

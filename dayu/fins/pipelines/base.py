@@ -117,8 +117,8 @@ class PipelineProtocol(Protocol):
             amended: 是否修订版。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
-            company_id: 公司 ID（create/update 必填）。
-            company_name: 公司名称（create/update 必填）。
+            company_id: 可选兼容字段；公司 ID 会由 ticker 归一化结果自动生成。
+            company_name: 公司名称（create/update 在公司级 meta 缺失时必填，可由 infer 补齐）。
             ticker_aliases: 可选 ticker alias 列表；用于初始化公司级 meta。
             overwrite: 是否强制覆盖。
 
@@ -157,8 +157,8 @@ class PipelineProtocol(Protocol):
             amended: 是否修订版。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
-            company_id: 公司 ID（create/update 必填）。
-            company_name: 公司名称（create/update 必填）。
+            company_id: 可选兼容字段；公司 ID 会由 ticker 归一化结果自动生成。
+            company_name: 公司名称（create/update 在公司级 meta 缺失时必填，可由 infer 补齐）。
             ticker_aliases: 可选 ticker alias 列表；用于初始化公司级 meta。
             overwrite: 是否强制覆盖。
 
@@ -203,8 +203,8 @@ class PipelineProtocol(Protocol):
             fiscal_period: 可选财期；提供时参与稳定 document_id 生成。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
-            company_id: 公司 ID（create/update 必填）。
-            company_name: 公司名称（create/update 必填）。
+            company_id: 可选兼容字段；公司 ID 会由 ticker 归一化结果自动生成。
+            company_name: 公司名称（create/update 在公司级 meta 缺失时必填，可由 infer 补齐）。
             ticker_aliases: 可选 ticker alias 列表；用于初始化公司级 meta。
             overwrite: 是否强制覆盖。
 
@@ -249,8 +249,8 @@ class PipelineProtocol(Protocol):
             fiscal_period: 可选财期；提供时参与稳定 document_id 生成。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
-            company_id: 公司 ID（create/update 必填）。
-            company_name: 公司名称（create/update 必填）。
+            company_id: 可选兼容字段；公司 ID 会由 ticker 归一化结果自动生成。
+            company_name: 公司名称（create/update 在公司级 meta 缺失时必填，可由 infer 补齐）。
             ticker_aliases: 可选 ticker alias 列表；用于初始化公司级 meta。
             overwrite: 是否强制覆盖。
 

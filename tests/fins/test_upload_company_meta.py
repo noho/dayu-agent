@@ -82,18 +82,9 @@ def test_upsert_company_meta_skips_non_create_update() -> None:
 
 @pytest.mark.unit
 def test_upsert_company_meta_requires_fields_when_meta_missing() -> None:
-    """验证仓储中缺少 meta 时，create/update 仍要求显式 company meta。"""
+    """验证仓储中缺少 meta 时，create/update 仍要求公司名称。"""
 
     repo = _RepositoryStub()
-
-    with pytest.raises(ValueError, match="--company-id"):
-        module.upsert_company_meta_for_upload(
-            repository=repo,
-            ticker="AAPL",
-            action="create",
-            company_id=" ",
-            company_name="Apple",
-        )
 
     with pytest.raises(ValueError, match="--company-name"):
         module.upsert_company_meta_for_upload(
@@ -127,7 +118,7 @@ def test_upsert_company_meta_success(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     assert repo.captured is not None
-    assert repo.captured.company_id == "320193"
+    assert repo.captured.company_id == "AAPL_US"
     assert repo.captured.company_name == "Apple Inc."
     assert repo.captured.ticker == "AAPL"
     assert repo.captured.market == "US"
@@ -163,4 +154,4 @@ def test_upsert_company_meta_ignores_passed_fields_when_meta_exists(
         )
 
     assert repo.captured is None
-    assert "忽略本次上传传入的 --company-id/--company-name" in caplog.text
+    assert "忽略本次上传传入的 company_id/company_name" in caplog.text

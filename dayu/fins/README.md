@@ -468,7 +468,7 @@ python utils/retriage_active_6k_filings.py --base workspace --tickers ALC,ASM,NV
   - CLI / service / 仓储 / downloader / pipeline / prompt contribution 一律调用该真源，不再在各自模块重造 normalize 实现。
   - `FinsToolService._resolve_canonical_ticker` 中真源识别失败时会回退到 `strip().upper()` 作为查询候选，保留"公司名当 ticker 传"的既有行为。
   - CLI `--ticker` CSV 中**每个 token 都走真源归一化**，再整体去重：首个归一化结果作为 canonical，其余作为显式 alias。业务动机是把同一公司的跨市场 ticker（如 `BABA,9988`）整体作为 alias 写入 meta，让工具查询无论传哪种变形都能命中。
-- `ticker_to_company_id` 当前直接返回 `ticker.canonical`，属"稳定契约、实现可演进"：保留该接口以便后续接入跨市场上市折叠、CIK、统一社会信用代码等更精细的公司主体映射。
+- `ticker_to_company_id` 当前返回 `canonical_exchange`（美股无交易所时使用 `canonical_market`，如 `AAPL_US`），属"稳定契约、实现可演进"：保留该接口以便后续接入跨市场上市折叠、CIK、统一社会信用代码等更精细的公司主体映射。
 
 ## 7. 内部分层
 

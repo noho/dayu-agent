@@ -10,6 +10,7 @@ from __future__ import annotations
 from dayu.fins.domain.document_models import CompanyMeta, now_iso8601
 from dayu.fins.pipelines.cn_download_models import CnCompanyProfile
 from dayu.fins.storage import CompanyMetaRepositoryProtocol
+from dayu.fins.ticker_normalization import normalize_ticker, ticker_to_company_id
 
 _RESOLVER_VERSION = "cn_download_v1"
 
@@ -39,12 +40,11 @@ def upsert_company_meta_for_cn_download(
     """
 
     ticker = normalized_ticker.strip()
-    company_id = profile.company_id.strip()
+    normalized = normalize_ticker(ticker)
+    company_id = ticker_to_company_id(normalized)
     company_name = profile.company_name.strip()
     if not ticker:
         raise ValueError("normalized_ticker 不能为空")
-    if not company_id:
-        raise ValueError("profile.company_id 不能为空")
     if not company_name:
         raise ValueError("profile.company_name 不能为空")
 

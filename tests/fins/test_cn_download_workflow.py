@@ -310,6 +310,21 @@ def test_cn_download_workflow_commits_pdf_and_docling(tmp_path: Path) -> None:
     assert summary["converted"] == 1
     assert discovery.download_calls == 1
     assert converter.calls == 1
+    company_info = result["company_info"]
+    assert isinstance(company_info, dict)
+    assert company_info["company_id"] == "600519_SSE"
+    company_meta = pipeline._company_repository.get_company_meta("600519")  # type: ignore[attr-defined]
+    assert company_meta.company_id == "600519_SSE"
+    document_id, _ = build_cn_filing_ids(
+        ticker="600519",
+        form_type="FY",
+        fiscal_year=2024,
+        fiscal_period="FY",
+        amended=False,
+    )
+    source_meta = pipeline._source_repository.get_source_meta("600519", document_id, SourceKind.FILING)  # type: ignore[attr-defined]
+    assert source_meta["company_id"] == "600519_SSE"
+    assert source_meta["document_version"] == "v1"
 
 
 def test_cn_download_fast_skip_uses_remote_fingerprint(tmp_path: Path) -> None:
@@ -328,19 +343,40 @@ def test_cn_download_fast_skip_uses_remote_fingerprint(tmp_path: Path) -> None:
     assert converter.calls == 1
 
 
-def test_cn_download_pdf_sha_skip_does_not_reconvert(tmp_path: Path) -> None:
-    """远端 fingerprint 变化但 PDF 内容一致时跳过 Docling 与 meta 更新。"""
+def test_cn_download_pdf_sha_skip_commits_remote_meta_for_next_fast_skip(tmp_path: Path) -> None:
+    """PDF 内容一致时跳过 Docling，但推进远端 meta 让下次 fast skip。"""
 
     discovery = _FakeDiscoveryClient(temp_dir=tmp_path, candidates=(_candidate(etag='"v1"'),))
     converter = _FakeConverter()
     pipeline = _build_pipeline(tmp_path=tmp_path, discovery=discovery, converter=converter)
     _collect_events(pipeline)
     discovery.candidates = (_candidate(source_id="A2", etag='"v2"'),)
+    document_id = build_cn_filing_ids(
+        ticker="600519",
+        form_type="FY",
+        fiscal_year=2024,
+        fiscal_period="FY",
+        amended=False,
+    )[0]
+    context = build_fs_storage_test_context(tmp_path)
+    before_meta = context.source_repository.get_source_meta("600519", document_id, SourceKind.FILING)
 
     events = _collect_events(pipeline)
 
     completed = [event for event in events if event.event_type == DownloadEventType.FILING_COMPLETED]
     assert completed[-1].payload["reason_code"] == "pdf_sha256_matched"
+    assert discovery.download_calls == 2
+    assert converter.calls == 1
+    after_meta = context.source_repository.get_source_meta("600519", document_id, SourceKind.FILING)
+    assert after_meta["source_id"] == "A2"
+    assert after_meta["remote_fingerprint"] != before_meta["remote_fingerprint"]
+    assert after_meta["source_fingerprint"] == before_meta["source_fingerprint"]
+    assert after_meta["document_version"] == before_meta["document_version"]
+
+    third_events = _collect_events(pipeline)
+
+    third_completed = [event for event in third_events if event.event_type == DownloadEventType.FILING_COMPLETED]
+    assert third_completed[-1].payload["reason_code"] == "remote_fingerprint_matched"
     assert discovery.download_calls == 2
     assert converter.calls == 1
 
@@ -414,6 +450,8 @@ def test_cn_download_version_mismatch_redownloads(tmp_path: Path) -> None:
     )[0]
     meta = context.source_repository.get_source_meta("600519", document_id, SourceKind.FILING)
     meta["download_version"] = "cn_pipeline_download_v0.0.0"
+    meta["first_ingested_at"] = "2020-01-01T00:00:00+00:00"
+    meta["created_at"] = "2020-01-01T00:00:01+00:00"
     context.source_repository.replace_source_meta("600519", document_id, SourceKind.FILING, meta)
 
     events = _collect_events(pipeline)
@@ -422,6 +460,9 @@ def test_cn_download_version_mismatch_redownloads(tmp_path: Path) -> None:
     assert completed[-1].payload["status"] == "downloaded"
     assert discovery.download_calls == 2
     assert converter.calls == 2
+    updated_meta = context.source_repository.get_source_meta("600519", document_id, SourceKind.FILING)
+    assert updated_meta["first_ingested_at"] == "2020-01-01T00:00:00+00:00"
+    assert updated_meta["created_at"] == "2020-01-01T00:00:01+00:00"
 
 
 def test_cn_download_resumes_staged_pdf_after_docling_failure(tmp_path: Path) -> None:

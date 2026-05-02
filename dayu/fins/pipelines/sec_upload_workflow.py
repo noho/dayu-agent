@@ -21,7 +21,7 @@ from dayu.fins.pipelines.upload_material_events import UploadMaterialEvent, Uplo
 from dayu.fins.ticker_normalization import normalize_ticker
 from dayu.fins.storage import CompanyMetaRepositoryProtocol, SourceDocumentRepositoryProtocol
 
-from .upload_company_meta import upsert_company_meta_for_upload
+from .upload_company_meta import build_upload_company_id, upsert_company_meta_for_upload
 from .upload_progress_helpers import (
     map_upload_file_event_to_filing_event_type as _map_upload_file_event_to_filing_event_type,
     map_upload_file_event_to_material_event_type as _map_upload_file_event_to_material_event_type,
@@ -129,7 +129,7 @@ async def run_upload_filing_stream(
         amended: 是否修订版。
         filing_date: 可选 filing 日期。
         report_date: 可选 report 日期。
-        company_id: 公司 ID。
+        company_id: 可选兼容字段；上传链路不会把它作为身份真源。
         company_name: 公司名称。
         ticker_aliases: ticker alias 列表。
         overwrite: 是否覆盖。
@@ -143,6 +143,7 @@ async def run_upload_filing_stream(
 
     requested_action = str(action or "").strip().lower() or None
     normalized_ticker = host._downloader.normalize_ticker(ticker)
+    normalized_company_id = build_upload_company_id(normalized_ticker)
     normalized_period = str(fiscal_period).strip().upper()
     filing_form_type = normalized_period
     document_id, internal_document_id = build_sec_filing_ids(
@@ -170,7 +171,7 @@ async def run_upload_filing_stream(
             "amended": amended,
             "filing_date": filing_date,
             "report_date": report_date,
-            "company_id": company_id,
+            "company_id": normalized_company_id,
             "company_name": company_name,
             "ticker_aliases": ticker_aliases,
             "overwrite": overwrite,
@@ -186,7 +187,6 @@ async def run_upload_filing_stream(
             company_name=company_name,
             ticker_aliases=ticker_aliases,
         )
-        normalized_company_id = str(company_id or normalized_ticker).strip() or normalized_ticker
         reset_upload_target_for_overwrite(
             source_repository=host._source_repository,
             ticker=normalized_ticker,
@@ -235,7 +235,7 @@ async def run_upload_filing_stream(
             amended=amended,
             filing_date=filing_date,
             report_date=report_date,
-            company_id=company_id,
+            company_id=normalized_company_id,
             company_name=company_name,
             ticker_aliases=ticker_aliases,
             overwrite=overwrite,
@@ -261,7 +261,7 @@ async def run_upload_filing_stream(
             amended=amended,
             filing_date=filing_date,
             report_date=report_date,
-            company_id=company_id,
+            company_id=normalized_company_id,
             company_name=company_name,
             ticker_aliases=ticker_aliases,
             overwrite=overwrite,
@@ -310,7 +310,7 @@ async def run_upload_material_stream(
         fiscal_period: 可选财期；提供时参与稳定 document_id 生成。
         filing_date: 可选 filing 日期。
         report_date: 可选 report 日期。
-        company_id: 公司 ID。
+        company_id: 可选兼容字段；上传链路不会把它作为身份真源。
         company_name: 公司名称。
         ticker_aliases: ticker alias 列表。
         overwrite: 是否覆盖。
@@ -327,6 +327,7 @@ async def run_upload_material_stream(
     if normalized.market != "US":
         raise ValueError(f"SecPipeline 仅支持 US，当前 market={normalized.market}")
     normalized_ticker = host._downloader.normalize_ticker(ticker)
+    normalized_company_id = build_upload_company_id(normalized_ticker)
     file_list = files or []
     normalized_fiscal_period = str(fiscal_period or "").strip().upper() or None
     stable_document_id, stable_internal_document_id = build_material_ids(
@@ -363,7 +364,7 @@ async def run_upload_material_stream(
             "fiscal_period": normalized_fiscal_period,
             "filing_date": filing_date,
             "report_date": report_date,
-            "company_id": company_id,
+            "company_id": normalized_company_id,
             "company_name": company_name,
             "ticker_aliases": ticker_aliases,
             "overwrite": overwrite,
@@ -379,7 +380,6 @@ async def run_upload_material_stream(
             company_name=company_name,
             ticker_aliases=ticker_aliases,
         )
-        normalized_company_id = str(company_id or normalized_ticker).strip() or normalized_ticker
         reset_upload_target_for_overwrite(
             source_repository=host._source_repository,
             ticker=normalized_ticker,
@@ -428,7 +428,7 @@ async def run_upload_material_stream(
             fiscal_period=normalized_fiscal_period,
             filing_date=filing_date,
             report_date=report_date,
-            company_id=company_id,
+            company_id=normalized_company_id,
             company_name=company_name,
             overwrite=overwrite,
             **upload_result.payload,
@@ -456,7 +456,7 @@ async def run_upload_material_stream(
             fiscal_period=normalized_fiscal_period,
             filing_date=filing_date,
             report_date=report_date,
-            company_id=company_id,
+            company_id=normalized_company_id,
             company_name=company_name,
             overwrite=overwrite,
             status="failed",

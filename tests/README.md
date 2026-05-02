@@ -382,7 +382,7 @@ Fins 相关改动时，至少同步更新：
 - `tests/fins/test_sec_rebuild_workflow.py` 负责守住 rebuild 真源边界：本地过滤条件的 form/date 收敛、以及单 filing 重建时 `document_version/source_fingerprint` 保持稳定并通过 replace-source-meta 清理历史脏字段。
 - `tests/fins/test_rejected_6k_rescue.py` 还要守住 `.rejections/` 枚举容错边界：若个别 rejected artifact 目录缺失 `meta.json` 或元数据损坏，rescue 必须跳过坏目录继续处理其它候选，不能让单个脏目录中断整批误拒救回。
 - `tests/fins/test_active_6k_retriage.py` 还要守住 active filing 枚举容错边界：若个别 active `6-K` 目录缺失 `meta.json` 或元数据损坏，retriage 必须跳过坏目录继续处理其它 active 样本，不能让单个脏目录中断整批误收剔除。
-- `tests/fins/test_pipeline_cli.py` 与 `tests/fins/test_ingestion_job_manager.py` 还要继续共同守住 `document_ids` 透传链路：CLI `process` 子命令、job manager 和 ingestion backend 必须把显式文档过滤以等价语义传到 `process_stream(...)`；允许做去空、去重和稳定排序，但不能改变过滤结果，也不能让等价请求绕过去重复用。
+- `tests/fins/test_pipeline_cli.py` 与 `tests/fins/test_ingestion_job_manager.py` 还要继续共同守住 `document_ids` 透传链路：CLI `process` 子命令、job manager 和 ingestion backend 必须把显式文档过滤以等价语义传到 `process_stream(...)`；允许做去空、去重和稳定排序，但不能改变过滤结果，也不能让等价请求绕过去重复用。上传类 CLI 测试还要守住 `--company-id` 不再作为用户参数出现，公司 ID 由 ticker 归一化真源自动生成。
 - `tests/fins/test_fins_runtime_tool_service.py` 与 `tests/fins/test_cli_formatters_coverage.py` 现在还要继续守住 direct operation 的强类型消费边界：`runtime.execute()` 的测试必须先显式收窄 `FinsResult | AsyncIterator[FinsEvent]`，formatter 测试构造 pipeline 事件时优先使用 `DownloadEventType` / `ProcessEventType` / `Upload*EventType` 枚举真源，未知事件分支才允许显式 cast 到窄类型做兜底覆盖。
 
 另外，processor/source 相关测试现在要守住两条契约：

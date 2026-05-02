@@ -206,7 +206,6 @@ def _add_date_args(
 def _add_company_meta_args(
     parser: argparse.ArgumentParser,
     *,
-    company_id_help: str,
     company_name_help: str,
     infer_help: str,
 ) -> None:
@@ -214,7 +213,6 @@ def _add_company_meta_args(
 
     Args:
         parser: 子命令解析器。
-        company_id_help: `--company-id` 帮助文案。
         company_name_help: `--company-name` 帮助文案。
         infer_help: `--infer` 帮助文案。
 
@@ -225,7 +223,7 @@ def _add_company_meta_args(
         无。
     """
 
-    parser.add_argument("--company-id", dest="company_id", default=None, help=company_id_help)
+    parser.set_defaults(company_id=None)
     parser.add_argument(
         "--company-name",
         dest="company_name",
@@ -346,7 +344,6 @@ def _add_fins_upload_filing_args(parser: argparse.ArgumentParser) -> None:
     )
     _add_company_meta_args(
         parser,
-        company_id_help="公司 ID（仅在 meta.json 不存在时 create/update 必填）",
         company_name_help="公司名称（仅在 meta.json 不存在时 create/update 必填；若显式传入，则优先于 --infer 返回值）",
         infer_help="使用 FMP 推断 ticker_aliases；成功时与显式 CSV alias 合并，且仅在未传 --company-name 时回退使用 FMP 公司名",
     )
@@ -393,7 +390,6 @@ def _add_fins_upload_material_args(parser: argparse.ArgumentParser) -> None:
     )
     _add_company_meta_args(
         parser,
-        company_id_help="公司 ID（仅在 meta.json 不存在时 create/update 必填）",
         company_name_help="公司名称（仅在 meta.json 不存在时 create/update 必填；若显式传入，则优先于 --infer 返回值）",
         infer_help="使用 FMP 推断 ticker_aliases；成功时与显式 CSV alias 合并，且仅在未传 --company-name 时回退使用 FMP 公司名",
     )
@@ -427,7 +423,6 @@ def _add_fins_upload_filings_from_args(parser: argparse.ArgumentParser) -> None:
     )
     _add_company_meta_args(
         parser,
-        company_id_help="公司 ID（仅在工作区缺少 meta.json 时用于首条生成命令）",
         company_name_help="公司名称（仅在工作区缺少 meta.json 时用于首条生成命令；若显式传入，则优先于 --infer 返回值）",
         infer_help="使用 FMP 推断 ticker_aliases；成功时与显式 CSV alias 合并，且仅在未传 --company-name 时回退使用 FMP 公司名",
     )
@@ -793,4 +788,3 @@ def parse_arguments() -> argparse.Namespace:
 
 # 注：``parse_limits_override`` / ``parse_temperature_argument`` 已下沉到
 # ``dayu/execution/cli_execution_options.py``，避免 execution/ 层反向依赖 UI 层。
-

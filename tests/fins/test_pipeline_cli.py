@@ -1379,8 +1379,6 @@ def test_dispatch_upload_filing_uses_default_action_create(tmp_path: Path) -> No
             "2025",
             "--fiscal-period",
             "FY",
-            "--company-id",
-            "320193",
             "--company-name",
             "Apple Inc.",
         ]
@@ -1394,7 +1392,7 @@ def test_dispatch_upload_filing_uses_default_action_create(tmp_path: Path) -> No
     assert fake.last_call is not None
     assert fake.last_call[0] == "upload_filing"
     assert fake.last_call[1]["action"] is None
-    assert fake.last_call[1]["company_id"] == "320193"
+    assert fake.last_call[1]["company_id"] is None
     assert fake.last_call[1]["company_name"] == "Apple Inc."
 
 
@@ -1545,7 +1543,7 @@ def test_dispatch_upload_filing_create_requires_company_meta_when_meta_missing(
             "FY",
         ]
     )
-    with pytest.raises(ValueError, match="company-id"):
+    with pytest.raises(ValueError, match="company-name"):
         cli._dispatch_action(FakePipeline(), args)
 
 
@@ -1581,8 +1579,6 @@ def test_dispatch_upload_filing_infer_merges_aliases_and_preserves_explicit_comp
             "2025",
             "--fiscal-period",
             "FY",
-            "--company-id",
-            "1577552",
             "--company-name",
             "阿里巴巴",
         ]
@@ -1630,8 +1626,6 @@ def test_dispatch_upload_filing_infer_fills_missing_company_name_and_merges_alia
             "2025",
             "--fiscal-period",
             "FY",
-            "--company-id",
-            "1577552",
         ]
     )
 
@@ -1672,8 +1666,6 @@ def test_dispatch_upload_filing_infer_failure_without_company_name_fails(
             "2025",
             "--fiscal-period",
             "FY",
-            "--company-id",
-            "1577552",
         ]
     )
 
@@ -1719,8 +1711,6 @@ def test_dispatch_upload_filings_from_generates_script(
             str(tmp_path),
             "--output",
             str(output_script),
-            "--company-id",
-            "000333",
             "--company-name",
             "美的集团",
         ]
@@ -1737,7 +1727,7 @@ def test_dispatch_upload_filings_from_generates_script(
     assert "--fiscal-year 2023 --fiscal-period FY" in script_text
     assert "--fiscal-year 2025 --fiscal-period H1" in script_text
     assert "--action create" not in script_text
-    assert "\n".join(command_lines).count("--company-id 000333") == 1
+    assert "--company-id" not in "\n".join(command_lines)
     assert "\n".join(command_lines).count("--company-name") == 1
     assert all(line.endswith('"$@"') for line in command_lines)
     assert "# python -m dayu.cli upload_filings_from" in script_text
@@ -1779,8 +1769,6 @@ def test_dispatch_upload_filings_from_output_directory_writes_default_script_nam
             str(tmp_path),
             "--output",
             str(output_dir),
-            "--company-id",
-            "0300",
             "--company-name",
             "美的集团",
         ]
@@ -1793,7 +1781,7 @@ def test_dispatch_upload_filings_from_output_directory_writes_default_script_nam
     script_text = expected_script.read_text(encoding="utf-8")
     command_lines = [line for line in script_text.splitlines() if line.startswith("python -m dayu.cli upload_")]
     assert "--ticker 0300" in script_text
-    assert "\n".join(command_lines).count("--company-id 0300") == 1
+    assert "--company-id" not in "\n".join(command_lines)
     assert "\n".join(command_lines).count("--company-name") == 1
 
 
@@ -1819,8 +1807,6 @@ def test_dispatch_upload_filings_from_without_output_writes_default_script_to_wo
             str(source_dir),
             "--base",
             str(tmp_path),
-            "--company-id",
-            "0300",
             "--company-name",
             "美的集团",
         ]
@@ -1859,8 +1845,6 @@ def test_dispatch_upload_filings_from_windows_output_directory_writes_cmd_script
             str(tmp_path),
             "--output",
             str(output_dir),
-            "--company-id",
-            "0300",
             "--company-name",
             "美的集团",
         ]
@@ -1904,7 +1888,7 @@ def test_dispatch_upload_filings_from_requires_company_meta(tmp_path: Path) -> N
             str(tmp_path),
         ]
     )
-    with pytest.raises(ValueError, match="company-id"):
+    with pytest.raises(ValueError, match="company-name"):
         cli._dispatch_action(FakePipeline(), args)
 
 
@@ -1944,8 +1928,6 @@ def test_dispatch_upload_filings_from_infer_bakes_result_into_generated_commands
             str(tmp_path),
             "--output",
             str(output_script),
-            "--company-id",
-            "1577552",
             "--company-name",
             "阿里巴巴",
             "--infer",
@@ -1989,8 +1971,6 @@ def test_dispatch_upload_filings_from_infer_failure_without_company_name_fails(
             str(source_dir),
             "--base",
             str(tmp_path),
-            "--company-id",
-            "1577552",
             "--infer",
         ]
     )
@@ -2033,8 +2013,6 @@ def test_dispatch_upload_filings_from_omits_company_meta_when_existing_meta_pres
             str(tmp_path),
             "--output",
             str(output_script),
-            "--company-id",
-            "999999",
             "--company-name",
             "错误名称",
         ]
@@ -2047,7 +2025,7 @@ def test_dispatch_upload_filings_from_omits_company_meta_when_existing_meta_pres
     script_text = output_script.read_text(encoding="utf-8")
     assert "--company-id" not in script_text
     assert "--company-name" not in script_text
-    assert "将忽略本次传入的 --company-id/--company-name" in caplog.text
+    assert "将忽略本次传入的 company_id/company_name" in caplog.text
 
 
 def test_main_upload_filings_from_does_not_require_pipeline(
@@ -2090,8 +2068,6 @@ def test_main_upload_filings_from_does_not_require_pipeline(
             str(tmp_path),
             "--output",
             str(output_script),
-            "--company-id",
-            "000333",
             "--company-name",
             "美的集团",
         ]
@@ -2215,7 +2191,6 @@ def test_dispatch_upload_filings_from_applies_filter(tmp_path: Path) -> None:
             "--from", str(source_dir),
             "--base", str(tmp_path),
             "--output", str(output_script),
-            "--company-id", "TEST01",
             "--company-name", "测试公司",
         ]
     )
@@ -2366,7 +2341,6 @@ def test_dispatch_upload_filings_from_year_subdir_layout(tmp_path: Path) -> None
             "--from", str(tmp_path),
             "--base", str(tmp_path),
             "--output", str(output_script),
-            "--company-id", "0388HK",
             "--company-name", "香港交易所",
         ]
     )
@@ -2409,7 +2383,6 @@ def test_validate_upload_material_rejects_invalid_form_type(tmp_path: Path) -> N
             "--forms", "earning_calls",
             "--material-name", "Q1 Call",
             "--files", str(file_path),
-            "--company-id", "1234",
             "--company-name", "Futu",
         ]
     )
@@ -2443,7 +2416,6 @@ def test_validate_upload_material_normalizes_form_type_to_upper(tmp_path: Path) 
             "--forms", "earnings_call",
             "--material-name", "Q1 Call",
             "--files", str(file_path),
-            "--company-id", "1234",
             "--company-name", "Futu",
         ]
     )
@@ -2471,8 +2443,6 @@ def test_dispatch_upload_material_allows_update_without_explicit_document_id(tmp
             "Deck",
             "--files",
             str(file_path),
-            "--company-id",
-            "320193",
             "--company-name",
             "Apple Inc.",
         ]
@@ -2503,8 +2473,6 @@ def test_dispatch_upload_material_passes_optional_fiscal_fields(tmp_path: Path) 
             "2025",
             "--fiscal-period",
             "q1",
-            "--company-id",
-            "320193",
             "--company-name",
             "Apple Inc.",
         ]
@@ -2553,7 +2521,7 @@ def test_dispatch_upload_material_create_requires_company_meta_when_meta_missing
             str(file_path),
         ]
     )
-    with pytest.raises(ValueError, match="company-id"):
+    with pytest.raises(ValueError, match="company-name"):
         cli._dispatch_action(FakePipeline(), args)
 
 
@@ -2786,7 +2754,6 @@ def test_upload_filings_from_bare_filename_in_quarter_subdir(tmp_path: Path) -> 
             "--from", str(tmp_path),
             "--base", str(tmp_path),
             "--output", str(output_script),
-            "--company-id", "01003690",
             "--company-name", "美团",
         ]
     )
@@ -3002,7 +2969,6 @@ class TestGenerateUploadFilingsScriptWithMaterial:
                 "--from", str(source),
                 "--base", str(tmp_path),
                 "--output", str(output_script),
-                "--company-id", "9999HK",
                 "--company-name", "测试公司",
             ]
         )
@@ -3037,7 +3003,6 @@ class TestGenerateUploadFilingsScriptWithMaterial:
                 "--from", str(source),
                 "--base", str(tmp_path),
                 "--output", str(output_script),
-                "--company-id", "1234HK",
                 "--company-name", "测试",
             ]
         )
@@ -3064,7 +3029,6 @@ class TestGenerateUploadFilingsScriptWithMaterial:
                 "--from", str(source),
                 "--base", str(tmp_path),
                 "--output", str(output_script),
-                "--company-id", "8888HK",
                 "--company-name", "测试",
             ]
         )
@@ -3098,7 +3062,6 @@ class TestGenerateUploadFilingsScriptWithMaterial:
                 "--from", str(source),
                 "--base", str(tmp_path),
                 "--output", str(output_script),
-                "--company-id", "01000700",
                 "--company-name", "腾讯控股",
             ]
         )
@@ -3138,7 +3101,6 @@ class TestGenerateUploadFilingsScriptWithMaterial:
                 "--from", str(source),
                 "--base", str(tmp_path),
                 "--output", str(output_script),
-                "--company-id", "01000700",
                 "--company-name", "腾讯控股",
             ]
         )
@@ -3175,7 +3137,6 @@ class TestGenerateUploadFilingsScriptWithMaterial:
                 "--from", str(source),
                 "--base", str(tmp_path),
                 "--output", str(output_script),
-                "--company-id", "01000700",
                 "--company-name", "腾讯控股",
             ]
         )
@@ -3529,8 +3490,6 @@ def test_main_prints_human_readable_upload_material_result(
             "Deck",
             "--files",
             str(file_path),
-            "--company-id",
-            "320193",
             "--company-name",
             "Apple Inc.",
         ]
@@ -3586,8 +3545,6 @@ def test_main_upload_material_prints_file_level_progress_lines(
                 "--files",
                 str(file_a),
                 str(file_b),
-                "--company-id",
-                "320193",
                 "--company-name",
                 "Apple Inc.",
             ]
@@ -3641,8 +3598,6 @@ def test_main_upload_filing_prints_file_level_progress_lines(
                 "2025",
                 "--fiscal-period",
                 "FY",
-                "--company-id",
-                "320193",
                 "--company-name",
                 "Apple Inc.",
             ]

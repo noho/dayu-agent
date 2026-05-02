@@ -72,7 +72,7 @@ async def test_upload_material_stream_uploads_docling_files(tmp_path: Path) -> N
     assert result["status"] == "ok"
     assert str(result["document_id"]).startswith("mat_")
     company_meta = pipeline._company_repository.get_company_meta("AAPL")  # type: ignore[attr-defined]
-    assert company_meta.company_id == "320193"
+    assert company_meta.company_id == "AAPL_US"
     assert company_meta.company_name == "Apple Inc."
     assert company_meta.ticker_aliases == ["AAPL", "APC"]
     meta = pipeline._source_repository.get_source_meta("AAPL", result["document_id"], SourceKind.MATERIAL)  # type: ignore[attr-defined]

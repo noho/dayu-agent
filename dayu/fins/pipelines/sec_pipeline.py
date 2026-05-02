@@ -1370,7 +1370,7 @@ class SecPipeline(PipelineProtocol):
             amended: 是否修订版。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
-            company_id: 公司 ID。
+            company_id: 可选兼容字段；上传链路不会把它作为身份真源。
             company_name: 公司名称。
             ticker_aliases: 可选 ticker alias 列表。
             overwrite: 是否强制覆盖。
@@ -1428,7 +1428,7 @@ class SecPipeline(PipelineProtocol):
             amended: 是否修订版。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
-            company_id: 公司 ID。
+            company_id: 可选兼容字段；上传链路不会把它作为身份真源。
             company_name: 公司名称。
             ticker_aliases: 可选 ticker alias 列表。
             overwrite: 是否强制覆盖。
@@ -1489,7 +1489,7 @@ class SecPipeline(PipelineProtocol):
             fiscal_period: 可选财期；提供时参与稳定 document_id 生成。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
-            company_id: 公司 ID。
+            company_id: 可选兼容字段；上传链路不会把它作为身份真源。
             company_name: 公司名称。
             ticker_aliases: 可选 ticker alias 列表。
             overwrite: 是否强制覆盖。
@@ -1556,7 +1556,7 @@ class SecPipeline(PipelineProtocol):
             fiscal_period: 可选财期；提供时参与稳定 document_id 生成。
             filing_date: 可选披露日期。
             report_date: 可选报告日期。
-            company_id: 公司 ID。
+            company_id: 可选兼容字段；上传链路不会把它作为身份真源。
             company_name: 公司名称。
             ticker_aliases: 可选 ticker alias 列表。
             overwrite: 是否强制覆盖。
