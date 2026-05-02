@@ -1,4 +1,8 @@
-"""港A股管线占位实现。"""
+"""港A股财报管线实现。
+
+本模块负责 CN/HK 市场的 pipeline 装配、上传、下载与离线处理入口。下载链路
+通过 ``cn_download_workflow`` 编排，文档存取统一经 ``dayu.fins.storage`` 仓储。
+"""
 
 from __future__ import annotations
 
@@ -181,7 +185,7 @@ class CnPipeline(PipelineProtocol):
             blob_repository: 可选文件对象仓储实现。
             filing_maintenance_repository: 可选 filing 维护治理仓储实现。
             cn_discovery_client: 可选 CN 巨潮 discovery client。
-            hk_discovery_client: 可选 HK 披露易 discovery client；B 阶段接入前可注入测试实现。
+            hk_discovery_client: 可选 HK 披露易 discovery client；当前默认实现显式返回未接入错误，测试可注入 fake。
             convert_pdf_to_docling_json: 可选 PDF 到 Docling JSON 转换函数。
             workspace_root: 工作区根目录。
         Returns:
@@ -331,7 +335,7 @@ class CnPipeline(PipelineProtocol):
         rebuild: bool = False,
         ticker_aliases: Optional[list[str]] = None,
     ) -> dict[str, Any]:
-        """执行下载入口（CN 当前未实现）。
+        """执行 CN/HK 下载同步入口。
 
         Args:
             ticker: 股票代码。
@@ -340,10 +344,10 @@ class CnPipeline(PipelineProtocol):
             end_date: 可选结束日期。
             overwrite: 是否强制覆盖。
             rebuild: 是否仅基于本地已下载数据重建 `meta/manifest`。
-            ticker_aliases: 可选公司 alias 列表；当前 CN download 不使用该参数。
+            ticker_aliases: 可选公司 alias 列表；写入公司级 meta 时合并。
 
         Returns:
-            未实现结果字典。
+            下载结果字典。
 
         Raises:
             无。
@@ -358,9 +362,6 @@ class CnPipeline(PipelineProtocol):
             rebuild=rebuild,
             ticker_aliases=ticker_aliases,
         )
-        if result.get("status") == self.NOT_IMPLEMENTED_STATUS:
-            result = dict(result)
-            result["message"] = "CnPipeline.download 尚未实现"
         return result
 
     async def download_stream(
@@ -384,7 +385,7 @@ class CnPipeline(PipelineProtocol):
             end_date: 可选结束日期。
             overwrite: 是否强制覆盖。
             rebuild: 是否仅基于本地已下载数据重建 `meta/manifest`。
-            ticker_aliases: 可选公司 alias 列表；当前 CN download 不使用该参数。
+            ticker_aliases: 可选公司 alias 列表；写入公司级 meta 时合并。
             cancel_checker: 可选取消检查函数。
 
         Yields:
@@ -1359,7 +1360,7 @@ class CnPipeline(PipelineProtocol):
             cancel_checker: 可选取消检查函数，仅在同步单文档处理阶段边界生效。
 
         Returns:
-            占位结果字典。
+            单文档处理结果字典。
 
         Raises:
             RuntimeError: 执行失败时抛出。
@@ -1394,7 +1395,7 @@ class CnPipeline(PipelineProtocol):
             cancel_checker: 可选取消检查函数，仅在同步单文档处理阶段边界生效。
 
         Returns:
-            占位结果字典。
+            单材料处理结果字典。
 
         Raises:
             RuntimeError: 执行失败时抛出。
@@ -1674,7 +1675,7 @@ class CnPipeline(PipelineProtocol):
         )
 
     def _build_result(self, action: str, **payload: Any) -> dict[str, Any]:
-        """构建统一占位结果。
+        """构建统一结果。
 
         Args:
             action: 动作名称。
