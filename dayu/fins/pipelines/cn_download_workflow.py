@@ -117,6 +117,14 @@ async def run_cn_download_stream_impl(
             "rebuild": rebuild,
         },
     )
+    Log.info(
+        (
+            "进入CN/HK下载流程: "
+            f"ticker={normalized_ticker} market={market} form_type={form_type} "
+            f"start={start_date} end={end_date} overwrite={overwrite}"
+        ),
+        module=module,
+    )
     discovery = _select_discovery_client(host=host, market=market)
     query = CnReportQuery(
         market=market,
@@ -154,6 +162,11 @@ async def run_cn_download_stream_impl(
         for period in missing_periods:
             skipped = _build_missing_period_result(period=period)
             filings.append(skipped)
+            _log_filing_download_result(
+                module=module,
+                ticker=normalized_ticker,
+                filing_result=skipped,
+            )
             yield DownloadEvent(
                 event_type=DownloadEventType.FILING_COMPLETED,
                 ticker=normalized_ticker,
@@ -193,8 +206,17 @@ async def run_cn_download_stream_impl(
                     module=module,
                 ):
                     item = event.payload.get("filing_result")
-                    if isinstance(item, dict):
-                        filings.append(dict(item))
+                    if isinstance(item, dict) and event.event_type in {
+                        DownloadEventType.FILING_COMPLETED,
+                        DownloadEventType.FILING_FAILED,
+                    }:
+                        filing_result: JsonObject = dict(item)
+                        filings.append(filing_result)
+                        _log_filing_download_result(
+                            module=module,
+                            ticker=normalized_ticker,
+                            filing_result=filing_result,
+                        )
                     yield event
             except CancelledError:
                 notes.append("cancelled")
@@ -208,6 +230,11 @@ async def run_cn_download_stream_impl(
                     reason_message=str(exc),
                 )
                 filings.append(failed_item)
+                _log_filing_download_result(
+                    module=module,
+                    ticker=normalized_ticker,
+                    filing_result=failed_item,
+                )
                 yield DownloadEvent(
                     event_type=DownloadEventType.FILING_FAILED,
                     ticker=normalized_ticker,
@@ -258,7 +285,7 @@ async def run_cn_download_stream_impl(
             "CN/HK 下载完成: "
             f"ticker={normalized_ticker} total={summary['total']} "
             f"downloaded={summary['downloaded']} skipped={summary['skipped']} "
-            f"failed={summary['failed']}"
+            f"failed={summary['failed']} elapsed_ms={summary['elapsed_ms']}"
         ),
         module=module,
     )
@@ -373,6 +400,100 @@ def _build_candidate_failed_result(
         "reason_code": reason_code,
         "reason_message": reason_message,
     }
+
+
+def _log_filing_download_result(
+    *,
+    module: str,
+    ticker: str,
+    filing_result: JsonObject,
+) -> None:
+    """输出单个 CN/HK filing 下载完成日志。
+
+    Args:
+        module: 日志模块名。
+        ticker: 股票代码。
+        filing_result: 单个 filing 的下载结果字典。
+
+    Returns:
+        无。
+
+    Raises:
+        无。
+    """
+
+    document_id = _optional_log_text(filing_result.get("document_id"))
+    status = _optional_log_text(filing_result.get("status")) or "unknown"
+    form_type = _optional_log_text(filing_result.get("form_type"))
+    filing_date = _optional_log_text(filing_result.get("filing_date"))
+    report_date = _optional_log_text(filing_result.get("report_date"))
+    downloaded_files = _log_int(filing_result.get("downloaded_files"))
+    skipped_files = _log_int(filing_result.get("skipped_files"))
+    failed_files = filing_result.get("failed_files")
+    failed_count = len(failed_files) if isinstance(failed_files, list) else 0
+    skip_reason = _optional_log_text(filing_result.get("skip_reason"))
+    reason_code = _optional_log_text(filing_result.get("reason_code"))
+    reason_message = _optional_log_text(filing_result.get("reason_message"))
+    filter_category = _optional_log_text(filing_result.get("filter_category"))
+    Log.info(
+        (
+            "filing 下载完成: "
+            f"ticker={ticker} document_id={document_id} status={status} form={form_type} "
+            f"filing_date={filing_date} report_date={report_date} "
+            f"downloaded_files={downloaded_files} skipped_files={skipped_files} "
+            f"failed_files={failed_count} skip_reason={skip_reason} "
+            f"reason_code={reason_code} reason_message={reason_message} "
+            f"filter_category={filter_category}"
+        ),
+        module=module,
+    )
+
+
+def _optional_log_text(value: JsonValue | None) -> str | None:
+    """把日志字段转换为可读字符串。
+
+    Args:
+        value: JSON 字段值。
+
+    Returns:
+        ``None`` 或字符串。
+
+    Raises:
+        无。
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return str(value)
+    return None
+
+
+def _log_int(value: JsonValue | None) -> int:
+    """把日志数值字段转换为整数。
+
+    Args:
+        value: JSON 字段值。
+
+    Returns:
+        可安全记录的整数；无法解析时返回 0。
+
+    Raises:
+        无。
+    """
+
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
 
 
 def _build_summary(*, filings: list[JsonObject], elapsed_ms: int) -> JsonObject:

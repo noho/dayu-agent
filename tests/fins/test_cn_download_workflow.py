@@ -14,6 +14,8 @@ from typing import BinaryIO, Optional, TypeAlias
 from io import BytesIO
 from pathlib import Path
 
+import pytest
+
 from dayu.engine.processors.processor_registry import ProcessorRegistry
 from dayu.fins.domain.document_models import (
     FileObjectMeta,
@@ -331,6 +333,44 @@ def test_cn_download_workflow_commits_pdf_and_docling(tmp_path: Path) -> None:
     assert source_meta["company_id"] == "600519_SSE"
     assert source_meta["provider_company_id"] == "CNINFO:9900000600"
     assert source_meta["document_version"] == "v1"
+
+
+def test_cn_download_logs_match_sec_download_shape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CN download 应输出与 SEC download 对齐的入口和 filing 终态日志。"""
+
+    info_logs: list[str] = []
+
+    def capture_info(message: str, *, module: str) -> None:
+        """捕获 ``Log.info`` 消息。"""
+
+        info_logs.append(f"{module} {message}")
+
+    monkeypatch.setattr(
+        "dayu.fins.pipelines.cn_download_workflow.Log.info",
+        capture_info,
+    )
+    discovery = _FakeDiscoveryClient(temp_dir=tmp_path, candidates=(_candidate(),))
+    converter = _FakeConverter()
+    pipeline = _build_pipeline(tmp_path=tmp_path, discovery=discovery, converter=converter)
+
+    _collect_events(pipeline)
+
+    assert any("FINS.CN_PIPELINE 进入CN/HK下载流程: ticker=600519" in item for item in info_logs)
+    assert any(
+        "FINS.CN_PIPELINE filing 下载完成: ticker=600519 "
+        "document_id=fil_cn_" in item
+        and "status=downloaded form=FY" in item
+        and "downloaded_files=2 skipped_files=0 failed_files=0" in item
+        for item in info_logs
+    )
+    assert any(
+        "FINS.CN_PIPELINE CN/HK 下载完成: ticker=600519 total=1 downloaded=1 skipped=0 failed=0 elapsed_ms="
+        in item
+        for item in info_logs
+    )
 
 
 def test_cn_download_fast_skip_uses_remote_fingerprint(tmp_path: Path) -> None:
