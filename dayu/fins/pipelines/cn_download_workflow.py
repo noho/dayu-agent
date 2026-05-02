@@ -22,6 +22,7 @@ from dayu.fins.pipelines.cn_download_protocols import (
     CnReportDiscoveryClientProtocol,
 )
 from dayu.fins.pipelines.cn_form_utils import resolve_target_periods, resolve_window
+from dayu.fins.pipelines.docling_upload_service import build_cn_filing_ids
 from dayu.fins.pipelines.download_events import DownloadEvent, DownloadEventType
 from dayu.fins.ticker_normalization import try_normalize_ticker
 from dayu.log import Log
@@ -140,6 +141,7 @@ async def run_cn_download_stream_impl(
             ticker=normalized_ticker,
             payload={
                 "company_id": company_meta.company_id,
+                "provider_company_id": profile.company_id,
                 "company_name": profile.company_name,
                 "market": market,
             },
@@ -163,7 +165,7 @@ async def run_cn_download_stream_impl(
                 notes.append("cancelled")
                 cancelled = True
                 break
-            document_id = _candidate_document_id_seed(normalized_ticker, candidate)
+            document_id = _candidate_document_id(normalized_ticker, candidate)
             yield DownloadEvent(
                 event_type=DownloadEventType.FILING_STARTED,
                 ticker=normalized_ticker,
@@ -236,6 +238,7 @@ async def run_cn_download_stream_impl(
         ticker=normalized_ticker,
         company_info={
             "company_id": company_meta.company_id,
+            "provider_company_id": profile.company_id,
             "company_name": profile.company_name,
             "market": market,
         },
@@ -356,7 +359,7 @@ def _build_candidate_failed_result(
     """
 
     return {
-        "document_id": _candidate_document_id_seed(ticker, candidate),
+        "document_id": _candidate_document_id(ticker, candidate),
         "status": "failed",
         "form_type": candidate.fiscal_period,
         "filing_date": candidate.filing_date,
@@ -427,11 +430,28 @@ def _build_result(
     }
 
 
-def _candidate_document_id_seed(ticker: str, candidate: CnReportCandidate) -> str:
-    """构建 ``FILING_STARTED`` 事件用 document_id 预览。"""
+def _candidate_document_id(ticker: str, candidate: CnReportCandidate) -> str:
+    """构建单候选真实 document_id。
 
-    suffix = "a" if candidate.amended else "original"
-    return f"{ticker}_{candidate.fiscal_year}_{candidate.fiscal_period.lower()}_{suffix}"
+    Args:
+        ticker: 已归一化 ticker。
+        candidate: 远端候选。
+
+    Returns:
+        与单 filing 阶段机一致的 source document ID。
+
+    Raises:
+        无。
+    """
+
+    document_id, _ = build_cn_filing_ids(
+        ticker=ticker,
+        form_type=candidate.fiscal_period,
+        fiscal_year=candidate.fiscal_year,
+        fiscal_period=candidate.fiscal_period,
+        amended=candidate.amended,
+    )
+    return document_id
 
 
 def _reason_code_from_exception(exc: Exception) -> str:

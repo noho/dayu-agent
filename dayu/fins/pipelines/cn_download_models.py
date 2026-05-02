@@ -80,8 +80,7 @@ class CnCompanyProfile:
     由 downloader 的 ``resolve_company`` 返回，供 company meta upsert 与
     source upsert 共同消费。``company_id`` 字段命名规则：
 
-    - CN: ``"CNINFO:{orgId}"``，``orgId`` 来自巨潮 ``szse_stock.json`` /
-      ``sse_stock.json``。
+    - CN: ``"CNINFO:{orgId}"``，``orgId`` 来自巨潮全市场 stockList。
     - HK: ``"HKEX:{stockId}"``，``stockId`` 来自披露易
       ``activestock_sehk_*.json`` / ``inactivestock_sehk_*.json``。
 

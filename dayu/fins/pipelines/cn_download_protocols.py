@@ -66,7 +66,7 @@ class CnReportDiscoveryClientProtocol(Protocol):
             或 ``HKEX:{stockId}`` 前缀约定。
 
         Raises:
-            ValueError: 解析失败（无法在主源映射文件中定位公司）时抛出。
+            ValueError: 解析失败（无法在主源公司映射中定位公司）时抛出。
         """
 
         ...

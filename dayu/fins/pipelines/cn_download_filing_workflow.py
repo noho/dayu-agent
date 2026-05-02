@@ -272,21 +272,26 @@ async def run_cn_download_single_filing_stream(
         docling_filename=docling_filename,
         previous_meta=previous_meta,
         remote_fingerprint=remote_fingerprint,
+        pdf_sha256=pdf_sha256,
         overwrite=overwrite,
     )
     staged_docling_meta: FileObjectMeta | None = None
     staged_docling_entry: JsonObject | None = None
     if reusable_docling is not None:
-        staged_docling_meta = _find_file_meta(
-            blob_repository=blob_repository,
-            handle=handle,
-            filename=docling_filename,
-        )
-        staged_docling_entry = build_cn_file_entry(
-            filename=docling_filename,
-            file_meta=staged_docling_meta,
-            source_label=_SOURCE_LABEL_DOCLING,
-        )
+        try:
+            staged_docling_meta = _find_file_meta(
+                blob_repository=blob_repository,
+                handle=handle,
+                filename=docling_filename,
+            )
+        except FileNotFoundError:
+            staged_docling_meta = None
+        if staged_docling_meta is not None:
+            staged_docling_entry = build_cn_file_entry(
+                filename=docling_filename,
+                file_meta=staged_docling_meta,
+                source_label=_SOURCE_LABEL_DOCLING,
+            )
     staging_entries = [pdf_entry]
     if staged_docling_entry is not None:
         staging_entries.append(staged_docling_entry)
@@ -343,15 +348,23 @@ async def run_cn_download_single_filing_stream(
             docling_filename,
             BytesIO(docling_json_bytes),
             content_type=_JSON_CONTENT_TYPE,
-            metadata={"source": _SOURCE_LABEL_DOCLING},
+            metadata={"source": _SOURCE_LABEL_DOCLING, "pdf_sha256": pdf_sha256},
         )
         reused_docling = False
         converted = True
     else:
         docling_json_bytes = reusable_docling
-        if staged_docling_meta is None:
-            raise CnDownloadFilingError("staged Docling JSON 元数据缺失")
-        docling_meta = staged_docling_meta
+        docling_meta = (
+            staged_docling_meta
+            if staged_docling_meta is not None
+            else blob_repository.store_file(
+                handle,
+                docling_filename,
+                BytesIO(docling_json_bytes),
+                content_type=_JSON_CONTENT_TYPE,
+                metadata={"source": _SOURCE_LABEL_DOCLING, "pdf_sha256": pdf_sha256},
+            )
+        )
         reused_docling = True
         converted = False
     docling_entry = build_cn_file_entry(
@@ -521,9 +534,26 @@ def _resolve_reusable_docling(
     docling_filename: str,
     previous_meta: JsonObject | None,
     remote_fingerprint: str,
+    pdf_sha256: str,
     overwrite: bool,
 ) -> bytes | None:
-    """判断中间态 Docling JSON 是否可复用。"""
+    """判断中间态 Docling JSON 是否可复用。
+
+    Args:
+        blob_repository: blob 仓储。
+        handle: source document 句柄。
+        docling_filename: Docling JSON 文件名。
+        previous_meta: 当前 source meta。
+        remote_fingerprint: 当前候选远端 fingerprint。
+        pdf_sha256: 当前 PDF 字节 SHA-256。
+        overwrite: 是否强制覆盖。
+
+    Returns:
+        可复用 Docling JSON 字节；不可复用时返回 ``None``。
+
+    Raises:
+        OSError: 底层 blob 读取失败时抛出。
+    """
 
     if overwrite or previous_meta is None:
         return None
@@ -531,9 +561,12 @@ def _resolve_reusable_docling(
         return None
     if previous_meta.get("staging_remote_fingerprint") != remote_fingerprint:
         return None
-    if not has_blob_file(blob_repository=blob_repository, handle=handle, filename=docling_filename):
+    if previous_meta.get("staging_pdf_sha256") != pdf_sha256:
         return None
-    return blob_repository.read_file_bytes(handle, docling_filename)
+    try:
+        return blob_repository.read_file_bytes(handle, docling_filename)
+    except FileNotFoundError:
+        return None
 
 
 def _can_skip_by_pdf_sha(

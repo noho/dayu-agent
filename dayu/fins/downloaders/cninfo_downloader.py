@@ -11,9 +11,7 @@
 - 主源接口：
 
   - ``GET http://www.cninfo.com.cn/new/data/szse_stock.json``：
-    深市公司基础映射（``code`` -> ``orgId``）。
-  - ``GET http://www.cninfo.com.cn/new/data/sse_stock.json``：
-    沪市公司基础映射。
+    全市场 A 股公司基础映射（``code`` -> ``orgId``）。
   - ``POST http://www.cninfo.com.cn/new/hisAnnouncement/query``：按
     ``stock={code},{orgId}`` + ``category_*_szsh;`` 分类拉公告列表。
   - ``GET http://static.cninfo.com.cn/{adjunctUrl}``：PDF 实体下载。
@@ -60,8 +58,7 @@ JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 
 CNINFO_BASE_URL: Final[str] = "http://www.cninfo.com.cn"
 CNINFO_STATIC_BASE_URL: Final[str] = "http://static.cninfo.com.cn/"
-CNINFO_SZSE_STOCK_JSON_URL: Final[str] = f"{CNINFO_BASE_URL}/new/data/szse_stock.json"
-CNINFO_SSE_STOCK_JSON_URL: Final[str] = f"{CNINFO_BASE_URL}/new/data/sse_stock.json"
+CNINFO_STOCK_JSON_URL: Final[str] = f"{CNINFO_BASE_URL}/new/data/szse_stock.json"
 CNINFO_QUERY_URL: Final[str] = f"{CNINFO_BASE_URL}/new/hisAnnouncement/query"
 
 DEFAULT_USER_AGENT: Final[str] = "DayuAgent/1.0 (+cn-download)"
@@ -69,7 +66,6 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS: Final[float] = 30.0
 DEFAULT_SLEEP_SECONDS: Final[float] = 0.3
 DEFAULT_MAX_RETRIES: Final[int] = 3
 RETRY_BACKOFF_BASE_SECONDS: Final[float] = 0.8
-
 # CN form -> 巨潮 category 映射；HK 不走此 downloader。
 _PERIOD_TO_CATEGORY: Final[dict[CnFiscalPeriod, str]] = {
     "FY": "category_ndbg_szsh;",
@@ -94,6 +90,9 @@ _TITLE_BLOCKLIST: Final[tuple[str, ...]] = (
     "意见",
     "英文版",
     "english",
+    "港股公告",
+    "h股公告",
+    "h股",
 )
 
 # 标题中 "amended" 标记关键词。
@@ -101,6 +100,7 @@ _TITLE_AMENDED_TOKENS: Final[tuple[str, ...]] = ("更正", "更正后", "修订"
 
 _PDF_MAGIC_BYTES: Final[bytes] = b"%PDF-"
 _PDF_MIN_BYTES: Final[int] = 1024  # 1 KiB；正常财报 PDF 至少几百 KB。
+_CNINFO_ADJUNCT_TYPE_PDF: Final[str] = "PDF"
 
 # A 股 ticker 前缀 -> 巨潮 column / plate 映射。
 _TICKER_PREFIX_TO_MARKET_PARAMS: Final[
@@ -128,12 +128,11 @@ class _CninfoExchangeContext:
 
     column: str  # "szse" | "sse"
     plate: str  # "sz" | "sh"
-    stock_json_url: str
 
 
 @dataclass(frozen=True)
-class _CninfoStockMappingEntry:
-    """巨潮 ``szse_stock.json`` / ``sse_stock.json`` 单只记录。"""
+class _CninfoCompanyLookupEntry:
+    """巨潮 stockList 中的公司基础信息。"""
 
     code: str
     org_id: str
@@ -196,7 +195,7 @@ class CninfoDiscoveryClient:
         self._sleep_func: Callable[[float], None] = (
             sleep_func if sleep_func is not None else time.sleep
         )
-        self._stock_mapping_cache: dict[str, dict[str, _CninfoStockMappingEntry]] = {}
+        self._stock_mapping_cache: dict[str, _CninfoCompanyLookupEntry] | None = None
 
     def close(self) -> None:
         """关闭底层 HTTP 客户端。
@@ -234,10 +233,7 @@ class CninfoDiscoveryClient:
             raise ValueError(f"CninfoDiscoveryClient 仅支持 CN，收到 market={query.market!r}")
         ticker = query.normalized_ticker.strip()
         context = self._resolve_exchange_context(ticker)
-        mapping = self._fetch_stock_mapping(context.stock_json_url)
-        entry = mapping.get(ticker)
-        if entry is None:
-            raise ValueError(f"巨潮主源映射未命中 ticker={ticker!r}")
+        entry = self._resolve_company_lookup(ticker=ticker, context=context)
         return CnCompanyProfile(
             provider="cninfo",
             company_id=f"CNINFO:{entry.org_id}",
@@ -374,7 +370,7 @@ class CninfoDiscoveryClient:
     # ---------- 内部辅助 ----------
 
     def _resolve_exchange_context(self, ticker: str) -> _CninfoExchangeContext:
-        """根据 ticker 前缀决定巨潮 column / plate 与映射文件 URL。
+        """根据 ticker 前缀决定巨潮 column / plate。
 
         Args:
             ticker: 已归一化的 6 位 A 股代码。
@@ -393,46 +389,69 @@ class CninfoDiscoveryClient:
         if params is None:
             raise ValueError(f"巨潮未支持的 A 股前缀 {prefix!r}（ticker={ticker!r}）")
         column, plate = params
-        stock_url = (
-            CNINFO_SZSE_STOCK_JSON_URL if column == "szse" else CNINFO_SSE_STOCK_JSON_URL
-        )
-        return _CninfoExchangeContext(column=column, plate=plate, stock_json_url=stock_url)
+        return _CninfoExchangeContext(column=column, plate=plate)
 
-    def _fetch_stock_mapping(self, url: str) -> dict[str, _CninfoStockMappingEntry]:
-        """拉取并缓存巨潮 ``*_stock.json`` 映射。
+    def _resolve_company_lookup(
+        self,
+        *,
+        ticker: str,
+        context: _CninfoExchangeContext,
+    ) -> _CninfoCompanyLookupEntry:
+        """通过全市场 stockList 解析并缓存公司基础信息。
 
         Args:
-            url: ``szse_stock.json`` 或 ``sse_stock.json`` URL。
+            ticker: 已归一化的 6 位 A 股代码。
+            context: ticker 对应的巨潮市场上下文。
 
         Returns:
-            ``code -> _CninfoStockMappingEntry`` 映射。
+            :class:`_CninfoCompanyLookupEntry`。
 
         Raises:
-            RuntimeError: 请求失败或响应字段缺失时抛出。
+            ValueError: 公告搜索结果未命中 ticker 时抛出。
+            RuntimeError: 主源接口请求失败或响应字段缺失时抛出。
         """
 
-        cached = self._stock_mapping_cache.get(url)
-        if cached is not None:
-            return cached
-        payload = self._http_get_json(url)
-        items = payload.get("stockList") if isinstance(payload, dict) else payload
+        del context
+        mapping = self._fetch_stock_mapping()
+        entry = mapping.get(ticker)
+        if entry is None:
+            raise ValueError(f"巨潮 stockList 未命中 ticker={ticker!r}")
+        return entry
+
+    def _fetch_stock_mapping(self) -> dict[str, _CninfoCompanyLookupEntry]:
+        """拉取并缓存巨潮全市场 A 股 stockList。
+
+        Args:
+            无。
+
+        Returns:
+            ``code -> _CninfoCompanyLookupEntry`` 映射。
+
+        Raises:
+            RuntimeError: 主源接口请求失败或响应字段缺失时抛出。
+        """
+
+        if self._stock_mapping_cache is not None:
+            return self._stock_mapping_cache
+        payload = self._http_get_json(CNINFO_STOCK_JSON_URL)
+        items = payload.get("stockList") if isinstance(payload, dict) else None
         if not isinstance(items, list):
-            raise RuntimeError(f"巨潮主源映射 schema 异常: url={url}")
-        mapping: dict[str, _CninfoStockMappingEntry] = {}
+            raise RuntimeError(f"巨潮 stockList schema 异常: url={CNINFO_STOCK_JSON_URL}")
+        mapping: dict[str, _CninfoCompanyLookupEntry] = {}
         for raw in items:
             if not isinstance(raw, dict):
                 continue
             code = str(raw.get("code", "")).strip()
             org_id = str(raw.get("orgId", "")).strip()
-            company_name = str(raw.get("zwjc", "") or raw.get("category", "")).strip()
+            company_name = str(raw.get("zwjc", "")).strip()
             if not code or not org_id:
                 continue
-            mapping[code] = _CninfoStockMappingEntry(
+            mapping[code] = _CninfoCompanyLookupEntry(
                 code=code,
                 org_id=org_id,
                 company_name=company_name or code,
             )
-        self._stock_mapping_cache[url] = mapping
+        self._stock_mapping_cache = mapping
         return mapping
 
     def _query_announcements(
@@ -467,29 +486,23 @@ class CninfoDiscoveryClient:
         announcements: list[_RawAnnouncement] = []
         page_num = 1
         while True:
-            data = {
-                "pageNum": str(page_num),
-                "pageSize": str(self._page_size),
-                "column": column,
-                "tabName": "fulltext",
-                "plate": plate,
-                "stock": f"{stock},{org_id}",
-                "searchkey": "",
-                "secid": "",
-                "category": category,
-                "trade": "",
-                "seDate": f"{start_date}~{end_date}",
-                "sortName": "time",
-                "sortType": "desc",
-                "isHLtitle": "true",
-            }
-            payload = self._http_post_form(CNINFO_QUERY_URL, data=data)
+            payload = self._query_announcement_page(
+                column=column,
+                plate=plate,
+                stock=f"{stock},{org_id}",
+                search_key="",
+                category=category,
+                start_date=start_date,
+                end_date=end_date,
+                page_num=page_num,
+                page_size=self._page_size,
+            )
             items = payload.get("announcements") if isinstance(payload, dict) else None
             if not isinstance(items, list) or not items:
                 break
             for raw in items:
                 parsed = _parse_raw_announcement(raw)
-                if parsed is not None:
+                if parsed is not None and parsed.sec_code == stock:
                     announcements.append(parsed)
             has_more = bool(payload.get("hasMore")) if isinstance(payload, dict) else False
             if not has_more:
@@ -502,6 +515,57 @@ class CninfoDiscoveryClient:
                 )
                 break
         return announcements
+
+    def _query_announcement_page(
+        self,
+        *,
+        column: str,
+        plate: str,
+        stock: str,
+        search_key: str,
+        category: str,
+        start_date: str,
+        end_date: str,
+        page_num: int,
+        page_size: int,
+    ) -> JsonValue:
+        """请求单页 ``hisAnnouncement/query``。
+
+        Args:
+            column: ``szse`` / ``sse``。
+            plate: ``sz`` / ``sh``。
+            stock: 巨潮 ``stock`` 字段；可为空，或 ``{code},{orgId}``。
+            search_key: 巨潮全文搜索关键词；公司解析时传 ticker。
+            category: 巨潮公告分类；为空表示不限制分类。
+            start_date: 窗口起点 ``YYYY-MM-DD``。
+            end_date: 窗口终点 ``YYYY-MM-DD``。
+            page_num: 页码，从 1 开始。
+            page_size: 单页大小。
+
+        Returns:
+            JSON 解析后的响应对象。
+
+        Raises:
+            RuntimeError: 请求 / 解析失败时抛出。
+        """
+
+        data = {
+            "pageNum": str(page_num),
+            "pageSize": str(page_size),
+            "column": column,
+            "tabName": "fulltext",
+            "plate": plate,
+            "stock": stock,
+            "searchkey": search_key,
+            "secid": "",
+            "category": category,
+            "trade": "",
+            "seDate": f"{start_date}~{end_date}",
+            "sortName": "time",
+            "sortType": "desc",
+            "isHLtitle": "true",
+        }
+        return self._http_post_form(CNINFO_QUERY_URL, data=data)
 
     def _build_candidate_from_announcement(
         self,
@@ -701,6 +765,7 @@ class _HeadMeta:
 class _RawAnnouncement:
     """巨潮 ``hisAnnouncement/query`` 单条公告的强类型抽象。"""
 
+    sec_code: str
     announcement_id: str
     title: str
     announcement_date: str
@@ -717,6 +782,7 @@ _PERIOD_SORT_KEY: Final[dict[CnFiscalPeriod, int]] = {
 
 _TITLE_FY_PATTERN: Final[re.Pattern[str]] = re.compile(r"(\d{4})\s*年[年度]?\s*(年度报告|年报)")
 _TITLE_FISCAL_YEAR_FALLBACK: Final[re.Pattern[str]] = re.compile(r"(\d{4})\s*年")
+_CNINFO_HTML_TAG_PATTERN: Final[re.Pattern[str]] = re.compile(r"<[^>]+>")
 
 
 def _is_title_blocked(title: str) -> bool:
@@ -778,19 +844,41 @@ def _parse_raw_announcement(raw: JsonValue) -> Optional[_RawAnnouncement]:
 
     if not isinstance(raw, dict):
         return None
+    sec_code = str(raw.get("secCode", "")).strip()
+    adjunct_type = str(raw.get("adjunctType", "")).strip().upper()
     announcement_id = str(raw.get("announcementId", "")).strip()
-    title = str(raw.get("announcementTitle", "")).strip()
+    title = _clean_cninfo_text(str(raw.get("announcementTitle", "")).strip())
     adjunct_url = str(raw.get("adjunctUrl", "")).strip()
     raw_time = raw.get("announcementTime")
     announcement_date = _format_announcement_date(raw_time)
-    if not announcement_id or not title or not adjunct_url or not announcement_date:
+    if adjunct_type != _CNINFO_ADJUNCT_TYPE_PDF:
+        return None
+    if not sec_code or not announcement_id or not title or not adjunct_url or not announcement_date:
         return None
     return _RawAnnouncement(
+        sec_code=sec_code,
         announcement_id=announcement_id,
         title=title,
         announcement_date=announcement_date,
         adjunct_url=adjunct_url,
     )
+
+
+def _clean_cninfo_text(text: str) -> str:
+    """清洗巨潮返回的高亮 HTML 文本。
+
+    Args:
+        text: 巨潮文本字段，可能包含 ``<em>`` 高亮标签。
+
+    Returns:
+        去掉 HTML 标签并压缩首尾空白后的文本。
+
+    Raises:
+        无。
+    """
+
+    without_tags = _CNINFO_HTML_TAG_PATTERN.sub("", text)
+    return without_tags.strip()
 
 
 def _format_announcement_date(raw_time: JsonValue) -> Optional[str]:
@@ -877,8 +965,7 @@ def _utc_now_isoformat() -> str:
 __all__ = [
     "CNINFO_BASE_URL",
     "CNINFO_QUERY_URL",
-    "CNINFO_SSE_STOCK_JSON_URL",
+    "CNINFO_STOCK_JSON_URL",
     "CNINFO_STATIC_BASE_URL",
-    "CNINFO_SZSE_STOCK_JSON_URL",
     "CninfoDiscoveryClient",
 ]

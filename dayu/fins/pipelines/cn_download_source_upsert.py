@@ -299,6 +299,7 @@ def _build_base_meta(
         "ingest_method": _INGEST_METHOD_DOWNLOAD,
         "ticker": ticker,
         "company_id": company_id,
+        "provider_company_id": profile.company_id,
         "company_name": profile.company_name,
         "form_type": form_type,
         "fiscal_year": candidate.fiscal_year,

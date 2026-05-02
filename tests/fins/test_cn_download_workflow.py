@@ -310,9 +310,12 @@ def test_cn_download_workflow_commits_pdf_and_docling(tmp_path: Path) -> None:
     assert summary["converted"] == 1
     assert discovery.download_calls == 1
     assert converter.calls == 1
+    started = [event for event in events if event.event_type == DownloadEventType.FILING_STARTED]
+    completed = [event for event in events if event.event_type == DownloadEventType.FILING_COMPLETED]
     company_info = result["company_info"]
     assert isinstance(company_info, dict)
     assert company_info["company_id"] == "600519_SSE"
+    assert company_info["provider_company_id"] == "CNINFO:9900000600"
     company_meta = pipeline._company_repository.get_company_meta("600519")  # type: ignore[attr-defined]
     assert company_meta.company_id == "600519_SSE"
     document_id, _ = build_cn_filing_ids(
@@ -323,7 +326,10 @@ def test_cn_download_workflow_commits_pdf_and_docling(tmp_path: Path) -> None:
         amended=False,
     )
     source_meta = pipeline._source_repository.get_source_meta("600519", document_id, SourceKind.FILING)  # type: ignore[attr-defined]
+    assert started[-1].document_id == document_id
+    assert completed[-1].document_id == document_id
     assert source_meta["company_id"] == "600519_SSE"
+    assert source_meta["provider_company_id"] == "CNINFO:9900000600"
     assert source_meta["document_version"] == "v1"
 
 
@@ -562,6 +568,75 @@ def test_cn_download_commits_when_pdf_and_docling_are_staged(tmp_path: Path) -> 
     assert completed[-1].payload["reused_docling"] is True
     assert discovery.download_calls == 1
     assert converter.calls == 1
+
+
+def test_cn_download_reuses_unlisted_docling_blob_after_crash(tmp_path: Path) -> None:
+    """Docling blob 已落盘但 meta 未列出时，下次应复用 blob 并 commit。"""
+
+    discovery = _FakeDiscoveryClient(temp_dir=tmp_path, candidates=(_candidate(),))
+    converter = _FakeConverter(fail_once=True)
+    pipeline = _build_pipeline(tmp_path=tmp_path, discovery=discovery, converter=converter)
+    _collect_events(pipeline)
+    context = build_fs_storage_test_context(tmp_path)
+    document_id = build_cn_filing_ids(
+        ticker="600519",
+        form_type="FY",
+        fiscal_year=2024,
+        fiscal_period="FY",
+        amended=False,
+    )[0]
+    handle = context.source_repository.get_source_handle("600519", document_id, SourceKind.FILING)
+    context.blob_repository.store_file(
+        handle,
+        f"{document_id}_docling.json",
+        BytesIO(_DOCLING_BYTES),
+        content_type="application/json",
+        metadata={"source": "docling"},
+    )
+
+    events = _collect_events(pipeline)
+
+    completed = [event for event in events if event.event_type == DownloadEventType.FILING_COMPLETED]
+    assert completed[-1].payload["status"] == "downloaded"
+    assert completed[-1].payload["reused_docling"] is True
+    assert discovery.download_calls == 1
+    assert converter.calls == 1
+
+
+def test_cn_download_does_not_reuse_docling_when_staged_pdf_sha_differs(tmp_path: Path) -> None:
+    """当前 PDF SHA 与 staged meta 不一致时，旧 Docling JSON 不能复用。"""
+
+    discovery = _FakeDiscoveryClient(temp_dir=tmp_path, candidates=(_candidate(),))
+    converter = _FakeConverter(fail_once=True)
+    pipeline = _build_pipeline(tmp_path=tmp_path, discovery=discovery, converter=converter)
+    _collect_events(pipeline)
+    context = build_fs_storage_test_context(tmp_path)
+    document_id = build_cn_filing_ids(
+        ticker="600519",
+        form_type="FY",
+        fiscal_year=2024,
+        fiscal_period="FY",
+        amended=False,
+    )[0]
+    handle = context.source_repository.get_source_handle("600519", document_id, SourceKind.FILING)
+    context.blob_repository.store_file(
+        handle,
+        f"{document_id}_docling.json",
+        BytesIO(b'{"document": "old"}'),
+        content_type="application/json",
+        metadata={"source": "docling"},
+    )
+    staged_meta = context.source_repository.get_source_meta("600519", document_id, SourceKind.FILING)
+    staged_meta["staging_pdf_sha256"] = "0" * 64
+    context.source_repository.replace_source_meta("600519", document_id, SourceKind.FILING, staged_meta)
+
+    events = _collect_events(pipeline)
+
+    completed = [event for event in events if event.event_type == DownloadEventType.FILING_COMPLETED]
+    assert completed[-1].payload["status"] == "downloaded"
+    assert completed[-1].payload["reused_docling"] is False
+    assert discovery.download_calls == 2
+    assert converter.calls == 2
 
 
 def test_cn_download_overwrite_clears_ticker_and_redownloads(tmp_path: Path) -> None:
