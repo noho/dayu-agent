@@ -9,18 +9,30 @@ from typing import Any, AsyncIterator, Callable, Optional
 from dayu.contracts.cancellation import CancelledError
 from dayu.log import Log
 from dayu.engine.processors.processor_registry import ProcessorRegistry
+from dayu.fins.docling_export import PdfToDoclingJsonBytes, convert_pdf_bytes_to_docling_json_bytes
 from dayu.fins.domain.document_models import ProcessedHandle
 from dayu.fins.domain.enums import SourceKind
+from dayu.fins.downloaders.cninfo_downloader import CninfoDiscoveryClient
 from dayu.fins.ingestion.pipeline_backends import PipelineIngestionBackend
 from dayu.fins.ingestion.process_events import ProcessEvent, ProcessEventType
 from dayu.fins.ingestion.service import FinsIngestionService
+from dayu.fins.pipelines.cn_download_protocols import CnReportDiscoveryClientProtocol
+from dayu.fins.pipelines.cn_download_workflow import run_cn_download_stream_impl
+from dayu.fins.pipelines.cn_download_models import (
+    CnCompanyProfile,
+    CnReportCandidate,
+    CnReportQuery,
+    DownloadedReportAsset,
+)
 from dayu.fins.storage import (
     CompanyMetaRepositoryProtocol,
     DocumentBlobRepositoryProtocol,
     FsCompanyMetaRepository,
     FsDocumentBlobRepository,
+    FsFilingMaintenanceRepository,
     FsProcessedDocumentRepository,
     FsSourceDocumentRepository,
+    FilingMaintenanceRepositoryProtocol,
     ProcessedDocumentRepositoryProtocol,
     SourceDocumentRepositoryProtocol,
 )
@@ -83,6 +95,61 @@ def _raise_if_cancelled(
     raise CancelledError("操作已被取消")
 
 
+class _UnsupportedHkDiscoveryClient:
+    """B 阶段接入披露易前的 HK discovery 显式未支持实现。"""
+
+    def resolve_company(self, query: CnReportQuery) -> CnCompanyProfile:
+        """拒绝 HK 公司解析。
+
+        Args:
+            query: 下载查询。
+
+        Returns:
+            不返回。
+
+        Raises:
+            ValueError: 始终抛出，提示 HK 下载尚未接入。
+        """
+
+        raise ValueError(f"HK download 尚未接入披露易 downloader: ticker={query.normalized_ticker}")
+
+    def list_report_candidates(
+        self,
+        query: CnReportQuery,
+        profile: CnCompanyProfile,
+    ) -> tuple[CnReportCandidate, ...]:
+        """拒绝 HK 候选发现。
+
+        Args:
+            query: 下载查询。
+            profile: 公司基础元数据。
+
+        Returns:
+            不返回。
+
+        Raises:
+            ValueError: 始终抛出，提示 HK 下载尚未接入。
+        """
+
+        del profile
+        raise ValueError(f"HK download 尚未接入披露易 downloader: ticker={query.normalized_ticker}")
+
+    def download_report_pdf(self, candidate: CnReportCandidate) -> DownloadedReportAsset:
+        """拒绝 HK PDF 下载。
+
+        Args:
+            candidate: 远端候选。
+
+        Returns:
+            不返回。
+
+        Raises:
+            RuntimeError: 始终抛出，提示 HK 下载尚未接入。
+        """
+
+        raise RuntimeError(f"HK download 尚未接入披露易 downloader: source_id={candidate.source_id}")
+
+
 class CnPipeline(PipelineProtocol):
     """港A股管线骨架实现。"""
 
@@ -98,6 +165,10 @@ class CnPipeline(PipelineProtocol):
         source_repository: SourceDocumentRepositoryProtocol | None = None,
         processed_repository: ProcessedDocumentRepositoryProtocol | None = None,
         blob_repository: DocumentBlobRepositoryProtocol | None = None,
+        filing_maintenance_repository: FilingMaintenanceRepositoryProtocol | None = None,
+        cn_discovery_client: CnReportDiscoveryClientProtocol | None = None,
+        hk_discovery_client: CnReportDiscoveryClientProtocol | None = None,
+        convert_pdf_to_docling_json: PdfToDoclingJsonBytes | None = None,
         workspace_root: Optional[Path] = None,
     ) -> None:
         """初始化港A股管线。
@@ -108,6 +179,10 @@ class CnPipeline(PipelineProtocol):
             source_repository: 可选源文档仓储实现。
             processed_repository: 可选 processed 文档仓储实现。
             blob_repository: 可选文件对象仓储实现。
+            filing_maintenance_repository: 可选 filing 维护治理仓储实现。
+            cn_discovery_client: 可选 CN 巨潮 discovery client。
+            hk_discovery_client: 可选 HK 披露易 discovery client；B 阶段接入前可注入测试实现。
+            convert_pdf_to_docling_json: 可选 PDF 到 Docling JSON 转换函数。
             workspace_root: 工作区根目录。
         Returns:
             无。
@@ -137,6 +212,21 @@ class CnPipeline(PipelineProtocol):
             self._workspace_root,
             repository_set=repository_set,
         )
+        self._filing_maintenance_repository = (
+            filing_maintenance_repository
+            or FsFilingMaintenanceRepository(
+                self._workspace_root,
+                repository_set=repository_set,
+            )
+        )
+        self._cn_discovery_client = cn_discovery_client or CninfoDiscoveryClient()
+        self._hk_discovery_client = hk_discovery_client or _UnsupportedHkDiscoveryClient()
+        self._convert_pdf_to_docling_json = (
+            convert_pdf_to_docling_json or convert_pdf_bytes_to_docling_json_bytes
+        )
+        self._user_agent: Optional[str] = None
+        self._sleep_seconds = 0.0
+        self._max_retries = 3
         self._upload_service = DoclingUploadService(
             source_repository=self._source_repository,
             blob_repository=self._blob_repository,
@@ -148,6 +238,72 @@ class CnPipeline(PipelineProtocol):
             f"初始化港A股管线: workspace_root={self._workspace_root}",
             module=self.MODULE,
         )
+
+    @property
+    def company_meta_repository(self) -> CompanyMetaRepositoryProtocol:
+        """返回公司元数据仓储。"""
+
+        return self._company_repository
+
+    @property
+    def source_repository(self) -> SourceDocumentRepositoryProtocol:
+        """返回 source 文档仓储。"""
+
+        return self._source_repository
+
+    @property
+    def blob_repository(self) -> DocumentBlobRepositoryProtocol:
+        """返回 blob 仓储。"""
+
+        return self._blob_repository
+
+    @property
+    def processed_repository(self) -> ProcessedDocumentRepositoryProtocol:
+        """返回 processed 仓储。"""
+
+        return self._processed_repository
+
+    @property
+    def filing_maintenance_repository(self) -> FilingMaintenanceRepositoryProtocol:
+        """返回 filing 维护仓储。"""
+
+        return self._filing_maintenance_repository
+
+    @property
+    def cn_discovery_client(self) -> CnReportDiscoveryClientProtocol:
+        """返回 CN 巨潮 discovery client。"""
+
+        return self._cn_discovery_client
+
+    @property
+    def hk_discovery_client(self) -> CnReportDiscoveryClientProtocol:
+        """返回 HK 披露易 discovery client。"""
+
+        return self._hk_discovery_client
+
+    @property
+    def convert_pdf_to_docling_json(self) -> PdfToDoclingJsonBytes:
+        """返回 PDF 到 Docling JSON 转换函数。"""
+
+        return self._convert_pdf_to_docling_json
+
+    @property
+    def user_agent(self) -> Optional[str]:
+        """返回下载 User-Agent。"""
+
+        return self._user_agent
+
+    @property
+    def sleep_seconds(self) -> float:
+        """返回下载请求间隔。"""
+
+        return self._sleep_seconds
+
+    @property
+    def max_retries(self) -> int:
+        """返回下载最大重试次数。"""
+
+        return self._max_retries
 
     @property
     def ingestion_service(self) -> FinsIngestionService:
@@ -262,7 +418,7 @@ class CnPipeline(PipelineProtocol):
         *,
         cancel_checker: Optional[Callable[[], bool]] = None,
     ) -> AsyncIterator[DownloadEvent]:
-        """执行流式下载（CN 当前未实现）。
+        """执行流式下载。
 
         Args:
             ticker: 股票代码。
@@ -271,43 +427,30 @@ class CnPipeline(PipelineProtocol):
             end_date: 可选结束日期。
             overwrite: 是否强制覆盖。
             rebuild: 是否仅基于本地已下载数据重建 `meta/manifest`。
-            ticker_aliases: 可选公司 alias 列表；当前 CN download 不使用该参数。
-            cancel_checker: 可选取消检查函数（CN 当前未使用）。
+            ticker_aliases: 可选公司 alias 列表。
+            cancel_checker: 可选取消检查函数。
 
         Yields:
-            仅产出开始与结束事件，结束事件携带未实现结果。
+            下载流程事件。
 
         Raises:
             无。
         """
 
-        result = self._build_not_implemented_result(
-            action="download",
-            message="CnPipeline.download_stream 尚未实现",
+        async for event in run_cn_download_stream_impl(
+            self,
             ticker=ticker,
             form_type=form_type,
             start_date=start_date,
             end_date=end_date,
             overwrite=overwrite,
             rebuild=rebuild,
-        )
-        del cancel_checker, ticker_aliases
-        yield DownloadEvent(
-            event_type=DownloadEventType.PIPELINE_STARTED,
-            ticker=ticker,
-            payload={
-                "form_type": form_type,
-                "start_date": start_date,
-                "end_date": end_date,
-                "overwrite": overwrite,
-                "rebuild": rebuild,
-            },
-        )
-        yield DownloadEvent(
-            event_type=DownloadEventType.PIPELINE_COMPLETED,
-            ticker=ticker,
-            payload={"result": result},
-        )
+            ticker_aliases=ticker_aliases,
+            cancel_checker=cancel_checker,
+            module=self.MODULE,
+            pipeline_name=self.PIPELINE_NAME,
+        ):
+            yield event
 
     def upload_filing(
         self,

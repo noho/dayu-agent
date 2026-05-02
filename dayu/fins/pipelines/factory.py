@@ -104,6 +104,7 @@ def get_pipeline_from_normalized_ticker(
             source_repository=source_repository,
             processed_repository=processed_repository,
             blob_repository=blob_repository,
+            filing_maintenance_repository=filing_maintenance_repository,
         )
     raise ValueError(f"不支持的 market: {normalized_ticker.market}")
 
@@ -132,8 +133,8 @@ def build_ingestion_service_from_normalized_ticker(
         source_repository: 共享源文档仓储。
         processed_repository: 共享 processed 文档仓储。
         blob_repository: 共享文件对象仓储。
-        filing_maintenance_repository: 共享 filing 维护治理仓储（仅 US pipeline
-            实际使用，CN/HK pipeline 忽略）。
+        filing_maintenance_repository: 共享 filing 维护治理仓储；US 与 CN/HK
+            download overwrite 都通过它执行 ticker 级清理。
         processor_registry: 共享处理器注册表。
 
     Returns:

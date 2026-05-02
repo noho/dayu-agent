@@ -61,7 +61,7 @@ playwright install chromium
   - 同一章节里，不同行业公司写出明显不同的判断路径。
   - 同一行业里，不同公司写出公司自己的特殊结构变量。
 - 位于 Engine 的 web tools 现在的对抗challenge能力很弱，很多网站无法访问。
-- 位于 Fins 的港股、A股财报下载功能尚未实现。
+- 位于 Fins 的港股财报下载功能尚未实现；A 股下载已接入巨潮主源。
 - GUI 尚未实现；Web UI 目前仍只有 FastAPI 骨架。
 - WeChat UI 仅支持文本消息首版，还可添加更多好玩的功能。
 - 财报电话会议记录音频转录文字后信息提取（起码要区分信息来自提问还是回答）尚未实现。
@@ -768,7 +768,7 @@ NormalizedTicker.market in {"HK", "CN"}    → CnPipeline
 关键事实：
 
 - pipeline 分派只看 `NormalizedTicker.market`，不看 ticker 字面量或字母数字模式。
-- 同一 `FinsRuntime` 实例里，CLI 与 tool 两路共享同一份 `ProcessorRegistry` 与仓储实例，pipeline 构造时把它们逐项注入。
+- 同一 `FinsRuntime` 实例里，CLI 与 tool 两路共享同一份 `ProcessorRegistry` 与仓储实例，pipeline 构造时把它们逐项注入；CN/HK pipeline 也接收 filing maintenance 仓储，用于 download overwrite 的 ticker 级清理。
 - `SecPipeline` 已不再接受识别器注入参数；ticker 的市场识别统一由 `dayu/fins/ticker_normalization.py::normalize_ticker` 真源完成。
 
 #### 5.3.2 document → processor（按 source + form_type + media_type 分派）
