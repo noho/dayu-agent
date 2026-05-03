@@ -157,6 +157,8 @@ def test_ingestion_tool_schema_hides_internal_switches(monkeypatch: pytest.Monke
 
     assert "rebuild" not in download_schema
     assert "start_financial_document_preprocess_job" not in registry.schemas
+    assert "FY" in download_schema["form_types"]["items"]["enum"]
+    assert "Q3" in download_schema["form_types"]["items"]["enum"]
 
 
 @pytest.mark.unit
@@ -171,7 +173,9 @@ def test_ingestion_tool_schema_descriptions_follow_workflow(monkeypatch: pytest.
     cancel_schema = registry.schemas["cancel_financial_filing_download_job"]["function"]
 
     assert "最自然的写法" in download_schema["parameters"]["properties"]["ticker"]["description"]
+    assert "A 股/港股" in download_schema["parameters"]["properties"]["form_types"]["description"]
     assert "只在你明确要限制时间范围时填写" in download_schema["parameters"]["properties"]["filed_date_from"]["description"]
+    assert "支持美股、A 股和港股" in download_schema["description"]
     assert "直接使用启动工具返回的 job.job_id" in status_schema["parameters"]["properties"]["job_id"]["description"]
     assert "下一步只用状态工具轮询" in download_schema["description"]
     assert "优先按 next_step.action 决定" in status_schema["description"]
@@ -204,7 +208,7 @@ def test_start_download_job_tool_returns_low_cognitive_load_response(
     assert response["failure"] is None
     assert response["next_step"]["action"] == "poll_status"
     assert response["next_step"]["tool_name"] == "get_financial_filing_download_job_status"
-    assert manager.start_download_calls[0]["ticker"] == "aapl"
+    assert manager.start_download_calls[0]["ticker"] == "AAPL"
     assert manager.start_download_calls[0]["form_types"] == ["10-K", "10-Q"]
 
 
@@ -228,10 +232,21 @@ def test_status_tool_distinguishes_job_not_found(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.unit
-def test_start_download_job_tool_returns_not_implemented_for_non_us_ticker(
+@pytest.mark.parametrize(
+    "raw_ticker, market, canonical, form_types",
+    [
+        ("600519.SH", "CN", "600519", ["FY", "Q1"]),
+        ("700.HK", "HK", "0700", ["H1", "Q2"]),
+    ],
+)
+def test_start_download_job_tool_supports_cn_and_hk_tickers(
     monkeypatch: pytest.MonkeyPatch,
+    raw_ticker: str,
+    market: str,
+    canonical: str,
+    form_types: list[str],
 ) -> None:
-    """验证非 US ticker 不创建 job，直接返回 `not_implemented`。"""
+    """验证 CN/HK ticker 会进入下载 job 而不是停在工具层。"""
 
     manager = _FakeJobManager()
     registry = _register_tools(monkeypatch=monkeypatch, manager=manager)
@@ -241,20 +256,61 @@ def test_start_download_job_tool_returns_not_implemented_for_non_us_ticker(
     monkeypatch.setattr(
         module,
         "normalize_ticker",
-        lambda ticker: NormalizedTicker(canonical=ticker.upper(), market="CN", exchange=None, raw=ticker),
+        lambda ticker: NormalizedTicker(canonical=canonical, market=market, exchange=None, raw=ticker),
     )
 
     response = _execute_tool(
         registry,
         "start_financial_filing_download_job",
-        {"ticker": "000333"},
+        {"ticker": raw_ticker, "form_types": form_types},
     )
 
-    assert response["request_outcome"] == "not_implemented"
-    assert response["job"] is None
-    assert response["failure"]["code"] == "not_implemented"
-    assert "当前市场暂不支持下载任务" in response["failure"]["message"]
-    assert response["next_step"]["action"] == "stop"
+    assert response["request_outcome"] == "started"
+    assert response["job"]["job_type"] == "filing_download"
+    assert response["failure"] is None
+    assert response["next_step"]["action"] == "poll_status"
+    assert manager.start_download_calls[0]["ticker"] == canonical
+    assert manager.start_download_calls[0]["form_types"] == sorted(form_types)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "raw_ticker, market, canonical, form_types, message_fragment",
+    [
+        ("AAPL", "US", "AAPL", ["FY"], "US 市场不支持这些表单"),
+        ("600519.SH", "CN", "600519", ["10-K"], "CN 市场不支持这些表单"),
+        ("700.HK", "HK", "0700", ["10-Q"], "HK 市场不支持这些表单"),
+    ],
+)
+def test_start_download_job_tool_rejects_cross_market_forms(
+    monkeypatch: pytest.MonkeyPatch,
+    raw_ticker: str,
+    market: str,
+    canonical: str,
+    form_types: list[str],
+    message_fragment: str,
+) -> None:
+    """验证跨市场非法 form 组合在工具层同步拒绝。"""
+
+    manager = _FakeJobManager()
+    registry = _register_tools(monkeypatch=monkeypatch, manager=manager)
+
+    from dayu.fins.tools import ingestion_tools as module
+
+    monkeypatch.setattr(
+        module,
+        "normalize_ticker",
+        lambda ticker: NormalizedTicker(canonical=canonical, market=market, exchange=None, raw=ticker),
+    )
+
+    response = registry.execute(
+        "start_financial_filing_download_job",
+        {"ticker": raw_ticker, "form_types": form_types},
+    )
+
+    assert response["ok"] is False
+    assert response["error"] == "execution_error"
+    assert message_fragment in str(response.get("hint"))
     assert manager.start_download_calls == []
 
 
@@ -443,6 +499,17 @@ def test_normalize_form_types_deduplicates_and_sorts() -> None:
     from dayu.fins.tools.ingestion_tools import _normalize_form_types
 
     assert _normalize_form_types(["10-Q", "10-K", "10-K"]) == ["10-K", "10-Q"]
+
+
+@pytest.mark.unit
+def test_validate_download_form_types_for_market_raises_tool_argument_error() -> None:
+    """验证跨市场 form 校验真源抛出工具参数错误。"""
+
+    from dayu.engine.exceptions import ToolArgumentError
+    from dayu.fins.tools.ingestion_tools import _validate_download_form_types_for_market
+
+    with pytest.raises(ToolArgumentError, match="CN 市场不支持这些表单"):
+        _validate_download_form_types_for_market(form_types=["10-K"], market="CN")
 
 
 # ── process job 工具（start / status / cancel）──

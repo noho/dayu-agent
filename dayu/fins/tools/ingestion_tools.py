@@ -17,13 +17,13 @@ from dayu.fins.ingestion.job_manager import (
     IngestionJobManager,
     get_or_create_ingestion_job_manager,
 )
-from dayu.fins.ticker_normalization import normalize_ticker
+from dayu.fins.ticker_normalization import Market, normalize_ticker
 from dayu.fins.ingestion.service import FinsIngestionService
 
 MODULE = "FINS.INGESTION_TOOLS"
 INGESTION_TOOL_TAGS = frozenset({"ingestion"})
 
-_SUPPORTED_DOWNLOAD_FORM_TYPES = [
+_US_DOWNLOAD_FORM_TYPES = (
     "10-K",
     "10-Q",
     "20-F",
@@ -35,9 +35,20 @@ _SUPPORTED_DOWNLOAD_FORM_TYPES = [
     "SC 13D/A",
     "SC 13G",
     "SC 13G/A",
+)
+_CN_HK_DOWNLOAD_FORM_TYPES = (
+    "FY",
+    "H1",
+    "Q1",
+    "Q2",
+    "Q3",
+)
+_SUPPORTED_DOWNLOAD_FORM_TYPES = [
+    *_US_DOWNLOAD_FORM_TYPES,
+    *_CN_HK_DOWNLOAD_FORM_TYPES,
 ]
 
-_SUPPORTED_DOWNLOAD_MARKETS = frozenset({"US"})
+_SUPPORTED_DOWNLOAD_MARKETS = frozenset({"US", "CN", "HK"})
 _JOB_TERMINAL_STATUSES = ["succeeded", "failed", "cancelled"]
 
 def register_ingestion_tools(
@@ -116,15 +127,15 @@ def _create_start_download_job_tool(
                     "enum": _SUPPORTED_DOWNLOAD_FORM_TYPES,
                 },
                 "uniqueItems": True,
-                "description": "可选表单过滤。只在你明确要缩小下载范围时填写；留空表示下载该公司当前支持的全部表单。",
+                "description": "可选表单过滤。只在你明确要缩小下载范围时填写；留空表示下载该公司当前市场支持的全部表单。美股使用 10-K/10-Q/20-F/6-K/8-K/SC 13D/SC 13G 等，A 股/港股使用 FY/H1/Q1/Q2/Q3，其中 Q2 会按半年报 H1 处理。",
             },
             "filed_date_from": {
                 "type": "string",
-                "description": "可选 filed date 下界。只在你明确要限制时间范围时填写；格式 YYYY、YYYY-MM 或 YYYY-MM-DD。",
+                "description": "可选披露日期下界。只在你明确要限制时间范围时填写；格式 YYYY、YYYY-MM 或 YYYY-MM-DD。",
             },
             "filed_date_to": {
                 "type": "string",
-                "description": "可选 filed date 上界。只在你明确要限制时间范围时填写；格式 YYYY、YYYY-MM 或 YYYY-MM-DD。",
+                "description": "可选披露日期上界。只在你明确要限制时间范围时填写；格式 YYYY、YYYY-MM 或 YYYY-MM-DD。",
             },
             "overwrite": {
                 "type": "boolean",
@@ -139,7 +150,7 @@ def _create_start_download_job_tool(
         registry,
         name="start_financial_filing_download_job",
         description=(
-            "启动单个 ticker 的下载任务。拿到返回里的 job.job_id 后，下一步只用状态工具轮询，直到 job.status 进入 succeeded / failed / cancelled。"
+            "启动单个 ticker 的财报下载任务，支持美股、A 股和港股。拿到返回里的 job.job_id 后，下一步只用状态工具轮询，直到 job.status 进入 succeeded / failed / cancelled。"
         ),
         parameters=parameters,
         tags=INGESTION_TOOL_TAGS,
@@ -158,8 +169,8 @@ def _create_start_download_job_tool(
         Args:
             ticker: 股票代码。
             form_types: 可选表单过滤。
-            filed_date_from: 可选 filing date 下界。
-            filed_date_to: 可选 filing date 上界。
+            filed_date_from: 可选披露日期下界。
+            filed_date_to: 可选披露日期上界。
             overwrite: 是否覆盖已有下载结果。
 
         Returns:
@@ -185,8 +196,12 @@ def _create_start_download_job_tool(
                 market=market_profile.market,
             )
         normalized_form_types = _normalize_form_types(form_types)
+        _validate_download_form_types_for_market(
+            form_types=normalized_form_types,
+            market=market_profile.market,
+        )
         request_outcome, snapshot = manager.start_download_job(
-            ticker=normalized_ticker,
+            ticker=market_profile.canonical,
             form_types=normalized_form_types,
             filed_date_from=normalize_optional_text(filed_date_from),
             filed_date_to=normalize_optional_text(filed_date_to),
@@ -634,6 +649,59 @@ def _normalize_form_types(form_types: Optional[list[str]]) -> Optional[list[str]
     if not normalized_items:
         return None
     return sorted(set(normalized_items))
+
+
+def _validate_download_form_types_for_market(
+    *,
+    form_types: Optional[list[str]],
+    market: Market,
+) -> None:
+    """校验下载表单是否属于当前市场。
+
+    Args:
+        form_types: 已标准化的表单数组；为空表示使用市场默认 forms。
+        market: 已归一化 ticker 对应市场。
+
+    Returns:
+        无。
+
+    Raises:
+        ToolArgumentError: 存在跨市场非法表单时抛出。
+    """
+
+    if form_types is None:
+        return
+    allowed_forms = _download_form_types_for_market(market)
+    invalid_forms = [form_type for form_type in form_types if form_type not in allowed_forms]
+    if not invalid_forms:
+        return
+    raise ToolArgumentError(
+        "start_financial_filing_download_job",
+        "form_types",
+        form_types,
+        (
+            f"{market} 市场不支持这些表单: {', '.join(invalid_forms)}；"
+            f"支持: {', '.join(allowed_forms)}"
+        ),
+    )
+
+
+def _download_form_types_for_market(market: Market) -> tuple[str, ...]:
+    """返回指定市场允许的下载表单。
+
+    Args:
+        market: 已归一化 ticker 对应市场。
+
+    Returns:
+        允许的表单元组。
+
+    Raises:
+        无。
+    """
+
+    if market == "US":
+        return _US_DOWNLOAD_FORM_TYPES
+    return _CN_HK_DOWNLOAD_FORM_TYPES
 
 
 def _build_status_response(

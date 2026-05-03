@@ -160,7 +160,7 @@ Fins 当前通过两个 toolset registrar 向 Agent 路径注入工具：
 - 财报读取 toolset 的限制配置由 registrar 自己从 `context.toolset_config.payload` 反解，不再由 Host 传专用 `fins_tool_limits`
 - registrar 反解 `context.toolset_config.payload` 中的数值限制时，必须走 `dayu.contracts.toolset_config` 的统一 coercion helper，不能直接对 `ToolsetConfigValue` 做裸 `int()`
 - 财报读取工具只接受预构建 `FinsToolService`
-- ingestion 工具只接受 `service_factory + manager_key`
+- ingestion 工具只接受 `service_factory + manager_key`；下载 job 工具按 ticker 归一化后的市场路由到同一 ingestion service factory，当前支持美股、A 股、港股，A 股/港股表单过滤使用 `FY/H1/Q1/Q2/Q3`
 - `Host` 不再从 `FinsRuntime` 拉总仓储对象，也不再持有 Agent 工具注入所需的 Fins runtime
 
 ### 4.2 Prompt Contributions
