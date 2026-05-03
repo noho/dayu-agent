@@ -297,6 +297,32 @@ def test_resolve_company_success_and_not_found(tmp_path: Path, monkeypatch: pyte
         _run(downloader.resolve_company("AAPL"))
 
 
+def test_resolve_company_uses_hyphenated_class_share_canonical(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证点号类股输入会归一到 SEC ticker map 的横杠形态。"""
+
+    downloader = _create_downloader(tmp_path)
+    monkeypatch.setattr(
+        downloader,
+        "_http_get_json",
+        lambda url: {
+            "0": {"ticker": "BRK-B", "cik_str": "1067983", "title": "BERKSHIRE HATHAWAY INC"},
+            "1": {"ticker": "BRK-A", "cik_str": "1067983", "title": "BERKSHIRE HATHAWAY INC"},
+        },
+    )
+    monkeypatch.setattr(
+        downloader,
+        "_http_get_bytes",
+        lambda url: (_ for _ in ()).throw(AssertionError(f"不应访问 browse-edgar: {url}")),
+    )
+
+    expected = ("1067983", "BERKSHIRE HATHAWAY INC", "0001067983")
+    assert _run(downloader.resolve_company("BRK.B")) == expected
+    assert _run(downloader.resolve_company("BRK.A")) == expected
+
+
 def test_resolve_company_fallback_via_browse_edgar(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
