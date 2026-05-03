@@ -69,9 +69,6 @@ DEFAULT_MAX_RETRIES = 3
 RETRY_BACKOFF_BASE_SECONDS = 0.8
 _GLOBAL_SEC_THROTTLE_STATE_FILENAME = "state.json"
 _GLOBAL_SEC_THROTTLE_LOCK_FILENAME = "state.lock"
-_SEC_TICKER_ROW_TICKER_FIELD = "ticker"
-_SEC_TICKER_ROW_CIK_FIELD = "cik_str"
-_SEC_TICKER_ROW_TITLE_FIELD = "title"
 
 # SEC 速率限制：最小请求间隔（秒），SEC 要求 ≤10 请求/秒，留安全余量
 _SEC_MIN_REQUEST_INTERVAL_SECONDS = 0.12
@@ -87,9 +84,6 @@ _ETAG_WEAK_PREFIX = "W/"
 _ETAG_GZIP_SUFFIX = "-gzip"
 _AwaitedValueT = TypeVar("_AwaitedValueT")
 _HttpResultT = TypeVar("_HttpResultT")
-JsonScalar = str | int | float | bool | None
-JsonValue = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
-JsonObject = dict[str, JsonValue]
 
 
 @dataclass(frozen=True)
@@ -180,110 +174,6 @@ def _build_empty_content_failure_event(
         reason_message="下载内容为 0 字节，视为下载失败",
         error="下载内容为 0 字节，视为下载失败",
     )
-
-
-def _resolve_company_from_ticker_map(
-    mapping: JsonObject,
-    requested_ticker: str,
-) -> Optional[tuple[str, str, str]]:
-    """从 SEC ticker map 解析公司信息。
-
-    Args:
-        mapping: SEC ``company_tickers.json`` 解析结果。
-        requested_ticker: 已标准化的大写 ticker。
-
-    Returns:
-        命中时返回 ``(cik, company_name, cik10)``；未命中返回 ``None``。
-
-    Raises:
-        无。
-    """
-
-    normalized_request = _normalize_sec_ticker_lookup_key(requested_ticker)
-    for row in _iter_sec_ticker_rows(mapping):
-        row_ticker = _row_text(row, _SEC_TICKER_ROW_TICKER_FIELD)
-        if _normalize_sec_ticker_lookup_key(row_ticker) != normalized_request:
-            continue
-        company_tuple = _build_company_tuple_from_sec_ticker_row(row)
-        if company_tuple is not None:
-            return company_tuple
-    return None
-
-
-def _iter_sec_ticker_rows(mapping: JsonObject) -> list[JsonObject]:
-    """提取 SEC ticker map 中的 row 对象。
-
-    Args:
-        mapping: SEC ``company_tickers.json`` 解析结果。
-
-    Returns:
-        只包含对象 row 的列表。
-
-    Raises:
-        无。
-    """
-
-    return [dict(row) for row in mapping.values() if isinstance(row, dict)]
-
-
-def _build_company_tuple_from_sec_ticker_row(row: JsonObject) -> Optional[tuple[str, str, str]]:
-    """把 SEC ticker map row 转成公司解析结果。
-
-    Args:
-        row: SEC ticker map 中的单行对象。
-
-    Returns:
-        字段完整时返回 ``(cik, company_name, cik10)``；CIK 非数字时返回 ``None``。
-
-    Raises:
-        无。
-    """
-
-    cik = _row_text(row, _SEC_TICKER_ROW_CIK_FIELD)
-    if not cik.isdigit():
-        return None
-    company_name = _row_text(row, _SEC_TICKER_ROW_TITLE_FIELD)
-    cik10 = str(int(cik)).zfill(10)
-    return cik, company_name, cik10
-
-
-def _row_text(row: JsonObject, field_name: str) -> str:
-    """读取 SEC ticker map row 的标量文本字段。
-
-    Args:
-        row: SEC ticker map row。
-        field_name: 字段名。
-
-    Returns:
-        标量字段的去空白文本；字段不存在或不是标量时返回空字符串。
-
-    Raises:
-        无。
-    """
-
-    value = row.get(field_name)
-    if isinstance(value, (str, int, float, bool)):
-        return str(value).strip()
-    return ""
-
-
-def _normalize_sec_ticker_lookup_key(ticker: str) -> str:
-    """归一化 SEC ticker map 查找键。
-
-    SEC map 对类股 ticker 使用横杠（如 ``BRK-B``），而用户和内部真源常见
-    输入使用点号（如 ``BRK.B``）。查找键把二者视为等价。
-
-    Args:
-        ticker: SEC ticker map 或调用方传入的 ticker。
-
-    Returns:
-        大写且把横杠类股分隔符替换为点号的查找键。
-
-    Raises:
-        无。
-    """
-
-    return ticker.strip().upper().replace("-", ".")
 
 
 def _should_abort_after_empty_primary(
@@ -965,9 +855,14 @@ class SecDownloader:
 
         normalized = self.normalize_ticker(ticker)
         mapping = await _await_if_needed(self._http_get_json(SEC_TICKER_MAP_URL))
-        map_result = _resolve_company_from_ticker_map(mapping, normalized)
-        if map_result is not None:
-            return map_result
+        for row in mapping.values():
+            if str(row.get("ticker", "")).upper() != normalized:
+                continue
+            cik = str(row.get("cik_str", "")).strip()
+            company_name = str(row.get("title", "")).strip()
+            if cik.isdigit():
+                cik10 = str(int(cik)).zfill(10)
+                return cik, company_name, cik10
         fallback_result = await _await_if_needed(self._resolve_company_via_browse_edgar_ticker(normalized))
         if fallback_result is not None:
             return fallback_result

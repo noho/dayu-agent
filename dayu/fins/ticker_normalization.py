@@ -6,8 +6,7 @@
 - 仅暴露 ``NormalizedTicker`` 与 ``normalize_ticker`` / ``try_normalize_ticker``
   / ``ticker_to_company_id`` 作为公共 API；其它均为模块级私有辅助。
 - Canonical 形态：港股 4 位补零（``0700``）或保留原 5 位（``89988``），沪股 6 位
-  （``600519``），深股 6 位（``000333`` / ``300750``），美股保留字母并把类股
-  分隔符统一为点号（``AAPL``、``BRK.B``）。
+  （``600519``），深股 6 位（``000333`` / ``300750``），美股保留字母（``AAPL``、``BRK.B``）。
 - 美股在无明确交易所后缀时，``exchange`` 返回 ``None``，当前不区分 NYSE/NASDAQ。
 - 无法识别的输入：``normalize_ticker`` 抛 ``ValueError``；``try_normalize_ticker``
   返回 ``None``。
@@ -32,7 +31,7 @@ class NormalizedTicker:
 
     Attributes:
         canonical: 规范裸码；港/沪/深为纯数字字符串，美股保留字母（可能含
-            一个 ``.`` 分节，如 ``BRK.B``）。
+            一个 ``.`` 或 ``-`` 分节，如 ``BRK.B``）。
         market: 市场标识，取值 ``"US"`` / ``"HK"`` / ``"CN"``。
         exchange: 交易所标识；港股 ``"HKEX"``、沪股 ``"SSE"``、深股 ``"SZSE"``；
             美股无后缀时为 ``None``。
@@ -66,18 +65,6 @@ _SUFFIX_NO_SEP_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^(.+?)(HKEX|HK|SSE|SH|SS|SZSE|SZ|NASDAQ|NYSE|OQ|PK|US)$"
 )
 _US_SYMBOL_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Z]+(?:[.\-][A-Z0-9]+)?$")
-_US_PARENT_CLASS_ALIASES: Final[dict[str, str]] = {
-    "BRK": "BRK.B",
-    "BRK.A": "BRK.B",
-    "BRK-A": "BRK.B",
-}
-"""美股类股母代码的稳定 alias。
-
-SEC ticker map 中 Berkshire Hathaway 只有 ``BRK-A`` / ``BRK-B``，但用户和 LLM
-常用 ``BRK`` 指代公司本身。财报下载与读取按公司级 CIK 工作，选择更常用的
-``BRK.B`` 作为 canonical，避免 ``BRK`` / ``BRK.A`` / ``BRK.B`` 写入不同
-workspace 目录。
-"""
 # 美股 ticker 字面长度上限。
 #
 # 设计意图：防御性输入白名单，**不是**对合法 ticker 的业务约束。
@@ -106,8 +93,8 @@ def normalize_ticker(raw: str) -> NormalizedTicker:
     - 深股：``000333`` / ``300750`` / ``000333.SZ`` / ``SZ.000333`` /
       ``sz000333`` → canonical=同值，market=``CN``，exchange=``SZSE``。
     - 美股：``AAPL`` / ``AAPL.US`` / ``AAPL.O`` / ``US.AAPL`` / ``BRK.B`` /
-      ``BRK-B`` / ``BF.B`` / ``SHEL`` / ``SHOP`` → canonical 保留字母形态且
-      类股分隔符统一为点号，market=``US``，exchange=``None``。
+      ``BF.B`` / ``SHEL`` / ``SHOP`` → canonical 保留原字母形态，market=``US``，
+      exchange=``None``。
 
     Args:
         raw: 原始输入字符串。
@@ -356,8 +343,8 @@ def _build_sz(body: str, raw: str) -> Optional[NormalizedTicker]:
 def _build_us(body: str, raw: str) -> Optional[NormalizedTicker]:
     """构造美股 ``NormalizedTicker``。
 
-    规则：首字符字母、仅含 ``A-Z`` 以及可选 ``.`` / ``-`` 分节（如 ``BRK.B`` /
-    ``BRK-B``），长度不超过 ``_MAX_US_SYMBOL_LENGTH``；canonical 统一使用点号。
+    规则：首字符字母、仅含 ``A-Z`` 以及可选 ``.`` / ``-`` 分节（如 ``BRK.B``），
+    长度不超过 ``_MAX_US_SYMBOL_LENGTH``。
 
     Args:
         body: ticker 主体。
@@ -374,5 +361,4 @@ def _build_us(body: str, raw: str) -> Optional[NormalizedTicker]:
         return None
     if _US_SYMBOL_PATTERN.fullmatch(body) is None:
         return None
-    canonical = _US_PARENT_CLASS_ALIASES.get(body, body.replace("-", "."))
-    return NormalizedTicker(canonical=canonical, market="US", exchange=None, raw=raw)
+    return NormalizedTicker(canonical=body, market="US", exchange=None, raw=raw)
