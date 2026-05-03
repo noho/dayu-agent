@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Callable
 from io import BytesIO
 from pathlib import Path
@@ -159,7 +160,7 @@ async def run_cn_download_single_filing_stream(
     )
     if reusable_pdf is None:
         try:
-            asset = discovery_client.download_report_pdf(candidate)
+            asset = await asyncio.to_thread(discovery_client.download_report_pdf, candidate)
         except CancelledError:
             raise
         except Exception as exc:
@@ -180,8 +181,28 @@ async def run_cn_download_single_filing_stream(
             )
             return
         pdf_path = asset.pdf_path
-        pdf_bytes = pdf_path.read_bytes()
-        _unlink_temp_pdf(pdf_path, module=module)
+        try:
+            pdf_bytes = await asyncio.to_thread(pdf_path.read_bytes)
+        except Exception as exc:
+            _unlink_temp_pdf(pdf_path, module=module)
+            failed = _build_filing_result(
+                document_id=document_id,
+                status="failed",
+                candidate=candidate,
+                reason_code="pdf_read_failed",
+                reason_message=str(exc),
+                downloaded_files=0,
+                skipped_files=0,
+            )
+            yield DownloadEvent(
+                event_type=DownloadEventType.FILING_FAILED,
+                ticker=ticker,
+                document_id=document_id,
+                payload={"filing_result": failed, **failed},
+            )
+            return
+        else:
+            _unlink_temp_pdf(pdf_path, module=module)
         pdf_sha256 = asset.sha256
         reused_pdf = False
     else:
@@ -331,7 +352,11 @@ async def run_cn_download_single_filing_stream(
                 f"source_file={pdf_filename} reused_pdf={reused_pdf}",
                 module=module,
             )
-            docling_json_bytes = convert_pdf_to_docling_json(pdf_bytes, pdf_filename)
+            docling_json_bytes = await asyncio.to_thread(
+                convert_pdf_to_docling_json,
+                pdf_bytes,
+                pdf_filename,
+            )
         except Exception as exc:
             failed = _build_filing_result(
                 document_id=document_id,
@@ -349,6 +374,7 @@ async def run_cn_download_single_filing_stream(
                 payload={"filing_result": failed, **failed},
             )
             return
+        _raise_if_cancelled(module=module, ticker=ticker, document_id=document_id, cancel_checker=cancel_checker)
         docling_meta = blob_repository.store_file(
             handle,
             docling_filename,

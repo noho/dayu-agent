@@ -493,6 +493,48 @@ def test_list_report_candidates_skips_failed_hk_period_and_keeps_other_periods()
     assert candidates[0].fiscal_period == "H1"
 
 
+def test_list_report_candidates_maps_direct_q2_to_interim_category() -> None:
+    """直接传入 Q2 时应查询中期分类，不应静默跳过。"""
+
+    h1_url = f"{HKEXNEWS_BASE_URL}/listedco/listconews/sehk/2025/0826/h1.pdf"
+    seen_t2codes: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url).startswith(HKEXNEWS_TITLE_SEARCH_URL) and request.method == "GET":
+            form = _query_from_request(request)
+            seen_t2codes.append(form["t2code"][0])
+            if form["lang"] == ("E",):
+                return httpx.Response(200, json={"result": "[]"})
+            return httpx.Response(
+                200,
+                json=_title_search_payload(
+                    [
+                        _announcement(
+                            document_id="Q2_2025",
+                            title="中期報告 2025",
+                            file_link="/listedco/listconews/sehk/2025/0826/h1.pdf",
+                            date_time="26/08/2025 16:30",
+                            category_text="Financial Statements/ESG Information - [中期/半年度報告]",
+                        )
+                    ]
+                ),
+            )
+        if str(request.url) == h1_url and request.method == "HEAD":
+            return httpx.Response(200, headers={})
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    client = _build_client(handler)
+    candidates = client.list_report_candidates(
+        _query(periods=("Q2",)),
+        _profile(),
+    )
+
+    assert seen_t2codes == ["40200", "40200"]
+    assert len(candidates) == 1
+    assert candidates[0].source_id == "Q2_2025"
+    assert candidates[0].fiscal_period == "Q2"
+
+
 def test_list_report_candidates_treats_traditional_half_year_as_h1() -> None:
     """真实繁体 ``中期/半年度報告`` 分类必须归入 H1 而非 FY。"""
 
@@ -719,6 +761,114 @@ def test_download_report_pdf_returns_asset_for_valid_pdf() -> None:
     assert asset.content_length == len(pdf_payload)
     assert asset.pdf_path.read_bytes() == pdf_payload
     asset.pdf_path.unlink()
+
+
+def test_download_report_pdf_does_not_sleep_before_first_request() -> None:
+    """首次请求不应被 sleep_seconds 延迟，等待只发生在重试之间。"""
+
+    pdf_payload = _build_pdf_payload()
+    sleep_calls: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=pdf_payload)
+
+    candidate = CnReportCandidate(
+        provider="hkexnews",
+        source_id="DOC1",
+        source_url=_PDF_URL,
+        title="Tencent Holdings Limited: 2024 Annual Report",
+        language="en",
+        filing_date="2025-04-01",
+        fiscal_year=2024,
+        fiscal_period="FY",
+        amended=False,
+        content_length=len(pdf_payload),
+        etag=None,
+        last_modified=None,
+    )
+    client = HkexnewsDiscoveryClient(
+        client=_build_http_client(handler),
+        sleep_seconds=0.3,
+        max_retries=2,
+        sleep_func=sleep_calls.append,
+    )
+
+    asset = client.download_report_pdf(candidate)
+
+    assert sleep_calls == []
+    asset.pdf_path.unlink()
+
+
+def test_download_report_pdf_throttles_between_successful_requests() -> None:
+    """连续成功请求之间应按 sleep_seconds 补足主源保护间隔。"""
+
+    pdf_payload = _build_pdf_payload()
+    sleep_calls: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=pdf_payload)
+
+    candidate = CnReportCandidate(
+        provider="hkexnews",
+        source_id="DOC1",
+        source_url=_PDF_URL,
+        title="Tencent Holdings Limited: 2024 Annual Report",
+        language="en",
+        filing_date="2025-04-01",
+        fiscal_year=2024,
+        fiscal_period="FY",
+        amended=False,
+        content_length=len(pdf_payload),
+        etag=None,
+        last_modified=None,
+    )
+    client = HkexnewsDiscoveryClient(
+        client=_build_http_client(handler),
+        sleep_seconds=0.3,
+        max_retries=2,
+        sleep_func=sleep_calls.append,
+    )
+    first = client.download_report_pdf(candidate)
+    second = client.download_report_pdf(candidate)
+
+    assert len(sleep_calls) == 1
+    assert 0 < sleep_calls[0] <= 0.3
+    first.pdf_path.unlink()
+    second.pdf_path.unlink()
+
+
+def test_download_report_pdf_uses_unique_temp_paths_for_same_candidate() -> None:
+    """同一披露易 candidate 重复下载也应落到不同临时文件路径。"""
+
+    pdf_payload = _build_pdf_payload()
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=pdf_payload)
+
+    candidate = CnReportCandidate(
+        provider="hkexnews",
+        source_id="DOC1",
+        source_url=_PDF_URL,
+        title="Tencent Holdings Limited: 2024 Annual Report",
+        language="en",
+        filing_date="2025-04-01",
+        fiscal_year=2024,
+        fiscal_period="FY",
+        amended=False,
+        content_length=len(pdf_payload),
+        etag=None,
+        last_modified=None,
+    )
+    client = _build_client(handler)
+
+    first = client.download_report_pdf(candidate)
+    second = client.download_report_pdf(candidate)
+
+    assert first.pdf_path != second.pdf_path
+    assert first.pdf_path.exists()
+    assert second.pdf_path.exists()
+    first.pdf_path.unlink()
+    second.pdf_path.unlink()
 
 
 def test_download_report_pdf_rejects_short_or_non_pdf_payload() -> None:

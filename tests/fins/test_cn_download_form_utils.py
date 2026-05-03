@@ -269,6 +269,9 @@ def test_resolve_window_invalid_date_format_raises() -> None:
     with pytest.raises(ValueError):
         resolve_window("2024/03/15", None)
 
+    with pytest.raises(ValueError, match="日期格式非法"):
+        resolve_window("2024-13", None)
+
 
 def test_resolve_window_start_after_end_raises() -> None:
     """``start > end`` 抛 ``ValueError``。"""

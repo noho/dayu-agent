@@ -157,6 +157,11 @@ _PERIOD_TO_CATEGORY_SPEC: Final[dict[CnFiscalPeriod, _HkCategorySpec]] = {
         t2_group_code=_HKEXNEWS_T2_GROUP_ALL,
         t2code=_HKEXNEWS_T2_INTERIM_REPORT,
     ),
+    "Q2": _HkCategorySpec(
+        t1code=_HKEXNEWS_T1_FINANCIAL_STATEMENTS,
+        t2_group_code=_HKEXNEWS_T2_GROUP_ALL,
+        t2code=_HKEXNEWS_T2_INTERIM_REPORT,
+    ),
     "Q1": _HkCategorySpec(
         t1code=_HKEXNEWS_T1_ANNOUNCEMENTS,
         t2_group_code=_HKEXNEWS_T2_GROUP_RESULTS,
@@ -216,6 +221,7 @@ class HkexnewsDiscoveryClient:
         self._sleep_func: Callable[[float], None] = (
             sleep_func if sleep_func is not None else time.sleep
         )
+        self._last_request_finished_at: float | None = None
         self._stock_mapping_cache: dict[str, _HkStockMappingEntry] | None = None
 
     def close(self) -> None:
@@ -297,6 +303,7 @@ class HkexnewsDiscoveryClient:
         for period in query.target_periods:
             category_spec = _PERIOD_TO_CATEGORY_SPEC.get(period)
             if category_spec is None:
+                Log.warn(f"未知 fiscal_period={period!r}，已跳过", module=_MODULE)
                 continue
             queried_periods += 1
             try:
@@ -319,6 +326,8 @@ class HkexnewsDiscoveryClient:
                     title=item.title,
                     category_text=item.category_text,
                 )
+                if period == "Q2" and inferred_period == "H1":
+                    inferred_period = "Q2"
                 if inferred_period != period:
                     continue
                 fiscal_year = _infer_fiscal_year(
@@ -376,8 +385,14 @@ class HkexnewsDiscoveryClient:
         sha256 = hashlib.sha256(payload).hexdigest()
         tmp_dir = Path(tempfile.gettempdir()) / "dayu_hk_downloads"
         tmp_dir.mkdir(parents=True, exist_ok=True)
-        pdf_path = tmp_dir / f"hkexnews_{candidate.source_id}.pdf"
-        pdf_path.write_bytes(payload)
+        with tempfile.NamedTemporaryFile(
+            prefix="hkexnews_",
+            suffix=".pdf",
+            dir=tmp_dir,
+            delete=False,
+        ) as fp:
+            fp.write(payload)
+            pdf_path = Path(fp.name)
         return DownloadedReportAsset(
             candidate=candidate,
             pdf_path=pdf_path,
@@ -532,11 +547,14 @@ class HkexnewsDiscoveryClient:
 
         last_exc: Optional[Exception] = None
         for attempt in range(self._max_retries):
-            self._sleep_between_requests()
             try:
-                response = self._client.get(url, params=params)
-                response.raise_for_status()
-                return cast(JsonValue, response.json())
+                self._throttle_before_request()
+                try:
+                    response = self._client.get(url, params=params)
+                    response.raise_for_status()
+                    return cast(JsonValue, response.json())
+                finally:
+                    self._mark_request_finished()
             except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
                 last_exc = exc
                 self._retry_backoff(attempt)
@@ -556,9 +574,12 @@ class HkexnewsDiscoveryClient:
         """
 
         try:
-            self._sleep_between_requests()
-            response = self._client.head(url, follow_redirects=True)
-            response.raise_for_status()
+            self._throttle_before_request()
+            try:
+                response = self._client.head(url, follow_redirects=True)
+                response.raise_for_status()
+            finally:
+                self._mark_request_finished()
         except httpx.HTTPError as exc:
             Log.warn(f"HEAD 失败: url={url} error={exc}", module=_MODULE)
             return _HeadMeta(content_length=None, etag=None, last_modified=None)
@@ -588,18 +609,21 @@ class HkexnewsDiscoveryClient:
 
         last_exc: Optional[Exception] = None
         for attempt in range(self._max_retries):
-            self._sleep_between_requests()
             try:
-                response = self._client.get(url, follow_redirects=True)
-                response.raise_for_status()
-                return response.content
+                self._throttle_before_request()
+                try:
+                    response = self._client.get(url, follow_redirects=True)
+                    response.raise_for_status()
+                    return response.content
+                finally:
+                    self._mark_request_finished()
             except httpx.HTTPError as exc:
                 last_exc = exc
                 self._retry_backoff(attempt)
         raise RuntimeError(f"PDF 下载失败: url={url} error={last_exc}")
 
-    def _sleep_between_requests(self) -> None:
-        """请求前 sleep。
+    def _throttle_before_request(self) -> None:
+        """按连续请求间隔限制发起 HTTP 请求。
 
         Args:
             无。
@@ -611,9 +635,27 @@ class HkexnewsDiscoveryClient:
             无。
         """
 
-        if self._sleep_seconds <= 0:
-            return
-        self._sleep_func(self._sleep_seconds)
+        now = time.monotonic()
+        if self._sleep_seconds > 0 and self._last_request_finished_at is not None:
+            elapsed = now - self._last_request_finished_at
+            remaining = self._sleep_seconds - elapsed
+            if remaining > 0:
+                self._sleep_func(remaining)
+
+    def _mark_request_finished(self) -> None:
+        """记录最近一次 HTTP 请求结束时间。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        self._last_request_finished_at = time.monotonic()
 
     def _retry_backoff(self, attempt_index: int) -> None:
         """指数退避。

@@ -40,11 +40,11 @@ def upsert_company_meta_for_cn_download(
     """
 
     ticker = normalized_ticker.strip()
+    if not ticker:
+        raise ValueError("normalized_ticker 不能为空")
     normalized = normalize_ticker(ticker)
     company_id = ticker_to_company_id(normalized)
     company_name = profile.company_name.strip()
-    if not ticker:
-        raise ValueError("normalized_ticker 不能为空")
     if not company_name:
         raise ValueError("profile.company_name 不能为空")
 

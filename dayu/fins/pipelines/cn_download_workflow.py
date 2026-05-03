@@ -100,19 +100,49 @@ async def run_cn_download_stream_impl(
                 "rebuild": True,
             },
         )
-        rebuild_result = rebuild_cn_download_artifacts(
-            host=host,
-            ticker=normalized_ticker,
-            market=market,
-            form_type=form_type,
-            start_date=start_date,
-            end_date=end_date,
-            overwrite=overwrite,
-            pipeline_name=pipeline_name,
-        )
+        try:
+            rebuild_result = rebuild_cn_download_artifacts(
+                host=host,
+                ticker=normalized_ticker,
+                market=market,
+                form_type=form_type,
+                start_date=start_date,
+                end_date=end_date,
+                overwrite=overwrite,
+                pipeline_name=pipeline_name,
+                cancel_checker=cancel_checker,
+            )
+        except Exception as exc:
+            failed = _build_result(
+                pipeline_name=pipeline_name,
+                status="failed",
+                ticker=normalized_ticker,
+                reason_code=_reason_code_from_exception(exc),
+                message=str(exc),
+                filings=[],
+            )
+            yield DownloadEvent(
+                event_type=DownloadEventType.PIPELINE_COMPLETED,
+                ticker=normalized_ticker,
+                payload={"result": failed},
+            )
+            return
         raw_filings = rebuild_result.get("filings")
         rebuild_filings = raw_filings if isinstance(raw_filings, list) else []
         for raw_filing in rebuild_filings:
+            try:
+                if _is_cancel_requested(cancel_checker):
+                    break
+            except Exception as exc:
+                rebuild_result = _build_result(
+                    pipeline_name=pipeline_name,
+                    status="failed",
+                    ticker=normalized_ticker,
+                    reason_code=_reason_code_from_exception(exc),
+                    message=str(exc),
+                    filings=[],
+                )
+                break
             if not isinstance(raw_filing, dict):
                 continue
             filing_result: JsonObject = dict(raw_filing)
@@ -291,11 +321,29 @@ async def run_cn_download_stream_impl(
         )
         return
 
+    try:
+        final_cancelled = cancelled or _is_cancel_requested(cancel_checker)
+    except Exception as exc:
+        failed = _build_result(
+            pipeline_name=pipeline_name,
+            status="failed",
+            ticker=normalized_ticker,
+            reason_code=_reason_code_from_exception(exc),
+            message=str(exc),
+            filings=filings,
+        )
+        yield DownloadEvent(
+            event_type=DownloadEventType.PIPELINE_COMPLETED,
+            ticker=normalized_ticker,
+            payload={"result": failed},
+        )
+        return
+
     elapsed_ms = int((time.perf_counter() - started_at) * 1000)
     summary = _build_summary(filings=filings, elapsed_ms=elapsed_ms)
     result = _build_result(
         pipeline_name=pipeline_name,
-        status="cancelled" if cancelled or (cancel_checker is not None and cancel_checker()) else "ok",
+        status="cancelled" if final_cancelled else "ok",
         ticker=normalized_ticker,
         company_info={
             "company_id": company_meta.company_id,
@@ -338,6 +386,29 @@ def _select_discovery_client(
     """按市场选择 discovery client。"""
 
     return host.cn_discovery_client if market == "CN" else host.hk_discovery_client
+
+
+def _is_cancel_requested(cancel_checker: Callable[[], bool] | None) -> bool:
+    """安全检查取消信号。
+
+    Args:
+        cancel_checker: 可选取消检查函数。
+
+    Returns:
+        True 表示已取消。
+
+    Raises:
+        RuntimeError: ``cancel_checker`` 自身失败时抛出。
+    """
+
+    if cancel_checker is None:
+        return False
+    try:
+        return cancel_checker()
+    except CancelledError:
+        return True
+    except Exception as exc:
+        raise RuntimeError(f"取消检查失败: {exc}") from exc
 
 
 def _coerce_market(raw: str) -> CnMarketKind:

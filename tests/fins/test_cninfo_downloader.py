@@ -945,6 +945,70 @@ def test_download_report_pdf_returns_asset_with_sha256() -> None:
     asset.pdf_path.unlink()
 
 
+def test_download_report_pdf_does_not_sleep_before_first_request() -> None:
+    """首次请求不应被 sleep_seconds 延迟，等待只发生在重试之间。"""
+
+    payload = _build_pdf_payload()
+    sleep_calls: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=payload)
+
+    client = CninfoDiscoveryClient(
+        client=_build_transport(handler),
+        sleep_seconds=0.3,
+        max_retries=2,
+        sleep_func=sleep_calls.append,
+    )
+    asset = client.download_report_pdf(_make_candidate())
+
+    assert sleep_calls == []
+    asset.pdf_path.unlink()
+
+
+def test_download_report_pdf_throttles_between_successful_requests() -> None:
+    """连续成功请求之间应按 sleep_seconds 补足主源保护间隔。"""
+
+    payload = _build_pdf_payload()
+    sleep_calls: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=payload)
+
+    client = CninfoDiscoveryClient(
+        client=_build_transport(handler),
+        sleep_seconds=0.3,
+        max_retries=2,
+        sleep_func=sleep_calls.append,
+    )
+    first = client.download_report_pdf(_make_candidate())
+    second = client.download_report_pdf(_make_candidate())
+
+    assert len(sleep_calls) == 1
+    assert 0 < sleep_calls[0] <= 0.3
+    first.pdf_path.unlink()
+    second.pdf_path.unlink()
+
+
+def test_download_report_pdf_uses_unique_temp_paths_for_same_candidate() -> None:
+    """同一 candidate 并发/重复下载也应落到不同临时文件路径。"""
+
+    payload = _build_pdf_payload()
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=payload)
+
+    client = _build_client(handler)
+    first = client.download_report_pdf(_make_candidate())
+    second = client.download_report_pdf(_make_candidate())
+
+    assert first.pdf_path != second.pdf_path
+    assert first.pdf_path.exists()
+    assert second.pdf_path.exists()
+    first.pdf_path.unlink()
+    second.pdf_path.unlink()
+
+
 def test_download_report_pdf_rejects_short_content() -> None:
     """字节数 < 1 KiB 视为破损，抛 ``RuntimeError``。"""
 

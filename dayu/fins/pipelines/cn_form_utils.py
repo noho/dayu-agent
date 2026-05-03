@@ -300,21 +300,24 @@ def _parse_date(value: str, *, is_end: bool) -> dt.date:
     """解析 ``YYYY`` / ``YYYY-MM`` / ``YYYY-MM-DD`` 字符串。"""
 
     raw = value.strip()
-    if _DATE_YEAR_PATTERN.fullmatch(raw):
-        year = int(raw)
-        return dt.date(year, 12, 31) if is_end else dt.date(year, 1, 1)
-    if _DATE_YEAR_MONTH_PATTERN.fullmatch(raw):
-        year_str, month_str = raw.split("-")
-        year = int(year_str)
-        month = int(month_str)
-        if is_end:
-            next_month = (
-                dt.date(year + 1, 1, 1) if month == 12 else dt.date(year, month + 1, 1)
-            )
-            return next_month - dt.timedelta(days=1)
-        return dt.date(year, month, 1)
-    if _DATE_FULL_PATTERN.fullmatch(raw):
-        return dt.datetime.strptime(raw, "%Y-%m-%d").date()
+    try:
+        if _DATE_YEAR_PATTERN.fullmatch(raw):
+            year = int(raw)
+            return dt.date(year, 12, 31) if is_end else dt.date(year, 1, 1)
+        if _DATE_YEAR_MONTH_PATTERN.fullmatch(raw):
+            year_str, month_str = raw.split("-")
+            year = int(year_str)
+            month = int(month_str)
+            if is_end:
+                next_month = (
+                    dt.date(year + 1, 1, 1) if month == 12 else dt.date(year, month + 1, 1)
+                )
+                return next_month - dt.timedelta(days=1)
+            return dt.date(year, month, 1)
+        if _DATE_FULL_PATTERN.fullmatch(raw):
+            return dt.datetime.strptime(raw, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError(f"日期格式非法: {value!r}") from exc
     raise ValueError(f"日期格式非法: {value!r}")
 
 

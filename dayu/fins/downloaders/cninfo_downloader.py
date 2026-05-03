@@ -195,6 +195,7 @@ class CninfoDiscoveryClient:
         self._sleep_func: Callable[[float], None] = (
             sleep_func if sleep_func is not None else time.sleep
         )
+        self._last_request_finished_at: float | None = None
         self._stock_mapping_cache: dict[str, _CninfoCompanyLookupEntry] | None = None
 
     def close(self) -> None:
@@ -374,9 +375,14 @@ class CninfoDiscoveryClient:
         downloaded_at = _utc_now_isoformat()
         tmp_dir = Path(tempfile.gettempdir()) / "dayu_cn_downloads"
         tmp_dir.mkdir(parents=True, exist_ok=True)
-        # 文件名稳定：``{source_id}.pdf``，便于在调用方层面做幂等暂存。
-        pdf_path = tmp_dir / f"cninfo_{candidate.source_id}.pdf"
-        pdf_path.write_bytes(payload)
+        with tempfile.NamedTemporaryFile(
+            prefix="cninfo_",
+            suffix=".pdf",
+            dir=tmp_dir,
+            delete=False,
+        ) as fp:
+            fp.write(payload)
+            pdf_path = Path(fp.name)
         return DownloadedReportAsset(
             candidate=candidate,
             pdf_path=pdf_path,
@@ -645,11 +651,14 @@ class CninfoDiscoveryClient:
 
         last_exc: Optional[Exception] = None
         for attempt in range(self._max_retries):
-            self._sleep_between_requests()
             try:
-                response = self._client.get(url)
-                response.raise_for_status()
-                return cast(JsonValue, response.json())
+                self._throttle_before_request()
+                try:
+                    response = self._client.get(url)
+                    response.raise_for_status()
+                    return cast(JsonValue, response.json())
+                finally:
+                    self._mark_request_finished()
             except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
                 last_exc = exc
                 Log.debug(
@@ -675,11 +684,14 @@ class CninfoDiscoveryClient:
 
         last_exc: Optional[Exception] = None
         for attempt in range(self._max_retries):
-            self._sleep_between_requests()
             try:
-                response = self._client.post(url, data=data)
-                response.raise_for_status()
-                return cast(JsonValue, response.json())
+                self._throttle_before_request()
+                try:
+                    response = self._client.post(url, data=data)
+                    response.raise_for_status()
+                    return cast(JsonValue, response.json())
+                finally:
+                    self._mark_request_finished()
             except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
                 last_exc = exc
                 Log.debug(
@@ -703,9 +715,12 @@ class CninfoDiscoveryClient:
         """
 
         try:
-            self._sleep_between_requests()
-            response = self._client.head(url, follow_redirects=True)
-            response.raise_for_status()
+            self._throttle_before_request()
+            try:
+                response = self._client.head(url, follow_redirects=True)
+                response.raise_for_status()
+            finally:
+                self._mark_request_finished()
         except httpx.HTTPError as exc:
             Log.warn(f"HEAD 失败: url={url} error={exc}", module=_MODULE)
             return _HeadMeta(content_length=None, etag=None, last_modified=None)
@@ -737,11 +752,14 @@ class CninfoDiscoveryClient:
 
         last_exc: Optional[Exception] = None
         for attempt in range(self._max_retries):
-            self._sleep_between_requests()
             try:
-                response = self._client.get(url, follow_redirects=True)
-                response.raise_for_status()
-                return response.content
+                self._throttle_before_request()
+                try:
+                    response = self._client.get(url, follow_redirects=True)
+                    response.raise_for_status()
+                    return response.content
+                finally:
+                    self._mark_request_finished()
             except httpx.HTTPError as exc:
                 last_exc = exc
                 Log.debug(
@@ -751,12 +769,40 @@ class CninfoDiscoveryClient:
                 self._retry_backoff(attempt)
         raise RuntimeError(f"PDF 下载失败: url={url} error={last_exc}")
 
-    def _sleep_between_requests(self) -> None:
-        """每次请求前等待 ``self._sleep_seconds`` 秒。"""
+    def _throttle_before_request(self) -> None:
+        """按连续请求间隔限制发起 HTTP 请求。
 
-        if self._sleep_seconds <= 0:
-            return
-        self._sleep_func(self._sleep_seconds)
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        now = time.monotonic()
+        if self._sleep_seconds > 0 and self._last_request_finished_at is not None:
+            elapsed = now - self._last_request_finished_at
+            remaining = self._sleep_seconds - elapsed
+            if remaining > 0:
+                self._sleep_func(remaining)
+
+    def _mark_request_finished(self) -> None:
+        """记录最近一次 HTTP 请求结束时间。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            无。
+        """
+
+        self._last_request_finished_at = time.monotonic()
 
     def _retry_backoff(self, attempt_index: int) -> None:
         """指数退避：``RETRY_BACKOFF_BASE_SECONDS * 2**attempt_index``。"""

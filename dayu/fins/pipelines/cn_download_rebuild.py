@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import time
+from collections.abc import Callable
 
+from dayu.contracts.cancellation import CancelledError
 from dayu.fins.domain.document_models import FilingUpdateRequest, now_iso8601
 from dayu.fins.domain.enums import SourceKind
 from dayu.fins.pipelines.cn_download_models import (
@@ -43,6 +45,7 @@ def rebuild_cn_download_artifacts(
     end_date: str | None,
     overwrite: bool,
     pipeline_name: str,
+    cancel_checker: Callable[[], bool] | None = None,
 ) -> JsonObject:
     """基于本地 CN/HK 下载结果重建 source meta 与 manifest。
 
@@ -55,6 +58,7 @@ def rebuild_cn_download_artifacts(
         end_date: 可选窗口终点。
         overwrite: 是否覆盖；rebuild 不下载远端文件，仅回填 filters。
         pipeline_name: pipeline 名称。
+        cancel_checker: 可选取消检查函数。
 
     Returns:
         download 结果字典。
@@ -73,7 +77,11 @@ def rebuild_cn_download_artifacts(
     started_at = time.perf_counter()
     filings: list[JsonObject] = []
     document_ids = host.source_repository.list_source_document_ids(ticker, SourceKind.FILING)
+    cancelled = False
     for document_id in document_ids:
+        if _is_cancel_requested(cancel_checker):
+            cancelled = True
+            break
         previous_meta = host.source_repository.get_source_meta(ticker, document_id, SourceKind.FILING)
         meta = dict(previous_meta)
         if not _should_rebuild_meta(meta=meta, period_windows=period_windows):
@@ -93,11 +101,13 @@ def rebuild_cn_download_artifacts(
     form_values: list[JsonValue] = [period for period in periods.target_periods]
     warning_values: list[JsonValue] = [warning for warning in warnings]
     note_values: list[JsonValue] = [note for note in periods.notes]
+    if cancelled:
+        note_values.append("cancelled")
     filing_values: list[JsonValue] = [filing for filing in filings]
     result: JsonObject = {
         "pipeline": pipeline_name,
         "action": "download",
-        "status": "ok",
+        "status": "cancelled" if cancelled else "ok",
         "ticker": ticker,
         "company_info": {},
         "filters": {
@@ -180,6 +190,16 @@ def _rebuild_single_cn_download_document(
             reason_message="重建失败：CN/HK 下载完成态缺少 PDF",
         )
     primary_document = _resolve_primary_document(previous_meta=previous_meta, file_entries=file_entries)
+    if not primary_document:
+        return _failed_rebuild_result(
+            document_id=document_id,
+            internal_document_id=internal_document_id,
+            form_type=form_type,
+            filing_date=filing_date,
+            report_date=report_date,
+            reason_code="missing_primary_document",
+            reason_message="重建失败：CN/HK 下载完成态缺少 primary_document",
+        )
     source_fingerprint = _resolve_source_fingerprint(previous_meta=previous_meta, file_entries=file_entries)
     meta_payload = dict(previous_meta)
     file_values: list[JsonValue] = [item for item in file_entries]
@@ -252,6 +272,29 @@ def _resolve_primary_document(*, previous_meta: JsonObject, file_entries: list[J
         if name is not None and name.endswith(_DOCLING_SUFFIX):
             return name
     return raw_primary or _optional_text(file_entries[0].get("name")) or ""
+
+
+def _is_cancel_requested(cancel_checker: Callable[[], bool] | None) -> bool:
+    """安全检查取消信号。
+
+    Args:
+        cancel_checker: 可选取消检查函数。
+
+    Returns:
+        True 表示已取消。
+
+    Raises:
+        RuntimeError: 取消检查函数自身失败时抛出。
+    """
+
+    if cancel_checker is None:
+        return False
+    try:
+        return cancel_checker()
+    except CancelledError:
+        return True
+    except Exception as exc:
+        raise RuntimeError(f"取消检查失败: {exc}") from exc
 
 
 def _resolve_source_fingerprint(*, previous_meta: JsonObject, file_entries: list[JsonObject]) -> str:
