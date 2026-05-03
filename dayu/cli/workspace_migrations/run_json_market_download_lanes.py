@@ -1,15 +1,12 @@
-"""run.json 迁移：补齐 ``host_config.lane.write_chapter``。
+"""run.json 迁移：补齐 A 股与港股下载业务 lane。
 
-2026-04 架构调整把写作流水线的并发上限从 in-process 常量
-``_MIDDLE_CHAPTER_MAX_WORKERS`` 移交给 Host ``write_chapter`` lane。
-旧工作区的 ``workspace/config/run.json`` 在 ``host_config.lane`` 下
-没有该 key，启动期会缺失业务默认值。
+CN/HK 财报下载接入 Host direct operation 后，需要与美股
+``sec_download`` 一样通过 ``host_config.lane`` 配置跨进程并发上限。
+旧工作区的 ``workspace/config/run.json`` 没有 ``cn_download`` 与
+``hk_download``，会导致服务启动时只能依赖内置默认值，用户配置文件
+无法显式呈现当前 schema。
 
-本迁移只做一件事：在 ``host_config.lane`` 缺少 ``write_chapter`` 时补 5；
-存在则一律尊重用户取值，绝不覆写。
-
-写入采用「写临时文件 + ``os.replace`` 原子替换」：在 init 持有 workspace
-advisory lock 的前提下额外抵御进程被强制终止时残留半截写入的边界情况。
+本迁移只在缺少 key 时补默认值 1；已存在的用户取值一律保留。
 """
 
 from __future__ import annotations
@@ -26,12 +23,13 @@ from dayu.cli.workspace_migrations.run_json_utils import (
 _RUN_JSON_FILENAME = "run.json"
 _HOST_CONFIG_KEY = "host_config"
 _LANE_KEY = "lane"
-_WRITE_CHAPTER_LANE = "write_chapter"
-_DEFAULT_WRITE_CHAPTER_CONCURRENCY = 5
+_CN_DOWNLOAD_LANE = "cn_download"
+_HK_DOWNLOAD_LANE = "hk_download"
+_DEFAULT_MARKET_DOWNLOAD_CONCURRENCY = 1
 
 
-def migrate_run_json_add_write_chapter_lane(config_dir: Path) -> bool:
-    """为旧工作区的 ``run.json`` 补齐 ``write_chapter`` lane 默认值。
+def migrate_run_json_add_market_download_lanes(config_dir: Path) -> bool:
+    """为旧工作区的 ``run.json`` 补齐 CN/HK 下载 lane 默认值。
 
     Args:
         config_dir: 工作区配置目录，即 ``workspace/config``。
@@ -62,9 +60,16 @@ def migrate_run_json_add_write_chapter_lane(config_dir: Path) -> bool:
     if lane_section is None:
         return False
 
-    if _WRITE_CHAPTER_LANE in lane_section:
+    changed = False
+    if _CN_DOWNLOAD_LANE not in lane_section:
+        lane_section[_CN_DOWNLOAD_LANE] = _DEFAULT_MARKET_DOWNLOAD_CONCURRENCY
+        changed = True
+    if _HK_DOWNLOAD_LANE not in lane_section:
+        lane_section[_HK_DOWNLOAD_LANE] = _DEFAULT_MARKET_DOWNLOAD_CONCURRENCY
+        changed = True
+
+    if not changed:
         return False
 
-    lane_section[_WRITE_CHAPTER_LANE] = _DEFAULT_WRITE_CHAPTER_CONCURRENCY
     write_json_value(run_json_path, payload)
     return True

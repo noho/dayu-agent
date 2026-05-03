@@ -29,6 +29,9 @@ from dayu.cli.workspace_migrations.host_store_strip_max_output_tokens import (
 from dayu.cli.workspace_migrations.run_json_write_chapter_lane import (
     migrate_run_json_add_write_chapter_lane,
 )
+from dayu.cli.workspace_migrations.run_json_market_download_lanes import (
+    migrate_run_json_add_market_download_lanes,
+)
 from dayu.workspace_paths import build_host_store_default_path
 
 
@@ -50,6 +53,9 @@ def apply_all_workspace_migrations(*, base_dir: Path, config_dir: Path) -> None:
 
     if migrate_run_json_add_write_chapter_lane(config_dir):
         print("✓ 工作区迁移: run.json 已补齐 host_config.lane.write_chapter=5")
+
+    if migrate_run_json_add_market_download_lanes(config_dir):
+        print("✓ 工作区迁移: run.json 已补齐 host_config.lane.cn_download=1 / hk_download=1")
 
     host_db_path = build_host_store_default_path(base_dir)
     rewritten = migrate_host_store_rename_concurrency_lane(host_db_path)

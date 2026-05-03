@@ -57,6 +57,8 @@ def test_apply_all_migrates_both_artifacts(tmp_path: Path, capsys: pytest.Captur
     # run.json
     payload = json.loads((config_dir / "run.json").read_text(encoding="utf-8"))
     assert payload["host_config"]["lane"]["write_chapter"] == 5
+    assert payload["host_config"]["lane"]["cn_download"] == 1
+    assert payload["host_config"]["lane"]["hk_download"] == 1
 
     # db
     conn = sqlite3.connect(str(db_path))
@@ -73,6 +75,7 @@ def test_apply_all_migrates_both_artifacts(tmp_path: Path, capsys: pytest.Captur
 
     captured = capsys.readouterr()
     assert "run.json" in captured.out
+    assert "cn_download" in captured.out
     assert "business_concurrency_lane" in captured.out
     assert "max_output_tokens" in captured.out
 
@@ -87,7 +90,18 @@ def test_apply_all_is_silent_when_nothing_to_do(
     config_dir = base_dir / "config"
     config_dir.mkdir()
     (config_dir / "run.json").write_text(
-        json.dumps({"host_config": {"lane": {"llm_api": 8, "write_chapter": 5}}}),
+        json.dumps(
+            {
+                "host_config": {
+                    "lane": {
+                        "llm_api": 8,
+                        "write_chapter": 5,
+                        "cn_download": 1,
+                        "hk_download": 1,
+                    }
+                }
+            }
+        ),
         encoding="utf-8",
     )
 
