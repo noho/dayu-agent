@@ -498,7 +498,7 @@ Agent 行为控制：
 说明:
 - `host_config.store.path` 是宿主层 SQLite 数据库文件路径。相对路径按 `workspace` 根目录解析；绝对路径则直接使用。当前默认值是 `.dayu/host/dayu_host.db`。
 - 宿主层的 `session`、`run`、并发 `permit` 与 pending turn 恢复状态都共享这一个数据库文件。
-- `host_config.lane` 是宿主层并发 lane 配置，内容为 `lane_name: max_concurrent` 键值对；未显式填写的 lane 回退到 Host 默认（`llm_api`）与 Service 业务默认（`write_chapter`、`sec_download`）的合并值。`llm_api` 是 Host 自治 lane，用户可在此下调/上调运维抓手；`write_chapter` 控制真实章节 scene 的同时写作数（写作 pipeline 的 ThreadPoolExecutor worker 上限与本值同源，顶层 `write_pipeline` orchestration 本身不占这个 lane）；`sec_download` 控制 SEC 下载的跨进程串行度。
+- `host_config.lane` 是宿主层并发 lane 配置，内容为 `lane_name: max_concurrent` 键值对；未显式填写的 lane 回退到 Host 默认（`llm_api`）与 Service 业务默认（`write_chapter`、`sec_download`、`cn_download`、`hk_download`）的合并值。`llm_api` 是 Host 自治 lane，用户可在此下调/上调运维抓手；`write_chapter` 控制真实章节 scene 的同时写作数（写作 pipeline 的 ThreadPoolExecutor worker 上限与本值同源，顶层 `write_pipeline` orchestration 本身不占这个 lane）；`sec_download` / `cn_download` / `hk_download` 分别控制美股 / A 股 / 港股财报下载 direct operation 的跨进程串行度。
 - `host_config.pending_turn_resume.max_attempts` 控制单条 pending turn 的最大恢复次数。当前默认值是 `3`；达到上限后 Host 会删除该 pending turn，避免同一 `session + scene` 槽位被坏记录永久卡死。
 - `host_config.pending_turn_retention.retention_hours` 控制 pending turn 在 `ACCEPTED_BY_HOST` / `PREPARED_BY_HOST` 状态下的最长保留时间（小时）。当前默认值是 `168`（7 天）；`Host.cleanup_stale_pending_turns` 会在启动 / 维护阶段把超过保留期的记录兜底删除，避免 UI 层长期未询问用户"是否重发"时库无限累积。该值是 UI 询问窗口的上限，典型 UI 会在 <72 小时内完成询问。
 - `host_config.cancellation_bridge.poll_interval_seconds` 控制 `CancellationBridge` 轮询 SQLite run 状态的间隔（秒），默认 `0.5`。该值同时是跨进程取消信号的最大探测时延量级。

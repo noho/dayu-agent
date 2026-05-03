@@ -2,7 +2,8 @@
 
 该模块收口 Service 层对"业务并发通道"的声明：
 
-- ``LANE_WRITE_CHAPTER`` / ``LANE_SEC_DOWNLOAD``：业务 lane 名称常量。
+- ``LANE_WRITE_CHAPTER`` / ``LANE_SEC_DOWNLOAD`` / ``LANE_CN_DOWNLOAD`` /
+  ``LANE_HK_DOWNLOAD``：业务 lane 名称常量。
 - ``SERVICE_DEFAULT_LANE_CONFIG``：Service 启动期交给 Host 作为默认 lane 配置
   的一部分；Host 不感知这些业务语义。
 - ``resolve_contract_concurrency_lane`` / ``resolve_hosted_run_concurrency_lane`` /
@@ -31,9 +32,19 @@ LANE_SEC_DOWNLOAD: str = "sec_download"
 """SEC 原始文件下载业务 lane 名称。"""
 
 
+LANE_CN_DOWNLOAD: str = "cn_download"
+"""A 股主源 PDF 下载业务 lane 名称。"""
+
+
+LANE_HK_DOWNLOAD: str = "hk_download"
+"""港股主源 PDF 下载业务 lane 名称。"""
+
+
 SERVICE_DEFAULT_LANE_CONFIG: dict[str, int] = {
     LANE_WRITE_CHAPTER: 5,
     LANE_SEC_DOWNLOAD: 1,
+    LANE_CN_DOWNLOAD: 1,
+    LANE_HK_DOWNLOAD: 1,
 }
 """Service 启动期交给 Host 的业务 lane 默认配置。
 
@@ -74,7 +85,9 @@ def resolve_hosted_run_concurrency_lane(operation_name: str) -> str | None:
     Returns:
         - ``"write_pipeline"`` → ``None``。顶层 orchestration 不占业务 lane，
           真实章节 scene 会在 ``ExecutionContract`` 侧声明 ``write_chapter``。
-        - ``"fins_download"`` → ``LANE_SEC_DOWNLOAD``
+        - ``"fins_download"`` → ``None``。财报下载必须走
+          ``resolve_fins_command_concurrency_lane``，按 ticker 市场决定是否使用
+          SEC lane；不能把泛化 operation 名直接映射到 ``sec_download``。
         - 其他宿主操作 → ``None``，由 Host 根据调用路径自动补齐自治 lane。
 
     Raises:
@@ -83,7 +96,7 @@ def resolve_hosted_run_concurrency_lane(operation_name: str) -> str | None:
 
     normalized = (operation_name or "").strip()
     if normalized == f"fins_{FinsCommandName.DOWNLOAD}":
-        return LANE_SEC_DOWNLOAD
+        return None
     return None
 
 
@@ -91,17 +104,14 @@ def resolve_fins_command_concurrency_lane(command: FinsCommand) -> str | None:
     """解析财报 HostedRunSpec 的业务 lane。
 
     ``HostedRunSpec.business_concurrency_lane`` 会包住整个 direct operation。
-    SEC 下载仍使用外层 ``sec_download``，因为 SEC pipeline 的下载链路整体需要
-    串行治理；CN/HK 下载的远端 PDF 获取与 Docling 转换在 workflow 内分段处理，
-    外层不占 ``sec_download``，避免 A 股 / 港股被 SEC 下载许可阻塞，也避免把
-    Docling 转换纳入 CN/HK 下载段限流。
+    三个下载市场分别使用 ``sec_download`` / ``cn_download`` / ``hk_download``，
+    复用 Host 既有跨进程并发治理机制，不在 Fins 内部再引入额外 lane 能力面。
 
     Args:
         command: 财报命令。
 
     Returns:
-        SEC download 返回 ``LANE_SEC_DOWNLOAD``；CN/HK download 和其他财报命令
-        返回 ``None``。
+        US / CN / HK download 分别返回对应市场 lane；其他财报命令返回 ``None``。
 
     Raises:
         无。
@@ -117,10 +127,16 @@ def resolve_fins_command_concurrency_lane(command: FinsCommand) -> str | None:
         return LANE_SEC_DOWNLOAD
     if normalized_ticker.market == "US":
         return LANE_SEC_DOWNLOAD
+    if normalized_ticker.market == "CN":
+        return LANE_CN_DOWNLOAD
+    if normalized_ticker.market == "HK":
+        return LANE_HK_DOWNLOAD
     return None
 
 
 __all__ = [
+    "LANE_CN_DOWNLOAD",
+    "LANE_HK_DOWNLOAD",
     "LANE_SEC_DOWNLOAD",
     "LANE_WRITE_CHAPTER",
     "SERVICE_DEFAULT_LANE_CONFIG",

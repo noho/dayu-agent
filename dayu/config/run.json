@@ -56,7 +56,9 @@
     "lane": {
       "llm_api": 8,
       "write_chapter": 5,
-      "sec_download": 1
+      "sec_download": 1,
+      "cn_download": 1,
+      "hk_download": 1
     },
     "pending_turn_resume": {
       "max_attempts": 3
