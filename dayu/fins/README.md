@@ -201,6 +201,8 @@ direct operation 当前由 `FinsRuntime` 和对应 pipeline 实现。
 - `dayu/fins/pipelines/sec_process_workflow.py` — process/process_filing/process_material 的单文档决策与批量工作流编排
 - `dayu/fins/pipelines/sec_upload_workflow.py` — upload_filing/upload_material 的事件编排、稳定上传身份、自动动作解析与单文档 overwrite reset 收口
 
+SEC download 未显式传 `start_date` 时，`LOOKBACK_YEARS_BY_FORM` 是默认窗口真源：`10-K`/`20-F` 回溯 5 年，`10-Q` 与季报型 `6-K` 回溯 2 年，`DEF 14A` 回溯 3 年，`8-K`、SC13 系列表单回溯 1 年；显式传 `start_date` 时所有目标 form 共用用户窗口。
+
 `CnPipeline` 当前承担 A 股 / 港股下载、CN/HK 上传与 CN/HK process。CN/HK 下载链路已按 downloader / workflow / storage commit 拆分：
 
 - `dayu/fins/downloaders/cninfo_downloader.py` — 巨潮 discovery 与 PDF 下载；不写 workspace、不依赖 pipeline/docling/storage。

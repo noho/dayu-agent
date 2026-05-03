@@ -1643,9 +1643,9 @@ def test_pipeline_internal_form_windows(tmp_path: Path) -> None:
     # 年报回溯 5 年
     assert default_windows["10-K"] == dt.date(2021, 3, 1) - grace
     assert default_windows["20-F"] == dt.date(2021, 3, 1) - grace
-    # 季报/当期报告回溯 1 年
-    assert default_windows["10-Q"] == dt.date(2025, 3, 1) - grace
-    assert default_windows["6-K"] == dt.date(2025, 3, 1) - grace
+    # 季报回溯 2 年；当期报告仍回溯 1 年
+    assert default_windows["10-Q"] == dt.date(2024, 3, 1) - grace
+    assert default_windows["6-K"] == dt.date(2024, 3, 1) - grace
     assert default_windows["8-K"] == dt.date(2025, 3, 1) - grace
     # DEF 14A 回溯 3 年
     assert default_windows["DEF 14A"] == dt.date(2023, 3, 1) - grace
