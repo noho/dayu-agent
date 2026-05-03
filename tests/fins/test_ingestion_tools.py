@@ -159,6 +159,7 @@ def test_ingestion_tool_schema_hides_internal_switches(monkeypatch: pytest.Monke
     assert "start_financial_document_preprocess_job" not in registry.schemas
     assert "FY" in download_schema["form_types"]["items"]["enum"]
     assert "Q3" in download_schema["form_types"]["items"]["enum"]
+    assert "Q4" in download_schema["form_types"]["items"]["enum"]
 
 
 @pytest.mark.unit
@@ -236,7 +237,7 @@ def test_status_tool_distinguishes_job_not_found(monkeypatch: pytest.MonkeyPatch
     "raw_ticker, market, canonical, form_types",
     [
         ("600519.SH", "CN", "600519", ["FY", "Q1"]),
-        ("700.HK", "HK", "0700", ["H1", "Q2"]),
+        ("700.HK", "HK", "0700", ["H1", "Q2", "Q4"]),
     ],
 )
 def test_start_download_job_tool_supports_cn_and_hk_tickers(

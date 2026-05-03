@@ -6,20 +6,20 @@
   （``None`` / CSV 字符串 / 已切分 tuple）规范化为 ``tuple[str, ...]``，
   同时支持英文逗号 ``,``、中文全角逗号 ``，`` 与空白分隔。
 - :func:`resolve_target_periods`：把 form 输入解析成
-  :data:`CnFiscalPeriod` 字面量集合，CN ``Q2``/``二季报`` 归一为 ``H1``。
+  :data:`CnFiscalPeriod` 字面量集合，``Q1``/``Q2``/``Q3``/``Q4`` 均保留为
+  独立季度期间。
 - :func:`resolve_window`：解析 ``start_date`` / ``end_date``，生成远端查询用的
   最大窗口。
 - :func:`resolve_period_windows`：生成按财期区分的业务窗口；年报默认 5 年，
   半年报/季报默认 2 年。
-- 默认 forms 常量：CN/HK 默认均为 ``(FY, H1, Q1, Q3)``。
+- 默认 forms 常量：CN/HK 默认均为 ``(FY, H1, Q1, Q2, Q3, Q4)``。
 
 设计要点：
 
 - 不依赖仓储 / downloader / docling，可被 workflow 与 pipeline 共享。
 - 解析失败抛 ``ValueError``，调用方决定是否升级为 ``failed`` 事件。
-- ``Q2`` / ``2Q`` / ``二季报`` 在 CN 链路归一为 ``H1`` 时，调用方应在
-  ``summary.notes`` 标记 ``cn_q2_normalized_to_h1``；本模块通过返回结构
-  显式暴露归一化事实，**不**在内部静默丢弃。
+- ``Q2`` / ``Q4`` 与 ``H1`` / ``FY`` 不做互相归一。主源缺少独立季度报告
+  时由 workflow 标记 skipped。
 """
 
 from __future__ import annotations
@@ -31,11 +31,11 @@ from typing import Final
 
 from dayu.fins.pipelines.cn_download_models import CnFiscalPeriod, CnMarketKind
 
-DEFAULT_FORMS_CN: Final[tuple[CnFiscalPeriod, ...]] = ("FY", "H1", "Q1", "Q3")
+DEFAULT_FORMS_CN: Final[tuple[CnFiscalPeriod, ...]] = ("FY", "H1", "Q1", "Q2", "Q3", "Q4")
 """A 股默认下载 form 集合。"""
 
-DEFAULT_FORMS_HK: Final[tuple[CnFiscalPeriod, ...]] = ("FY", "H1", "Q1", "Q3")
-"""港股默认下载 form 集合。HK 主板 Q1/Q3 缺失视为 skipped 而非 failed。"""
+DEFAULT_FORMS_HK: Final[tuple[CnFiscalPeriod, ...]] = ("FY", "H1", "Q1", "Q2", "Q3", "Q4")
+"""港股默认下载 form 集合。HK 主板季度报告缺失视为 skipped 而非 failed。"""
 
 # 窗口默认值与 SEC 链路的业务意图对齐：年报 5 年，季报/半年报 2 年。
 _ANNUAL_LOOKBACK_YEARS: Final[int] = 5
@@ -44,7 +44,6 @@ _LOOKBACK_GRACE_DAYS: Final[int] = 60
 
 # CLI ``--forms`` 输入的 token 拼写到 ``CnFiscalPeriod`` 字面量的归一化映射。
 # 源覆盖：英文大写、拼音首字母、纯数字 + Q 后缀、中文"X 季报/年报/半年报"。
-# Q2 / 2Q / 二季报 故意映射到 ``H1``，由调用方在 summary 标 ``cn_q2_normalized_to_h1``。
 _TOKEN_TO_PERIOD: Final[dict[str, CnFiscalPeriod]] = {
     "FY": "FY",
     "ANNUAL": "FY",
@@ -58,17 +57,19 @@ _TOKEN_TO_PERIOD: Final[dict[str, CnFiscalPeriod]] = {
     "1Q": "Q1",
     "一季报": "Q1",
     "一季度报告": "Q1",
-    "Q2": "H1",
-    "2Q": "H1",
-    "二季报": "H1",
+    "Q2": "Q2",
+    "2Q": "Q2",
+    "二季报": "Q2",
+    "二季度报告": "Q2",
     "Q3": "Q3",
     "3Q": "Q3",
     "三季报": "Q3",
     "三季度报告": "Q3",
+    "Q4": "Q4",
+    "4Q": "Q4",
+    "四季报": "Q4",
+    "四季度报告": "Q4",
 }
-
-# 触发 ``cn_q2_normalized_to_h1`` summary 标记的输入 token 集合。
-_Q2_TOKENS: Final[frozenset[str]] = frozenset({"Q2", "2Q", "二季报"})
 
 # form 输入分隔符：英文逗号 / 中文全角逗号 / 任意空白。
 _FORM_INPUT_SEPARATOR_PATTERN: Final[re.Pattern[str]] = re.compile(r"[,，\s]+")
@@ -84,9 +85,7 @@ class TargetPeriodResolution:
 
     Attributes:
         target_periods: 已去重并按 ``CnFiscalPeriod`` 字面量归一的 form tuple。
-        notes: 解析过程产生的 summary 标记字符串集合。例如出现 ``Q2`` 输入时
-            会包含 ``"cn_q2_normalized_to_h1"``；调用方应将其合并到
-            ``DownloadResultData.notes``。
+        notes: 解析过程产生的 summary 标记字符串集合。
     """
 
     target_periods: tuple[CnFiscalPeriod, ...]
@@ -160,10 +159,10 @@ def resolve_target_periods(
     - 输入为空 / ``None`` / 全空白 -> 返回 :data:`DEFAULT_FORMS_CN` 或
       :data:`DEFAULT_FORMS_HK`。
     - 字符串输入按 :func:`split_cn_form_input` 规则切分；tuple 输入直接消费。
-    - 输入 token 经 :data:`_TOKEN_TO_PERIOD` 归一，``Q2``/``2Q``/``二季报``
-      归一为 ``H1`` 并在 notes 标记 ``cn_q2_normalized_to_h1``。
-    - 输出按字面量稳定顺序去重：``FY`` / ``H1`` / ``Q1`` / ``Q3``，**不**保留
-      ``Q2`` 字面量（已被归一为 ``H1``）。
+    - 输入 token 经 :data:`_TOKEN_TO_PERIOD` 归一，``Q2``/``Q4`` 保留为独立
+      季度期间，不折叠到 ``H1``/``FY``。
+    - 输出按字面量稳定顺序去重：``FY`` / ``H1`` / ``Q1`` / ``Q2`` /
+      ``Q3`` / ``Q4``。
 
     Args:
         raw_forms: 原始 form 输入；接受 ``None`` / CSV 字符串 / 已切分 tuple。
@@ -194,14 +193,12 @@ def resolve_target_periods(
             invalid.append(raw)
             continue
         seen.add(period)
-        if token in _Q2_TOKENS and "cn_q2_normalized_to_h1" not in notes:
-            notes.append("cn_q2_normalized_to_h1")
     if invalid:
         raise ValueError(f"不支持的 form 输入: {invalid!r}")
     if not seen:
         raise ValueError("form 输入解析后为空")
 
-    canonical_order: tuple[CnFiscalPeriod, ...] = ("FY", "H1", "Q1", "Q3")
+    canonical_order: tuple[CnFiscalPeriod, ...] = ("FY", "H1", "Q1", "Q2", "Q3", "Q4")
     target_periods: tuple[CnFiscalPeriod, ...] = tuple(
         period for period in canonical_order if period in seen
     )

@@ -1,7 +1,8 @@
 """巨潮 CN 财报下载器。
 
 实现 :class:`CnReportDiscoveryClientProtocol`，覆盖 A 股年报 / 半年报 /
-一季报 / 三季报的 discovery 与 PDF 下载。
+一季报 / 三季报的 discovery 与 PDF 下载。巨潮当前没有稳定的独立 Q2/Q4
+分类证据，直接请求 Q2/Q4 时返回空候选，由 workflow 统一标记 skipped。
 
 设计要点：
 
@@ -21,8 +22,8 @@
 - 同 ``fiscal_period`` 多版本：``amended=True`` 优先，再按
   ``announcementTime`` 取最新；无 amended 时取最新一条全文。
 - HEAD 失败、PDF magic bytes 校验失败仅影响该 candidate，不让整个
-  ticker 流程崩。本模块只在 ``download_report_pdf`` 抛 ``RuntimeError``，
-  在 ``list_report_candidates`` 用 ``Log.warn`` 软失败 + 继续下一类。
+  ticker 流程崩。公告分类查询失败属于 discovery 阶段远端错误，必须抛
+  ``RuntimeError``，避免被 workflow 误报成缺报告 skipped。
 - 接口契约 / 公告字段非正式开放，参数随时变化；本模块**只**消费稳定字段，
   其余字段忽略，避免实现绑死巨潮 schema。
 """
@@ -73,6 +74,9 @@ _PERIOD_TO_CATEGORY: Final[dict[CnFiscalPeriod, str]] = {
     "Q1": "category_yjdbg_szsh;",
     "Q3": "category_sjdbg_szsh;",
 }
+_CNINFO_UNSUPPORTED_INDEPENDENT_PERIODS: Final[frozenset[CnFiscalPeriod]] = frozenset(
+    {"Q2", "Q4"}
+)
 
 # 标题黑名单关键词：命中即排除（大小写不敏感）。
 _TITLE_BLOCKLIST: Final[tuple[str, ...]] = (
@@ -267,8 +271,7 @@ class CninfoDiscoveryClient:
 
         Raises:
             ValueError: market/provider/company_id 非法时抛出。
-            RuntimeError: 底层请求或 JSON 解析失败；单个财期分类失败会记录
-                ``Log.warn`` 后跳过，所有有效财期分类均失败时抛出。
+            RuntimeError: 任一有效财期分类的底层请求或 JSON 解析失败时抛出。
         """
 
         if query.market != "CN":
@@ -282,17 +285,17 @@ class CninfoDiscoveryClient:
         context = self._resolve_exchange_context(ticker)
 
         per_period_year: dict[tuple[CnFiscalPeriod, int], list[_RawAnnouncement]] = {}
-        queried_periods = 0
-        failed_periods: list[CnFiscalPeriod] = []
         for period in query.target_periods:
             category = _PERIOD_TO_CATEGORY.get(period)
             if category is None:
-                # 上游已把 Q2 归一为 H1；其它字面量不应到此。
-                Log.warn(
-                    f"未知 fiscal_period={period!r}，已跳过", module=_MODULE
-                )
+                if period in _CNINFO_UNSUPPORTED_INDEPENDENT_PERIODS:
+                    Log.warn(
+                        f"巨潮暂无独立 fiscal_period={period!r} 分类，已按无候选跳过",
+                        module=_MODULE,
+                    )
+                    continue
+                Log.warn(f"未知 fiscal_period={period!r}，已跳过", module=_MODULE)
                 continue
-            queried_periods += 1
             try:
                 announcements = self._query_announcements(
                     column=context.column,
@@ -304,12 +307,9 @@ class CninfoDiscoveryClient:
                     end_date=query.end_date,
                 )
             except RuntimeError as exc:
-                failed_periods.append(period)
-                Log.warn(
-                    f"巨潮公告分类查询失败，已跳过: ticker={ticker} period={period} category={category} error={exc}",
-                    module=_MODULE,
-                )
-                continue
+                raise RuntimeError(
+                    f"巨潮公告分类查询失败: ticker={ticker} period={period} category={category} error={exc}"
+                ) from exc
             for item in announcements:
                 if _is_title_blocked(item.title):
                     continue
@@ -317,11 +317,6 @@ class CninfoDiscoveryClient:
                 if fiscal_year is None:
                     continue
                 per_period_year.setdefault((period, fiscal_year), []).append(item)
-
-        if queried_periods > 0 and len(failed_periods) == queried_periods:
-            raise RuntimeError(
-                f"巨潮公告分类查询全部失败: ticker={ticker} periods={','.join(failed_periods)}"
-            )
 
         candidates: list[CnReportCandidate] = []
         for (period, fiscal_year), items in per_period_year.items():
@@ -842,6 +837,7 @@ _PERIOD_SORT_KEY: Final[dict[CnFiscalPeriod, int]] = {
     "Q1": 2,
     "Q2": 3,
     "Q3": 4,
+    "Q4": 5,
 }
 
 _TITLE_FY_PATTERN: Final[re.Pattern[str]] = re.compile(r"(\d{4})\s*年[年度]?\s*(年度报告|年报)")

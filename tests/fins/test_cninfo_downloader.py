@@ -373,6 +373,36 @@ def test_list_report_candidates_filters_blocklisted_titles() -> None:
     assert only.etag == '"abc"'
 
 
+def test_list_report_candidates_returns_empty_for_cninfo_independent_q2_q4() -> None:
+    """巨潮没有稳定独立 Q2/Q4 分类时应返回空候选，不用 H1/FY 冒充。"""
+
+    query = CnReportQuery(
+        market="CN",
+        normalized_ticker="002594",
+        start_date="2024-01-01",
+        end_date="2025-12-31",
+        target_periods=("Q2", "Q4"),
+    )
+    query_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal query_calls
+        url_str = str(request.url)
+        if url_str == CNINFO_STOCK_JSON_URL:
+            return _stock_mapping_response()
+        if url_str == CNINFO_QUERY_URL:
+            query_calls += 1
+            return httpx.Response(200, json={"announcements": [], "hasMore": False})
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    client = _build_client(handler)
+    profile = client.resolve_company(query)
+    candidates = client.list_report_candidates(query, profile)
+
+    assert candidates == ()
+    assert query_calls == 0
+
+
 def test_list_report_candidates_prefers_a_share_fy_over_later_h_share_notice() -> None:
     """688981 年报候选应排除更晚披露的港股公告，选择 A 股年度报告。"""
 
@@ -433,8 +463,8 @@ def test_list_report_candidates_prefers_a_share_fy_over_later_h_share_notice() -
     assert [candidate.source_id for candidate in candidates] == ["A1"]
 
 
-def test_list_report_candidates_skips_failed_period_and_keeps_other_periods() -> None:
-    """单个巨潮公告分类失败时应跳过该分类，并保留其它财期候选。"""
+def test_list_report_candidates_raises_on_failed_period_query() -> None:
+    """单个巨潮公告分类失败也必须抛错，不能伪装成该财期缺报告。"""
 
     h1_payload = {
         "announcements": [
@@ -472,15 +502,12 @@ def test_list_report_candidates_skips_failed_period_and_keeps_other_periods() ->
     )
     profile = client.resolve_company(query)
 
-    candidates = client.list_report_candidates(query, profile)
-
-    assert len(candidates) == 1
-    assert candidates[0].source_id == "H1"
-    assert candidates[0].fiscal_period == "H1"
+    with pytest.raises(RuntimeError, match="period=FY"):
+        client.list_report_candidates(query, profile)
 
 
-def test_list_report_candidates_raises_when_all_period_queries_fail() -> None:
-    """所有巨潮公告分类均失败时应抛错，让 workflow 返回 failed。"""
+def test_list_report_candidates_raises_when_period_query_fails() -> None:
+    """巨潮公告分类请求失败时应抛错，让 workflow 返回 failed。"""
 
     def handler(request: httpx.Request) -> httpx.Response:
         url_str = str(request.url)
@@ -500,7 +527,7 @@ def test_list_report_candidates_raises_when_all_period_queries_fail() -> None:
     )
     profile = client.resolve_company(query)
 
-    with pytest.raises(RuntimeError, match="全部失败"):
+    with pytest.raises(RuntimeError, match="period=FY"):
         client.list_report_candidates(query, profile)
 
 

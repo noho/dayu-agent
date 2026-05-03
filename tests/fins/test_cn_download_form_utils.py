@@ -3,7 +3,7 @@
 覆盖：
 
 - 默认 forms（CN/HK 一致）；
-- ``Q2`` 归一为 ``H1`` 并落 summary 标记；
+- ``Q2`` / ``Q4`` 保留为独立季度；
 - 中文输入与拼写多样性；
 - 非法 token 抛 ``ValueError``；
 - 窗口默认值（``today=fixture`` 注入）；
@@ -31,11 +31,11 @@ from dayu.fins.pipelines.cn_form_utils import (
 )
 
 
-def test_default_forms_cn_and_hk_are_identical_quad() -> None:
-    """CN/HK 默认 forms 一致：``FY/H1/Q1/Q3``。"""
+def test_default_forms_cn_and_hk_are_identical_six_periods() -> None:
+    """CN/HK 默认 forms 一致：``FY/H1/Q1/Q2/Q3/Q4``。"""
 
-    assert DEFAULT_FORMS_CN == ("FY", "H1", "Q1", "Q3")
-    assert DEFAULT_FORMS_HK == ("FY", "H1", "Q1", "Q3")
+    assert DEFAULT_FORMS_CN == ("FY", "H1", "Q1", "Q2", "Q3", "Q4")
+    assert DEFAULT_FORMS_HK == ("FY", "H1", "Q1", "Q2", "Q3", "Q4")
 
 
 def test_resolve_target_periods_empty_input_returns_default_for_cn() -> None:
@@ -91,7 +91,7 @@ def test_split_cn_form_input_none_returns_empty_tuple() -> None:
 def test_split_cn_form_input_string_handles_mixed_separators() -> None:
     """字符串输入支持英文逗号 / 中文逗号 / 空白混合分隔，连续分隔符过滤为空。"""
 
-    assert split_cn_form_input("FY, H1，Q1  Q3") == ("FY", "H1", "Q1", "Q3")
+    assert split_cn_form_input("FY, H1，Q1  Q3 Q4") == ("FY", "H1", "Q1", "Q3", "Q4")
 
 
 def test_split_cn_form_input_tuple_passes_through() -> None:
@@ -118,45 +118,45 @@ def test_resolve_target_periods_empty_input_returns_default_for_hk() -> None:
 def test_resolve_target_periods_explicit_forms_preserved_canonical_order() -> None:
     """显式 form 输入按字面量稳定顺序去重，不被默认值覆盖。"""
 
-    result = resolve_target_periods(("Q3", "FY", "Q1"), "CN")
+    result = resolve_target_periods(("Q3", "FY", "Q1", "Q4", "Q2"), "CN")
 
-    assert result.target_periods == ("FY", "Q1", "Q3")
+    assert result.target_periods == ("FY", "Q1", "Q2", "Q3", "Q4")
     assert result.notes == ()
 
 
-def test_resolve_target_periods_q2_normalized_to_h1_with_summary_note() -> None:
-    """``Q2`` 输入归一为 ``H1`` 并产出 ``cn_q2_normalized_to_h1`` 标记。"""
+def test_resolve_target_periods_q2_preserved_as_independent_quarter() -> None:
+    """``Q2`` 输入保留为独立季度。"""
 
     result = resolve_target_periods(("Q2",), "CN")
 
-    assert result.target_periods == ("H1",)
-    assert "cn_q2_normalized_to_h1" in result.notes
+    assert result.target_periods == ("Q2",)
+    assert result.notes == ()
 
 
-def test_resolve_target_periods_chinese_q2_normalized_to_h1() -> None:
-    """中文 ``二季报`` 同样归一为 ``H1`` 并产出标记。"""
+def test_resolve_target_periods_chinese_q2_preserved_as_independent_quarter() -> None:
+    """中文 ``二季报`` 同样保留为 ``Q2``。"""
 
     result = resolve_target_periods(("二季报",), "CN")
 
-    assert result.target_periods == ("H1",)
-    assert "cn_q2_normalized_to_h1" in result.notes
+    assert result.target_periods == ("Q2",)
+    assert result.notes == ()
 
 
-def test_resolve_target_periods_q2_note_emitted_only_once() -> None:
-    """多次出现 Q2-style 输入只产出一次标记。"""
+def test_resolve_target_periods_q2_h1_and_q4_fy_all_preserved() -> None:
+    """``Q2``/``H1`` 与 ``Q4``/``FY`` 是互不折叠的独立期间。"""
 
-    result = resolve_target_periods(("Q2", "2Q", "二季报", "H1"), "CN")
+    result = resolve_target_periods(("Q2", "2Q", "二季报", "H1", "Q4", "FY"), "CN")
 
-    assert result.target_periods == ("H1",)
-    assert result.notes.count("cn_q2_normalized_to_h1") == 1
+    assert result.target_periods == ("FY", "H1", "Q2", "Q4")
+    assert result.notes == ()
 
 
 def test_resolve_target_periods_chinese_inputs_supported() -> None:
-    """中文 ``年报``/``半年报``/``一季报``/``三季报`` 全部能识别。"""
+    """中文 ``年报``/``半年报``/``一季报``/``二季报``/``三季报``/``四季报`` 全部能识别。"""
 
-    result = resolve_target_periods(("年报", "半年报", "一季报", "三季报"), "CN")
+    result = resolve_target_periods(("年报", "半年报", "一季报", "二季报", "三季报", "四季报"), "CN")
 
-    assert result.target_periods == ("FY", "H1", "Q1", "Q3")
+    assert result.target_periods == ("FY", "H1", "Q1", "Q2", "Q3", "Q4")
     assert result.notes == ()
 
 
@@ -209,7 +209,7 @@ def test_resolve_period_windows_defaults_annual_five_years_interim_two_years() -
     """默认业务窗口应为年报 5 年、半年报/季报 2 年。"""
 
     windows = resolve_period_windows(
-        target_periods=("FY", "H1", "Q1", "Q3"),
+        target_periods=("FY", "H1", "Q1", "Q2", "Q3", "Q4"),
         start_date=None,
         end_date=None,
         today=dt.date(2025, 5, 1),
@@ -219,7 +219,9 @@ def test_resolve_period_windows_defaults_annual_five_years_interim_two_years() -
         PeriodDownloadWindow("FY", "2020-03-02", "2025-05-01"),
         PeriodDownloadWindow("H1", "2023-03-02", "2025-05-01"),
         PeriodDownloadWindow("Q1", "2023-03-02", "2025-05-01"),
+        PeriodDownloadWindow("Q2", "2023-03-02", "2025-05-01"),
         PeriodDownloadWindow("Q3", "2023-03-02", "2025-05-01"),
+        PeriodDownloadWindow("Q4", "2023-03-02", "2025-05-01"),
     )
 
 

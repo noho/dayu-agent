@@ -30,14 +30,10 @@ def test_cn_market_kind_only_covers_cn_and_hk() -> None:
     assert set(get_args(CnMarketKind)) == {"CN", "HK"}
 
 
-def test_cn_fiscal_period_includes_q2_for_input_normalization() -> None:
-    """``CnFiscalPeriod`` 字面量集合需包含 ``Q2``，供 form 解析阶段输入归一。
+def test_cn_fiscal_period_includes_independent_quarters() -> None:
+    """``CnFiscalPeriod`` 字面量集合需覆盖互不折叠的季度与累计期间。"""
 
-    虽然 Q2 在 form 解析阶段会被归一为 H1，但保留 Q2 字面量可让"输入侧 Q2"与
-    "candidate 侧 Q2"在静态类型层面共享同一字面量集合。
-    """
-
-    expected = {"FY", "H1", "Q1", "Q2", "Q3"}
+    expected = {"FY", "H1", "Q1", "Q2", "Q3", "Q4"}
     assert set(get_args(CnFiscalPeriod)) == expected
 
 

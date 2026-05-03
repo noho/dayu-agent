@@ -1,7 +1,7 @@
 """``dayu/fins/downloaders/hkexnews_downloader.py`` 单元测试。
 
 覆盖披露易 stock list 解析、title search 参数、语言策略、多代码匹配、
-季度空结果与 PDF 校验。所有测试都通过 ``httpx.MockTransport`` 注入 fixture，
+季度空结果、Q2/Q4 独立识别与 PDF 校验。所有测试都通过 ``httpx.MockTransport`` 注入 fixture，
 禁止访问真实披露易网络。
 """
 
@@ -416,7 +416,7 @@ def test_list_report_candidates_uses_secondary_language_only_when_primary_empty(
 
 
 def test_list_report_candidates_maps_hk_period_codes_and_allows_empty_quarters() -> None:
-    """验证 FY/H1/Q1/Q3 标题分类映射；季度查无不抛异常。"""
+    """验证 FY/H1/Q1-Q4 标题分类映射；季度查无不抛异常。"""
 
     category_params: list[tuple[str, str, str]] = []
 
@@ -435,7 +435,7 @@ def test_list_report_candidates_maps_hk_period_codes_and_allows_empty_quarters()
 
     client = _build_client(handler)
     candidates = client.list_report_candidates(
-        _query(periods=("FY", "H1", "Q1", "Q3")),
+        _query(periods=("FY", "H1", "Q1", "Q2", "Q3", "Q4")),
         _profile(),
     )
 
@@ -447,13 +447,11 @@ def test_list_report_candidates_maps_hk_period_codes_and_allows_empty_quarters()
         ("40000", "-2", "40200"),
         ("10000", "3", "13600"),
         ("10000", "3", "13600"),
-        ("10000", "3", "13600"),
-        ("10000", "3", "13600"),
     ]
 
 
-def test_list_report_candidates_skips_failed_hk_period_and_keeps_other_periods() -> None:
-    """单个披露易分类查询失败时应跳过该分类，并保留其它财期候选。"""
+def test_list_report_candidates_raises_on_failed_hk_period_query() -> None:
+    """单个披露易分类查询失败也必须抛错，不能伪装成该财期缺报告。"""
 
     h1_url = f"{HKEXNEWS_BASE_URL}/listedco/listconews/sehk/2025/0826/h1.pdf"
 
@@ -483,20 +481,17 @@ def test_list_report_candidates_skips_failed_hk_period_and_keeps_other_periods()
         raise AssertionError(f"unexpected request {request.method} {request.url}")
 
     client = _build_client(handler)
-    candidates = client.list_report_candidates(
-        _query(periods=("FY", "H1")),
-        _profile(),
-    )
-
-    assert len(candidates) == 1
-    assert candidates[0].source_id == "H1_2025"
-    assert candidates[0].fiscal_period == "H1"
+    with pytest.raises(RuntimeError, match="periods=FY"):
+        client.list_report_candidates(
+            _query(periods=("FY", "H1")),
+            _profile(),
+        )
 
 
-def test_list_report_candidates_maps_direct_q2_to_interim_category() -> None:
-    """直接传入 Q2 时应查询中期分类，不应静默跳过。"""
+def test_list_report_candidates_maps_direct_q2_to_quarterly_category() -> None:
+    """直接传入 Q2 时应查询季度业绩分类，不应归入中期报告。"""
 
-    h1_url = f"{HKEXNEWS_BASE_URL}/listedco/listconews/sehk/2025/0826/h1.pdf"
+    q2_url = f"{HKEXNEWS_BASE_URL}/listedco/listconews/sehk/2025/0813/q2.pdf"
     seen_t2codes: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -511,15 +506,15 @@ def test_list_report_candidates_maps_direct_q2_to_interim_category() -> None:
                     [
                         _announcement(
                             document_id="Q2_2025",
-                            title="中期報告 2025",
-                            file_link="/listedco/listconews/sehk/2025/0826/h1.pdf",
-                            date_time="26/08/2025 16:30",
-                            category_text="Financial Statements/ESG Information - [中期/半年度報告]",
+                            title="截至二零二五年六月三十日止三個月及六個月業績公佈",
+                            file_link="/listedco/listconews/sehk/2025/0813/q2.pdf",
+                            date_time="13/08/2025 16:30",
+                            category_text="公告及通告 - [季度業績]",
                         )
                     ]
                 ),
             )
-        if str(request.url) == h1_url and request.method == "HEAD":
+        if str(request.url) == q2_url and request.method == "HEAD":
             return httpx.Response(200, headers={})
         raise AssertionError(f"unexpected request {request.method} {request.url}")
 
@@ -529,10 +524,66 @@ def test_list_report_candidates_maps_direct_q2_to_interim_category() -> None:
         _profile(),
     )
 
-    assert seen_t2codes == ["40200", "40200"]
+    assert seen_t2codes == ["13600", "13600"]
     assert len(candidates) == 1
     assert candidates[0].source_id == "Q2_2025"
     assert candidates[0].fiscal_period == "Q2"
+
+
+def test_list_report_candidates_keeps_q4_distinct_from_fy() -> None:
+    """港股 Q4 与 FY 是独立报告，不能把季度业绩折叠成年报。"""
+
+    q4_url = f"{HKEXNEWS_BASE_URL}/listedco/listconews/sehk/2026/0320/q4.pdf"
+    fy_url = f"{HKEXNEWS_BASE_URL}/listedco/listconews/sehk/2026/0401/fy.pdf"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url).startswith(HKEXNEWS_TITLE_SEARCH_URL) and request.method == "GET":
+            form = _query_from_request(request)
+            if form["lang"] == ("E",):
+                return httpx.Response(200, json={"result": "[]"})
+            if form["t2code"] == ("40100",):
+                return httpx.Response(
+                    200,
+                    json=_title_search_payload(
+                        [
+                            _announcement(
+                                document_id="FY_2025",
+                                title="2025 年報",
+                                file_link="/listedco/listconews/sehk/2026/0401/fy.pdf",
+                                date_time="01/04/2026 16:30",
+                                category_text="財務報表/環境、社會及管治資料 - [年報]",
+                            )
+                        ]
+                    ),
+                )
+            return httpx.Response(
+                200,
+                json=_title_search_payload(
+                    [
+                        _announcement(
+                            document_id="Q4_2025",
+                            title="截至二零二五年十二月三十一日止三個月及十二個月業績公佈",
+                            file_link="/listedco/listconews/sehk/2026/0320/q4.pdf",
+                            date_time="20/03/2026 16:30",
+                            category_text="公告及通告 - [季度業績]",
+                        )
+                    ]
+                ),
+            )
+        if str(request.url) in {q4_url, fy_url} and request.method == "HEAD":
+            return httpx.Response(200, headers={})
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    client = _build_client(handler)
+    candidates = client.list_report_candidates(
+        _query(periods=("FY", "Q4")),
+        _profile(),
+    )
+
+    assert [(candidate.source_id, candidate.fiscal_period) for candidate in candidates] == [
+        ("FY_2025", "FY"),
+        ("Q4_2025", "Q4"),
+    ]
 
 
 def test_list_report_candidates_treats_traditional_half_year_as_h1() -> None:
@@ -626,10 +677,12 @@ def test_list_report_candidates_filters_q1_q3_by_title_period() -> None:
 
 
 def test_list_report_candidates_reads_hk_quarterly_results_announcements() -> None:
-    """真实腾讯式 ``公告及通告 - [季度業績]`` 应归入 Q1/Q3。"""
+    """真实腾讯式 ``公告及通告 - [季度業績]`` 应归入 Q1/Q2/Q3/Q4。"""
 
     q1_url = f"{HKEXNEWS_BASE_URL}/listedco/listconews/sehk/2025/0514/q1.pdf"
+    q2_url = f"{HKEXNEWS_BASE_URL}/listedco/listconews/sehk/2025/0813/q2.pdf"
     q3_url = f"{HKEXNEWS_BASE_URL}/listedco/listconews/sehk/2025/1113/q3.pdf"
+    q4_url = f"{HKEXNEWS_BASE_URL}/listedco/listconews/sehk/2026/0320/q4.pdf"
 
     def handler(request: httpx.Request) -> httpx.Response:
         if str(request.url).startswith(HKEXNEWS_TITLE_SEARCH_URL) and request.method == "GET":
@@ -651,6 +704,20 @@ def test_list_report_candidates_reads_hk_quarterly_results_announcements() -> No
                             category_text="公告及通告 - [季度業績]",
                         ),
                         _announcement(
+                            document_id="Q4_2025",
+                            title="截至二零二五年十二月三十一日止三個月及十二個月業績公佈",
+                            file_link="/listedco/listconews/sehk/2026/0320/q4.pdf",
+                            date_time="20/03/2026 16:30",
+                            category_text="公告及通告 - [季度業績]",
+                        ),
+                        _announcement(
+                            document_id="Q2_2025",
+                            title="截至二零二五年六月三十日止三個月及六個月業績公佈",
+                            file_link="/listedco/listconews/sehk/2025/0813/q2.pdf",
+                            date_time="13/08/2025 16:30",
+                            category_text="公告及通告 - [季度業績]",
+                        ),
+                        _announcement(
                             document_id="Q1_2025",
                             title="截至二零二五年三月三十一日止三個月業績公佈",
                             file_link="/listedco/listconews/sehk/2025/0514/q1.pdf",
@@ -660,19 +727,21 @@ def test_list_report_candidates_reads_hk_quarterly_results_announcements() -> No
                     ]
                 ),
             )
-        if str(request.url) in {q1_url, q3_url} and request.method == "HEAD":
+        if str(request.url) in {q1_url, q2_url, q3_url, q4_url} and request.method == "HEAD":
             return httpx.Response(200, headers={})
         raise AssertionError(f"unexpected request {request.method} {request.url}")
 
     client = _build_client(handler)
     candidates = client.list_report_candidates(
-        _query(periods=("Q1", "Q3")),
+        _query(periods=("Q1", "Q2", "Q3", "Q4")),
         _profile(),
     )
 
     assert [(candidate.source_id, candidate.fiscal_period) for candidate in candidates] == [
         ("Q1_2025", "Q1"),
+        ("Q2_2025", "Q2"),
         ("Q3_2025", "Q3"),
+        ("Q4_2025", "Q4"),
     ]
 
 

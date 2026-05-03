@@ -392,6 +392,8 @@ def _optional_period(value: JsonValue | None) -> CnFiscalPeriod | None:
         return "Q2"
     if normalized == "Q3":
         return "Q3"
+    if normalized == "Q4":
+        return "Q4"
     return None
 
 

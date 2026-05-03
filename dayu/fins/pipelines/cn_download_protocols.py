@@ -52,7 +52,9 @@ class CnReportDiscoveryClientProtocol(Protocol):
     - 不写 workspace、不依赖 pipeline、不调 docling、不生成 ``document_id``。
     - HEAD/GET 失败、PDF magic bytes 校验失败等候选层失败仅影响该 candidate，
       不能让整个 ticker 流程崩。
-    - HK Q1/Q3 主板查无视为返回空列表（不抛异常），由 workflow 标 skipped。
+    - HK 季度报告查无视为返回空列表（不抛异常），由 workflow 标 skipped。
+    - discovery 请求失败 / JSON 解析失败必须抛 ``RuntimeError``，不能用空
+      候选伪装成缺报告。
     """
 
     def resolve_company(self, query: CnReportQuery) -> CnCompanyProfile:
@@ -66,7 +68,8 @@ class CnReportDiscoveryClientProtocol(Protocol):
             或 ``HKEX:{stockId}`` 前缀约定。
 
         Raises:
-            ValueError: 解析失败（无法在主源公司映射中定位公司）时抛出。
+            ValueError: 公司映射响应合法但无法定位 ticker 时抛出。
+            RuntimeError: 主源请求失败或响应无法解析时抛出。
         """
 
         ...
@@ -79,7 +82,7 @@ class CnReportDiscoveryClientProtocol(Protocol):
         """列出符合 ``target_periods`` 与窗口约束的候选报告。
 
         实现层负责按白/黑名单与类别过滤、按 fiscal_period 去重；多版本仅保留
-        最新有效全文，amended 优先。HK Q1/Q3 主板查无返回空 tuple，**不**抛
+        最新有效全文，amended 优先。HK 季度报告查无返回空 tuple，**不**抛
         异常。
 
         Args:
@@ -90,7 +93,8 @@ class CnReportDiscoveryClientProtocol(Protocol):
             候选报告 tuple；候选已经按 fiscal_period 收敛、amended 优先。
 
         Raises:
-            ValueError: 主源响应无法解析时抛出。
+            ValueError: 查询参数或 profile 与当前 provider 不匹配时抛出。
+            RuntimeError: 主源请求失败或响应无法解析时抛出。
         """
 
         ...

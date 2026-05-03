@@ -472,7 +472,7 @@ def test_cn_download_candidate_failure_does_not_fail_pipeline(tmp_path: Path) ->
 
 
 def test_cn_download_workflow_keeps_multi_year_periodic_candidates(tmp_path: Path) -> None:
-    """workflow 不应再次截断 downloader 返回的跨年 H1/Q1/Q3 候选。"""
+    """workflow 不应再次截断 downloader 返回的跨年 H1/季度候选。"""
 
     discovery = _FakeDiscoveryClient(
         temp_dir=tmp_path,
@@ -494,6 +494,30 @@ def test_cn_download_workflow_keeps_multi_year_periodic_candidates(tmp_path: Pat
     assert summary["downloaded"] == 2
     assert discovery.download_calls == 2
     assert converter.calls == 2
+
+
+def test_cn_download_workflow_marks_missing_independent_quarters_skipped(tmp_path: Path) -> None:
+    """请求 Q2/Q4 但主源无独立报告时应 skipped，不应 failed 或用 H1/FY 冒充。"""
+
+    discovery = _FakeDiscoveryClient(temp_dir=tmp_path, candidates=())
+    converter = _FakeConverter()
+    pipeline = _build_pipeline(tmp_path=tmp_path, discovery=discovery, converter=converter)
+
+    events = _collect_events(pipeline, form_type="Q2 Q4")
+
+    completed = [event for event in events if event.event_type == DownloadEventType.FILING_COMPLETED]
+    result = _final_result(events)
+    summary = result["summary"]
+    assert isinstance(summary, dict)
+    assert [(event.payload["form_type"], event.payload["status"]) for event in completed] == [
+        ("Q2", "skipped"),
+        ("Q4", "skipped"),
+    ]
+    assert result["status"] == "ok"
+    assert summary["skipped"] == 2
+    assert summary["failed"] == 0
+    assert discovery.download_calls == 0
+    assert converter.calls == 0
 
 
 def test_cn_download_default_window_limits_interim_to_two_years(tmp_path: Path) -> None:

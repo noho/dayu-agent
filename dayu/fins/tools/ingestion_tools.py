@@ -42,6 +42,7 @@ _CN_HK_DOWNLOAD_FORM_TYPES = (
     "Q1",
     "Q2",
     "Q3",
+    "Q4",
 )
 _SUPPORTED_DOWNLOAD_FORM_TYPES = [
     *_US_DOWNLOAD_FORM_TYPES,
@@ -127,7 +128,7 @@ def _create_start_download_job_tool(
                     "enum": _SUPPORTED_DOWNLOAD_FORM_TYPES,
                 },
                 "uniqueItems": True,
-                "description": "可选表单过滤。只在你明确要缩小下载范围时填写；留空表示下载该公司当前市场支持的全部表单。美股使用 10-K/10-Q/20-F/6-K/8-K/SC 13D/SC 13G 等，A 股/港股使用 FY/H1/Q1/Q2/Q3，其中 Q2 会按半年报 H1 处理。",
+                "description": "可选表单过滤。只在你明确要缩小下载范围时填写；留空表示下载该公司当前市场支持的全部表单。美股使用 10-K/10-Q/20-F/6-K/8-K/SC 13D/SC 13G 等，A 股/港股使用 FY/H1/Q1/Q2/Q3/Q4，缺少对应独立报告时按 skipped 统计。",
             },
             "filed_date_from": {
                 "type": "string",

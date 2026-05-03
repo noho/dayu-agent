@@ -24,15 +24,16 @@ CnMarketKind = Literal["CN", "HK"]
 """CN 下载链路覆盖的市场标识。``ticker_normalization.NormalizedTicker.market``
 取值 ``"CN"`` / ``"HK"`` / ``"US"``，本字面量是 CN 链路允许的子集。"""
 
-CnFiscalPeriod = Literal["FY", "H1", "Q1", "Q2", "Q3"]
+CnFiscalPeriod = Literal["FY", "H1", "Q1", "Q2", "Q3", "Q4"]
 """CN/HK 财期字面量集合。
 
 - ``FY``：年报。
 - ``H1``：半年报。
-- ``Q1`` / ``Q3``：A 股一季报 / 三季报；HK 主板季度业绩也走此枚举。
-- ``Q2``：保留以表达"二季报输入"语义；workflow form 解析阶段会把 ``Q2``
-  归一为 ``H1``，常规下载的 candidate / source meta 不会出现 ``Q2``。
-  downloader 直接调用收到 ``Q2`` 时可映射到中期分类，避免静默跳过。
+- ``Q1`` / ``Q2`` / ``Q3`` / ``Q4``：独立季度报告或季度业绩。
+
+这些字面量表示互不折叠的业务期间：``Q2`` 不归一为 ``H1``，``Q4`` 不归一
+为 ``FY``。主源缺少某个独立期间报告时由 workflow 统一标记为 skipped，而
+不是用相邻累计期间冒充。
 """
 
 CnSourceProvider = Literal["cninfo", "hkexnews"]
@@ -134,7 +135,7 @@ class CnReportCandidate:
         filing_date: 公告披露日期，``YYYY-MM-DD``。
         fiscal_year: 推断财年；``fiscal_year_source`` 在 source meta 标记为
             ``"title_or_category_inferred"``。
-        fiscal_period: 推断财期，已经过 Q2→H1 归一。
+        fiscal_period: 推断财期；季度、半年报与年报互不折叠。
         amended: 是否修订/更正版本。
         content_length: HEAD 返回的 ``Content-Length``；为 ``None`` 表示
             HEAD 不可用或服务端未返回。
