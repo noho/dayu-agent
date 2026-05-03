@@ -213,6 +213,7 @@ def _candidate(
     etag: str = '"v1"',
     fiscal_year: int = 2024,
     fiscal_period: CnFiscalPeriod = "FY",
+    filing_date: str | None = None,
 ) -> CnReportCandidate:
     """构造 CN 候选。"""
 
@@ -222,7 +223,7 @@ def _candidate(
         source_url=f"https://static.cninfo.test/{source_id}.pdf",
         title=f"贵州茅台：{fiscal_year}年{fiscal_period}报告",
         language="zh",
-        filing_date=f"{fiscal_year + 1}-04-01",
+        filing_date=filing_date or f"{fiscal_year + 1}-04-01",
         fiscal_year=fiscal_year,
         fiscal_period=fiscal_period,
         amended=False,
@@ -489,6 +490,96 @@ def test_cn_download_workflow_keeps_multi_year_periodic_candidates(tmp_path: Pat
     assert converter.calls == 2
 
 
+def test_cn_download_default_window_limits_interim_to_two_years(tmp_path: Path) -> None:
+    """默认窗口下半年报/季报只保留 end 年和上一 fiscal_year 候选。"""
+
+    discovery = _FakeDiscoveryClient(
+        temp_dir=tmp_path,
+        candidates=(
+            _candidate(
+                source_id="H1-2026",
+                fiscal_year=2026,
+                fiscal_period="H1",
+                filing_date="2026-08-30",
+            ),
+            _candidate(
+                source_id="H1-2025",
+                fiscal_year=2025,
+                fiscal_period="H1",
+                filing_date="2025-08-30",
+            ),
+            _candidate(
+                source_id="H1-2024",
+                fiscal_year=2024,
+                fiscal_period="H1",
+                filing_date="2024-08-30",
+            ),
+        ),
+    )
+    converter = _FakeConverter()
+    pipeline = _build_pipeline(tmp_path=tmp_path, discovery=discovery, converter=converter)
+
+    async def collect() -> list[DownloadEvent]:
+        events: list[DownloadEvent] = []
+        async for event in pipeline.download_stream(
+            ticker="600519",
+            form_type="H1",
+            start_date=None,
+            end_date="2026-12-31",
+            overwrite=False,
+        ):
+            events.append(event)
+        return events
+
+    events = asyncio.run(collect())
+
+    started = [event for event in events if event.event_type == DownloadEventType.FILING_STARTED]
+    result = _final_result(events)
+    summary = result["summary"]
+    assert isinstance(summary, dict)
+    assert [event.payload["fiscal_year"] for event in started] == [2026, 2025]
+    assert summary["downloaded"] == 2
+    assert discovery.download_calls == 2
+    assert converter.calls == 2
+
+
+def test_cn_download_default_window_limits_annual_to_five_reports(tmp_path: Path) -> None:
+    """默认窗口下 FY 只保留最近 5 份年报候选。"""
+
+    discovery = _FakeDiscoveryClient(
+        temp_dir=tmp_path,
+        candidates=tuple(
+            _candidate(source_id=f"FY-{year}", fiscal_year=year, fiscal_period="FY")
+            for year in (2025, 2024, 2023, 2022, 2021, 2020)
+        ),
+    )
+    converter = _FakeConverter()
+    pipeline = _build_pipeline(tmp_path=tmp_path, discovery=discovery, converter=converter)
+
+    async def collect() -> list[DownloadEvent]:
+        events: list[DownloadEvent] = []
+        async for event in pipeline.download_stream(
+            ticker="600519",
+            form_type="FY",
+            start_date=None,
+            end_date="2026-05-01",
+            overwrite=False,
+        ):
+            events.append(event)
+        return events
+
+    events = asyncio.run(collect())
+
+    started = [event for event in events if event.event_type == DownloadEventType.FILING_STARTED]
+    result = _final_result(events)
+    summary = result["summary"]
+    assert isinstance(summary, dict)
+    assert [event.payload["fiscal_year"] for event in started] == [2025, 2024, 2023, 2022, 2021]
+    assert summary["downloaded"] == 5
+    assert discovery.download_calls == 5
+    assert converter.calls == 5
+
+
 def test_cn_download_version_mismatch_redownloads(tmp_path: Path) -> None:
     """完成态 download_version 不一致时禁止 fast skip 和 PDF skip。"""
 
@@ -734,8 +825,8 @@ def test_cn_download_overwrite_clears_ticker_and_redownloads(tmp_path: Path) -> 
     assert str(meta["primary_document"]).endswith("_docling.json")
 
 
-def test_cn_download_unsupported_ticker_returns_failed_result(tmp_path: Path) -> None:
-    """非 CN/HK ticker 应收口为 failed result。"""
+def test_cn_download_unsupported_ticker_raises_value_error(tmp_path: Path) -> None:
+    """非 CN/HK ticker 应与 SEC 一样作为请求级错误直接抛出。"""
 
     discovery = _FakeDiscoveryClient(temp_dir=tmp_path, candidates=(_candidate(),))
     converter = _FakeConverter()
@@ -747,9 +838,62 @@ def test_cn_download_unsupported_ticker_returns_failed_result(tmp_path: Path) ->
             events.append(event)
         return events
 
+    with pytest.raises(ValueError, match="不支持"):
+        asyncio.run(collect())
+
+
+def test_cn_download_rebuild_local_meta_manifest_without_redownload(tmp_path: Path) -> None:
+    """CN/HK `download --rebuild` 应基于本地完成态重建且不访问远端下载。"""
+
+    discovery = _FakeDiscoveryClient(temp_dir=tmp_path, candidates=(_candidate(),))
+    converter = _FakeConverter()
+    pipeline = _build_pipeline(tmp_path=tmp_path, discovery=discovery, converter=converter)
+    _collect_events(pipeline)
+    context = build_fs_storage_test_context(tmp_path)
+    document_id = build_cn_filing_ids(
+        ticker="600519",
+        form_type="FY",
+        fiscal_year=2024,
+        fiscal_period="FY",
+        amended=False,
+    )[0]
+    meta = context.source_repository.get_source_meta("600519", document_id, SourceKind.FILING)
+    meta["download_version"] = "legacy_download_version"
+    meta["staging_remote_fingerprint"] = "legacy_stage"
+    meta["staging_pdf_sha256"] = "legacy_pdf"
+    context.source_repository.replace_source_meta("600519", document_id, SourceKind.FILING, meta)
+
+    async def collect() -> list[DownloadEvent]:
+        events: list[DownloadEvent] = []
+        async for event in pipeline.download_stream(
+            ticker="600519",
+            form_type="FY",
+            start_date="2024",
+            end_date="2026",
+            overwrite=False,
+            rebuild=True,
+        ):
+            events.append(event)
+        return events
+
     events = asyncio.run(collect())
 
-    assert [event.event_type for event in events] == [DownloadEventType.PIPELINE_COMPLETED]
     result = _final_result(events)
-    assert result["status"] == "failed"
-    assert result["reason_code"] == "unsupported_market"
+    filters = result["filters"]
+    summary = result["summary"]
+    assert isinstance(filters, dict)
+    assert isinstance(summary, dict)
+    rebuilt_meta = context.source_repository.get_source_meta("600519", document_id, SourceKind.FILING)
+    assert [event.event_type for event in events] == [
+        DownloadEventType.PIPELINE_STARTED,
+        DownloadEventType.FILING_COMPLETED,
+        DownloadEventType.PIPELINE_COMPLETED,
+    ]
+    assert result["status"] == "ok"
+    assert filters["rebuild"] is True
+    assert summary["downloaded"] == 1
+    assert discovery.download_calls == 1
+    assert converter.calls == 1
+    assert rebuilt_meta["download_version"] == CN_PIPELINE_DOWNLOAD_VERSION
+    assert rebuilt_meta["staging_remote_fingerprint"] is None
+    assert rebuilt_meta["staging_pdf_sha256"] is None

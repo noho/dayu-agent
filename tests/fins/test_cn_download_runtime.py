@@ -321,7 +321,7 @@ def test_runtime_download_sync_uses_cn_pipeline_and_builds_contract_result(
                     ticker="000001",
                     form_type=("FY",),
                     start_date="2025-01-01",
-                    end_date="2025-12-31",
+                    end_date="2026-12-31",
                     overwrite=True,
                     ticker_aliases=("平安银行",),
                 ),
@@ -335,7 +335,7 @@ def test_runtime_download_sync_uses_cn_pipeline_and_builds_contract_result(
     assert result.data.ticker == "000001"
     assert result.data.company_info.company_id == "000001_SZSE"
     assert result.data.filters.forms == ("FY",)
-    assert result.data.filters.end_date == "2025-12-31"
+    assert result.data.filters.end_date == "2026-12-31"
     assert result.data.filters.overwrite is True
     assert result.data.summary.total == 1
     assert result.data.summary.downloaded == 1
@@ -378,7 +378,7 @@ async def test_runtime_download_stream_uses_cn_pipeline_and_emits_result_event(
                     ticker="000001",
                     form_type=("FY",),
                     start_date="2025-01-01",
-                    end_date="2025-12-31",
+                    end_date="2026-12-31",
                 ),
                 stream=True,
             )

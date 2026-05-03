@@ -257,7 +257,7 @@ def test_download_runs_cn_workflow_with_injected_discovery_client(tmp_path: Path
         ticker="000001",
         form_type="FY",
         start_date="2025-01-01",
-        end_date="2025-12-31",
+        end_date="2026-12-31",
         overwrite=True,
     )
 
@@ -362,7 +362,7 @@ async def test_download_stream_runs_cn_workflow_with_injected_discovery_client(
             ticker="000001",
             form_type="FY",
             start_date="2025-01-01",
-            end_date="2025-12-31",
+            end_date="2026-12-31",
             overwrite=False,
         )
     ]
@@ -439,11 +439,55 @@ async def test_upload_filing_stream_uploads_files_with_docling(tmp_path: Path) -
     assert result["status"] == "ok"
     assert str(result["document_id"]).startswith("fil_cn_")
     assert str(result["internal_document_id"]).startswith("cn_")
+    assert result["ticker_aliases"] is None
     company_meta = pipeline._company_repository.get_company_meta("000001")  # type: ignore[attr-defined]
     assert company_meta.company_id == "000001_SZSE"
     assert company_meta.company_name == "平安银行"
     meta = pipeline._source_repository.get_source_meta("000001", result["document_id"], SourceKind.FILING)  # type: ignore[attr-defined]
     assert str(meta["primary_document"]).endswith("_docling.json")
+
+
+@pytest.mark.asyncio
+async def test_upload_filing_failed_result_uses_normalized_period_and_aliases(
+    tmp_path: Path,
+) -> None:
+    """CN upload_filing 失败结果应与 SEC 一样回填归一化 fiscal_period 与 aliases。"""
+
+    pipeline = CnPipeline(
+        workspace_root=tmp_path,
+        processor_registry=build_fins_processor_registry(),
+    )
+
+    def fail_convert(raw_data: bytes, stream_name: str) -> dict[str, str]:
+        """模拟 Docling 转换失败。"""
+
+        del raw_data, stream_name
+        raise RuntimeError("convert failed")
+
+    pipeline._upload_service._convert_with_docling = fail_convert  # type: ignore[attr-defined]
+    sample_file = tmp_path / "sample.pdf"
+    sample_file.write_text("demo", encoding="utf-8")
+
+    events = [
+        event
+        async for event in pipeline.upload_filing_stream(
+            ticker="000001",
+            action="create",
+            files=[sample_file],
+            fiscal_year=2025,
+            fiscal_period="fy",
+            company_id="000001",
+            company_name="平安银行",
+            ticker_aliases=["000001.SZ"],
+            overwrite=False,
+        )
+    ]
+
+    assert events[-1].event_type == UploadFilingEventType.UPLOAD_FAILED
+    result = events[-1].payload["result"]
+    assert result["status"] == "failed"
+    assert result["fiscal_period"] == "FY"
+    assert result["ticker_aliases"] == ["000001.SZ"]
 
 
 @pytest.mark.asyncio

@@ -7,8 +7,10 @@
   同时支持英文逗号 ``,``、中文全角逗号 ``，`` 与空白分隔。
 - :func:`resolve_target_periods`：把 form 输入解析成
   :data:`CnFiscalPeriod` 字面量集合，CN ``Q2``/``二季报`` 归一为 ``H1``。
-- :func:`resolve_window`：解析 ``start_date`` / ``end_date``，与 SEC 链路保持
-  一致的窗口默认值（end 取今天，start 默认回溯五年并加 60 天宽限）。
+- :func:`resolve_window`：解析 ``start_date`` / ``end_date``，生成远端查询用的
+  最大窗口。
+- :func:`resolve_period_windows`：生成按财期区分的业务窗口；年报默认 5 年，
+  半年报/季报默认 2 年。
 - 默认 forms 常量：CN/HK 默认均为 ``(FY, H1, Q1, Q3)``。
 
 设计要点：
@@ -35,8 +37,9 @@ DEFAULT_FORMS_CN: Final[tuple[CnFiscalPeriod, ...]] = ("FY", "H1", "Q1", "Q3")
 DEFAULT_FORMS_HK: Final[tuple[CnFiscalPeriod, ...]] = ("FY", "H1", "Q1", "Q3")
 """港股默认下载 form 集合。HK 主板 Q1/Q3 缺失视为 skipped 而非 failed。"""
 
-# 窗口默认值与 SEC 链路对齐：5 年回溯 + 60 天宽限。
-_DEFAULT_LOOKBACK_YEARS: Final[int] = 5
+# 窗口默认值与 SEC 链路的业务意图对齐：年报 5 年，季报/半年报 2 年。
+_ANNUAL_LOOKBACK_YEARS: Final[int] = 5
+_INTERIM_LOOKBACK_YEARS: Final[int] = 2
 _LOOKBACK_GRACE_DAYS: Final[int] = 60
 
 # CLI ``--forms`` 输入的 token 拼写到 ``CnFiscalPeriod`` 字面量的归一化映射。
@@ -99,6 +102,21 @@ class DownloadWindow:
         end_date: 已规范为 ``YYYY-MM-DD`` 的窗口终点（含）。
     """
 
+    start_date: str
+    end_date: str
+
+
+@dataclass(frozen=True)
+class PeriodDownloadWindow:
+    """单个财期的下载窗口。
+
+    Attributes:
+        fiscal_period: 财期字面量。
+        start_date: 已规范为 ``YYYY-MM-DD`` 的窗口起点（含）。
+        end_date: 已规范为 ``YYYY-MM-DD`` 的窗口终点（含）。
+    """
+
+    fiscal_period: CnFiscalPeriod
     start_date: str
     end_date: str
 
@@ -195,12 +213,13 @@ def resolve_window(
     end_date: str | None,
     today: dt.date | None = None,
 ) -> DownloadWindow:
-    """解析 ``start_date`` / ``end_date``，与 SEC 链路一致的窗口默认值。
+    """解析远端查询用的最大 ``start_date`` / ``end_date``。
 
     解析规则：
 
     - ``end_date`` 缺省 -> ``today``。
-    - ``start_date`` 缺省 -> ``end_date`` 回退 5 年再减 60 天宽限。
+    - ``start_date`` 缺省 -> ``end_date`` 回退 5 年再减 60 天宽限；这是远端
+      查询最大窗口，workflow 会再按财期应用 :func:`resolve_period_windows`。
     - ``YYYY`` -> ``YYYY-01-01`` / ``YYYY-12-31``（``end`` 语义补尾）。
     - ``YYYY-MM`` -> 月初 / 月末。
     - ``YYYY-MM-DD`` -> 直接采用。
@@ -222,12 +241,56 @@ def resolve_window(
     if start_date:
         start = _parse_date(start_date, is_end=False)
     else:
-        start = _subtract_years(end, _DEFAULT_LOOKBACK_YEARS) - dt.timedelta(
+        start = _subtract_years(end, _ANNUAL_LOOKBACK_YEARS) - dt.timedelta(
             days=_LOOKBACK_GRACE_DAYS
         )
     if start > end:
         raise ValueError(f"start_date 不能晚于 end_date: {start.isoformat()} > {end.isoformat()}")
     return DownloadWindow(start_date=start.isoformat(), end_date=end.isoformat())
+
+
+def resolve_period_windows(
+    *,
+    target_periods: tuple[CnFiscalPeriod, ...],
+    start_date: str | None,
+    end_date: str | None,
+    today: dt.date | None = None,
+) -> tuple[PeriodDownloadWindow, ...]:
+    """解析各财期的业务下载窗口。
+
+    Args:
+        target_periods: 已归一化目标财期。
+        start_date: 用户显式起点；提供时所有财期共用该起点。
+        end_date: 用户显式终点；缺省时使用 ``today``。
+        today: 测试注入日期；生产传 ``None``。
+
+    Returns:
+        按 ``target_periods`` 顺序返回的窗口 tuple。默认窗口为年报 5 年、
+        半年报/季报 2 年，均加 60 天披露宽限。
+
+    Raises:
+        ValueError: 日期非法或起点晚于终点时抛出。
+    """
+
+    anchor_today = today if today is not None else dt.date.today()
+    end = _parse_date(end_date, is_end=True) if end_date else anchor_today
+    explicit_start = _parse_date(start_date, is_end=False) if start_date else None
+    windows: list[PeriodDownloadWindow] = []
+    for period in target_periods:
+        lookback_years = _ANNUAL_LOOKBACK_YEARS if period == "FY" else _INTERIM_LOOKBACK_YEARS
+        start = explicit_start or (
+            _subtract_years(end, lookback_years) - dt.timedelta(days=_LOOKBACK_GRACE_DAYS)
+        )
+        if start > end:
+            raise ValueError(f"start_date 不能晚于 end_date: {start.isoformat()} > {end.isoformat()}")
+        windows.append(
+            PeriodDownloadWindow(
+                fiscal_period=period,
+                start_date=start.isoformat(),
+                end_date=end.isoformat(),
+            )
+        )
+    return tuple(windows)
 
 
 # ---------- 模块级私有辅助 ----------
@@ -269,7 +332,9 @@ __all__ = [
     "DEFAULT_FORMS_CN",
     "DEFAULT_FORMS_HK",
     "DownloadWindow",
+    "PeriodDownloadWindow",
     "TargetPeriodResolution",
+    "resolve_period_windows",
     "resolve_target_periods",
     "resolve_window",
     "split_cn_form_input",

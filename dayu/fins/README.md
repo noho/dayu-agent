@@ -207,10 +207,11 @@ direct operation 当前由 `FinsRuntime` 和对应 pipeline 实现。
 - `dayu/fins/downloaders/hkexnews_downloader.py` — 披露易 discovery 与 PDF 下载；解析 active/inactive stock list、`titleSearchServlet.do`、多代码 `STOCK_CODE` 与中英语言补位，同样不写 workspace、不依赖 pipeline/docling/storage。
 - `dayu/fins/pipelines/cn_download_workflow.py` — ticker 级 form/window 解析、company meta 写入、overwrite ticker 级清理、候选调度与 summary 聚合。
 - `dayu/fins/pipelines/cn_download_filing_workflow.py` — 单 filing 的 fast skip、PDF SHA skip、中断恢复、Docling 转换与 commit 阶段机。
+- `dayu/fins/pipelines/cn_download_rebuild.py` — `download --rebuild` 的本地重建路径，只消费已完成的 PDF + Docling JSON source 文档，不访问巨潮、披露易或 Docling。
 - `dayu/fins/pipelines/cn_download_source_upsert.py` — 完成态 source meta 写入真源；完成态必须同时满足 PDF 落盘、`_docling.json` 落盘、`ingest_complete=True`、`primary_document` 指向 `_docling.json`。
 - `dayu/fins/pipelines/cn_download_staging.py` — 仅通过 blob 仓储探测中间态 PDF / Docling JSON，不直接拼 workspace 路径。
 
-CN/HK download 的 source 写入顺序固定为：先通过 source 仓储创建或更新 meta，再通过 blob 仓储写 PDF / Docling JSON，最后通过 source 仓储提交 `file_entries`、`primary_document` 与完成态 meta；不得绕开 source 仓储直接刷新 manifest。`company_id` 使用 `ticker_to_company_id()` 生成的 workspace 稳定主体 ID，主源解析出的 `CNINFO:{orgId}` / `HKEX:{stockId}` 写入 `provider_company_id` 作为审计字段。`overwrite=True` 与 SEC 对齐，走 filing maintenance 仓储的 ticker 级 `clear_filing_documents(ticker)`，不会复用 staged 或完成态文件。A 股默认 discovery client 使用巨潮，港股默认 discovery client 使用披露易，二者通过同一 `CnReportDiscoveryClientProtocol` 接入 workflow；HK FY/H1 查询披露易“财务报表/ESG 信息”分类，HK Q1/Q3 查询“公告及通告 - 季度业绩”分类，查无仍会收口为 skipped。
+CN/HK download 的 source 写入顺序固定为：先通过 source 仓储创建或更新 meta，再通过 blob 仓储写 PDF / Docling JSON，最后通过 source 仓储提交 `file_entries`、`primary_document` 与完成态 meta；不得绕开 source 仓储直接刷新 manifest。`company_id` 使用 `ticker_to_company_id()` 生成的 workspace 稳定主体 ID，主源解析出的 `CNINFO:{orgId}` / `HKEX:{stockId}` 写入 `provider_company_id` 作为审计字段。`overwrite=True` 与 SEC 对齐，走 filing maintenance 仓储的 ticker 级 `clear_filing_documents(ticker)`，不会复用 staged 或完成态文件。A 股默认 discovery client 使用巨潮，港股默认 discovery client 使用披露易，二者通过同一 `CnReportDiscoveryClientProtocol` 接入 workflow；HK FY/H1 查询披露易“财务报表/ESG 信息”分类，HK Q1/Q3 查询“公告及通告 - 季度业绩”分类，查无仍会收口为 skipped。未显式传 `start_date` 时，CN/HK 年报只保留最近 5 个 fiscal_year，半年报/季报只保留 end 年和上一 fiscal_year；远端查询会覆盖最大披露日期窗口，workflow 再按财期业务规则过滤候选。
 
 当前 source fiscal 字段还需要守住一条稳定边界：source/download/rebuild/list 四条链路都不能仅凭 `report_date` 或 `filing_date` 编造 fiscal 事实。`6-K` 与 `6-K/A` 在没有同源 fiscal 证据时都不得再猜 `fiscal_year/fiscal_period`；`10-Q` 也不得在 `list_documents()` 阶段仅凭 `report_date` 推断季度；其他表单同样不得在消费侧把空的 `fiscal_year` 从日期回填出来。当前仅保留表单内生、且不依赖日期猜测的低风险回退，例如 `10-K/20-F -> FY`。`download --rebuild` 走同一套真源，并且会清理历史上遗留在 source meta / manifest 中的 6-K / 6-K/A 猜测值。这个修复只影响 fiscal 字段，不改变 6-K 现有的 `document_type` 返回语义。
 
@@ -230,7 +231,7 @@ CN/HK download 的 source 写入顺序固定为：先通过 source 仓储创建�
 
 ### 5.2 direct operation 公共契约
 
-`download/upload/process` 这条 direct operation 链路当前按命令拆成独立载荷和结果类型：
+`download/upload/process` 这条 direct operation 链路当前按命令拆成独立载荷和结果类型。`DownloadSummary` 的公共字段为 `total/downloaded/skipped/failed/elapsed_ms/reused_downloads/converted`；SEC 当前不做 PDF 复用与 Docling 转换，后两项固定为 0，CN/HK 会据恢复与转换阶段填充。
 
 - `DownloadCommandPayload` / `DownloadResultData` / `DownloadProgressPayload`
 - `UploadFilingCommandPayload` / `UploadFilingResultData` / `UploadFilingProgressPayload`

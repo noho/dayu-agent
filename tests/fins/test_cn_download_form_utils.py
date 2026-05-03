@@ -7,6 +7,7 @@
 - 中文输入与拼写多样性；
 - 非法 token 抛 ``ValueError``；
 - 窗口默认值（``today=fixture`` 注入）；
+- 按财期区分的默认业务窗口；
 - 窗口日期串解析（``YYYY`` / ``YYYY-MM`` / ``YYYY-MM-DD``）；
 - ``start > end`` 抛 ``ValueError``。
 """
@@ -21,7 +22,9 @@ from dayu.fins.pipelines.cn_form_utils import (
     DEFAULT_FORMS_CN,
     DEFAULT_FORMS_HK,
     DownloadWindow,
+    PeriodDownloadWindow,
     TargetPeriodResolution,
+    resolve_period_windows,
     resolve_target_periods,
     resolve_window,
     split_cn_form_input,
@@ -199,6 +202,40 @@ def test_resolve_window_defaults_to_five_year_lookback_with_grace() -> None:
     assert window == DownloadWindow(
         start_date="2020-03-02",
         end_date="2025-05-01",
+    )
+
+
+def test_resolve_period_windows_defaults_annual_five_years_interim_two_years() -> None:
+    """默认业务窗口应为年报 5 年、半年报/季报 2 年。"""
+
+    windows = resolve_period_windows(
+        target_periods=("FY", "H1", "Q1", "Q3"),
+        start_date=None,
+        end_date=None,
+        today=dt.date(2025, 5, 1),
+    )
+
+    assert windows == (
+        PeriodDownloadWindow("FY", "2020-03-02", "2025-05-01"),
+        PeriodDownloadWindow("H1", "2023-03-02", "2025-05-01"),
+        PeriodDownloadWindow("Q1", "2023-03-02", "2025-05-01"),
+        PeriodDownloadWindow("Q3", "2023-03-02", "2025-05-01"),
+    )
+
+
+def test_resolve_period_windows_explicit_start_applies_to_all_periods() -> None:
+    """显式 start_date 应覆盖各财期默认回溯年限。"""
+
+    windows = resolve_period_windows(
+        target_periods=("FY", "H1"),
+        start_date="2024",
+        end_date="2025",
+        today=dt.date(2026, 5, 1),
+    )
+
+    assert windows == (
+        PeriodDownloadWindow("FY", "2024-01-01", "2025-12-31"),
+        PeriodDownloadWindow("H1", "2024-01-01", "2025-12-31"),
     )
 
 

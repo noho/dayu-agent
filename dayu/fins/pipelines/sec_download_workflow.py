@@ -490,6 +490,8 @@ async def run_download_stream_impl(
         "skipped": sum(1 for item in filing_results if item["status"] == "skipped"),
         "failed": sum(1 for item in filing_results if item["status"] == "failed"),
         "elapsed_ms": elapsed_ms,
+        "reused_downloads": 0,
+        "converted": 0,
     }
     Log.info(
         (

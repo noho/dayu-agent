@@ -277,6 +277,8 @@ class DownloadSummary:
     skipped: int
     failed: int
     elapsed_ms: int = 0
+    reused_downloads: int = 0
+    converted: int = 0
 
 
 @dataclass(frozen=True)
@@ -290,7 +292,7 @@ class DownloadResultData:
     filters: DownloadFilters = field(default_factory=DownloadFilters)
     warnings: tuple[str, ...] = ()
     filings: tuple[DownloadFilingResultItem, ...] = ()
-    summary: DownloadSummary = field(default_factory=lambda: DownloadSummary(0, 0, 0, 0, 0))
+    summary: DownloadSummary = field(default_factory=lambda: DownloadSummary(0, 0, 0, 0, 0, 0, 0))
 
 
 @dataclass(frozen=True)

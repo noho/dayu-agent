@@ -424,6 +424,7 @@ dayu-cli download --ticker AAPL --forms 10K
 dayu-cli download --ticker AAPL --rebuild
 dayu-cli download --ticker 600519 --forms FY H1 Q1 Q3 --start 2024 --end 2026
 dayu-cli download --ticker 0700 --forms FY H1 Q1 Q3 --start 2024 --end 2026
+dayu-cli download --ticker 0700 --rebuild
 dayu-cli download --ticker BABA,9988,9988.HK --infer
 ```
 
@@ -432,18 +433,18 @@ dayu-cli download --ticker BABA,9988,9988.HK --infer
 - `download`、`upload_filing`、`upload_material`、`upload_filings_from` 的 `--ticker` 支持 CSV（半角逗号分隔）；CSV 中**每个 token 都会走真源归一化**（如 `9988.HK`→`9988`）后再整体去重。首个归一化结果作为 canonical ticker，其余作为显式 alias 写入 meta，便于工具后续用任意跨市场变形命中同一公司。
 - `--ticker` 支持 `0700.HK` / `HK.00700` / `600519.SH` / `sh600519` / `AAPL.US` 等常见变形，内部统一归一化到裸码（港 4 位补零、沪深 6 位、美股原字母）。公司名仍可作为 ticker 传入，由仓储 alias 查表兜底。
 - 显式传 `--infer` 时，CLI 会把 `--ticker` 里的显式 alias 与 FMP infer 结果合并；`download` 场景下 pipeline 还会继续与 SEC 返回的 alias 合并。
-- A 股下载当前使用巨潮主源，港股下载当前使用披露易主源，默认 forms 均为 `FY H1 Q1 Q3`；`Q2` 输入会自动归一为 `H1`。下载完成定义为 PDF 落盘、`_docling.json` 落盘、source meta `ingest_complete=True` 且 `primary_document` 指向 `_docling.json`。中断后再次运行会优先复用已落盘 PDF，避免重复下载。
+- A 股下载当前使用巨潮主源，港股下载当前使用披露易主源，默认 forms 均为 `FY H1 Q1 Q3`；未显式传 `--start` 时，年报默认覆盖 5 年，半年报/季报默认覆盖 2 年；`Q2` 输入会自动归一为 `H1`。下载完成定义为 PDF 落盘、`_docling.json` 落盘、source meta `ingest_complete=True` 且 `primary_document` 指向 `_docling.json`。中断后再次运行会优先复用已落盘 PDF，避免重复下载；`--rebuild` 只基于本地已下载的 PDF + Docling JSON 重建 meta/manifest，不访问主源。
 - 港股 ticker 示例 `0700` / `00700` / `700.HK` 会归一化到同一 canonical ticker；港股主板缺失的 Q1/Q3 会按 skipped 统计而不是 failed。
 - 使用 `--infer` 功能需要申请FMP_API_KEY。
 - 首次写入时会自动创建 `workspace/portfolio/{ticker}` 下的源文档目录，不要求你预先手动建好 `filings/`。
 - `prompt`、`interactive` 在 `filings/` 缺失时不会直接退出；CLI 会提示当前无本地财报，并继续执行问答。
-- SEC 下载必须串行执行，不要并发跑多个 `download` 命令。
+- 美股 / A 股 / 港股下载分别使用独立并发 lane；默认配置下同一市场下载串行执行，不同市场互不占用对方的下载许可。
 - **也可在interactive / wechat中发送`下载xx公司财报`进行下载**
 
 ### 3.2 上传本地文件
 
 命令用途：
-上传本地下载好的财报。（港股财报目前仍需上传；A 股可通过 `download` 直接从巨潮下载。）
+上传本地下载好的财报。（A 股可通过 `download` 直接从巨潮下载；港股可通过 `download` 直接从披露易下载，也仍可上传本地整理的文件。）
 把你已经准备好的补充材料纳入工作区，适合手动整理 PDF、电话会纪要、演示材料等场景。
 
 参数 / 说明：

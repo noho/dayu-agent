@@ -362,6 +362,8 @@ def _coerce_download_result(result: DownloadResultData | dict[str, Any]) -> Down
             skipped=int_or_zero(summary.get("skipped")),
             failed=int_or_zero(summary.get("failed")),
             elapsed_ms=int_or_zero(summary.get("elapsed_ms")),
+            reused_downloads=int_or_zero(summary.get("reused_downloads")),
+            converted=int_or_zero(summary.get("converted")),
         ),
     )
 
@@ -383,7 +385,9 @@ def _format_download_result(result: DownloadResultData) -> str:
         f"- ticker: {result.ticker}",
         (
             f"- 汇总: total={result.summary.total}, downloaded={result.summary.downloaded}, "
-            f"skipped={result.summary.skipped}, failed={result.summary.failed}, elapsed_ms={result.summary.elapsed_ms}"
+            f"skipped={result.summary.skipped}, failed={result.summary.failed}, "
+            f"elapsed_ms={result.summary.elapsed_ms}, reused_downloads={result.summary.reused_downloads}, "
+            f"converted={result.summary.converted}"
         ),
     ]
     if result.warnings:

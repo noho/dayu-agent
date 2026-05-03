@@ -17,11 +17,17 @@ from dayu.fins.pipelines.cn_download_filing_workflow import (
     run_cn_download_single_filing_stream,
 )
 from dayu.fins.pipelines.cn_download_models import CnMarketKind, CnReportCandidate, CnReportQuery
+from dayu.fins.pipelines.cn_download_rebuild import rebuild_cn_download_artifacts
 from dayu.fins.pipelines.cn_download_protocols import (
     CnDownloadWorkflowHost,
     CnReportDiscoveryClientProtocol,
 )
-from dayu.fins.pipelines.cn_form_utils import resolve_target_periods, resolve_window
+from dayu.fins.pipelines.cn_form_utils import (
+    PeriodDownloadWindow,
+    resolve_period_windows,
+    resolve_target_periods,
+    resolve_window,
+)
 from dayu.fins.pipelines.docling_upload_service import build_cn_filing_ids
 from dayu.fins.pipelines.download_events import DownloadEvent, DownloadEventType
 from dayu.fins.ticker_normalization import try_normalize_ticker
@@ -55,7 +61,7 @@ async def run_cn_download_stream_impl(
         start_date: 可选窗口起点。
         end_date: 可选窗口终点。
         overwrite: 是否强制覆盖。
-        rebuild: 是否执行 rebuild；CN/HK 当前不支持。
+        rebuild: 是否仅基于本地已下载数据重建 `meta/manifest`。
         ticker_aliases: 可选 ticker alias。
         cancel_checker: 可选取消检查函数。
         module: 日志模块名。
@@ -65,44 +71,68 @@ async def run_cn_download_stream_impl(
         下载事件流。
 
     Raises:
-        无。请求级错误会收口为 ``PIPELINE_COMPLETED.status="failed"``。
+        ValueError: ticker、form 或日期参数非法时抛出。
+        OSError: 仓储读写失败时抛出。
     """
 
     started_at = time.perf_counter()
     normalized = try_normalize_ticker(ticker)
     if normalized is None or normalized.market not in {"CN", "HK"}:
-        result = _build_result(
-            pipeline_name=pipeline_name,
-            status="failed",
-            ticker=ticker,
-            reason_code="unsupported_market",
-            message=f"CN/HK download 不支持 ticker={ticker!r}",
-        )
-        yield DownloadEvent(
-            event_type=DownloadEventType.PIPELINE_COMPLETED,
-            ticker=ticker,
-            payload={"result": result},
-        )
-        return
+        raise ValueError(f"CN/HK download 不支持 ticker={ticker!r}")
     market = _coerce_market(normalized.market)
     normalized_ticker = normalized.canonical
-    try:
-        if rebuild:
-            raise ValueError("CN/HK download 当前不支持 rebuild")
-        periods = resolve_target_periods(form_type, market)
-        window = resolve_window(start_date, end_date)
-    except ValueError as exc:
-        result = _build_result(
-            pipeline_name=pipeline_name,
-            status="failed",
+    periods = resolve_target_periods(form_type, market)
+    period_windows = resolve_period_windows(
+        target_periods=periods.target_periods,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    window = resolve_window(start_date, end_date)
+    if rebuild:
+        yield DownloadEvent(
+            event_type=DownloadEventType.PIPELINE_STARTED,
             ticker=normalized_ticker,
-            reason_code="invalid_download_request",
-            message=str(exc),
+            payload={
+                "form_type": form_type,
+                "start_date": start_date,
+                "end_date": end_date,
+                "overwrite": overwrite,
+                "rebuild": True,
+            },
         )
+        rebuild_result = rebuild_cn_download_artifacts(
+            host=host,
+            ticker=normalized_ticker,
+            market=market,
+            form_type=form_type,
+            start_date=start_date,
+            end_date=end_date,
+            overwrite=overwrite,
+            pipeline_name=pipeline_name,
+        )
+        raw_filings = rebuild_result.get("filings")
+        rebuild_filings = raw_filings if isinstance(raw_filings, list) else []
+        for raw_filing in rebuild_filings:
+            if not isinstance(raw_filing, dict):
+                continue
+            filing_result: JsonObject = dict(raw_filing)
+            status = str(filing_result.get("status", "failed"))
+            event_type = (
+                DownloadEventType.FILING_FAILED
+                if status == "failed"
+                else DownloadEventType.FILING_COMPLETED
+            )
+            document_id = str(filing_result.get("document_id", ""))
+            yield DownloadEvent(
+                event_type=event_type,
+                ticker=normalized_ticker,
+                document_id=document_id,
+                payload={"filing_result": filing_result, **filing_result},
+            )
         yield DownloadEvent(
             event_type=DownloadEventType.PIPELINE_COMPLETED,
             ticker=normalized_ticker,
-            payload={"result": result},
+            payload={"result": rebuild_result},
         )
         return
 
@@ -157,7 +187,11 @@ async def run_cn_download_stream_impl(
         if overwrite:
             host.filing_maintenance_repository.clear_filing_documents(normalized_ticker)
         candidates = discovery.list_report_candidates(query, profile)
-        selected = _select_candidates_for_a4(candidates)
+        selected = _select_candidates_for_a4(
+            candidates,
+            period_windows=period_windows,
+            use_default_business_limits=start_date is None,
+        )
         missing_periods = _resolve_missing_periods(periods.target_periods, selected)
         for period in missing_periods:
             skipped = _build_missing_period_result(period=period)
@@ -318,20 +352,67 @@ def _coerce_market(raw: str) -> CnMarketKind:
 
 def _select_candidates_for_a4(
     candidates: tuple[CnReportCandidate, ...],
+    *,
+    period_windows: tuple[PeriodDownloadWindow, ...],
+    use_default_business_limits: bool,
 ) -> tuple[CnReportCandidate, ...]:
     """返回 downloader 在窗口内选出的全部候选。
 
     Args:
         candidates: downloader 已按 ``(fiscal_year, fiscal_period)`` 去重后的候选。
+        period_windows: 各财期业务窗口；默认年报 5 年、半年报/季报 2 年。
+        use_default_business_limits: 是否启用默认业务数量约束；显式 start_date 时
+            只按用户窗口过滤。
 
     Returns:
-        原候选 tuple，不在 workflow 层再次截断。
+        业务窗口内的候选 tuple。
 
     Raises:
         无。
     """
 
-    return candidates
+    windows = {item.fiscal_period: item for item in period_windows}
+    preselected: list[CnReportCandidate] = []
+    for candidate in candidates:
+        window = windows.get(candidate.fiscal_period)
+        if window is None:
+            continue
+        if window.start_date <= candidate.filing_date <= window.end_date:
+            preselected.append(candidate)
+    if not use_default_business_limits:
+        return tuple(preselected)
+    return _apply_default_business_limits(preselected, period_windows=period_windows)
+
+
+def _apply_default_business_limits(
+    candidates: list[CnReportCandidate],
+    *,
+    period_windows: tuple[PeriodDownloadWindow, ...],
+) -> tuple[CnReportCandidate, ...]:
+    """应用默认业务数量约束：FY 5 年，半年报/季报当前和上一 fiscal year。"""
+
+    end_years = {item.fiscal_period: _year_from_iso_date(item.end_date) for item in period_windows}
+    fy_count = 0
+    selected: list[CnReportCandidate] = []
+    for candidate in candidates:
+        end_year = end_years.get(candidate.fiscal_period)
+        if end_year is None:
+            continue
+        if candidate.fiscal_period == "FY":
+            if fy_count >= 5:
+                continue
+            fy_count += 1
+            selected.append(candidate)
+            continue
+        if end_year - 1 <= candidate.fiscal_year <= end_year:
+            selected.append(candidate)
+    return tuple(selected)
+
+
+def _year_from_iso_date(value: str) -> int:
+    """从 ``YYYY-MM-DD`` 字符串提取年份。"""
+
+    return int(value[:4])
 
 
 def _resolve_missing_periods(
@@ -547,6 +628,8 @@ def _build_result(
             "skipped": 0,
             "failed": 0,
             "elapsed_ms": 0,
+            "reused_downloads": 0,
+            "converted": 0,
         },
     }
 

@@ -905,7 +905,7 @@ def _build_download_result_data(result: dict[str, Any]) -> DownloadResultData:
         for item in filings_raw
         if isinstance(item, dict)
     ) if isinstance(filings_raw, list) else ()
-    summary = DownloadSummary(0, 0, 0, 0, 0)
+    summary = DownloadSummary(0, 0, 0, 0, 0, 0, 0)
     if isinstance(summary_raw, dict):
         summary = DownloadSummary(
             total=int_or_zero(summary_raw.get("total")),
@@ -913,6 +913,8 @@ def _build_download_result_data(result: dict[str, Any]) -> DownloadResultData:
             skipped=int_or_zero(summary_raw.get("skipped")),
             failed=int_or_zero(summary_raw.get("failed")),
             elapsed_ms=int_or_zero(summary_raw.get("elapsed_ms")),
+            reused_downloads=int_or_zero(summary_raw.get("reused_downloads")),
+            converted=int_or_zero(summary_raw.get("converted")),
         )
     return DownloadResultData(
         pipeline=str(result.get("pipeline", "")).strip(),
