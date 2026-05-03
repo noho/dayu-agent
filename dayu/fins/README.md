@@ -466,7 +466,7 @@ python utils/retriage_active_6k_filings.py --base workspace --tickers ALC,ASM,NV
   - 港股 4 位补零（`0700`）；港交所新发 5 位代码原样保留（`89988`）；`exchange="HKEX"`、`market="HK"`。
   - 沪股 6 位裸码，首位 `6`（主板 / 科创板）；`exchange="SSE"`、`market="CN"`。
   - 深股 6 位裸码，首位 `0` / `3`（主板 / 创业板）；`exchange="SZSE"`、`market="CN"`。
-  - 美股保留原字母（`AAPL` / `BRK.B` / `BF.B`）；`exchange=None`、`market="US"`（当前不区分 NYSE/NASDAQ）。
+  - 美股保留字母，类股分隔符统一为点号（`AAPL` / `BRK.B` / `BF.B`）；`BRK` / `BRK.A` / `BRK.B` 归一到 `BRK.B`，避免同一 SEC issuer 的财报写入不同目录；`exchange=None`、`market="US"`（当前不区分 NYSE/NASDAQ）。
 - 使用规则：
   - CLI / service / 仓储 / downloader / pipeline / prompt contribution 一律调用该真源，不再在各自模块重造 normalize 实现。
   - `FinsToolService._resolve_canonical_ticker` 中真源识别失败时会回退到 `strip().upper()` 作为查询候选，保留"公司名当 ticker 传"的既有行为。
