@@ -5,8 +5,9 @@
 - ``LANE_WRITE_CHAPTER`` / ``LANE_SEC_DOWNLOAD``：业务 lane 名称常量。
 - ``SERVICE_DEFAULT_LANE_CONFIG``：Service 启动期交给 Host 作为默认 lane 配置
   的一部分；Host 不感知这些业务语义。
-- ``resolve_contract_concurrency_lane`` / ``resolve_hosted_run_concurrency_lane``：
-  调用点用于把"scene / operation 名称"映射到业务 lane。
+- ``resolve_contract_concurrency_lane`` / ``resolve_hosted_run_concurrency_lane`` /
+  ``resolve_fins_command_concurrency_lane``：调用点用于把"scene / operation /
+  command"映射到业务 lane。
 
 分层约束（CLAUDE.md 硬约束）：
 
@@ -17,7 +18,8 @@
 
 from __future__ import annotations
 
-from dayu.contracts.fins import FinsCommandName
+from dayu.contracts.fins import DownloadCommandPayload, FinsCommand, FinsCommandName
+from dayu.fins.ticker_normalization import try_normalize_ticker
 from dayu.services.internal.write_pipeline.enums import WriteSceneName
 
 
@@ -85,10 +87,44 @@ def resolve_hosted_run_concurrency_lane(operation_name: str) -> str | None:
     return None
 
 
+def resolve_fins_command_concurrency_lane(command: FinsCommand) -> str | None:
+    """解析财报 HostedRunSpec 的业务 lane。
+
+    ``HostedRunSpec.business_concurrency_lane`` 会包住整个 direct operation。
+    SEC 下载仍使用外层 ``sec_download``，因为 SEC pipeline 的下载链路整体需要
+    串行治理；CN/HK 下载的远端 PDF 获取与 Docling 转换在 workflow 内分段处理，
+    外层不占 ``sec_download``，避免 A 股 / 港股被 SEC 下载许可阻塞，也避免把
+    Docling 转换纳入 CN/HK 下载段限流。
+
+    Args:
+        command: 财报命令。
+
+    Returns:
+        SEC download 返回 ``LANE_SEC_DOWNLOAD``；CN/HK download 和其他财报命令
+        返回 ``None``。
+
+    Raises:
+        无。
+    """
+
+    if command.name != FinsCommandName.DOWNLOAD:
+        return None
+    payload = command.payload
+    if not isinstance(payload, DownloadCommandPayload):
+        return LANE_SEC_DOWNLOAD
+    normalized_ticker = try_normalize_ticker(payload.ticker)
+    if normalized_ticker is None:
+        return LANE_SEC_DOWNLOAD
+    if normalized_ticker.market == "US":
+        return LANE_SEC_DOWNLOAD
+    return None
+
+
 __all__ = [
     "LANE_SEC_DOWNLOAD",
     "LANE_WRITE_CHAPTER",
     "SERVICE_DEFAULT_LANE_CONFIG",
     "resolve_contract_concurrency_lane",
+    "resolve_fins_command_concurrency_lane",
     "resolve_hosted_run_concurrency_lane",
 ]

@@ -37,6 +37,7 @@ from dayu.fins.ingestion.factory import IngestionServiceFactory
 from dayu.fins.processors.registry import build_fins_processor_registry
 from dayu.fins.tools.service import FinsToolService
 from dayu.services.contracts import FinsSubmitRequest
+from dayu.services.concurrency_lanes import LANE_SEC_DOWNLOAD
 from dayu.services.fins_service import FinsService
 from dayu.services.protocols import FinsServiceProtocol
 from tests.application.conftest import StubHostExecutor, StubSessionRegistry
@@ -310,6 +311,39 @@ def test_execute_sync_download() -> None:
     last_spec = _executor(host).last_spec
     assert last_spec is not None
     assert last_spec.metadata == {}
+    assert last_spec.business_concurrency_lane == LANE_SEC_DOWNLOAD
+
+
+@pytest.mark.unit
+def test_execute_cn_download_does_not_use_sec_download_hosted_lane() -> None:
+    """CN download 不应在 HostedRun 外层占用 SEC 下载 lane。"""
+
+    def _executor(host_obj: Host) -> StubHostExecutor:
+        """把 Host 内部 executor 收窄到测试 stub。"""
+
+        return cast(StubHostExecutor, host_obj._executor)
+
+    host = Host(
+        executor=StubHostExecutor(),  # type: ignore[arg-type]
+        session_registry=StubSessionRegistry(),  # type: ignore[arg-type]
+        run_registry=object(),  # type: ignore[arg-type]
+    )
+    service = FinsService(
+        host=host,
+        fins_runtime=_FakeFinsRuntime(),
+    )
+    result = service.execute(
+        FinsCommand(
+            name=FinsCommandName.DOWNLOAD,
+            payload=DownloadCommandPayload(ticker="600519"),
+            stream=False,
+        )
+    )
+
+    assert isinstance(result, FinsResult)
+    last_spec = _executor(host).last_spec
+    assert last_spec is not None
+    assert last_spec.business_concurrency_lane is None
 
 
 @pytest.mark.unit

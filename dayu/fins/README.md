@@ -223,7 +223,7 @@ CN/HK download 的 source 写入顺序固定为：先通过 source 仓储创建�
 ### 5.1 并发与宿主约束
 
 当前直接受 Host 约束的典型点：
-- `download` 走 `sec_download` lane，必须串行
+- SEC `download` 走 Host 外层 `sec_download` lane，必须串行；CN/HK `download` 不占用该 lane，远端 PDF 下载段在 workflow 内按市场分段治理，Docling 转换不在下载段 gate 内
 - 流式 direct operation 事件可以双写到 EventBus
 - 取消通过 `CancellationBridge` 收口在 Host，而不是散在 Fins 内部
 - direct operation 不得自己持有 `RunRegistry` 或 Host 内部桥接器；若需要及时响应取消，只能沿 `Service -> Runtime -> Pipeline` 透传窄 `cancel_checker`，并在已支持取消协作的阶段边界主动停机

@@ -13,9 +13,11 @@ from collections.abc import Callable
 from typing import BinaryIO, Optional, TypeAlias
 from io import BytesIO
 from pathlib import Path
+from threading import BoundedSemaphore
 
 import pytest
 
+from dayu.contracts.cancellation import CancelledError
 from dayu.engine.processors.processor_registry import ProcessorRegistry
 from dayu.fins.domain.document_models import (
     FileObjectMeta,
@@ -32,6 +34,7 @@ from dayu.fins.pipelines.cn_download_models import (
     CnReportQuery,
     DownloadedReportAsset,
 )
+from dayu.fins.pipelines import cn_download_filing_workflow as filing_workflow_module
 from dayu.fins.pipelines.cn_pipeline import CnPipeline
 from dayu.fins.pipelines.docling_upload_service import build_cn_filing_ids
 from dayu.fins.pipelines.download_events import DownloadEvent, DownloadEventType
@@ -352,6 +355,10 @@ def test_cn_download_logs_match_sec_download_shape(
         "dayu.fins.pipelines.cn_download_workflow.Log.info",
         capture_info,
     )
+    monkeypatch.setattr(
+        "dayu.fins.pipelines.cn_download_filing_workflow.Log.info",
+        capture_info,
+    )
     discovery = _FakeDiscoveryClient(temp_dir=tmp_path, candidates=(_candidate(),))
     converter = _FakeConverter()
     pipeline = _build_pipeline(tmp_path=tmp_path, discovery=discovery, converter=converter)
@@ -364,6 +371,10 @@ def test_cn_download_logs_match_sec_download_shape(
         "document_id=fil_cn_" in item
         and "status=downloaded form=FY" in item
         and "downloaded_files=2 skipped_files=0 failed_files=0" in item
+        for item in info_logs
+    )
+    assert any(
+        "FINS.CN_PIPELINE 开始 Docling 转换: ticker=600519 document_id=fil_cn_" in item
         for item in info_logs
     )
     assert any(
@@ -524,8 +535,54 @@ def test_cn_download_resumes_staged_pdf_after_docling_failure(tmp_path: Path) ->
 
     file_events = [event for event in second_events if event.event_type == DownloadEventType.FILE_DOWNLOADED]
     assert file_events[-1].payload["reused"] is True
+    completed = [event for event in second_events if event.event_type == DownloadEventType.FILING_COMPLETED]
+    assert completed[-1].payload["downloaded_files"] == 1
+    assert completed[-1].payload["skipped_files"] == 1
+    assert completed[-1].payload["reused_pdf"] is True
+    assert completed[-1].payload["reused_docling"] is False
     assert discovery.download_calls == 1
     assert converter.calls == 2
+
+
+def test_cn_download_gate_wait_obeys_cancel_checker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """等待 CN/HK 远端下载 gate 时应响应取消，不可无限阻塞。"""
+
+    discovery = _FakeDiscoveryClient(temp_dir=tmp_path, candidates=(_candidate(),))
+    candidate = _candidate()
+    gate = BoundedSemaphore(value=1)
+    assert gate.acquire(blocking=False) is True
+    calls = {"count": 0}
+
+    def resolve_test_gate(provider: str) -> tuple[str, BoundedSemaphore]:
+        """返回已被占用的测试 gate。"""
+
+        del provider
+        return "test_lane", gate
+
+    def cancel_checker() -> bool:
+        """第二次检查时触发取消。"""
+
+        calls["count"] += 1
+        return calls["count"] >= 2
+
+    monkeypatch.setattr(filing_workflow_module, "_resolve_download_gate", resolve_test_gate)
+    monkeypatch.setattr(filing_workflow_module, "_DOWNLOAD_GATE_POLL_SECONDS", 0.001)
+
+    with pytest.raises(CancelledError):
+        filing_workflow_module._download_report_pdf_with_lane(
+            discovery_client=discovery,
+            candidate=candidate,
+            ticker="600519",
+            document_id="fil_cn_test",
+            module="FINS.CN_PIPELINE",
+            cancel_checker=cancel_checker,
+        )
+
+    assert discovery.download_calls == 0
+    gate.release()
 
 
 def test_cn_download_stage_cancel_returns_cancelled_not_failed(tmp_path: Path) -> None:
@@ -538,7 +595,7 @@ def test_cn_download_stage_cancel_returns_cancelled_not_failed(tmp_path: Path) -
 
     def cancel_checker() -> bool:
         calls["count"] += 1
-        return calls["count"] >= 3
+        return calls["count"] >= 5
 
     events = _collect_events(pipeline, cancel_checker=cancel_checker)
 

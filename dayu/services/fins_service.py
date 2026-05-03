@@ -11,7 +11,7 @@ from dayu.fins.domain.document_models import FilingSummary
 from dayu.fins.service_runtime import FinsRuntimeProtocol
 from dayu.contracts.host_execution import HostedRunContext, HostedRunSpec
 from dayu.host.protocols import HostedExecutionGatewayProtocol
-from dayu.services.concurrency_lanes import resolve_hosted_run_concurrency_lane
+from dayu.services.concurrency_lanes import resolve_fins_command_concurrency_lane
 from dayu.services.contracts import FinsSubmission, FinsSubmitRequest, SessionResolutionPolicy
 from dayu.services.internal.session_coordinator import ServiceSessionCoordinator
 from dayu.services.protocols import FinsServiceProtocol
@@ -54,9 +54,7 @@ class FinsService(FinsServiceProtocol):
             operation_name=f"fins_{request.command.name}",
             session_id=session.session_id,
             scene_name=request.command.name,
-            business_concurrency_lane=resolve_hosted_run_concurrency_lane(
-                f"fins_{request.command.name}"
-            ),
+            business_concurrency_lane=resolve_fins_command_concurrency_lane(request.command),
         )
 
         if request.command.stream:

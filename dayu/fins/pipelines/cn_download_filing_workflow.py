@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable
 from io import BytesIO
 from pathlib import Path
+from threading import BoundedSemaphore
 
 from dayu.contracts.cancellation import CancelledError
 from dayu.fins.domain.document_models import FileObjectMeta, SourceHandle
@@ -18,6 +19,8 @@ from dayu.fins.pipelines.cn_download_models import (
     CN_PIPELINE_DOWNLOAD_VERSION,
     CnCompanyProfile,
     CnReportCandidate,
+    CnSourceProvider,
+    DownloadedReportAsset,
 )
 from dayu.fins.pipelines.cn_download_protocols import (
     CnReportDiscoveryClientProtocol,
@@ -45,6 +48,12 @@ _PDF_CONTENT_TYPE = "application/pdf"
 _JSON_CONTENT_TYPE = "application/json"
 _SOURCE_LABEL_ORIGINAL = "original"
 _SOURCE_LABEL_DOCLING = "docling"
+_CNINFO_PROVIDER: CnSourceProvider = "cninfo"
+_CNINFO_DOWNLOAD_LANE_NAME = "cn_download"
+_HKEXNEWS_DOWNLOAD_LANE_NAME = "hk_download"
+_DOWNLOAD_GATE_POLL_SECONDS = 0.25
+_CNINFO_DOWNLOAD_GATE: BoundedSemaphore = BoundedSemaphore(value=1)
+_HKEXNEWS_DOWNLOAD_GATE: BoundedSemaphore = BoundedSemaphore(value=1)
 
 
 class CnDownloadFilingError(RuntimeError):
@@ -159,7 +168,14 @@ async def run_cn_download_single_filing_stream(
     )
     if reusable_pdf is None:
         try:
-            asset = discovery_client.download_report_pdf(candidate)
+            asset = _download_report_pdf_with_lane(
+                discovery_client=discovery_client,
+                candidate=candidate,
+                ticker=ticker,
+                document_id=document_id,
+                module=module,
+                cancel_checker=cancel_checker,
+            )
         except CancelledError:
             raise
         except Exception as exc:
@@ -325,6 +341,11 @@ async def run_cn_download_single_filing_stream(
     _raise_if_cancelled(module=module, ticker=ticker, document_id=document_id, cancel_checker=cancel_checker)
     if reusable_docling is None:
         try:
+            Log.info(
+                f"开始 Docling 转换: ticker={ticker} document_id={document_id} "
+                f"source_file={pdf_filename} reused_pdf={reused_pdf}",
+                module=module,
+            )
             docling_json_bytes = convert_pdf_to_docling_json(pdf_bytes, pdf_filename)
         except Exception as exc:
             failed = _build_filing_result(
@@ -399,7 +420,7 @@ async def run_cn_download_single_filing_stream(
         candidate=candidate,
         reason_code="download_committed",
         reason_message="PDF 与 Docling JSON 已完成落盘并提交 source meta",
-        downloaded_files=0 if reused_pdf and reused_docling else 2,
+        downloaded_files=(0 if reused_pdf else 1) + (0 if reused_docling else 1),
         skipped_files=(1 if reused_pdf else 0) + (1 if reused_docling else 0),
     )
     downloaded["reused_pdf"] = reused_pdf
@@ -711,6 +732,109 @@ def _unlink_temp_pdf(path: Path, *, module: str) -> None:
         path.unlink(missing_ok=True)
     except OSError as exc:
         Log.warn(f"删除临时 PDF 失败: path={path} error={exc}", module=module)
+
+
+def _download_report_pdf_with_lane(
+    *,
+    discovery_client: CnReportDiscoveryClientProtocol,
+    candidate: CnReportCandidate,
+    ticker: str,
+    document_id: str,
+    module: str,
+    cancel_checker: Callable[[], bool] | None,
+) -> DownloadedReportAsset:
+    """在 CN/HK 远端下载 gate 内下载 PDF。
+
+    Args:
+        discovery_client: 当前市场 downloader。
+        candidate: 远端候选报告。
+        ticker: 已归一化 ticker。
+        document_id: pipeline 生成的稳定文档 ID。
+        module: 日志模块名。
+        cancel_checker: 可选取消检查函数。
+
+    Returns:
+        下载得到的 PDF 临时资产。
+
+    Raises:
+        CancelledError: 等待下载 gate 期间收到取消请求时抛出。
+        Exception: downloader 抛出的下载异常原样透传，由上层转为 candidate 失败。
+    """
+
+    lane_name, gate = _resolve_download_gate(candidate.provider)
+    Log.info(
+        f"进入CN/HK远端PDF下载lane: ticker={ticker} document_id={document_id} "
+        f"lane={lane_name} provider={candidate.provider} source_id={candidate.source_id}",
+        module=module,
+    )
+    _acquire_download_gate(
+        gate=gate,
+        ticker=ticker,
+        document_id=document_id,
+        module=module,
+        cancel_checker=cancel_checker,
+    )
+    try:
+        return discovery_client.download_report_pdf(candidate)
+    finally:
+        gate.release()
+
+
+def _acquire_download_gate(
+    *,
+    gate: BoundedSemaphore,
+    ticker: str,
+    document_id: str,
+    module: str,
+    cancel_checker: Callable[[], bool] | None,
+) -> None:
+    """可取消地获取 CN/HK 远端 PDF 下载 gate。
+
+    Args:
+        gate: 当前 provider 对应的下载 gate。
+        ticker: 已归一化 ticker。
+        document_id: pipeline 生成的稳定文档 ID。
+        module: 日志模块名。
+        cancel_checker: 可选取消检查函数。
+
+    Returns:
+        无。
+
+    Raises:
+        CancelledError: 等待 gate 期间收到取消请求时抛出。
+    """
+
+    _raise_if_cancelled(
+        module=module,
+        ticker=ticker,
+        document_id=document_id,
+        cancel_checker=cancel_checker,
+    )
+    while not gate.acquire(timeout=_DOWNLOAD_GATE_POLL_SECONDS):
+        _raise_if_cancelled(
+            module=module,
+            ticker=ticker,
+            document_id=document_id,
+            cancel_checker=cancel_checker,
+        )
+
+
+def _resolve_download_gate(provider: CnSourceProvider) -> tuple[str, BoundedSemaphore]:
+    """按 provider 解析 CN/HK 远端 PDF 下载 gate。
+
+    Args:
+        provider: downloader provider 名称。
+
+    Returns:
+        ``(lane_name, gate)``，仅覆盖远端 PDF 下载阶段，不覆盖 Docling 转换。
+
+    Raises:
+        无。
+    """
+
+    if provider == _CNINFO_PROVIDER:
+        return _CNINFO_DOWNLOAD_LANE_NAME, _CNINFO_DOWNLOAD_GATE
+    return _HKEXNEWS_DOWNLOAD_LANE_NAME, _HKEXNEWS_DOWNLOAD_GATE
 
 
 def _raise_if_cancelled(
