@@ -162,6 +162,7 @@ def test_us_variants(raw: str, canonical: str) -> None:
         "123456789",
         "199999",  # 6 位但首位非 0/3/6
         "700.UN",  # 未知后缀
+        "AAPL.SW",  # 外部交易所后缀，不是美股类股分隔符
         "!!!",
         "A" * 9,  # 超过 US 长度上限
     ],

@@ -65,7 +65,7 @@ _SUFFIX_WITH_SEP_PATTERN: Final[re.Pattern[str]] = re.compile(
 _SUFFIX_NO_SEP_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^(.+?)(HKEX|HK|SSE|SH|SS|SZSE|SZ|NASDAQ|NYSE|OQ|PK|US)$"
 )
-_US_SYMBOL_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Z]+(?:[.\-][A-Z0-9]+)?$")
+_US_SYMBOL_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Z]+(?:-[A-Z0-9]+|[.][A-Z])?$")
 # 美股 ticker 字面长度上限。
 #
 # 设计意图：防御性输入白名单，**不是**对合法 ticker 的业务约束。
@@ -344,8 +344,9 @@ def _build_sz(body: str, raw: str) -> Optional[NormalizedTicker]:
 def _build_us(body: str, raw: str) -> Optional[NormalizedTicker]:
     """构造美股 ``NormalizedTicker``。
 
-    规则：首字符字母、仅含 ``A-Z`` 以及可选 ``.`` / ``-`` 分节（如 ``BRK.B`` /
-    ``BRK-B``），长度不超过 ``_MAX_US_SYMBOL_LENGTH``；canonical 统一使用横杠。
+    规则：首字符字母、仅含 ``A-Z`` 以及可选类股分节（如 ``BRK.B`` /
+    ``BRK-B``），长度不超过 ``_MAX_US_SYMBOL_LENGTH``；点号分节只接受单字符
+    类股，避免把 ``AAPL.SW`` 这类外部交易所 alias 误识别为美股类股。
 
     Args:
         body: ticker 主体。
