@@ -265,7 +265,9 @@ class CninfoDiscoveryClient:
             稳定顺序排序。
 
         Raises:
-            ValueError: 主源响应无法解析为 JSON 时抛出。
+            ValueError: market/provider/company_id 非法时抛出。
+            RuntimeError: 底层请求或 JSON 解析失败；单个财期分类失败会记录
+                ``Log.warn`` 后跳过，所有有效财期分类均失败时抛出。
         """
 
         if query.market != "CN":
@@ -279,6 +281,8 @@ class CninfoDiscoveryClient:
         context = self._resolve_exchange_context(ticker)
 
         per_period_year: dict[tuple[CnFiscalPeriod, int], list[_RawAnnouncement]] = {}
+        queried_periods = 0
+        failed_periods: list[CnFiscalPeriod] = []
         for period in query.target_periods:
             category = _PERIOD_TO_CATEGORY.get(period)
             if category is None:
@@ -287,15 +291,24 @@ class CninfoDiscoveryClient:
                     f"未知 fiscal_period={period!r}，已跳过", module=_MODULE
                 )
                 continue
-            announcements = self._query_announcements(
-                column=context.column,
-                plate=context.plate,
-                stock=ticker,
-                org_id=org_id,
-                category=category,
-                start_date=query.start_date,
-                end_date=query.end_date,
-            )
+            queried_periods += 1
+            try:
+                announcements = self._query_announcements(
+                    column=context.column,
+                    plate=context.plate,
+                    stock=ticker,
+                    org_id=org_id,
+                    category=category,
+                    start_date=query.start_date,
+                    end_date=query.end_date,
+                )
+            except RuntimeError as exc:
+                failed_periods.append(period)
+                Log.warn(
+                    f"巨潮公告分类查询失败，已跳过: ticker={ticker} period={period} category={category} error={exc}",
+                    module=_MODULE,
+                )
+                continue
             for item in announcements:
                 if _is_title_blocked(item.title):
                     continue
@@ -303,6 +316,11 @@ class CninfoDiscoveryClient:
                 if fiscal_year is None:
                     continue
                 per_period_year.setdefault((period, fiscal_year), []).append(item)
+
+        if queried_periods > 0 and len(failed_periods) == queried_periods:
+            raise RuntimeError(
+                f"巨潮公告分类查询全部失败: ticker={ticker} periods={','.join(failed_periods)}"
+            )
 
         candidates: list[CnReportCandidate] = []
         for (period, fiscal_year), items in per_period_year.items():

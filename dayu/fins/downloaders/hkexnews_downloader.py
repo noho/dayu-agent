@@ -278,7 +278,8 @@ class HkexnewsDiscoveryClient:
 
         Raises:
             ValueError: market/provider/company_id 非法时抛出。
-            RuntimeError: 主源请求失败时抛出。
+            RuntimeError: 底层请求或 JSON 解析失败；单个财期分类失败会记录
+                ``Log.warn`` 后跳过，所有有效财期分类均失败时抛出。
         """
 
         if query.market != "HK":
@@ -291,17 +292,28 @@ class HkexnewsDiscoveryClient:
         stock_code = _to_hkex_stock_code(query.normalized_ticker)
 
         grouped: dict[tuple[CnFiscalPeriod, int], list[_RawHkAnnouncement]] = {}
+        queried_periods = 0
+        failed_periods: list[CnFiscalPeriod] = []
         for period in query.target_periods:
             category_spec = _PERIOD_TO_CATEGORY_SPEC.get(period)
             if category_spec is None:
                 continue
-            announcements = self._query_period_announcements(
-                stock_id=stock_id,
-                stock_code=stock_code,
-                category_spec=category_spec,
-                start_date=query.start_date,
-                end_date=query.end_date,
-            )
+            queried_periods += 1
+            try:
+                announcements = self._query_period_announcements(
+                    stock_id=stock_id,
+                    stock_code=stock_code,
+                    category_spec=category_spec,
+                    start_date=query.start_date,
+                    end_date=query.end_date,
+                )
+            except RuntimeError as exc:
+                failed_periods.append(period)
+                Log.warn(
+                    f"披露易公告分类查询失败，已跳过: stock_code={stock_code} period={period} error={exc}",
+                    module=_MODULE,
+                )
+                continue
             for item in announcements:
                 inferred_period = _infer_fiscal_period_from_text(
                     title=item.title,
@@ -316,6 +328,11 @@ class HkexnewsDiscoveryClient:
                 if fiscal_year is None:
                     continue
                 grouped.setdefault((period, fiscal_year), []).append(item)
+
+        if queried_periods > 0 and len(failed_periods) == queried_periods:
+            raise RuntimeError(
+                f"披露易公告分类查询全部失败: stock_code={stock_code} periods={','.join(failed_periods)}"
+            )
 
         candidates: list[CnReportCandidate] = []
         for (period, fiscal_year), items in grouped.items():

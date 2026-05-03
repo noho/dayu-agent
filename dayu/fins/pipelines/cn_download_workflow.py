@@ -184,14 +184,14 @@ async def run_cn_download_stream_impl(
                 "market": market,
             },
         )
-        if overwrite:
-            host.filing_maintenance_repository.clear_filing_documents(normalized_ticker)
         candidates = discovery.list_report_candidates(query, profile)
         selected = _select_candidates_for_a4(
             candidates,
             period_windows=period_windows,
             use_default_business_limits=start_date is None,
         )
+        if overwrite:
+            host.filing_maintenance_repository.clear_filing_documents(normalized_ticker)
         missing_periods = _resolve_missing_periods(periods.target_periods, selected)
         for period in missing_periods:
             skipped = _build_missing_period_result(period=period)

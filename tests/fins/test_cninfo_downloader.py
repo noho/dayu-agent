@@ -433,6 +433,77 @@ def test_list_report_candidates_prefers_a_share_fy_over_later_h_share_notice() -
     assert [candidate.source_id for candidate in candidates] == ["A1"]
 
 
+def test_list_report_candidates_skips_failed_period_and_keeps_other_periods() -> None:
+    """单个巨潮公告分类失败时应跳过该分类，并保留其它财期候选。"""
+
+    h1_payload = {
+        "announcements": [
+            _build_announcement(
+                announcement_id="H1",
+                title="比亚迪：2024年半年度报告",
+                announcement_date="2024-08-30",
+                adjunct_url="finalpage/2024-08-30/h1.PDF",
+            ),
+        ],
+        "hasMore": False,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url_str = str(request.url)
+        if url_str == CNINFO_STOCK_JSON_URL:
+            return _stock_mapping_response()
+        if url_str == CNINFO_QUERY_URL:
+            form = _read_form(request)
+            if form["category"] == "category_ndbg_szsh;":
+                return httpx.Response(503, json={"error": "temporarily unavailable"})
+            if form["category"] == "category_bndbg_szsh;":
+                return httpx.Response(200, json=h1_payload)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={})
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    client = _build_client(handler)
+    query = CnReportQuery(
+        market="CN",
+        normalized_ticker="002594",
+        start_date="2024-01-01",
+        end_date="2025-12-31",
+        target_periods=("FY", "H1"),
+    )
+    profile = client.resolve_company(query)
+
+    candidates = client.list_report_candidates(query, profile)
+
+    assert len(candidates) == 1
+    assert candidates[0].source_id == "H1"
+    assert candidates[0].fiscal_period == "H1"
+
+
+def test_list_report_candidates_raises_when_all_period_queries_fail() -> None:
+    """所有巨潮公告分类均失败时应抛错，让 workflow 返回 failed。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url_str = str(request.url)
+        if url_str == CNINFO_STOCK_JSON_URL:
+            return _stock_mapping_response()
+        if url_str == CNINFO_QUERY_URL:
+            return httpx.Response(503, json={"error": "temporarily unavailable"})
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    client = _build_client(handler)
+    query = CnReportQuery(
+        market="CN",
+        normalized_ticker="002594",
+        start_date="2024-01-01",
+        end_date="2025-12-31",
+        target_periods=("FY",),
+    )
+    profile = client.resolve_company(query)
+
+    with pytest.raises(RuntimeError, match="全部失败"):
+        client.list_report_candidates(query, profile)
+
+
 def test_list_report_candidates_filters_non_pdf_and_other_sec_code() -> None:
     """非 PDF 或非目标证券公告不得进入候选。"""
 

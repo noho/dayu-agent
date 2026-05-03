@@ -55,6 +55,7 @@ class _FakeDiscoveryClient:
     pdf_bytes: bytes = _PDF_BYTES
     download_calls: int = 0
     failed_source_ids: set[str] = field(default_factory=set)
+    list_error: RuntimeError | None = None
 
     def resolve_company(self, query: CnReportQuery) -> CnCompanyProfile:
         """返回固定公司元数据。"""
@@ -74,6 +75,8 @@ class _FakeDiscoveryClient:
         """返回测试候选。"""
 
         del query, profile
+        if self.list_error is not None:
+            raise self.list_error
         return self.candidates
 
     def download_report_pdf(self, candidate: CnReportCandidate) -> DownloadedReportAsset:
@@ -823,6 +826,43 @@ def test_cn_download_overwrite_clears_ticker_and_redownloads(tmp_path: Path) -> 
     assert meta["ingest_complete"] is True
     assert meta["download_version"] == CN_PIPELINE_DOWNLOAD_VERSION
     assert str(meta["primary_document"]).endswith("_docling.json")
+
+
+def test_cn_download_overwrite_does_not_clear_when_discovery_fails(tmp_path: Path) -> None:
+    """overwrite=True 遇到候选发现失败时不得先清空本地已完成 filing。"""
+
+    context = build_fs_storage_test_context(tmp_path)
+    maintenance = _CountingMaintenanceRepository(context.filing_maintenance_repository)
+    discovery = _FakeDiscoveryClient(temp_dir=tmp_path, candidates=(_candidate(),))
+    converter = _FakeConverter()
+    pipeline = CnPipeline(
+        workspace_root=tmp_path,
+        processor_registry=ProcessorRegistry(),
+        company_repository=context.company_repository,
+        source_repository=context.source_repository,
+        processed_repository=context.processed_repository,
+        blob_repository=context.blob_repository,
+        filing_maintenance_repository=maintenance,
+        cn_discovery_client=discovery,
+        convert_pdf_to_docling_json=converter,
+    )
+    _collect_events(pipeline)
+    document_id = build_cn_filing_ids(
+        ticker="600519",
+        form_type="FY",
+        fiscal_year=2024,
+        fiscal_period="FY",
+        amended=False,
+    )[0]
+    assert context.source_repository.get_source_meta("600519", document_id, SourceKind.FILING)
+
+    discovery.list_error = RuntimeError("remote discovery unavailable")
+    events = _collect_events(pipeline, overwrite=True)
+
+    result = _final_result(events)
+    assert result["status"] == "failed"
+    assert maintenance.cleared_tickers == []
+    assert context.source_repository.get_source_meta("600519", document_id, SourceKind.FILING)
 
 
 def test_cn_download_unsupported_ticker_raises_value_error(tmp_path: Path) -> None:
