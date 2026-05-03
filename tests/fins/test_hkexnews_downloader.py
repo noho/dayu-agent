@@ -416,14 +416,20 @@ def test_list_report_candidates_uses_secondary_language_only_when_primary_empty(
 
 
 def test_list_report_candidates_maps_hk_period_codes_and_allows_empty_quarters() -> None:
-    """验证 FY/H1/Q1/Q3 t2code 映射；季度查无不抛异常。"""
+    """验证 FY/H1/Q1/Q3 标题分类映射；季度查无不抛异常。"""
 
-    t2codes: list[str] = []
+    category_params: list[tuple[str, str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         if str(request.url).startswith(HKEXNEWS_TITLE_SEARCH_URL) and request.method == "GET":
             form = _query_from_request(request)
-            t2codes.append(form["t2code"][0])
+            category_params.append(
+                (
+                    form["t1code"][0],
+                    form["t2Gcode"][0],
+                    form["t2code"][0],
+                )
+            )
             return httpx.Response(200, json={"result": "[]"})
         raise AssertionError(f"unexpected request {request.method} {request.url}")
 
@@ -434,7 +440,16 @@ def test_list_report_candidates_maps_hk_period_codes_and_allows_empty_quarters()
     )
 
     assert candidates == ()
-    assert t2codes == ["40100", "40100", "40200", "40200", "40300", "40300", "40300", "40300"]
+    assert category_params == [
+        ("40000", "-2", "40100"),
+        ("40000", "-2", "40100"),
+        ("40000", "-2", "40200"),
+        ("40000", "-2", "40200"),
+        ("10000", "3", "13600"),
+        ("10000", "3", "13600"),
+        ("10000", "3", "13600"),
+        ("10000", "3", "13600"),
+    ]
 
 
 def test_list_report_candidates_treats_traditional_half_year_as_h1() -> None:
@@ -477,7 +492,7 @@ def test_list_report_candidates_treats_traditional_half_year_as_h1() -> None:
 
 
 def test_list_report_candidates_filters_q1_q3_by_title_period() -> None:
-    """同一 ``40300`` 结果必须按标题区分 Q1/Q3，不能互相误标。"""
+    """同一季度业绩分类结果必须按标题区分 Q1/Q3，不能互相误标。"""
 
     first_quarter_url = f"{HKEXNEWS_BASE_URL}/listedco/listconews/sehk/2025/0420/q1.pdf"
     third_quarter_url = f"{HKEXNEWS_BASE_URL}/listedco/listconews/sehk/2025/1020/q3.pdf"
@@ -485,7 +500,9 @@ def test_list_report_candidates_filters_q1_q3_by_title_period() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if str(request.url).startswith(HKEXNEWS_TITLE_SEARCH_URL) and request.method == "GET":
             form = _query_from_request(request)
-            assert form["t2code"] == ("40300",)
+            assert form["t1code"] == ("10000",)
+            assert form["t2Gcode"] == ("3",)
+            assert form["t2code"] == ("13600",)
             if form["lang"] == ("E",):
                 return httpx.Response(200, json={"result": "[]"})
             return httpx.Response(
@@ -522,6 +539,57 @@ def test_list_report_candidates_filters_q1_q3_by_title_period() -> None:
     assert [(candidate.source_id, candidate.fiscal_period) for candidate in candidates] == [
         ("Q1_2024", "Q1"),
         ("Q3_2024", "Q3"),
+    ]
+
+
+def test_list_report_candidates_reads_hk_quarterly_results_announcements() -> None:
+    """真实腾讯式 ``公告及通告 - [季度業績]`` 应归入 Q1/Q3。"""
+
+    q1_url = f"{HKEXNEWS_BASE_URL}/listedco/listconews/sehk/2025/0514/q1.pdf"
+    q3_url = f"{HKEXNEWS_BASE_URL}/listedco/listconews/sehk/2025/1113/q3.pdf"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url).startswith(HKEXNEWS_TITLE_SEARCH_URL) and request.method == "GET":
+            form = _query_from_request(request)
+            assert form["t1code"] == ("10000",)
+            assert form["t2Gcode"] == ("3",)
+            assert form["t2code"] == ("13600",)
+            if form["lang"] == ("E",):
+                return httpx.Response(200, json={"result": "[]"})
+            return httpx.Response(
+                200,
+                json=_title_search_payload(
+                    [
+                        _announcement(
+                            document_id="Q3_2025",
+                            title="截至二零二五年九月三十日止三個月及九個月業績公佈",
+                            file_link="/listedco/listconews/sehk/2025/1113/q3.pdf",
+                            date_time="13/11/2025 16:30",
+                            category_text="公告及通告 - [季度業績]",
+                        ),
+                        _announcement(
+                            document_id="Q1_2025",
+                            title="截至二零二五年三月三十一日止三個月業績公佈",
+                            file_link="/listedco/listconews/sehk/2025/0514/q1.pdf",
+                            date_time="14/05/2025 16:31",
+                            category_text="公告及通告 - [季度業績]",
+                        ),
+                    ]
+                ),
+            )
+        if str(request.url) in {q1_url, q3_url} and request.method == "HEAD":
+            return httpx.Response(200, headers={})
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    client = _build_client(handler)
+    candidates = client.list_report_candidates(
+        _query(periods=("Q1", "Q3")),
+        _profile(),
+    )
+
+    assert [(candidate.source_id, candidate.fiscal_period) for candidate in candidates] == [
+        ("Q1_2025", "Q1"),
+        ("Q3_2025", "Q3"),
     ]
 
 

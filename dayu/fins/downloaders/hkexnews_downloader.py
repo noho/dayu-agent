@@ -57,12 +57,6 @@ DEFAULT_MAX_RETRIES: Final[int] = 3
 RETRY_BACKOFF_BASE_SECONDS: Final[float] = 0.8
 DEFAULT_LANGUAGES: Final[tuple[CnLanguage, ...]] = ("zh", "en")
 
-_PERIOD_TO_T2CODE: Final[dict[CnFiscalPeriod, str]] = {
-    "FY": "40100",
-    "H1": "40200",
-    "Q1": "40300",
-    "Q3": "40300",
-}
 _PERIOD_SORT_KEY: Final[dict[CnFiscalPeriod, int]] = {
     "FY": 0,
     "H1": 1,
@@ -87,7 +81,12 @@ _HKEXNEWS_CATEGORY_ZERO: Final[str] = "0"
 _HKEXNEWS_SEARCH_TYPE_BY_STOCK: Final[str] = "1"
 _HKEXNEWS_DOCUMENT_TYPE_ALL: Final[str] = "-1"
 _HKEXNEWS_T1_FINANCIAL_STATEMENTS: Final[str] = "40000"
+_HKEXNEWS_T1_ANNOUNCEMENTS: Final[str] = "10000"
 _HKEXNEWS_T2_GROUP_ALL: Final[str] = "-2"
+_HKEXNEWS_T2_GROUP_RESULTS: Final[str] = "3"
+_HKEXNEWS_T2_ANNUAL_REPORT: Final[str] = "40100"
+_HKEXNEWS_T2_INTERIM_REPORT: Final[str] = "40200"
+_HKEXNEWS_T2_QUARTERLY_RESULTS: Final[str] = "13600"
 _HKEXNEWS_ROW_RANGE: Final[str] = "100"
 _HKEXNEWS_MB_DATE_RANGE: Final[str] = "0"
 _HKEXNEWS_SORT_BY_DATETIME: Final[str] = "DateTime"
@@ -105,6 +104,15 @@ _DATE_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 _BR_PATTERN: Final[re.Pattern[str]] = re.compile(r"<br\s*/?>", re.IGNORECASE)
 _TAG_PATTERN: Final[re.Pattern[str]] = re.compile(r"<[^>]+>")
+
+
+@dataclass(frozen=True)
+class _HkCategorySpec:
+    """披露易 title search 标题分类参数。"""
+
+    t1code: str
+    t2_group_code: str
+    t2code: str
 
 
 @dataclass(frozen=True)
@@ -136,6 +144,30 @@ class _HeadMeta:
     content_length: Optional[int]
     etag: Optional[str]
     last_modified: Optional[str]
+
+
+_PERIOD_TO_CATEGORY_SPEC: Final[dict[CnFiscalPeriod, _HkCategorySpec]] = {
+    "FY": _HkCategorySpec(
+        t1code=_HKEXNEWS_T1_FINANCIAL_STATEMENTS,
+        t2_group_code=_HKEXNEWS_T2_GROUP_ALL,
+        t2code=_HKEXNEWS_T2_ANNUAL_REPORT,
+    ),
+    "H1": _HkCategorySpec(
+        t1code=_HKEXNEWS_T1_FINANCIAL_STATEMENTS,
+        t2_group_code=_HKEXNEWS_T2_GROUP_ALL,
+        t2code=_HKEXNEWS_T2_INTERIM_REPORT,
+    ),
+    "Q1": _HkCategorySpec(
+        t1code=_HKEXNEWS_T1_ANNOUNCEMENTS,
+        t2_group_code=_HKEXNEWS_T2_GROUP_RESULTS,
+        t2code=_HKEXNEWS_T2_QUARTERLY_RESULTS,
+    ),
+    "Q3": _HkCategorySpec(
+        t1code=_HKEXNEWS_T1_ANNOUNCEMENTS,
+        t2_group_code=_HKEXNEWS_T2_GROUP_RESULTS,
+        t2code=_HKEXNEWS_T2_QUARTERLY_RESULTS,
+    ),
+}
 
 
 class HkexnewsDiscoveryClient:
@@ -260,13 +292,13 @@ class HkexnewsDiscoveryClient:
 
         grouped: dict[tuple[CnFiscalPeriod, int], list[_RawHkAnnouncement]] = {}
         for period in query.target_periods:
-            t2code = _PERIOD_TO_T2CODE.get(period)
-            if t2code is None:
+            category_spec = _PERIOD_TO_CATEGORY_SPEC.get(period)
+            if category_spec is None:
                 continue
             announcements = self._query_period_announcements(
                 stock_id=stock_id,
                 stock_code=stock_code,
-                t2code=t2code,
+                category_spec=category_spec,
                 start_date=query.start_date,
                 end_date=query.end_date,
             )
@@ -367,7 +399,7 @@ class HkexnewsDiscoveryClient:
         *,
         stock_id: str,
         stock_code: str,
-        t2code: str,
+        category_spec: _HkCategorySpec,
         start_date: str,
         end_date: str,
     ) -> list[_RawHkAnnouncement]:
@@ -376,7 +408,7 @@ class HkexnewsDiscoveryClient:
         Args:
             stock_id: 披露易 stockId。
             stock_code: 5 位股票代码。
-            t2code: 披露易二级分类。
+            category_spec: 披露易标题分类参数。
             start_date: 起始日期 ``YYYY-MM-DD``。
             end_date: 结束日期 ``YYYY-MM-DD``。
 
@@ -399,9 +431,9 @@ class HkexnewsDiscoveryClient:
                     "stockId": stock_id,
                     "searchType": _HKEXNEWS_SEARCH_TYPE_BY_STOCK,
                     "documentType": _HKEXNEWS_DOCUMENT_TYPE_ALL,
-                    "t1code": _HKEXNEWS_T1_FINANCIAL_STATEMENTS,
-                    "t2Gcode": _HKEXNEWS_T2_GROUP_ALL,
-                    "t2code": t2code,
+                    "t1code": category_spec.t1code,
+                    "t2Gcode": category_spec.t2_group_code,
+                    "t2code": category_spec.t2code,
                     "fromDate": start_date.replace("-", ""),
                     "toDate": end_date.replace("-", ""),
                     "MB-Daterange": _HKEXNEWS_MB_DATE_RANGE,
@@ -923,7 +955,7 @@ def _infer_fiscal_period_from_text(
     """
 
     combined = f"{title} {category_text}".upper()
-    for period in ("H1", "Q1", "Q3", "FY"):
+    for period in ("H1", "Q3", "Q1", "FY"):
         tokens = _PERIOD_INFERENCE_TOKENS[period]
         if any(token.upper() in combined for token in tokens):
             return period
