@@ -372,6 +372,8 @@ def test_cn_download_logs_match_sec_download_shape(
     )
     assert any(
         "FINS.CN_PIPELINE 开始 Docling 转换: ticker=600519 document_id=fil_cn_" in item
+        and "form=FY filing_date=2025-04-01" in item
+        and "source_file=fil_cn_" in item
         for item in info_logs
     )
     assert any(

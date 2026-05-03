@@ -327,6 +327,7 @@ async def run_cn_download_single_filing_stream(
         try:
             Log.info(
                 f"开始 Docling 转换: ticker={ticker} document_id={document_id} "
+                f"form={candidate.fiscal_period} filing_date={candidate.filing_date} "
                 f"source_file={pdf_filename} reused_pdf={reused_pdf}",
                 module=module,
             )
