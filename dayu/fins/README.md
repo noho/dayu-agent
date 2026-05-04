@@ -547,8 +547,9 @@ python utils/retriage_active_6k_filings.py --base workspace --tickers ALC,ASM,NV
 - `_classify_6k_text()` 的年报排除信号必须继续保持“上下文优先”而不是词面一票否决：像 `annual report`、`annual financial statements`、`annual general meeting` 这类字样若只是中报附注或治理章节里的引用，不能压过同源可见的 `interim report`、`unaudited condensed consolidated statements`、`June quarter financial results` 等强季度财报信号。
 - SEC 规则诊断与 reject 样本读取也必须继续走仓储协议：active source doc 通过 source 仓储读取，`.rejections/` 样本通过 filing maintenance 仓储读取；上层禁止自行拼接 `portfolio/{ticker}/filings` 路径。
 - 源文档读取必须继续经过 `company/source/processed/blob` 窄仓储协作完成；上层只能通过源文档仓储拿 `handle/meta/source`，不能绕过仓储自己拼文件路径。
-- `ground_truth_baseline.py`、`score_sec_ci.py` 这类离线基线/评分工具同样属于这条边界：processed 文档发现必须通过 `ProcessedDocumentRepositoryProtocol`，snapshot 文件枚举与字节读取必须通过 `DocumentBlobRepositoryProtocol`；不能再直接扫描 `workspace/portfolio/{ticker}/processed/*` 或按路径打开 `tool_snapshot_*.json`。
+- `ground_truth_baseline.py`、`score_sec_ci.py`、`score_docling_ci.py` 这类离线基线/评分工具同样属于这条边界：processed 文档发现必须通过 `ProcessedDocumentRepositoryProtocol`，snapshot 文件枚举与字节读取必须通过 `DocumentBlobRepositoryProtocol`；不能再直接扫描 `workspace/portfolio/{ticker}/processed/*` 或按路径打开 `tool_snapshot_*.json`。
 - `score_sec_ci.py` 还要继续守住两层评分语义：active source filing 缺少 processed，或 processed 文档缺少/破坏 `tool_snapshot_meta.json` 时，必须记为 completeness hard gate 失败；其它 `tool_snapshot_*.json` 缺失则只能把对应评分维度记 0 分，不能直接把整批评分流程抛异常中断。
+- `score_docling_ci.py` 是 CN/HK Docling 可喂性评分入口，只读取 `process --ci` 产出的现有 `tool_snapshot_*`，支持 active `filing` 与 `material`，按 `annual/semiannual/quarterly/material` profile 评分；坏 `tool_snapshot_meta.json` 进入 completeness hard gate，其它工具快照缺失只影响对应维度，不得把 CN/HK 规则塞回 SEC scorer。
 - `source` 仓储还是真实存储事实的唯一入口：诸如“某 ticker 是否已有本地 filings 根目录”“某 filing 是否存在 instance XBRL”这类判断，必须通过 `SourceDocumentRepositoryProtocol` 获取；CLI、pipeline 和 tool service 都不能自己拼 `portfolio/...` 路径或重新扫描目录。
 - SEC/XBRL 关联文件发现规则的共享真源在 `xbrl_file_discovery.py`；凡是仓储实现、SEC pipeline 或 processor 需要判断 instance/auxiliary XBRL 文件，都必须复用这一真源，而不是各自复制文件名规则。
 - `blob` 仓储只负责文件枚举、字节读写与文件对象落盘；凡是需要返回 `Source` 或物化本地路径的流程，必须走 `SourceDocumentRepositoryProtocol`，不能在 blob 仓储协议上临时补 source 能力。
