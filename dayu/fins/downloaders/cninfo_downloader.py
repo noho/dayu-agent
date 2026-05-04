@@ -18,7 +18,8 @@
   - ``GET http://static.cninfo.com.cn/{adjunctUrl}``：PDF 实体下载。
 
 - 候选筛选：白名单按 category（与请求参数一致），黑名单按标题
-  关键词（摘要 / 英文版 / 已取消 / 募集说明书 / ESG / 可持续 / 审计 等）。
+  关键词（摘要 / 英文版 / 英文简版 / 已取消 / 募集说明书 / ESG / 可持续 / 审计 等），
+  并额外排除关于财报正本的公告类文件。
 - 同 ``fiscal_period`` 多版本：``amended=True`` 优先，再按
   ``announcementTime`` 取最新；无 amended 时取最新一条全文。
 - HEAD 失败、PDF magic bytes 校验失败仅影响该 candidate，不让整个
@@ -93,10 +94,28 @@ _TITLE_BLOCKLIST: Final[tuple[str, ...]] = (
     "财务报表",
     "意见",
     "英文版",
+    "英文简版",
+    "英文简本",
     "english",
     "港股公告",
     "h股公告",
     "h股",
+)
+
+# 标题含财报关键词但语义是公告时，不应作为财报正本候选。
+_REPORT_NOTICE_TITLE_TOKENS: Final[tuple[str, ...]] = (
+    "公告",
+    "提示性公告",
+    "自愿性披露公告",
+)
+_REPORT_TITLE_TOKENS: Final[tuple[str, ...]] = (
+    "年度报告",
+    "年报",
+    "半年度报告",
+    "一季度报告",
+    "第一季度报告",
+    "三季度报告",
+    "第三季度报告",
 )
 
 # 标题中 "amended" 标记关键词。
@@ -859,7 +878,11 @@ def _is_title_blocked(title: str) -> bool:
     """
 
     lowered = title.lower()
-    return any(token.lower() in lowered for token in _TITLE_BLOCKLIST)
+    if any(token.lower() in lowered for token in _TITLE_BLOCKLIST):
+        return True
+    has_report_title = any(token in title for token in _REPORT_TITLE_TOKENS)
+    has_notice_title = any(token in title for token in _REPORT_NOTICE_TITLE_TOKENS)
+    return has_report_title and has_notice_title
 
 
 def _pick_best_announcement(items: list[_RawAnnouncement]) -> Optional[_RawAnnouncement]:

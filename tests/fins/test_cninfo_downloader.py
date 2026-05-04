@@ -293,7 +293,7 @@ def test_resolve_company_does_not_depend_on_noisy_search_first_page() -> None:
 
 
 def test_list_report_candidates_filters_blocklisted_titles() -> None:
-    """标题命中黑名单（摘要 / 英文版 / 港股公告 等）必须被排除。"""
+    """标题命中黑名单（摘要 / 英文版 / 英文简版 / 港股公告 等）必须被排除。"""
 
     announcement_payload = {
         "announcements": [
@@ -320,6 +320,12 @@ def test_list_report_candidates_filters_blocklisted_titles() -> None:
                 title="比亚迪：港股公告：2024年年报",
                 announcement_date="2025-04-10",
                 adjunct_url="finalpage/2025-04-10/hk.PDF",
+            ),
+            _build_announcement(
+                announcement_id="A5",
+                title="比亚迪：2024年年度报告（英文简版）",
+                announcement_date="2025-06-13",
+                adjunct_url="finalpage/2025-06-13/english-brief.PDF",
             ),
         ],
         "hasMore": False,
@@ -371,6 +377,57 @@ def test_list_report_candidates_filters_blocklisted_titles() -> None:
     assert only.source_url == CNINFO_STATIC_BASE_URL + "finalpage/2025-04-03/full.PDF"
     assert only.content_length == 12345
     assert only.etag == '"abc"'
+
+
+def test_list_report_candidates_prefers_full_fy_over_later_report_notice() -> None:
+    """晚发的英文简版或披露公告不得覆盖已存在的年度报告正本。"""
+
+    announcement_payload = {
+        "announcements": [
+            _build_announcement(
+                announcement_id="FULL",
+                title="比亚迪：2024年年度报告",
+                announcement_date="2025-04-25",
+                adjunct_url="finalpage/2025-04-25/full.PDF",
+            ),
+            _build_announcement(
+                announcement_id="BRIEF_NOTICE",
+                title="关于2024年年度报告（英文简版）的自愿性披露公告",
+                announcement_date="2025-06-13",
+                adjunct_url="finalpage/2025-06-13/brief-notice.PDF",
+            ),
+            _build_announcement(
+                announcement_id="NOTICE",
+                title="关于披露2024年年度报告的提示性公告",
+                announcement_date="2025-04-26",
+                adjunct_url="finalpage/2025-04-26/notice.PDF",
+            ),
+        ],
+        "hasMore": False,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url_str = str(request.url)
+        if url_str == CNINFO_STOCK_JSON_URL:
+            return _stock_mapping_response()
+        if url_str == CNINFO_QUERY_URL:
+            return httpx.Response(200, json=announcement_payload)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={})
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    client = _build_client(handler)
+    query = CnReportQuery(
+        market="CN",
+        normalized_ticker="002594",
+        start_date="2025-01-01",
+        end_date="2025-12-31",
+        target_periods=("FY",),
+    )
+    profile = client.resolve_company(query)
+    candidates = client.list_report_candidates(query, profile)
+
+    assert [candidate.source_id for candidate in candidates] == ["FULL"]
 
 
 def test_list_report_candidates_returns_empty_for_cninfo_independent_q2_q4() -> None:
