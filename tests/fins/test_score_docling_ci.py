@@ -227,6 +227,26 @@ def test_semiannual_key_financials_profile_matches_hk_headings() -> None:
 
 
 @pytest.mark.unit
+def test_semiannual_mda_profile_matches_hk_review_headings() -> None:
+    """中报 profile 应识别港股业务与财务回顾类章节标题。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    profile = PROFILES[REPORT_KIND_SEMIANNUAL]
+    text = "財務表現\n業務表現\n集團回顧\n財務及營運回顧\n業績綜述"
+
+    assert "mda" in _matched_group_labels(text, profile.key_groups)
+
+
+@pytest.mark.unit
 def test_annual_financial_profile_matches_hk_loss_statement_headings() -> None:
     """年报 profile 应识别港股损益与亏损表标题。
 
@@ -242,6 +262,26 @@ def test_annual_financial_profile_matches_hk_loss_statement_headings() -> None:
 
     profile = PROFILES[REPORT_KIND_ANNUAL]
     text = "Consolidated Income Statement 合併利潤表\n合併綜合虧損表\n綜合收益表"
+
+    assert "income_statement" in _matched_group_labels(text, profile.financial_groups)
+
+
+@pytest.mark.unit
+def test_quarterly_financial_profile_matches_operating_statement_headings() -> None:
+    """季报 financial profile 应识别港股经营状况表标题。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    profile = PROFILES[REPORT_KIND_QUARTERLY]
+    text = "未經審計中期簡明合併經營狀況表\n淨利息收入\n手續費及佣金收入"
 
     assert "income_statement" in _matched_group_labels(text, profile.financial_groups)
 
@@ -264,6 +304,48 @@ def test_annual_financial_profile_matches_hk_cash_flow_statement_headings() -> N
     text = "綜合現金流動表\n主要業務活動之現金流量"
 
     assert "cash_flow" in _matched_group_labels(text, profile.financial_groups)
+
+
+@pytest.mark.unit
+def test_annual_profile_matches_cn_audit_and_accounting_notes_headings() -> None:
+    """年报 profile 应识别 A 股审计报告与会计报表注释标题。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    profile = PROFILES[REPORT_KIND_ANNUAL]
+    text = "已审财务报表\n审计 意 见\n关 键 审计事项\n注册会计师对财务报表审计的责任\n七 会计报表主要项目注释"
+    labels = _matched_group_labels(text, profile.key_groups)
+
+    assert "audit" in labels
+    assert "notes" in labels
+
+
+@pytest.mark.unit
+def test_annual_profile_matches_hk_accounting_notes_headings() -> None:
+    """年报 profile 应识别港股会计报表注释标题。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    profile = PROFILES[REPORT_KIND_ANNUAL]
+    text = "合併會計報表註釋\n五 合併會計報表主要項目註釋"
+
+    assert "notes" in _matched_group_labels(text, profile.key_groups)
 
 
 def _read_section_calls(sections: list[JsonObject], *, dangling_placeholder: bool = False) -> list[JsonObject]:

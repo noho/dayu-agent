@@ -941,6 +941,105 @@ class TestRelabelTables:
         assert table.table_type == "financial"
         assert table.caption == "主要财务数据"
 
+    def test_relabel_tables_derives_caption_from_bank_balance_sheet_body(self) -> None:
+        """验证银行资产负债表体会提升为资产负债表 caption。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            AssertionError: 断言失败时抛出。
+        """
+
+        table_item = MagicMock()
+        table_item.export_to_markdown.return_value = (
+            "| 項目 | 期末 |\n"
+            "| --- | --- |\n"
+            "| 資產 | |\n"
+            "| 現金及存放中央銀行款項 | 103400 |\n"
+            "| 客戶貸款及墊款 | 826500 |\n"
+            "| 負債及股東權益 | |\n"
+            "| 客戶存款 | 915300 |\n"
+            "| 股東權益 | 80200 |"
+        )
+        table = MagicMock(caption=None, headers=["項目", "期末"], context_before="")
+        table.table_item = table_item
+
+        relabel_tables([table], docling_document=object())
+
+        assert table.is_financial is True
+        assert table.table_type == "financial"
+        assert table.caption == "资产负债表"
+
+    def test_relabel_tables_derives_caption_from_hk_market_key_metrics_body(self) -> None:
+        """验证港股市场运营类关键财务数据表体会提升为主要财务数据 caption。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            AssertionError: 断言失败时抛出。
+        """
+
+        table_item = MagicMock()
+        table_item.export_to_markdown.return_value = (
+            "| 項目 | 本期 |\n"
+            "| --- | --- |\n"
+            "| 收入及其他收益 | 13295 |\n"
+            "| 主要業務收入 | 12301 |\n"
+            "| EBITDA | 9800 |\n"
+            "| 股東應佔溢利 | 6500 |\n"
+            "| 基本每股盈利 | 4.20 |\n"
+            "| 資本開支 | 500 |"
+        )
+        table = MagicMock(caption=None, headers=["項目", "本期"], context_before="")
+        table.table_item = table_item
+
+        relabel_tables([table], docling_document=object())
+
+        assert table.is_financial is True
+        assert table.table_type == "financial"
+        assert table.caption == "主要财务数据"
+
+    def test_relabel_tables_derives_caption_from_hk_new_economy_key_metrics_body(self) -> None:
+        """验证港股新经济公司财务概要表体会提升为主要财务数据 caption。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            AssertionError: 断言失败时抛出。
+        """
+
+        table_item = MagicMock()
+        table_item.export_to_markdown.return_value = (
+            "| 項目 | 本期 |\n"
+            "| --- | --- |\n"
+            "| 汽車銷售收入 | 1000 |\n"
+            "| 總收入 | 1200 |\n"
+            "| 毛利率 | 12% |\n"
+            "| 淨虧損 | (300) |\n"
+            "| 普通股股東應佔淨虧損 | (310) |\n"
+            "| 經調整 EBITDA | 50 |"
+        )
+        table = MagicMock(caption=None, headers=["項目", "本期"], context_before="")
+        table.table_item = table_item
+
+        relabel_tables([table], docling_document=object())
+
+        assert table.is_financial is True
+        assert table.table_type == "financial"
+        assert table.caption == "主要财务数据 / 利润表"
+
 
 @pytest.mark.unit
 class TestFinancialKeywordsCompleteness:

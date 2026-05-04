@@ -247,17 +247,17 @@ class DiscoveryResult:
 ANNUAL_KEY_GROUPS = (
     KeywordGroup("company_profile", ("公司简介", "公司資料", "公司资料")),
     KeywordGroup("main_business", ("主营业务", "主營業務", "业务概要", "業務概覽")),
-    KeywordGroup("mda", ("管理层讨论", "管理層討論", "董事会报告", "董事會報告", "业务回顾", "業務回顧", "主营业务分析", "主營業務分析", "财务回顾", "財務回顧", "主席报告书", "主席報告書", "行政总裁报告书", "行政總裁報告書", "行政總裁之回顧"), True),
+    KeywordGroup("mda", ("管理层讨论", "管理層討論", "董事会报告", "董事會報告", "业务回顾", "業務回顧", "业务表现", "業務表現", "主营业务分析", "主營業務分析", "财务回顾", "財務回顧", "财务表现", "財務表現", "财务及营运回顾", "財務及營運回顧", "集团回顾", "集團回顧", "经营亮点", "經營亮點", "业绩综述", "業績綜述", "主席报告书", "主席報告書", "行政总裁报告书", "行政總裁報告書", "行政總裁之回顧", "首席财务总监回顾", "首席財務總監回顧"), True),
     KeywordGroup("key_financials", ("主要会计数据", "主要財務資料", "财务指标", "財務指標")),
     KeywordGroup("governance", ("公司治理", "企業管治")),
     KeywordGroup("shareholders", ("股东信息", "股東資料", "主要股东", "主要股東")),
     KeywordGroup("risk", ("重大事项", "重大事項", "风险提示", "風險提示", "风险因素")),
-    KeywordGroup("audit", ("审计意见", "核數師報告", "独立审计", "獨立核數師", "關鍵審計事項", "关键审计事项", "我們已審計的內容", "我们已审计的内容"), True),
-    KeywordGroup("notes", ("附注", "附註", "財務報表附註", "财务报表附注", "綜合財務報表附註", "综合财务报表附注", "财务报表注释", "財務報表註釋", "财务报表项目注释", "合并财务报表项目注释", "合并财务报表主要项目注释", "母公司财务报表主要项目注释", "綜合財務報表說明", "综合财务报表说明"), True),
+    KeywordGroup("audit", ("审计意见", "审计报告", "審計報告", "財務報表審計報告", "财务报表审计报告", "核數師報告", "独立审计", "獨立核數師", "關鍵審計事項", "关键审计事项", "我們已審計的內容", "我们已审计的内容", "已审财务报表", "已審財務報表", "注册会计师对财务报表审计", "註冊會計師對財務報表審計"), True),
+    KeywordGroup("notes", ("附注", "附註", "財務報表附註", "财务报表附注", "綜合財務報表附註", "综合财务报表附注", "会计报表注释", "會計報表註釋", "财务报表注释", "財務報表註釋", "财务报表项目注释", "会计报表主要项目注释", "會計報表主要項目註釋", "合并财务报表项目注释", "合并财务报表主要项目注释", "合併會計報表註釋", "合併會計報表主要項目註釋", "母公司财务报表主要项目注释", "綜合財務報表說明", "综合财务报表说明"), True),
 )
 SEMIANNUAL_KEY_GROUPS = (
     KeywordGroup("main_business", ("主营业务", "主營業務", "业务概要", "業務概覽")),
-    KeywordGroup("mda", ("管理层讨论", "管理層討論", "董事会报告", "董事會報告", "业务回顾", "業務回顧", "主营业务分析", "主營業務分析", "财务回顾", "財務回顧", "主席报告书", "主席報告書", "行政总裁报告书", "行政總裁報告書", "行政總裁之回顧"), True),
+    KeywordGroup("mda", ("管理层讨论", "管理層討論", "董事会报告", "董事會報告", "业务回顾", "業務回顧", "业务表现", "業務表現", "主营业务分析", "主營業務分析", "财务回顾", "財務回顧", "财务表现", "財務表現", "财务及营运回顾", "財務及營運回顧", "集团回顾", "集團回顧", "经营亮点", "經營亮點", "业绩综述", "業績綜述", "主席报告书", "主席報告書", "行政总裁报告书", "行政總裁報告書", "行政總裁之回顧", "首席财务总监回顾", "首席財務總監回顧"), True),
     KeywordGroup("key_financials", ("主要会计数据", "主要會計數據", "主要財務資料", "主要财务数据", "主要財務數據", "财务指标", "財務指標", "财务资料", "財務資料", "财务摘要", "財務摘要", "财务概要", "財務概要", "财务概览", "財務概覽", "财务撮要", "財務撮要", "财务要点", "財務要點", "财务表现", "財務表現", "财务表现摘要", "財務表現摘要", "财务表现指标", "財務表現指標", "业绩摘要", "業績摘要", "业绩概览", "業績概覽", "经营亮点", "經營亮點", "中期业绩", "中期業績", "HIGHLIGHTS"), True),
     KeywordGroup("risk", ("重大事项", "重大事項", "风险提示", "風險提示")),
     KeywordGroup("notes", ("附注", "附註", "簡明附註", "简明附注", "綜合財務報表附註", "综合财务报表附注", "财务报表注释", "財務報表註釋", "财务报表项目注释", "合并财务报表项目注释", "合并财务报表主要项目注释", "母公司财务报表主要项目注释", "綜合財務報表說明", "综合财务报表说明"), True),
@@ -273,7 +273,7 @@ MATERIAL_KEY_GROUPS = (
 )
 FINANCIAL_GROUPS_FULL = (
     KeywordGroup("balance_sheet", ("资产负债表", "資產負債表", "財務狀況表", "财务状况表", "財務狀況報表", "财务状况报表"), True),
-    KeywordGroup("income_statement", ("利润表", "利潤表", "合併利潤表", "損益表", "合併損益表", "收益表", "全面收益表", "綜合收益表", "综合收益表", "綜合虧損表", "综合亏损表", "合併綜合虧損表", "合并综合亏损表", "一、营业收入", "一、營業收入", "損益及其他全面收入", "損益及其他全面收益"), True),
+    KeywordGroup("income_statement", ("利润表", "利潤表", "合併利潤表", "損益表", "合併損益表", "收益表", "全面收益表", "綜合收益表", "综合收益表", "經營狀況表", "经营状况表", "合併經營狀況表", "合并经营状况表", "綜合虧損表", "综合亏损表", "合併綜合虧損表", "合并综合亏损表", "淨利息收入", "净利息收入", "手續費及佣金收入", "手续费及佣金收入", "一、营业收入", "一、營業收入", "損益及其他全面收入", "損益及其他全面收益"), True),
     KeywordGroup("cash_flow", ("现金流量表", "現金流量表", "現金流動表", "现金流动表", "綜合現金流動表", "综合现金流动表", "一、经营活动产生的现金流量", "一、經營活動產生的現金流量"), True),
 )
 FINANCIAL_GROUPS_QUARTERLY = (
@@ -948,8 +948,48 @@ def _text_contains_any(text: str, keywords: tuple[str, ...]) -> bool:
         无。
     """
 
-    normalized = unicodedata.normalize("NFKC", text).casefold()
-    return any(unicodedata.normalize("NFKC", keyword).casefold() in normalized for keyword in keywords)
+    normalized = _normalize_keyword_match_text(text)
+    compact_normalized = _remove_match_whitespace(normalized)
+    for keyword in keywords:
+        normalized_keyword = _normalize_keyword_match_text(keyword)
+        if normalized_keyword in normalized:
+            return True
+        compact_keyword = _remove_match_whitespace(normalized_keyword)
+        if compact_keyword and compact_keyword in compact_normalized:
+            return True
+    return False
+
+
+def _normalize_keyword_match_text(text: str) -> str:
+    """归一化 profile 关键词匹配文本。
+
+    Args:
+        text: 原始文本。
+
+    Returns:
+        NFKC 与大小写折叠后的文本。
+
+    Raises:
+        无。
+    """
+
+    return unicodedata.normalize("NFKC", text).casefold()
+
+
+def _remove_match_whitespace(text: str) -> str:
+    """移除关键词匹配中的空白噪声。
+
+    Args:
+        text: 已归一化或待归一化文本。
+
+    Returns:
+        去除所有空白字符后的文本。
+
+    Raises:
+        无。
+    """
+
+    return re.sub(r"\s+", "", text)
 
 
 def _matched_group_labels(text: str, groups: tuple[KeywordGroup, ...]) -> list[str]:
