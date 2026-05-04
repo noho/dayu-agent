@@ -53,6 +53,7 @@ def _stock_mapping_payload() -> dict[str, list[dict[str, str]]]:
     return {
         "stockList": [
             {"code": "000001", "orgId": "gssz0000001", "zwjc": "平安银行"},
+            {"code": "000568", "orgId": "gssz0000568", "zwjc": "泸州老窖"},
             {"code": "002594", "orgId": "gssz0002594", "zwjc": "比亚迪"},
             {"code": "600519", "orgId": "gssh0600519", "zwjc": "贵州茅台"},
             {"code": "688981", "orgId": "gshk0000981", "zwjc": "中芯国际"},
@@ -293,7 +294,7 @@ def test_resolve_company_does_not_depend_on_noisy_search_first_page() -> None:
 
 
 def test_list_report_candidates_filters_blocklisted_titles() -> None:
-    """标题命中黑名单（摘要 / 英文版 / 英文简版 / 港股公告 等）必须被排除。"""
+    """标题命中黑名单（摘要 / 英文版 / ``（英文）`` / 港股公告 等）必须被排除。"""
 
     announcement_payload = {
         "announcements": [
@@ -326,6 +327,18 @@ def test_list_report_candidates_filters_blocklisted_titles() -> None:
                 title="比亚迪：2024年年度报告（英文简版）",
                 announcement_date="2025-06-13",
                 adjunct_url="finalpage/2025-06-13/english-brief.PDF",
+            ),
+            _build_announcement(
+                announcement_id="A6",
+                title="比亚迪：2024年年度报告（英文）",
+                announcement_date="2025-06-14",
+                adjunct_url="finalpage/2025-06-14/english-full.PDF",
+            ),
+            _build_announcement(
+                announcement_id="A7",
+                title="比亚迪：2024年度报告（英文）",
+                announcement_date="2025-06-15",
+                adjunct_url="finalpage/2025-06-15/english-annual.PDF",
             ),
         ],
         "hasMore": False,
@@ -377,6 +390,57 @@ def test_list_report_candidates_filters_blocklisted_titles() -> None:
     assert only.source_url == CNINFO_STATIC_BASE_URL + "finalpage/2025-04-03/full.PDF"
     assert only.content_length == 12345
     assert only.etag == '"abc"'
+
+
+def test_list_report_candidates_filters_english_quarterly_report_title() -> None:
+    """``第三季度报告（英文）`` 不得进入 A 股季度候选。"""
+
+    announcement_payload = {
+        "announcements": [
+            _build_announcement(
+                announcement_id="Q3_CN",
+                title="泸州老窖：2025年第三季度报告",
+                announcement_date="2025-10-31",
+                adjunct_url="finalpage/2025-10-31/q3-cn.PDF",
+                sec_code="000568",
+                sec_name="泸州老窖",
+                org_id="gssz0000568",
+            ),
+            _build_announcement(
+                announcement_id="Q3_EN",
+                title="泸州老窖：2025年第三季度报告（英文）",
+                announcement_date="2025-11-05",
+                adjunct_url="finalpage/2025-11-05/q3-en.PDF",
+                sec_code="000568",
+                sec_name="泸州老窖",
+                org_id="gssz0000568",
+            ),
+        ],
+        "hasMore": False,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url_str = str(request.url)
+        if url_str == CNINFO_STOCK_JSON_URL:
+            return _stock_mapping_response()
+        if url_str == CNINFO_QUERY_URL:
+            return httpx.Response(200, json=announcement_payload)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={})
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    client = _build_client(handler)
+    query = CnReportQuery(
+        market="CN",
+        normalized_ticker="000568",
+        start_date="2025-01-01",
+        end_date="2025-12-31",
+        target_periods=("Q3",),
+    )
+    profile = client.resolve_company(query)
+    candidates = client.list_report_candidates(query, profile)
+
+    assert [candidate.source_id for candidate in candidates] == ["Q3_CN"]
 
 
 def test_list_report_candidates_prefers_full_fy_over_later_report_notice() -> None:
@@ -1310,5 +1374,5 @@ def test_form_payload_serialization_round_trip_via_json() -> None:
 
     sample = json.dumps(_stock_mapping_payload(), ensure_ascii=False)
     payload = json.loads(sample)
-    assert payload["stockList"][1]["code"] == "002594"
-    assert payload["stockList"][1]["orgId"] == "gssz0002594"
+    by_code = {item["code"]: item for item in payload["stockList"]}
+    assert by_code["002594"]["orgId"] == "gssz0002594"

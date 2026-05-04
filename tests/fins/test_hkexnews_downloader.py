@@ -384,8 +384,8 @@ def test_list_report_candidates_gets_title_search_and_builds_absolute_url() -> N
     assert posted_forms[0]["toDate"] == ("20261231",)
 
 
-def test_list_report_candidates_uses_secondary_language_only_when_primary_empty() -> None:
-    """主语言为空时允许英文补位，并把 language 标为 ``en``。"""
+def test_list_report_candidates_does_not_use_english_fallback_when_primary_empty() -> None:
+    """主语言为空时不再用英文补位，避免英文财报进入 CN/HK active。"""
 
     def handler(request: httpx.Request) -> httpx.Response:
         if str(request.url).startswith(HKEXNEWS_TITLE_SEARCH_URL) and request.method == "GET":
@@ -410,9 +410,35 @@ def test_list_report_candidates_uses_secondary_language_only_when_primary_empty(
     client = _build_client(handler)
     candidates = client.list_report_candidates(_query(), _profile())
 
-    assert len(candidates) == 1
-    assert candidates[0].source_id == "DOC_EN"
-    assert candidates[0].language == "en"
+    assert candidates == ()
+
+
+def test_list_report_candidates_filters_english_title_from_primary_language() -> None:
+    """即使中文入口返回英文标题，也不得进入 HK active 候选。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url).startswith(HKEXNEWS_TITLE_SEARCH_URL) and request.method == "GET":
+            form = _query_from_request(request)
+            if form["lang"] == ("E",):
+                return httpx.Response(200, json={"result": "[]"})
+            return httpx.Response(
+                200,
+                json=_title_search_payload(
+                    [
+                        _announcement(
+                            document_id="DOC_EN_ON_ZH",
+                            title="Tencent Holdings Limited: 2024 Annual Report",
+                            category_text="Financial Statements/ESG Information - [Annual Report]",
+                        )
+                    ]
+                ),
+            )
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    client = _build_client(handler)
+    candidates = client.list_report_candidates(_query(), _profile())
+
+    assert candidates == ()
 
 
 def test_list_report_candidates_maps_hk_period_codes_and_allows_empty_quarters() -> None:
@@ -442,10 +468,7 @@ def test_list_report_candidates_maps_hk_period_codes_and_allows_empty_quarters()
     assert candidates == ()
     assert category_params == [
         ("40000", "-2", "40100"),
-        ("40000", "-2", "40100"),
         ("40000", "-2", "40200"),
-        ("40000", "-2", "40200"),
-        ("10000", "3", "13600"),
         ("10000", "3", "13600"),
     ]
 
@@ -524,7 +547,7 @@ def test_list_report_candidates_maps_direct_q2_to_quarterly_category() -> None:
         _profile(),
     )
 
-    assert seen_t2codes == ["13600", "13600"]
+    assert seen_t2codes == ["13600"]
     assert len(candidates) == 1
     assert candidates[0].source_id == "Q2_2025"
     assert candidates[0].fiscal_period == "Q2"
@@ -645,17 +668,17 @@ def test_list_report_candidates_filters_q1_q3_by_title_period() -> None:
                     [
                         _announcement(
                             document_id="Q1_2024",
-                            title="FIRST QUARTERLY REPORT 2024",
+                            title="二零二四年第一季度報告",
                             file_link="/listedco/listconews/sehk/2025/0420/q1.pdf",
                             date_time="2025-04-20 16:30",
-                            category_text="Financial Statements/ESG Information - [Quarterly Report]",
+                            category_text="財務報表/環境、社會及管治資料 - [季度業績]",
                         ),
                         _announcement(
                             document_id="Q3_2024",
-                            title="THIRD QUARTERLY REPORT 2024",
+                            title="二零二四年第三季度報告",
                             file_link="/listedco/listconews/sehk/2025/1020/q3.pdf",
                             date_time="2025-10-20 16:30",
-                            category_text="Financial Statements/ESG Information - [Quarterly Report]",
+                            category_text="財務報表/環境、社會及管治資料 - [季度業績]",
                         ),
                     ]
                 ),

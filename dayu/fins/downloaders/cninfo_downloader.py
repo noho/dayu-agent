@@ -18,8 +18,8 @@
   - ``GET http://static.cninfo.com.cn/{adjunctUrl}``：PDF 实体下载。
 
 - 候选筛选：白名单按 category（与请求参数一致），黑名单按标题
-  关键词（摘要 / 英文版 / 英文简版 / 已取消 / 募集说明书 / ESG / 可持续 / 审计 等），
-  并额外排除关于财报正本的公告类文件。
+  关键词（摘要 / 英文版 / ``（英文）`` / 英文简版 / 已取消 / 募集说明书 /
+  ESG / 可持续 / 审计 等），并额外排除关于财报正本的公告类文件。
 - 同 ``fiscal_period`` 多版本：``amended=True`` 优先，再按
   ``announcementTime`` 取最新；无 amended 时取最新一条全文。
 - HEAD 失败、PDF magic bytes 校验失败仅影响该 candidate，不让整个
@@ -93,6 +93,10 @@ _TITLE_BLOCKLIST: Final[tuple[str, ...]] = (
     "审计报告",
     "财务报表",
     "意见",
+    "（英文）",
+    "(英文)",
+    "英文)",
+    "英文）",
     "英文版",
     "英文简版",
     "英文简本",
@@ -880,9 +884,29 @@ def _is_title_blocked(title: str) -> bool:
     lowered = title.lower()
     if any(token.lower() in lowered for token in _TITLE_BLOCKLIST):
         return True
+    if _has_report_language_marker(title):
+        return True
     has_report_title = any(token in title for token in _REPORT_TITLE_TOKENS)
     has_notice_title = any(token in title for token in _REPORT_NOTICE_TITLE_TOKENS)
     return has_report_title and has_notice_title
+
+
+def _has_report_language_marker(title: str) -> bool:
+    """判断财报标题是否带英文语言标记。
+
+    Args:
+        title: 公告标题。
+
+    Returns:
+        财报标题带 ``英文`` 语言标记时返回 ``True``。
+
+    Raises:
+        无。
+    """
+
+    if "英文" not in title:
+        return False
+    return any(token in title for token in _REPORT_TITLE_TOKENS)
 
 
 def _pick_best_announcement(items: list[_RawAnnouncement]) -> Optional[_RawAnnouncement]:

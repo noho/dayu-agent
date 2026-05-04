@@ -55,7 +55,7 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS: Final[float] = 30.0
 DEFAULT_SLEEP_SECONDS: Final[float] = 0.3
 DEFAULT_MAX_RETRIES: Final[int] = 3
 RETRY_BACKOFF_BASE_SECONDS: Final[float] = 0.8
-DEFAULT_LANGUAGES: Final[tuple[CnLanguage, ...]] = ("zh", "en")
+DEFAULT_LANGUAGES: Final[tuple[CnLanguage, ...]] = ("zh",)
 
 _PERIOD_SORT_KEY: Final[dict[CnFiscalPeriod, int]] = {
     "FY": 0,
@@ -76,6 +76,16 @@ _TITLE_AMENDED_TOKENS: Final[tuple[str, ...]] = (
     "补充",
     "REVISED",
     "SUPPLEMENTAL",
+)
+_ENGLISH_REPORT_TITLE_TOKENS: Final[tuple[str, ...]] = (
+    "ANNUAL REPORT",
+    "INTERIM REPORT",
+    "QUARTERLY REPORT",
+    "QUARTERLY RESULTS",
+    "FIRST QUARTER",
+    "SECOND QUARTER",
+    "THIRD QUARTER",
+    "FOURTH QUARTER",
 )
 _HKEXNEWS_CATEGORY_MARKET: Final[str] = "SEHK"
 _HKEXNEWS_CATEGORY_ZERO: Final[str] = "0"
@@ -219,7 +229,7 @@ class HkexnewsDiscoveryClient:
             sleep_seconds: 连续请求间隔秒数。
             max_retries: 单次 HTTP 请求最大重试次数。
             request_timeout_seconds: 单次请求超时秒数。
-            languages: 查询语言顺序；默认先中文再英文。
+            languages: 查询语言顺序；默认只查中文。
             sleep_func: 可注入 sleep 函数；测试可传 ``lambda _: None``。
 
         Raises:
@@ -459,15 +469,14 @@ class HkexnewsDiscoveryClient:
             end_date: 结束日期 ``YYYY-MM-DD``。
 
         Returns:
-            匹配目标股票的公告列表；主语言有结果时不合并副语言。
+            匹配目标股票且非英文的公告列表。
 
         Raises:
             RuntimeError: HTTP 或 JSON 解析失败时抛出。
         """
 
         primary: list[_RawHkAnnouncement] = []
-        secondary: list[_RawHkAnnouncement] = []
-        for index, language in enumerate(self._languages):
+        for language in self._languages:
             payload = self._http_get_json(
                 HKEXNEWS_TITLE_SEARCH_URL,
                 params={
@@ -494,13 +503,10 @@ class HkexnewsDiscoveryClient:
                 for item in (_parse_announcement(row, language=language) for row in rows)
                 if item is not None
                 and _announcement_matches_stock(item.stock_code_payload, stock_code)
+                and not _is_english_announcement(item)
             ]
-            if index == 0:
-                primary.extend(parsed_rows)
-            else:
-                secondary.extend(parsed_rows)
-        # 副语言只在主语言没有候选时补位，避免中英公告重复进入主 candidate 集合。
-        return primary if primary else secondary
+            primary.extend(parsed_rows)
+        return primary
 
     def _build_candidate(
         self,
@@ -1109,6 +1115,60 @@ def _is_amended_title(title: str) -> bool:
 
     upper = title.upper()
     return any(token.upper() in upper for token in _TITLE_AMENDED_TOKENS)
+
+
+def _is_english_announcement(announcement: _RawHkAnnouncement) -> bool:
+    """判断披露易公告是否属于英文候选。
+
+    Args:
+        announcement: 披露易原始公告对象。
+
+    Returns:
+        英文语言入口或标题/分类明显为英文时返回 ``True``。
+
+    Raises:
+        无。
+    """
+
+    if announcement.language == "en":
+        return True
+    combined = f"{announcement.title} {announcement.category_text}"
+    return _looks_like_english_report_text(combined)
+
+
+def _looks_like_english_report_text(text: str) -> bool:
+    """判断文本是否明显是英文财报标题或分类。
+
+    Args:
+        text: 标题与分类拼接文本。
+
+    Returns:
+        命中英文财报关键词且缺少中文/繁中文字符时返回 ``True``。
+
+    Raises:
+        无。
+    """
+
+    if _contains_cjk(text):
+        return False
+    upper = text.upper()
+    return any(token in upper for token in _ENGLISH_REPORT_TITLE_TOKENS)
+
+
+def _contains_cjk(text: str) -> bool:
+    """判断文本是否包含中日韩统一表意文字。
+
+    Args:
+        text: 待检测文本。
+
+    Returns:
+        包含中文/繁中文字符返回 ``True``。
+
+    Raises:
+        无。
+    """
+
+    return any("\u4e00" <= char <= "\u9fff" for char in text)
 
 
 def _language_param(language: CnLanguage) -> str:

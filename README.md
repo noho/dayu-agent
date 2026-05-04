@@ -434,7 +434,7 @@ dayu-cli download --ticker BABA,9988,9988.HK --infer
 - `--ticker` 支持 `0700.HK` / `HK.00700` / `600519.SH` / `sh600519` / `AAPL.US` / `BRK.B` 等常见变形，内部统一归一化到裸码（港 4 位补零、沪深 6 位、美股类股分隔符统一为横杠，如 `BRK.B`→`BRK-B`）。公司名仍可作为 ticker 传入，由仓储 alias 查表兜底。
 - 显式传 `--infer` 时，CLI 会把 `--ticker` 里的显式 alias 与 FMP infer 结果合并；`download` 场景下 pipeline 还会继续与 SEC 返回的 alias 合并。
 - 美股下载未显式传 `--start` 时，年报（`10-K`/`20-F`）默认覆盖 5 年，季报（`10-Q`/季报型 `6-K`）默认覆盖 2 年；`8-K`、SC13 等事件类表单仍按各自默认窗口处理。
-- A 股下载当前使用巨潮主源，港股下载当前使用披露易主源，默认 forms 均为 `FY H1 Q1 Q2 Q3 Q4`；未显式传 `--start` 时，年报默认覆盖 5 年，半年报/季报默认覆盖 2 年；`Q2` 与 `H1`、`Q4` 与 `FY` 均作为独立期间处理，不互相归一。下载完成定义为 PDF 落盘、`_docling.json` 落盘、source meta `ingest_complete=True` 且 `primary_document` 指向 `_docling.json`。中断后再次运行会优先复用已落盘 PDF，避免重复下载；`--rebuild` 只基于本地已下载的 PDF + Docling JSON 重建 meta/manifest，不访问主源。
+- A 股下载当前使用巨潮主源，港股下载当前使用披露易主源，默认 forms 均为 `FY H1 Q1 Q2 Q3 Q4`；未显式传 `--start` 时，年报默认覆盖 5 年，半年报/季报默认覆盖 2 年；`Q2` 与 `H1`、`Q4` 与 `FY` 均作为独立期间处理，不互相归一。CN/HK 下载默认只保留中文/繁中文财报候选，英文财报会在 discovery 阶段过滤。下载完成定义为 PDF 落盘、`_docling.json` 落盘、source meta `ingest_complete=True` 且 `primary_document` 指向 `_docling.json`。中断后再次运行会优先复用已落盘 PDF，避免重复下载；`--rebuild` 只基于本地已下载的 PDF + Docling JSON 重建 meta/manifest，不访问主源。
 - 港股 ticker 示例 `0700` / `00700` / `700.HK` 会归一化到同一 canonical ticker；A 股/港股缺失的独立季度报告会按 skipped 统计而不是 failed。
 - 使用 `--infer` 功能需要申请FMP_API_KEY。
 - 首次写入时会自动创建 `workspace/portfolio/{ticker}` 下的源文档目录，不要求你预先手动建好 `filings/`。
