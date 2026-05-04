@@ -908,6 +908,70 @@ class TestRelabelTables:
         assert table.table_type == "financial"
         assert table.caption == "现金流量表"
 
+    def test_relabel_tables_derives_caption_from_hk_bank_cash_net_body(self) -> None:
+        """验证港股银行現金淨額表体会提升为现金流量表 caption。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            AssertionError: 断言失败时抛出。
+        """
+
+        table_item = MagicMock()
+        table_item.export_to_markdown.return_value = (
+            "| 項目 | 本年度 |\n"
+            "| --- | --- |\n"
+            "| 營業活動產生之現金淨額 | 27160 |\n"
+            "| 購入金融投資 | (29812) |\n"
+            "| 投資活動產生之現金淨額 | (2517) |\n"
+            "| 融資活動產生之現金淨額 | (8420) |"
+        )
+        table = MagicMock(caption=None, headers=["項目", "本年度"], context_before="")
+        table.table_item = table_item
+
+        relabel_tables([table], docling_document=object())
+
+        assert table.is_financial is True
+        assert table.table_type == "financial"
+        assert table.caption == "现金流量表"
+
+    def test_relabel_tables_derives_caption_from_hk_slash_cash_flow_body(self) -> None:
+        """验证港股斜线格式现金流量表体会提升为现金流量表 caption。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            AssertionError: 断言失败时抛出。
+        """
+
+        table_item = MagicMock()
+        table_item.export_to_markdown.return_value = (
+            "| 項目 | 本期间 |\n"
+            "| --- | --- |\n"
+            "| 經營活動產生╱ （使用） 的現金流量 | |\n"
+            "| 經營活動產生╱ （使用） 的現金流量淨額 | 1810 |\n"
+            "| 投資活動 （使用） ╱產生的現金流量 | |\n"
+            "| 投資活動 （使用） ╱產生的現金流量淨額 | (380) |\n"
+            "| 融資活動產生的現金流量 | |\n"
+            "| 融資活動產生的現金流量淨額 | 42 |"
+        )
+        table = MagicMock(caption=None, headers=["項目", "本期间"], context_before="")
+        table.table_item = table_item
+
+        relabel_tables([table], docling_document=object())
+
+        assert table.is_financial is True
+        assert table.table_type == "financial"
+        assert table.caption == "现金流量表"
+
     def test_relabel_tables_derives_caption_from_quarterly_key_metrics_body(self) -> None:
         """验证季报关键财务指标表体会提升为主要财务数据 caption。
 
@@ -964,6 +1028,70 @@ class TestRelabelTables:
             "| 負債及股東權益 | |\n"
             "| 客戶存款 | 915300 |\n"
             "| 股東權益 | 80200 |"
+        )
+        table = MagicMock(caption=None, headers=["項目", "期末"], context_before="")
+        table.table_item = table_item
+
+        relabel_tables([table], docling_document=object())
+
+        assert table.is_financial is True
+        assert table.table_type == "financial"
+        assert table.caption == "资产负债表"
+
+    def test_relabel_tables_derives_caption_from_reit_financial_position_body(self) -> None:
+        """验证港股 REIT 财务状况表体会提升为资产负债表 caption。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            AssertionError: 断言失败时抛出。
+        """
+
+        table_item = MagicMock()
+        table_item.export_to_markdown.return_value = (
+            "| 項目 | 期末 |\n"
+            "| --- | --- |\n"
+            "| 投資物業 | 832900 |\n"
+            "| 資產總值 | 880100 |\n"
+            "| 負債總額（不包括基金單位持有人應佔資產淨值） | 303200 |\n"
+            "| 基金單位持有人應佔資產淨值 | 576300 |\n"
+            "| 非控制性權益 | 600 |"
+        )
+        table = MagicMock(caption=None, headers=["項目", "期末"], context_before="")
+        table.table_item = table_item
+
+        relabel_tables([table], docling_document=object())
+
+        assert table.is_financial is True
+        assert table.table_type == "financial"
+        assert table.caption == "资产负债表"
+
+    def test_relabel_tables_derives_caption_from_hk_equity_balance_sheet_body(self) -> None:
+        """验证港股权益口径资产负债表体会提升为资产负债表 caption。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            AssertionError: 断言失败时抛出。
+        """
+
+        table_item = MagicMock()
+        table_item.export_to_markdown.return_value = (
+            "| 項目 | 期末 |\n"
+            "| --- | --- |\n"
+            "| 本公司權益持有人應佔權益 | |\n"
+            "| 權益總額 | 1122938 |\n"
+            "| 負債總額 | 795342 |\n"
+            "| 權益及負債總額 | 1918280 |\n"
+            "| 總資產 | 1918280 |"
         )
         table = MagicMock(caption=None, headers=["項目", "期末"], context_before="")
         table.table_item = table_item
