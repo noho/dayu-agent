@@ -467,3 +467,63 @@ def test_fins_docling_processor_relabels_financial_tables(
     assert len(tables) == 1
     assert tables[0].get("is_financial") is True
     assert tables[0]["table_type"] == "financial"
+
+
+@pytest.mark.unit
+def test_fins_docling_processor_derives_financial_caption_from_table_body(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证 fins Docling 处理器会从表体补充财报表语义 caption。
+
+    Args:
+        tmp_path: pytest 临时目录。
+        monkeypatch: monkeypatch fixture。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    json_path = tmp_path / "sample_docling.json"
+    json_path.write_text("{}", encoding="utf-8")
+
+    table = _FakeTableItem(
+        self_ref="#/tables/0",
+        page_no=1,
+        df=pd.DataFrame(
+            [
+                {"项目": "一、经营活动产生的现金流量", "金额": None},
+                {"项目": "销售商品、提供劳务收到的现金", "金额": 100.0},
+                {"项目": "二、投资活动产生的现金流量", "金额": None},
+                {"项目": "三、筹资活动产生的现金流量", "金额": None},
+            ]
+        ),
+        markdown=(
+            "| 项目 | 金额 |\n"
+            "| --- | --- |\n"
+            "| 一、经营活动产生的现金流量 | |\n"
+            "| 二、投资活动产生的现金流量 | |\n"
+            "| 三、筹资活动产生的现金流量 | |"
+        ),
+        caption=None,
+    )
+    linear_items = [
+        (_FakeTextItem(self_ref="#/texts/0", text="2021年度", label="section_header", page_no=1), 0),
+        (table, 1),
+    ]
+    fake_doc = _FakeDocument(linear_items=linear_items, tables=[table])
+    monkeypatch.setattr(
+        "dayu.engine.processors.docling_processor._load_docling_document",
+        lambda _: fake_doc,
+    )
+
+    processor = FinsDoclingProcessor(_make_source(json_path, media_type="application/json"))
+    tables = processor.list_tables()
+
+    assert len(tables) == 1
+    assert tables[0].get("is_financial") is True
+    assert tables[0]["table_type"] == "financial"
+    assert tables[0]["caption"] == "现金流量表"

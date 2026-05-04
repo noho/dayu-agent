@@ -16,8 +16,11 @@ from dayu.fins.domain.document_models import (
 from dayu.fins.domain.enums import SourceKind
 from dayu.fins.score_docling_ci import (
     JsonObject,
+    PROFILES,
+    REPORT_KIND_QUARTERLY,
     ScoreConfig,
     _discover_docling_snapshots,
+    _matched_group_labels,
     main,
     parse_args,
     score_batch,
@@ -150,17 +153,17 @@ def _annual_sections() -> list[JsonObject]:
     titles = [
         "公司简介",
         "主营业务",
-        "管理层讨论与分析",
+        "財務回顧",
         "主要会计数据和财务指标",
         "公司治理",
         "股东信息",
         "重大事项与风险提示",
-        "审计意见",
+        "關鍵審計事項",
         "财务报表",
         "资产负债表",
         "利润表",
-        "现金流量表",
-        "财务报表附注",
+        "現⾦流量表",
+        "附註",
         "董事会报告",
         "关联交易",
         "内部控制",
@@ -179,6 +182,26 @@ def _annual_sections() -> list[JsonObject]:
         }
         for index, title in enumerate(titles, start=1)
     ]
+
+
+@pytest.mark.unit
+def test_quarterly_key_financials_profile_matches_hk_headings() -> None:
+    """季度 profile 应识别港股关键财务数据章节标题。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    profile = PROFILES[REPORT_KIND_QUARTERLY]
+    text = "主要財務衡量指標\n財務表現摘要\n關鍵數據摘要"
+
+    assert "key_financials" in _matched_group_labels(text, profile.key_groups)
 
 
 def _read_section_calls(sections: list[JsonObject], *, dangling_placeholder: bool = False) -> list[JsonObject]:

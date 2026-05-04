@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import re
 import sys
+import unicodedata
 from typing import Mapping, Optional, Sequence, TypeAlias, cast
 
 from dayu.fins.domain.document_models import (
@@ -246,24 +247,24 @@ class DiscoveryResult:
 ANNUAL_KEY_GROUPS = (
     KeywordGroup("company_profile", ("公司简介", "公司資料", "公司资料")),
     KeywordGroup("main_business", ("主营业务", "主營業務", "业务概要", "業務概覽")),
-    KeywordGroup("mda", ("管理层讨论", "管理層討論", "董事会报告", "董事會報告"), True),
+    KeywordGroup("mda", ("管理层讨论", "管理層討論", "董事会报告", "董事會報告", "业务回顾", "業務回顧", "主营业务分析", "主營業務分析", "财务回顾", "財務回顧", "主席报告书", "主席報告書", "行政总裁报告书", "行政總裁報告書", "行政總裁之回顧"), True),
     KeywordGroup("key_financials", ("主要会计数据", "主要財務資料", "财务指标", "財務指標")),
     KeywordGroup("governance", ("公司治理", "企業管治")),
     KeywordGroup("shareholders", ("股东信息", "股東資料", "主要股东", "主要股東")),
     KeywordGroup("risk", ("重大事项", "重大事項", "风险提示", "風險提示", "风险因素")),
-    KeywordGroup("audit", ("审计意见", "核數師報告", "独立审计", "獨立核數師"), True),
-    KeywordGroup("notes", ("附注", "財務報表附註", "财务报表附注"), True),
+    KeywordGroup("audit", ("审计意见", "核數師報告", "独立审计", "獨立核數師", "關鍵審計事項", "关键审计事项", "我們已審計的內容", "我们已审计的内容"), True),
+    KeywordGroup("notes", ("附注", "附註", "財務報表附註", "财务报表附注", "綜合財務報表附註", "综合财务报表附注", "财务报表注释", "財務報表註釋", "财务报表项目注释", "合并财务报表项目注释", "合并财务报表主要项目注释", "母公司财务报表主要项目注释", "綜合財務報表說明", "综合财务报表说明"), True),
 )
 SEMIANNUAL_KEY_GROUPS = (
     KeywordGroup("main_business", ("主营业务", "主營業務", "业务概要", "業務概覽")),
-    KeywordGroup("mda", ("管理层讨论", "管理層討論", "董事会报告", "董事會報告"), True),
+    KeywordGroup("mda", ("管理层讨论", "管理層討論", "董事会报告", "董事會報告", "业务回顾", "業務回顧", "主营业务分析", "主營業務分析", "财务回顾", "財務回顧", "主席报告书", "主席報告書", "行政总裁报告书", "行政總裁報告書", "行政總裁之回顧"), True),
     KeywordGroup("key_financials", ("主要会计数据", "主要財務資料", "财务指标", "財務指標"), True),
     KeywordGroup("risk", ("重大事项", "重大事項", "风险提示", "風險提示")),
-    KeywordGroup("notes", ("附注", "簡明附註", "简明附注"), True),
+    KeywordGroup("notes", ("附注", "附註", "簡明附註", "简明附注", "綜合財務報表附註", "综合财务报表附注", "财务报表注释", "財務報表註釋", "财务报表项目注释", "合并财务报表项目注释", "合并财务报表主要项目注释", "母公司财务报表主要项目注释", "綜合財務報表說明", "综合财务报表说明"), True),
 )
 QUARTERLY_KEY_GROUPS = (
-    KeywordGroup("key_financials", ("主要会计数据", "主要財務資料", "主要财务数据", "财务指标"), True),
-    KeywordGroup("operations", ("经营情况", "經營情況", "管理层讨论", "管理層討論")),
+    KeywordGroup("key_financials", ("主要会计数据", "主要會計數據", "主要財務資料", "主要财务数据", "主要財務數據", "财务指标", "財務指標", "财务资料", "財務資料", "财务概要", "財務概要", "财务表现", "財務表現", "财务表现摘要", "財務表現摘要", "主要财务衡量指标", "主要財務衡量指標", "关键数据摘要", "關鍵數據摘要", "主要经营业绩", "主要經營業績"), True),
+    KeywordGroup("operations", ("经营情况", "經營情況", "管理层讨论", "管理層討論", "业务回顾", "業務回顧", "主营业务分析", "主營業務分析", "财务回顾", "財務回顧")),
     KeywordGroup("risk", ("重大事项", "重大事項", "风险提示", "風險提示")),
 )
 MATERIAL_KEY_GROUPS = (
@@ -271,9 +272,9 @@ MATERIAL_KEY_GROUPS = (
     KeywordGroup("body", ("事项", "交易", "影响", "風險", "风险", "董事会", "董事會"), True),
 )
 FINANCIAL_GROUPS_FULL = (
-    KeywordGroup("balance_sheet", ("资产负债表", "資產負債表", "財務狀況表", "财务状况表"), True),
-    KeywordGroup("income_statement", ("利润表", "損益表", "收益表", "全面收益表"), True),
-    KeywordGroup("cash_flow", ("现金流量表", "現金流量表"), True),
+    KeywordGroup("balance_sheet", ("资产负债表", "資產負債表", "財務狀況表", "财务状况表", "財務狀況報表", "财务状况报表"), True),
+    KeywordGroup("income_statement", ("利润表", "損益表", "收益表", "全面收益表", "一、营业收入", "一、營業收入", "損益及其他全面收入", "損益及其他全面收益"), True),
+    KeywordGroup("cash_flow", ("现金流量表", "現金流量表", "一、经营活动产生的现金流量", "一、經營活動產生的現金流量"), True),
 )
 FINANCIAL_GROUPS_QUARTERLY = (
     KeywordGroup("financial_data", ("主要财务数据", "主要会计数据", "主要財務資料"), True),
@@ -947,8 +948,8 @@ def _text_contains_any(text: str, keywords: tuple[str, ...]) -> bool:
         无。
     """
 
-    normalized = text.casefold()
-    return any(keyword.casefold() in normalized for keyword in keywords)
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    return any(unicodedata.normalize("NFKC", keyword).casefold() in normalized for keyword in keywords)
 
 
 def _matched_group_labels(text: str, groups: tuple[KeywordGroup, ...]) -> list[str]:

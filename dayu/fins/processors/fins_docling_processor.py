@@ -42,4 +42,4 @@ class FinsDoclingProcessor(FinsProcessorMixin, DoclingProcessor):
         """
 
         super().__init__(source=source, form_type=form_type, media_type=media_type)
-        relabel_tables(self._tables)
+        relabel_tables(self._tables, docling_document=self._document)

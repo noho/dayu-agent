@@ -718,6 +718,101 @@ class TestRelabelTables:
         assert tables[0].is_financial is True
         assert tables[1].is_financial is True
 
+    def test_relabel_tables_derives_caption_from_docling_cash_flow_body(self) -> None:
+        """验证 Docling 表体中的现金流量表语义会提升为表格 caption。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            AssertionError: 断言失败时抛出。
+        """
+
+        table_item = MagicMock()
+        table_item.export_to_markdown.return_value = (
+            "| 2021年度 | 人民币千元 |\n"
+            "| --- | --- |\n"
+            "| 一、经营活动产生的现金流量 | |\n"
+            "| 销售商品、提供劳务收到的现金 | 120976285 |\n"
+            "| 二、投资活动产生的现金流量 | |\n"
+            "| 三、筹资活动产生的现金流量 | |"
+        )
+        table = MagicMock(caption=None, headers=["一、", "二、"], context_before="")
+        table.table_item = table_item
+
+        relabel_tables([table], docling_document=object())
+
+        assert table.is_financial is True
+        assert table.table_type == "financial"
+        assert table.caption == "现金流量表"
+
+    def test_relabel_tables_derives_caption_from_hk_cash_flow_body(self) -> None:
+        """验证港股现金流量表体表达会提升为表格 caption。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            AssertionError: 断言失败时抛出。
+        """
+
+        table_item = MagicMock()
+        table_item.export_to_markdown.return_value = (
+            "| 截至年度 | 人民幣百萬元 |\n"
+            "| --- | --- |\n"
+            "| 經營活動現金流量 | |\n"
+            "| 經營活動所得現金淨額 | 29787 |\n"
+            "| 投資活動現金流量 | |\n"
+            "| 融資活動現金流量 | |"
+        )
+        table = MagicMock(caption=None, headers=["截至年度"], context_before="")
+        table.table_item = table_item
+
+        relabel_tables([table], docling_document=object())
+
+        assert table.is_financial is True
+        assert table.table_type == "financial"
+        assert table.caption == "现金流量表"
+
+    def test_relabel_tables_derives_caption_from_quarterly_key_metrics_body(self) -> None:
+        """验证季报关键财务指标表体会提升为主要财务数据 caption。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            AssertionError: 断言失败时抛出。
+        """
+
+        table_item = MagicMock()
+        table_item.export_to_markdown.return_value = (
+            "| 項目 | 本季度 |\n"
+            "| --- | --- |\n"
+            "| 經營收入 | 174376 |\n"
+            "| 淨利潤 | 95808 |\n"
+            "| 歸屬於本行股東的淨利潤 | 95284 |\n"
+            "| 經營活動產生的現金流 量淨額 | 1817380 |\n"
+            "| 基本和稀釋每股收益 | 0.35 |\n"
+            "| 資產總額 | 4200000 |"
+        )
+        table = MagicMock(caption=None, headers=["經營收入", "淨利潤"], context_before="")
+        table.table_item = table_item
+
+        relabel_tables([table], docling_document=object())
+
+        assert table.is_financial is True
+        assert table.table_type == "financial"
+        assert table.caption == "主要财务数据"
+
 
 @pytest.mark.unit
 class TestFinancialKeywordsCompleteness:
