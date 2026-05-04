@@ -780,6 +780,134 @@ class TestRelabelTables:
         assert table.table_type == "financial"
         assert table.caption == "现金流量表"
 
+    def test_relabel_tables_derives_caption_from_hk_cash_flow_net_body(self) -> None:
+        """验证港股现金流量淨額表体表达会提升为现金流量表 caption。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            AssertionError: 断言失败时抛出。
+        """
+
+        table_item = MagicMock()
+        table_item.export_to_markdown.return_value = (
+            "| 項目 | 本年度 |\n"
+            "| --- | --- |\n"
+            "| 經營活動所得現金流量淨額 | 106676 |\n"
+            "| 投資活動所用現金流量淨額 | (32852) |\n"
+            "| 融資活動所用現金流量淨額 | (17459) |\n"
+            "| 現金及現金等價物增加淨額 | 56365 |"
+        )
+        table = MagicMock(caption=None, headers=["項目", "本年度"], context_before="")
+        table.table_item = table_item
+
+        relabel_tables([table], docling_document=object())
+
+        assert table.is_financial is True
+        assert table.table_type == "financial"
+        assert table.caption == "现金流量表"
+
+    def test_relabel_tables_derives_caption_from_hk_loss_statement_body(self) -> None:
+        """验证港股亏损企业损益表体会提升为利润表 caption。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            AssertionError: 断言失败时抛出。
+        """
+
+        table_item = MagicMock()
+        table_item.export_to_markdown.return_value = (
+            "| 項目 | 本年度 |\n"
+            "| --- | --- |\n"
+            "| 總收入 | 30676067 |\n"
+            "| 總銷售成本 | (27872710) |\n"
+            "| 毛 （虧損） 溢利 | 2803357 |\n"
+            "| 經營開支總額 | (6911460) |\n"
+            "| 經營虧損 | (4108103) |\n"
+            "| 淨虧損 | (4856850) |"
+        )
+        table = MagicMock(caption=None, headers=["項目", "本年度"], context_before="")
+        table.table_item = table_item
+
+        relabel_tables([table], docling_document=object())
+
+        assert table.is_financial is True
+        assert table.table_type == "financial"
+        assert table.caption == "利润表"
+
+    def test_relabel_tables_derives_caption_from_hk_insurance_income_body(self) -> None:
+        """验证港股保险损益表体会提升为利润表 caption。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            AssertionError: 断言失败时抛出。
+        """
+
+        table_item = MagicMock()
+        table_item.export_to_markdown.return_value = (
+            "| 項目 | 本年度 |\n"
+            "| --- | --- |\n"
+            "| 保險收益 | 165420 |\n"
+            "| 保險服務開支 | (140103) |\n"
+            "| 保險服務業績 | 25317 |\n"
+            "| 投資回報 | 14302 |\n"
+            "| 稅後營運溢利 | 6765 |\n"
+            "| 純利 | 3764 |"
+        )
+        table = MagicMock(caption=None, headers=["項目", "本年度"], context_before="")
+        table.table_item = table_item
+
+        relabel_tables([table], docling_document=object())
+
+        assert table.is_financial is True
+        assert table.table_type == "financial"
+        assert table.caption == "利润表"
+
+    def test_relabel_tables_derives_caption_from_hk_cash_flow_statement_body(self) -> None:
+        """验证港股現金流動表表体会提升为现金流量表 caption。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            AssertionError: 断言失败时抛出。
+        """
+
+        table_item = MagicMock()
+        table_item.export_to_markdown.return_value = (
+            "| 項目 | 本年度 |\n"
+            "| --- | --- |\n"
+            "| 主要業務活動之現金流量 | |\n"
+            "| 主要業務活動之現金流入淨額 | 12895 |\n"
+            "| 投資活動之現金流量 | |\n"
+            "| 財務活動之現金流量 | |"
+        )
+        table = MagicMock(caption=None, headers=["項目", "本年度"], context_before="")
+        table.table_item = table_item
+
+        relabel_tables([table], docling_document=object())
+
+        assert table.is_financial is True
+        assert table.table_type == "financial"
+        assert table.caption == "现金流量表"
+
     def test_relabel_tables_derives_caption_from_quarterly_key_metrics_body(self) -> None:
         """验证季报关键财务指标表体会提升为主要财务数据 caption。
 

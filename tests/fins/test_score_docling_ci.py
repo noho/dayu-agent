@@ -17,7 +17,9 @@ from dayu.fins.domain.enums import SourceKind
 from dayu.fins.score_docling_ci import (
     JsonObject,
     PROFILES,
+    REPORT_KIND_ANNUAL,
     REPORT_KIND_QUARTERLY,
+    REPORT_KIND_SEMIANNUAL,
     ScoreConfig,
     _discover_docling_snapshots,
     _matched_group_labels,
@@ -202,6 +204,66 @@ def test_quarterly_key_financials_profile_matches_hk_headings() -> None:
     text = "主要財務衡量指標\n財務表現摘要\n關鍵數據摘要"
 
     assert "key_financials" in _matched_group_labels(text, profile.key_groups)
+
+
+@pytest.mark.unit
+def test_semiannual_key_financials_profile_matches_hk_headings() -> None:
+    """中报 profile 应识别港股财务摘要类章节标题。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    profile = PROFILES[REPORT_KIND_SEMIANNUAL]
+    text = "財務摘要\n財務概要\n財務表現摘要\n業績摘要\n2025年上半年財務表現指標"
+
+    assert "key_financials" in _matched_group_labels(text, profile.key_groups)
+
+
+@pytest.mark.unit
+def test_annual_financial_profile_matches_hk_loss_statement_headings() -> None:
+    """年报 profile 应识别港股损益与亏损表标题。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    profile = PROFILES[REPORT_KIND_ANNUAL]
+    text = "Consolidated Income Statement 合併利潤表\n合併綜合虧損表\n綜合收益表"
+
+    assert "income_statement" in _matched_group_labels(text, profile.financial_groups)
+
+
+@pytest.mark.unit
+def test_annual_financial_profile_matches_hk_cash_flow_statement_headings() -> None:
+    """年报 profile 应识别港股現金流動表标题。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    profile = PROFILES[REPORT_KIND_ANNUAL]
+    text = "綜合現金流動表\n主要業務活動之現金流量"
+
+    assert "cash_flow" in _matched_group_labels(text, profile.financial_groups)
 
 
 def _read_section_calls(sections: list[JsonObject], *, dangling_placeholder: bool = False) -> list[JsonObject]:
