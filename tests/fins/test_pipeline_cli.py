@@ -51,6 +51,8 @@ class FakePipeline(PipelineProtocol):
         overwrite: bool = False,
         rebuild: bool = False,
         ticker_aliases: Optional[list[str]] = None,
+        *,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         """记录 download 调用。
 
@@ -62,6 +64,7 @@ class FakePipeline(PipelineProtocol):
             overwrite: 是否覆盖。
             rebuild: 是否重建本地 meta/manifest。
             ticker_aliases: 可选 alias 列表。
+            cancel_checker: 可选取消检查函数。
 
         Returns:
             占位结果。

@@ -70,6 +70,8 @@ class PipelineProtocol(Protocol):
         overwrite: bool = False,
         rebuild: bool = False,
         ticker_aliases: Optional[list[str]] = None,
+        *,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> dict[str, Any]: # pyright: ignore[reportReturnType]
         """执行下载。
 
@@ -81,6 +83,7 @@ class PipelineProtocol(Protocol):
             overwrite: 是否强制覆盖。
             rebuild: 是否仅基于本地已下载数据重建 `meta/manifest`。
             ticker_aliases: 可选公司 alias 列表；download 场景下会与市场侧 alias 合并。
+            cancel_checker: 可选取消检查函数，仅在长事务阶段边界生效。
 
         Returns:
             下载结果。

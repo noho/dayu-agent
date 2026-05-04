@@ -21,6 +21,10 @@ from dayu.fins.downloaders.hkexnews_downloader import HkexnewsDiscoveryClient
 from dayu.fins.ingestion.pipeline_backends import PipelineIngestionBackend
 from dayu.fins.ingestion.process_events import ProcessEvent, ProcessEventType
 from dayu.fins.ingestion.service import FinsIngestionService
+from dayu.fins.pipelines.cn_download_pdf_gate import (
+    CnDownloadPdfGateProtocol,
+    NoopCnDownloadPdfGate,
+)
 from dayu.fins.pipelines.cn_download_protocols import CnReportDiscoveryClientProtocol
 from dayu.fins.pipelines.cn_download_workflow import run_cn_download_stream_impl
 from dayu.fins.storage import (
@@ -111,6 +115,7 @@ class CnPipeline(PipelineProtocol):
         filing_maintenance_repository: FilingMaintenanceRepositoryProtocol | None = None,
         cn_discovery_client: CnReportDiscoveryClientProtocol | None = None,
         hk_discovery_client: CnReportDiscoveryClientProtocol | None = None,
+        pdf_download_gate: CnDownloadPdfGateProtocol | None = None,
         convert_pdf_to_docling_json: PdfToDoclingJsonBytes | None = None,
         workspace_root: Optional[Path] = None,
     ) -> None:
@@ -125,6 +130,7 @@ class CnPipeline(PipelineProtocol):
             filing_maintenance_repository: 可选 filing 维护治理仓储实现。
             cn_discovery_client: 可选 CN 巨潮 discovery client。
             hk_discovery_client: 可选 HK 披露易 discovery client。
+            pdf_download_gate: 可选 PDF 下载段 gate。
             convert_pdf_to_docling_json: 可选 PDF 到 Docling JSON 转换函数。
             workspace_root: 工作区根目录。
         Returns:
@@ -164,6 +170,7 @@ class CnPipeline(PipelineProtocol):
         )
         self._cn_discovery_client = cn_discovery_client or CninfoDiscoveryClient()
         self._hk_discovery_client = hk_discovery_client or HkexnewsDiscoveryClient()
+        self._pdf_download_gate = pdf_download_gate or NoopCnDownloadPdfGate()
         self._convert_pdf_to_docling_json = (
             convert_pdf_to_docling_json or convert_pdf_bytes_to_docling_json_bytes
         )
@@ -225,6 +232,12 @@ class CnPipeline(PipelineProtocol):
         return self._hk_discovery_client
 
     @property
+    def pdf_download_gate(self) -> CnDownloadPdfGateProtocol:
+        """返回 PDF 下载段 gate。"""
+
+        return self._pdf_download_gate
+
+    @property
     def convert_pdf_to_docling_json(self) -> PdfToDoclingJsonBytes:
         """返回 PDF 到 Docling JSON 转换函数。"""
 
@@ -273,6 +286,8 @@ class CnPipeline(PipelineProtocol):
         overwrite: bool = False,
         rebuild: bool = False,
         ticker_aliases: Optional[list[str]] = None,
+        *,
+        cancel_checker: Optional[Callable[[], bool]] = None,
     ) -> dict[str, Any]:
         """执行 CN/HK 下载同步入口。
 
@@ -284,6 +299,7 @@ class CnPipeline(PipelineProtocol):
             overwrite: 是否强制覆盖。
             rebuild: 是否仅基于本地已下载数据重建 `meta/manifest`。
             ticker_aliases: 可选公司 alias 列表；写入公司级 meta 时合并。
+            cancel_checker: 可选取消检查函数。
 
         Returns:
             下载结果字典。
@@ -300,6 +316,7 @@ class CnPipeline(PipelineProtocol):
             overwrite=overwrite,
             rebuild=rebuild,
             ticker_aliases=ticker_aliases,
+            cancel_checker=cancel_checker,
         )
         return result
 

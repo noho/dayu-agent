@@ -374,6 +374,8 @@ class SecPipeline(PipelineProtocol):
         overwrite: bool = False,
         rebuild: bool = False,
         ticker_aliases: Optional[list[str]] = None,
+        *,
+        cancel_checker: Optional[Callable[[], bool]] = None,
     ) -> dict[str, Any]:
         """执行下载（同步聚合包装器）。
 
@@ -385,6 +387,7 @@ class SecPipeline(PipelineProtocol):
             overwrite: 是否强制覆盖。
             rebuild: 是否仅基于本地已下载数据重建 `meta/manifest`。
             ticker_aliases: CLI 侧传入的 alias 列表；会与 SEC submissions alias 合并。
+            cancel_checker: 可选取消检查函数。
 
         Returns:
             下载结果字典。
@@ -401,6 +404,7 @@ class SecPipeline(PipelineProtocol):
             overwrite=overwrite,
             rebuild=rebuild,
             ticker_aliases=ticker_aliases,
+            cancel_checker=cancel_checker,
         )
 
     async def download_stream(

@@ -104,14 +104,16 @@ def resolve_fins_command_concurrency_lane(command: FinsCommand) -> str | None:
     """解析财报 HostedRunSpec 的业务 lane。
 
     ``HostedRunSpec.business_concurrency_lane`` 会包住整个 direct operation。
-    三个下载市场分别使用 ``sec_download`` / ``cn_download`` / ``hk_download``，
-    复用 Host 既有跨进程并发治理机制，不在 Fins 内部再引入额外 lane 能力面。
+    SEC download 只做远端下载，仍使用外层 ``sec_download``；CN/HK download
+    还包含 Docling 转换，外层不占 lane，PDF 下载段在 pipeline 内使用
+    ``cn_download`` / ``hk_download`` gate。
 
     Args:
         command: 财报命令。
 
     Returns:
-        US / CN / HK download 分别返回对应市场 lane；其他财报命令返回 ``None``。
+        US download 返回 ``sec_download``；CN / HK download 与其他财报命令返回
+        ``None``。
 
     Raises:
         无。
@@ -127,10 +129,6 @@ def resolve_fins_command_concurrency_lane(command: FinsCommand) -> str | None:
         return LANE_SEC_DOWNLOAD
     if normalized_ticker.market == "US":
         return LANE_SEC_DOWNLOAD
-    if normalized_ticker.market == "CN":
-        return LANE_CN_DOWNLOAD
-    if normalized_ticker.market == "HK":
-        return LANE_HK_DOWNLOAD
     return None
 
 

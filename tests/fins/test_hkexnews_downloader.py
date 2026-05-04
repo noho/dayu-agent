@@ -441,6 +441,34 @@ def test_list_report_candidates_filters_english_title_from_primary_language() ->
     assert candidates == ()
 
 
+def test_list_report_candidates_filters_english_title_with_chinese_category() -> None:
+    """英文标题即使带中文分类文本，也不得进入 HK active 候选。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url).startswith(HKEXNEWS_TITLE_SEARCH_URL) and request.method == "GET":
+            form = _query_from_request(request)
+            if form["lang"] == ("E",):
+                return httpx.Response(200, json={"result": "[]"})
+            return httpx.Response(
+                200,
+                json=_title_search_payload(
+                    [
+                        _announcement(
+                            document_id="DOC_EN_ZH_CATEGORY",
+                            title="Tencent Holdings Limited: 2024 Annual Report",
+                            category_text="財務報表/環境、社會及管治資料 - [年報]",
+                        )
+                    ]
+                ),
+            )
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    client = _build_client(handler)
+    candidates = client.list_report_candidates(_query(), _profile())
+
+    assert candidates == ()
+
+
 def test_list_report_candidates_maps_hk_period_codes_and_allows_empty_quarters() -> None:
     """验证 FY/H1/Q1-Q4 标题分类映射；季度查无不抛异常。"""
 

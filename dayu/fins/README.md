@@ -209,6 +209,7 @@ SEC download 未显式传 `start_date` 时，`LOOKBACK_YEARS_BY_FORM` 是默认�
 - `dayu/fins/downloaders/hkexnews_downloader.py` — 披露易 discovery 与 PDF 下载；解析 active/inactive stock list、`titleSearchServlet.do`、多代码 `STOCK_CODE`，并在候选阶段过滤英文财报，同样不写 workspace、不依赖 pipeline/docling/storage。
 - `dayu/fins/pipelines/cn_download_workflow.py` — ticker 级 form/window 解析、company meta 写入、overwrite ticker 级清理、候选调度与 summary 聚合。
 - `dayu/fins/pipelines/cn_download_filing_workflow.py` — 单 filing 的 fast skip、PDF SHA skip、中断恢复、Docling 转换与 commit 阶段机。
+- `dayu/fins/pipelines/cn_download_pdf_gate.py` — CN/HK PDF 下载段 gate 协议与空实现；Fins 只按 provider 申请 PDF 下载段 lease，不感知 Service 业务 lane 名，真实跨进程 gate 由 Service 启动装配注入。
 - `dayu/fins/pipelines/cn_download_rebuild.py` — `download --rebuild` 的本地重建路径，只消费已完成的 PDF + Docling JSON source 文档，不访问巨潮、披露易或 Docling。
 - `dayu/fins/pipelines/cn_download_source_upsert.py` — 完成态 source meta 写入真源；完成态必须同时满足 PDF 落盘、`_docling.json` 落盘、`ingest_complete=True`、`primary_document` 指向 `_docling.json`。
 - `dayu/fins/pipelines/cn_download_staging.py` — 仅通过 blob 仓储探测中间态 PDF / Docling JSON，不直接拼 workspace 路径。
@@ -226,7 +227,7 @@ CN/HK download 的 source 写入顺序固定为：先通过 source 仓储创建�
 ### 5.1 并发与宿主约束
 
 当前直接受 Host 约束的典型点：
-- `download` 复用 Host 既有业务 lane 机制：美股 / A 股 / 港股分别走 `sec_download` / `cn_download` / `hk_download`，互不占用对方的并发许可
+- `download` 复用既有业务 lane 配置：美股 download 由 HostedRun 外层 `sec_download` lane 包住；A 股 / 港股 download 因包含 Docling 转换，外层不占 lane，只在主源 PDF 下载段分别进入 `cn_download` / `hk_download` gate，Docling 转换不会阻塞其它进程继续下载 PDF
 - 流式 direct operation 事件可以双写到 EventBus
 - 取消通过 `CancellationBridge` 收口在 Host，而不是散在 Fins 内部
 - direct operation 不得自己持有 `RunRegistry` 或 Host 内部桥接器；若需要及时响应取消，只能沿 `Service -> Runtime -> Pipeline` 透传窄 `cancel_checker`，并在已支持取消协作的阶段边界主动停机

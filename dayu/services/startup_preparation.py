@@ -13,10 +13,13 @@ from pathlib import Path
 from dayu.contracts.infrastructure import ModelCatalogProtocol, PromptAssetStoreProtocol
 from dayu.execution.options import ExecutionOptions, ResolvedExecutionOptions
 from dayu.fins.service_runtime import DefaultFinsRuntime, FinsRuntimeProtocol
+from dayu.host.concurrency import SQLiteConcurrencyGovernor
 from dayu.host import Host, resolve_host_config
+from dayu.host.host_store import HostStore
 from dayu.services.concurrency_lanes import SERVICE_DEFAULT_LANE_CONFIG
 from dayu.services.conversation_policy_reader import ConversationPolicyReader
 from dayu.services.host_admin_service import HostAdminService
+from dayu.services.fins_download_lane_gate import GovernorCnDownloadPdfGate
 from dayu.services.scene_definition_reader import SceneDefinitionReader
 from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
 from dayu.services.startup_recovery import recover_host_startup_state
@@ -149,12 +152,22 @@ def prepare_host_runtime_dependencies(
         model_catalog=model_catalog,
         prompt_asset_store=prompt_asset_store,
     )
-    fins_runtime = DefaultFinsRuntime.create(workspace_root=paths.workspace_root)
     host_config = resolve_host_config(
         workspace_root=paths.workspace_root,
         run_config=run_config,
         service_lane_defaults=dict(SERVICE_DEFAULT_LANE_CONFIG),
         explicit_lane_config=None,
+    )
+    pdf_gate_host_store = HostStore(host_config.store_path)
+    pdf_gate_host_store.initialize_schema()
+    fins_runtime = DefaultFinsRuntime.create(
+        workspace_root=paths.workspace_root,
+        cn_download_pdf_gate=GovernorCnDownloadPdfGate(
+            governor=SQLiteConcurrencyGovernor(
+                pdf_gate_host_store,
+                lane_config=host_config.lane_config,
+            )
+        ),
     )
     host = Host(
         workspace=workspace,

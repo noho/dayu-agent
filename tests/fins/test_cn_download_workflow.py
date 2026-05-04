@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from collections.abc import Callable
 from typing import BinaryIO, Optional, TypeAlias
 from io import BytesIO
 from pathlib import Path
+from types import TracebackType
 
 import pytest
 
@@ -30,8 +32,10 @@ from dayu.fins.pipelines.cn_download_models import (
     CnFiscalPeriod,
     CnReportCandidate,
     CnReportQuery,
+    CnSourceProvider,
     DownloadedReportAsset,
 )
+from dayu.fins.pipelines.cn_download_pdf_gate import CnDownloadPdfGateProtocol, NoopCnDownloadPdfGate
 from dayu.fins.pipelines.cn_pipeline import CnPipeline
 from dayu.fins.pipelines.docling_upload_service import build_cn_filing_ids
 from dayu.fins.pipelines.download_events import DownloadEvent, DownloadEventType
@@ -115,6 +119,66 @@ class _FakeConverter:
             self.fail_once = False
             raise RuntimeError("docling failed")
         return _DOCLING_BYTES
+
+
+@dataclass
+class _RecordingPdfGate(CnDownloadPdfGateProtocol):
+    """记录 PDF 下载 gate 持有状态。"""
+
+    active: bool = False
+    enter_count: int = 0
+    exit_count: int = 0
+
+    def lease_for_provider(
+        self,
+        provider: CnSourceProvider,
+        *,
+        cancel_checker: Callable[[], bool] | None = None,
+    ) -> AbstractContextManager[None]:
+        """返回记录型 lease。"""
+
+        del cancel_checker
+        assert provider in {"cninfo", "hkexnews"}
+        return _RecordingPdfGateLease(self)
+
+
+@dataclass
+class _RecordingPdfGateLease:
+    """测试用 PDF gate lease。"""
+
+    gate: _RecordingPdfGate
+
+    def __enter__(self) -> None:
+        """标记 gate 已进入。"""
+
+        self.gate.active = True
+        self.gate.enter_count += 1
+        return None
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """标记 gate 已退出。"""
+
+        del exc_type, exc, traceback
+        self.gate.active = False
+        self.gate.exit_count += 1
+
+
+@dataclass
+class _GateAwareConverter(_FakeConverter):
+    """验证 Docling 转换不在 PDF 下载 gate 内执行。"""
+
+    gate: _RecordingPdfGate = field(default_factory=_RecordingPdfGate)
+
+    def __call__(self, raw_data: bytes, stream_name: str) -> bytes:
+        """断言转换阶段没有持有 PDF 下载 gate。"""
+
+        assert self.gate.active is False
+        return super().__call__(raw_data, stream_name)
 
 
 @dataclass
@@ -245,6 +309,7 @@ def _build_pipeline(
     discovery: _FakeDiscoveryClient,
     converter: _FakeConverter,
     maintenance: FilingMaintenanceRepositoryProtocol | None = None,
+    pdf_download_gate: CnDownloadPdfGateProtocol | None = None,
 ) -> CnPipeline:
     """构造注入 fake downloader / converter 的 CnPipeline。"""
 
@@ -258,6 +323,7 @@ def _build_pipeline(
         blob_repository=context.blob_repository,
         filing_maintenance_repository=maintenance or context.filing_maintenance_repository,
         cn_discovery_client=discovery,
+        pdf_download_gate=pdf_download_gate or NoopCnDownloadPdfGate(),
         convert_pdf_to_docling_json=converter,
     )
 
@@ -340,6 +406,31 @@ def test_cn_download_workflow_commits_pdf_and_docling(tmp_path: Path) -> None:
     assert source_meta["company_id"] == "600519_SSE"
     assert source_meta["provider_company_id"] == "CNINFO:9900000600"
     assert source_meta["document_version"] == "v1"
+
+
+def test_cn_download_pdf_gate_does_not_cover_docling_convert(tmp_path: Path) -> None:
+    """PDF 下载 gate 只应覆盖远端 PDF 下载，不应覆盖 Docling 转换。"""
+
+    discovery = _FakeDiscoveryClient(temp_dir=tmp_path, candidates=(_candidate(),))
+    gate = _RecordingPdfGate()
+    converter = _GateAwareConverter(gate=gate)
+    pipeline = _build_pipeline(
+        tmp_path=tmp_path,
+        discovery=discovery,
+        converter=converter,
+        pdf_download_gate=gate,
+    )
+
+    result = _final_result(_collect_events(pipeline))
+
+    summary = result["summary"]
+    assert isinstance(summary, dict)
+    assert summary["downloaded"] == 1
+    assert summary["converted"] == 1
+    assert gate.enter_count == 1
+    assert gate.exit_count == 1
+    assert gate.active is False
+    assert converter.calls == 1
 
 
 def test_cn_download_logs_match_sec_download_shape(

@@ -67,6 +67,10 @@ from dayu.fins.ingestion.factory import (
     build_ingestion_manager_key,
     build_ingestion_service_factory,
 )
+from dayu.fins.pipelines.cn_download_pdf_gate import (
+    CnDownloadPdfGateProtocol,
+    NoopCnDownloadPdfGate,
+)
 from dayu.fins.pipelines import PipelineProtocol, get_pipeline_from_normalized_ticker
 from dayu.fins.pipelines.download_events import DownloadEvent
 from dayu.fins.pipelines.upload_filing_events import UploadFilingEvent
@@ -194,6 +198,7 @@ def _build_pipeline(
     blob_repository: DocumentBlobRepositoryProtocol,
     filing_maintenance_repository: FilingMaintenanceRepositoryProtocol,
     processor_registry: ProcessorRegistry,
+    cn_download_pdf_gate: CnDownloadPdfGateProtocol,
 ) -> PipelineProtocol:
     """按 ticker 构建 pipeline。"""
 
@@ -207,6 +212,7 @@ def _build_pipeline(
         blob_repository=blob_repository,
         filing_maintenance_repository=filing_maintenance_repository,
         processor_registry=processor_registry,
+        cn_download_pdf_gate=cn_download_pdf_gate,
     )
 
 
@@ -1234,6 +1240,9 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
     blob_repository: DocumentBlobRepositoryProtocol
     filing_maintenance_repository: FilingMaintenanceRepositoryProtocol
     processor_registry: ProcessorRegistry
+    cn_download_pdf_gate: CnDownloadPdfGateProtocol = field(
+        default_factory=NoopCnDownloadPdfGate
+    )
     _tool_service: Optional[FinsToolService] = field(init=False, default=None, repr=False)
     _tool_service_lock: Lock = field(init=False, repr=False)
 
@@ -1256,11 +1265,28 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
             blob_repository=self.blob_repository,
             filing_maintenance_repository=self.filing_maintenance_repository,
             processor_registry=self.processor_registry,
+            cn_download_pdf_gate=self.cn_download_pdf_gate,
         )
 
     @classmethod
-    def create(cls, *, workspace_root: Path) -> "DefaultFinsRuntime":
-        """创建默认 Fins 运行时。"""
+    def create(
+        cls,
+        *,
+        workspace_root: Path,
+        cn_download_pdf_gate: CnDownloadPdfGateProtocol | None = None,
+    ) -> "DefaultFinsRuntime":
+        """创建默认 Fins 运行时。
+
+        Args:
+            workspace_root: 工作区根目录。
+            cn_download_pdf_gate: 可选 CN/HK PDF 下载段 gate。
+
+        Returns:
+            默认 Fins 运行时。
+
+        Raises:
+            无。
+        """
 
         repository_set = build_fs_repository_set(workspace_root=workspace_root)
         return cls(
@@ -1286,6 +1312,7 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
                 repository_set=repository_set,
             ),
             processor_registry=build_fins_processor_registry(),
+            cn_download_pdf_gate=cn_download_pdf_gate or NoopCnDownloadPdfGate(),
         )
 
     def get_processor_registry(self) -> ProcessorRegistry:
@@ -1608,6 +1635,7 @@ class DefaultFinsRuntime(FinsRuntimeProtocol):
                 overwrite=prepared_args.overwrite,
                 rebuild=prepared_args.rebuild,
                 ticker_aliases=prepared_args.ticker_aliases,
+                cancel_checker=cancel_checker,
             )
             return _build_download_result_data(raw_result)
         if name == FinsCommandName.UPLOAD_FILING:

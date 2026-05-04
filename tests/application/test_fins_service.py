@@ -37,7 +37,7 @@ from dayu.fins.ingestion.factory import IngestionServiceFactory
 from dayu.fins.processors.registry import build_fins_processor_registry
 from dayu.fins.tools.service import FinsToolService
 from dayu.services.contracts import FinsSubmitRequest
-from dayu.services.concurrency_lanes import LANE_CN_DOWNLOAD, LANE_HK_DOWNLOAD, LANE_SEC_DOWNLOAD
+from dayu.services.concurrency_lanes import LANE_SEC_DOWNLOAD
 from dayu.services.fins_service import FinsService
 from dayu.services.protocols import FinsServiceProtocol
 from tests.application.conftest import StubHostExecutor, StubSessionRegistry
@@ -315,8 +315,8 @@ def test_execute_sync_download() -> None:
 
 
 @pytest.mark.unit
-def test_execute_cn_download_uses_cn_download_hosted_lane() -> None:
-    """CN download 应在 HostedRun 外层占用独立 CN 下载 lane。"""
+def test_execute_cn_download_does_not_hold_hosted_lane_for_whole_operation() -> None:
+    """CN download 外层不持有 lane，避免 Docling 转换阻塞 PDF 下载。"""
 
     def _executor(host_obj: Host) -> StubHostExecutor:
         """把 Host 内部 executor 收窄到测试 stub。"""
@@ -343,12 +343,12 @@ def test_execute_cn_download_uses_cn_download_hosted_lane() -> None:
     assert isinstance(result, FinsResult)
     last_spec = _executor(host).last_spec
     assert last_spec is not None
-    assert last_spec.business_concurrency_lane == LANE_CN_DOWNLOAD
+    assert last_spec.business_concurrency_lane is None
 
 
 @pytest.mark.unit
-def test_execute_hk_download_uses_hk_download_hosted_lane() -> None:
-    """HK download 应在 HostedRun 外层占用独立 HK 下载 lane。"""
+def test_execute_hk_download_does_not_hold_hosted_lane_for_whole_operation() -> None:
+    """HK download 外层不持有 lane，避免 Docling 转换阻塞 PDF 下载。"""
 
     def _executor(host_obj: Host) -> StubHostExecutor:
         """把 Host 内部 executor 收窄到测试 stub。"""
@@ -375,7 +375,7 @@ def test_execute_hk_download_uses_hk_download_hosted_lane() -> None:
     assert isinstance(result, FinsResult)
     last_spec = _executor(host).last_spec
     assert last_spec is not None
-    assert last_spec.business_concurrency_lane == LANE_HK_DOWNLOAD
+    assert last_spec.business_concurrency_lane is None
 
 
 @pytest.mark.unit

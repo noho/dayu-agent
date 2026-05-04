@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Optional, Protocol
 
 from dayu.fins.docling_export import PdfToDoclingJsonBytes
+from dayu.fins.pipelines.cn_download_pdf_gate import CnDownloadPdfGateProtocol
 from dayu.fins.pipelines.cn_download_models import (
     CnCompanyProfile,
     CnReportCandidate,
@@ -174,6 +175,12 @@ class CnDownloadWorkflowHost(Protocol):
     @property
     def hk_discovery_client(self) -> CnReportDiscoveryClientProtocol:
         """港股披露易 discovery client。"""
+
+        ...
+
+    @property
+    def pdf_download_gate(self) -> CnDownloadPdfGateProtocol:
+        """CN/HK PDF 下载段 gate。"""
 
         ...
 

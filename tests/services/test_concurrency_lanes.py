@@ -81,14 +81,14 @@ def test_resolve_fins_command_concurrency_lane_keeps_sec_on_sec_download() -> No
 def test_resolve_fins_command_concurrency_lane_uses_cn_download_for_cn(
     ticker: str,
 ) -> None:
-    """CN download 应使用独立 cn_download lane。"""
+    """CN download 外层不占 lane，PDF 下载段在 pipeline 内使用 cn_download。"""
 
     command = FinsCommand(
         name=FinsCommandName.DOWNLOAD,
         payload=DownloadCommandPayload(ticker=ticker),
     )
 
-    assert resolve_fins_command_concurrency_lane(command) == LANE_CN_DOWNLOAD
+    assert resolve_fins_command_concurrency_lane(command) is None
 
 
 @pytest.mark.unit
@@ -96,14 +96,14 @@ def test_resolve_fins_command_concurrency_lane_uses_cn_download_for_cn(
 def test_resolve_fins_command_concurrency_lane_uses_hk_download_for_hk(
     ticker: str,
 ) -> None:
-    """HK download 应使用独立 hk_download lane。"""
+    """HK download 外层不占 lane，PDF 下载段在 pipeline 内使用 hk_download。"""
 
     command = FinsCommand(
         name=FinsCommandName.DOWNLOAD,
         payload=DownloadCommandPayload(ticker=ticker),
     )
 
-    assert resolve_fins_command_concurrency_lane(command) == LANE_HK_DOWNLOAD
+    assert resolve_fins_command_concurrency_lane(command) is None
 
 
 @pytest.mark.unit

@@ -29,6 +29,7 @@ from dayu.fins.pipelines.cn_download_models import (
     CnReportQuery,
     DownloadedReportAsset,
 )
+from dayu.fins.pipelines.cn_download_pdf_gate import CnDownloadPdfGateProtocol
 from dayu.fins.pipelines.cn_pipeline import CnPipeline
 from dayu.fins.processors.registry import build_fins_processor_registry
 from dayu.fins.service_runtime import DefaultFinsRuntime
@@ -193,6 +194,7 @@ class _RuntimeCnPipelineFactory:
         blob_repository: DocumentBlobRepositoryProtocol | None = None,
         filing_maintenance_repository: FilingMaintenanceRepositoryProtocol | None = None,
         processor_registry: ProcessorRegistry | None = None,
+        cn_download_pdf_gate: CnDownloadPdfGateProtocol | None = None,
     ) -> PipelineProtocol:
         """构建测试用真实 CN pipeline。
 
@@ -206,6 +208,7 @@ class _RuntimeCnPipelineFactory:
             blob_repository: blob 仓储。
             filing_maintenance_repository: filing 维护仓储。
             processor_registry: 处理器注册表。
+            cn_download_pdf_gate: 可选 CN/HK PDF 下载段 gate。
 
         Returns:
             绑定 fake discovery 的 ``CnPipeline``。
@@ -226,6 +229,7 @@ class _RuntimeCnPipelineFactory:
             blob_repository=blob_repository,
             filing_maintenance_repository=filing_maintenance_repository,
             cn_discovery_client=self.discovery,
+            pdf_download_gate=cn_download_pdf_gate,
             convert_pdf_to_docling_json=self.converter,
         )
 

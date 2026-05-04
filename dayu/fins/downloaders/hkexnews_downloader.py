@@ -1132,15 +1132,20 @@ def _is_english_announcement(announcement: _RawHkAnnouncement) -> bool:
 
     if announcement.language == "en":
         return True
-    combined = f"{announcement.title} {announcement.category_text}"
-    return _looks_like_english_report_text(combined)
+    if _looks_like_english_report_text(announcement.title):
+        return True
+    if not _contains_cjk(announcement.title) and _looks_like_english_report_text(
+        announcement.category_text
+    ):
+        return True
+    return False
 
 
 def _looks_like_english_report_text(text: str) -> bool:
     """判断文本是否明显是英文财报标题或分类。
 
     Args:
-        text: 标题与分类拼接文本。
+        text: 标题或分类文本。
 
     Returns:
         命中英文财报关键词且缺少中文/繁中文字符时返回 ``True``。

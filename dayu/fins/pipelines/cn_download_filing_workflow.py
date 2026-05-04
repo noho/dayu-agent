@@ -15,10 +15,12 @@ from pathlib import Path
 from dayu.contracts.cancellation import CancelledError
 from dayu.fins.domain.document_models import FileObjectMeta, SourceHandle
 from dayu.fins.domain.enums import SourceKind
+from dayu.fins.pipelines.cn_download_pdf_gate import CnDownloadPdfGateProtocol
 from dayu.fins.pipelines.cn_download_models import (
     CN_PIPELINE_DOWNLOAD_VERSION,
     CnCompanyProfile,
     CnReportCandidate,
+    DownloadedReportAsset,
 )
 from dayu.fins.pipelines.cn_download_protocols import (
     CnReportDiscoveryClientProtocol,
@@ -52,12 +54,39 @@ class CnDownloadFilingError(RuntimeError):
     """CN/HK 单 filing 下载失败。"""
 
 
+def _download_report_pdf_with_gate(
+    *,
+    discovery_client: CnReportDiscoveryClientProtocol,
+    pdf_download_gate: CnDownloadPdfGateProtocol,
+    candidate: CnReportCandidate,
+    cancel_checker: Callable[[], bool] | None,
+) -> DownloadedReportAsset:
+    """在 PDF 下载 gate 内访问远端 PDF。
+
+    Args:
+        discovery_client: 当前市场 downloader。
+        pdf_download_gate: PDF 下载段 gate。
+        candidate: 待下载候选。
+        cancel_checker: 可选取消检查函数。
+
+    Returns:
+        已下载 PDF 资产。
+
+    Raises:
+        Exception: gate 获取、取消、主源下载或 PDF 校验失败时原样抛出。
+    """
+
+    with pdf_download_gate.lease_for_provider(candidate.provider, cancel_checker=cancel_checker):
+        return discovery_client.download_report_pdf(candidate)
+
+
 async def run_cn_download_single_filing_stream(
     *,
     source_repository: SourceDocumentRepositoryProtocol,
     blob_repository: DocumentBlobRepositoryProtocol,
     processed_repository: ProcessedDocumentRepositoryProtocol,
     discovery_client: CnReportDiscoveryClientProtocol,
+    pdf_download_gate: CnDownloadPdfGateProtocol,
     convert_pdf_to_docling_json: Callable[[bytes, str], bytes],
     ticker: str,
     profile: CnCompanyProfile,
@@ -73,6 +102,7 @@ async def run_cn_download_single_filing_stream(
         blob_repository: 文件对象仓储。
         processed_repository: processed 文档仓储。
         discovery_client: 当前市场 downloader。
+        pdf_download_gate: PDF 下载段 gate。
         convert_pdf_to_docling_json: PDF -> Docling JSON 转换函数。
         ticker: 已归一化 ticker。
         profile: 公司基础元数据。
@@ -160,7 +190,13 @@ async def run_cn_download_single_filing_stream(
     )
     if reusable_pdf is None:
         try:
-            asset = await asyncio.to_thread(discovery_client.download_report_pdf, candidate)
+            asset = await asyncio.to_thread(
+                _download_report_pdf_with_gate,
+                discovery_client=discovery_client,
+                pdf_download_gate=pdf_download_gate,
+                candidate=candidate,
+                cancel_checker=cancel_checker,
+            )
         except CancelledError:
             raise
         except Exception as exc:

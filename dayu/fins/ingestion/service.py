@@ -123,6 +123,8 @@ class FinsIngestionService:
         overwrite: bool = False,
         rebuild: bool = False,
         ticker_aliases: Optional[list[str]] = None,
+        *,
+        cancel_checker: Optional[Callable[[], bool]] = None,
     ) -> dict[str, Any]:
         """执行同步下载。
 
@@ -134,6 +136,7 @@ class FinsIngestionService:
             overwrite: 是否覆盖。
             rebuild: 是否重建本地 meta/manifest。
             ticker_aliases: 可选公司 alias 列表。
+            cancel_checker: 可选取消检查函数，用于同步聚合链路下传。
 
         Returns:
             最终结果字典。
@@ -152,6 +155,7 @@ class FinsIngestionService:
                     overwrite=overwrite,
                     rebuild=rebuild,
                     ticker_aliases=ticker_aliases,
+                    cancel_checker=cancel_checker,
                 ),
                 stream_name="download_stream",
             )

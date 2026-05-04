@@ -6,7 +6,7 @@ import asyncio
 import argparse
 from pathlib import Path
 from threading import Barrier, Thread
-from typing import Any, AsyncIterator, Optional, cast
+from typing import Any, AsyncIterator, Callable, Optional, cast
 
 import pytest
 
@@ -723,6 +723,7 @@ def test_execute_download_uses_normalized_namespace_values(
             overwrite: bool,
             rebuild: bool,
             ticker_aliases: list[str] | None,
+            cancel_checker: Callable[[], bool] | None = None,
         ) -> dict[str, Any]:
             captured["download_ticker"] = ticker
             captured["download_form_type"] = form_type
@@ -731,6 +732,7 @@ def test_execute_download_uses_normalized_namespace_values(
             captured["download_rebuild"] = rebuild
             captured["download_start_date"] = start_date
             captured["download_end_date"] = end_date
+            captured["download_cancel_checker"] = cancel_checker
             return {
                 "pipeline": "fake",
                 "status": "ok",

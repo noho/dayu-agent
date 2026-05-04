@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from dayu.engine.processors.processor_registry import ProcessorRegistry
+from dayu.fins.pipelines.cn_download_pdf_gate import CnDownloadPdfGateProtocol
 from dayu.log import Log
 from dayu.fins.ingestion.service import FinsIngestionService
 from dayu.fins.processors.registry import (
@@ -60,6 +61,7 @@ def get_pipeline_from_normalized_ticker(
     blob_repository: DocumentBlobRepositoryProtocol | None = None,
     filing_maintenance_repository: FilingMaintenanceRepositoryProtocol | None = None,
     processor_registry: ProcessorRegistry | None = None,
+    cn_download_pdf_gate: CnDownloadPdfGateProtocol | None = None,
 ) -> PipelineProtocol:
     """根据 ``NormalizedTicker`` 构建对应 Pipeline。
 
@@ -73,6 +75,7 @@ def get_pipeline_from_normalized_ticker(
         blob_repository: 可选共享文件对象仓储实例。
         filing_maintenance_repository: 可选共享 filing 维护治理仓储实例。
         processor_registry: 可选共享处理器注册表；传入后优先于 `processor_hint`。
+        cn_download_pdf_gate: 可选 CN/HK PDF 下载段 gate。
 
     Returns:
         对应的 pipeline 实例。
@@ -105,6 +108,7 @@ def get_pipeline_from_normalized_ticker(
             processed_repository=processed_repository,
             blob_repository=blob_repository,
             filing_maintenance_repository=filing_maintenance_repository,
+            pdf_download_gate=cn_download_pdf_gate,
         )
     raise ValueError(f"不支持的 market: {normalized_ticker.market}")
 

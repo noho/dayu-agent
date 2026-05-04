@@ -54,10 +54,12 @@ class _PipelineStub(PipelineProtocol):
         overwrite: bool = False,
         rebuild: bool = False,
         ticker_aliases: list[str] | None = None,
+        *,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         """测试中不应调用 download。"""
 
-        del ticker, form_type, start_date, end_date, overwrite, rebuild, ticker_aliases
+        del ticker, form_type, start_date, end_date, overwrite, rebuild, ticker_aliases, cancel_checker
         raise AssertionError("download 不应在该测试中被调用")
 
     def upload_filing(

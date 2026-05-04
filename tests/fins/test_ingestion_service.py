@@ -138,6 +138,23 @@ def test_download_sync_result_matches_stream_collection() -> None:
 
 
 @pytest.mark.unit
+def test_download_sync_passes_cancel_checker_to_stream() -> None:
+    """同步下载包装器必须把取消检查函数下传给流式后端。"""
+
+    backend = _FakeIngestionBackend()
+    service = FinsIngestionService(backend=backend)
+
+    def cancel_checker() -> bool:
+        """测试取消检查函数。"""
+
+        return True
+
+    service.download(ticker="600519", cancel_checker=cancel_checker)
+
+    assert backend.download_calls[0]["cancel_checker"] is cancel_checker
+
+
+@pytest.mark.unit
 def test_process_sync_result_matches_stream_collection() -> None:
     """验证 `process()` 与 `process_stream()` 的最终结果一致。"""
 
