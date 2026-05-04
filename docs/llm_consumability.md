@@ -7,9 +7,29 @@
 
 评估的不是「文档是否完整」，而是「agent 是否能用」。
 
-本框架适用于所有 SEC 表单（10-K、10-Q、20-F、6-K、8-K、SC 13G、DEF 14A），**六维**评估逻辑与表单类型无关，仅指标阈值按表单差异调参。
+本框架先定义跨市场共享的抽象维度，再由不同 profile 把抽象维度落到具体市场、文档类型、结构信号与阈值。SEC profile 使用 SEC form / Item 规则；CN/HK Docling profile 使用 A 股、港股财报与材料类文档的中文/繁中文结构信号。二者同源于 LLM 可喂性目标，但不能共享同一套 Item 覆盖率和关键章节阈值。
+
+### 通用评估维度
+
+| 维度 | 跨市场抽象 | profile 落地点 |
+|------|------------|----------------|
+| 结构可导航性 | agent 能否从章节列表快速定位应读区域 | SEC 使用 form / Item / Part；CN/HK 使用 report kind、目录层级、中文/繁中文章节标题 |
+| 文本可读性 | `read_section` 返回文本是否可直接理解 | 按语言、OCR、编码、页眉页脚噪声设定检测规则 |
+| 表格可消费性 | `list_tables/get_table` 是否支持数值推理 | 按表格标题、表头、行列质量、财务表语义、合并/母公司维度设定规则 |
+| 搜索可用性 | `search_document` 是否能稳定返回证据 | 按 query pack、market、report kind 分层设定召回与证据质量阈值 |
+| 一致性与可追溯性 | section/table/page refs 是否能跨工具互相解引用 | 统一检查悬挂 ref、跨工具 ref 集、section/table/page 关联 |
+| 噪声与完整性 | 处理产物是否缺失关键内容或混入干扰文本 | 按文档类型设定空章节、目录污染、截断、边界溢出、编码噪声规则 |
+| 语义可寻址性 | agent 能否按业务语义而非字符串猜测路由 | SEC 使用 Item→topic；CN/HK 使用财报章节语义、报表类型、治理/股东/风险等标签 |
+
+### Profile 分层原则
+
+- **SEC profile**：覆盖 10-K、10-Q、20-F、6-K、8-K、SC 13G、DEF 14A。评分入口为当前已实现的 `dayu.fins.score_sec_ci`，规则真源是 SEC form / Item / Part 与事件类表单关键词。
+- **CN/HK Docling profile**：覆盖 A 股、港股 filing/material 的 Docling JSON 工具快照。CN/HK 没有 `Item 7`、`Item 8` 等 SEC 法定结构，不评估 SEC Item 覆盖率；应按年报、半年报、季报、材料类文档分别设定关键章节、表格、搜索和页面定位规则。
+- **快照真源**：所有 profile 都以 `dayu-cli process --ci` 产出的 `tool_snapshot_*` 为评分输入；文档、processed、blob、snapshot 的发现与读取必须走 `dayu.fins.storage` 仓储协议和实现。
 
 ---
+
+## SEC Profile
 
 ### 适用表单与结构差异
 
@@ -355,7 +375,7 @@ DEF 14A（章节以关键词匹配识别）：
 
 ---
 
-### CI 110 分制评分框架（`score_sec_ci.py`）
+### SEC CI 110 分制评分框架（`score_sec_ci.py`）
 
 #### 评分维度（总分 110）
 
@@ -435,7 +455,7 @@ make score-ci FORM=20-F              # 指定 20-F
 
 ---
 
-### 维度适用性总结
+### SEC profile 维度适用性总结
 
 | 维度 | 跨表单复用性 | 需按表单调整的参数 |
 |------|------------------|----------|
@@ -446,7 +466,7 @@ make score-ci FORM=20-F              # 指定 20-F
 | 信息完整性 | 逻辑复用，参数重设 | 关键 Item、内容长度阈值、ToC 检测目标、近空白名单 |
 | **语义可寻址性** | **仅 10-K / 10-Q / 20-F；其他表单默认满分** | 表单是否具备标准 Item→topic 映射 |
 
-> 六维框架是 **form-agnostic** 的：它定义的是《agent 能否用好这份文档》，而不是《这份文档是什么类型》。差异仅在于**哪些 Item/章节是关键的、多长算充足、结构匹配方式（Item 编号/关键词/议案号）**——这些都是参数层面的调整，不改变评估逻辑。对于事件/治理类表单（6-K、8-K、SC 13G、DEF 14A），框架自适应：无标准 Item 结构的表单使用关键词匹配识别关键章节，事件驱动型表单（8-K）的内容长度检测默认满分，无 XBRL 的表单财报完整性默认满分，语义可寻址性（S）不适用表单默认满分。
+> SEC profile 当前评分维度是 **form-agnostic** 的：它定义的是《agent 能否用好这份 SEC filing》，而不是《这份 filing 是哪个 form》。差异仅在于**哪些 Item/章节是关键的、多长算充足、结构匹配方式（Item 编号/关键词/议案号）**——这些都是 SEC profile 内部的参数调整，不改变 SEC 评估逻辑。对于事件/治理类表单（6-K、8-K、SC 13G、DEF 14A），SEC profile 自适应：无标准 Item 结构的表单使用关键词匹配识别关键章节，事件驱动型表单（8-K）的内容长度检测默认满分，无 XBRL 的表单财报完整性默认满分，语义可寻址性（S）不适用表单默认满分。
 
 ---
 
@@ -505,7 +525,7 @@ make score-ci FORM=20-F              # 指定 20-F
 **为什么对写作重要**：agent 延读 10-K / 10-Q / 20-F 时，首先按语义标签（`risk_factors`、`mda`、`financial_statements`）路由工具调用。若 `topic` 字段全为 `null`，agent 需逐字匹配标题字符串，容易转到错误章节、漏读关键内容。
 ---
 
-### 当前评估脚本覆盖情况
+### SEC 当前评估脚本覆盖情况
 
 | 维度 | 已覆盖 | 未覆盖（待后续迭代） |
 |------|--------|---------------------|
@@ -515,3 +535,135 @@ make score-ci FORM=20-F              # 指定 20-F
 | 检索有效性 | coverage_rate_weighted、evidence_quality_rate、efficiency_rate | query_intent 级别召回（需标注集） |
 | 信息完整性 | 关键 Item 存在 + 长度、**财报深度**（NEW）、**截断检测**（NEW）、**边界溢出**（NEW） | Cover Page 信息完整性 |
 | **语义可寻址性** | **topic 覆盖率检测（NEW）；仅 10-K / 10-Q / 20-F** | XBRL 事实细粒度（query_xbrl_facts 每文档仅 1 调用，样本量不足） |
+
+---
+
+## CN/HK Docling Profile
+
+### 适用对象与评分输入
+
+CN/HK Docling profile 适用于 A 股与港股的 `filing`、`material` 文档，评分输入是 CN/HK pipeline 通过 `process --ci` 导出的 Docling JSON 工具快照。源 PDF 到 Docling JSON 的转换属于 pipeline 处理链路，scorer 不直接读取 PDF 或手拼工作区路径。
+
+该 scorer 入口尚未实现，本文只定义 Phase 1 可直接落地的 scorer 边界：
+
+- 新增独立入口，例如 `dayu.fins.score_docling_ci`；不把 CN/HK 规则硬塞进 `dayu.fins.score_sec_ci`。
+- 支持 `SourceKind.FILING` 与 `SourceKind.MATERIAL`，发现样本、读取 source/processed/blob/snapshot 一律走 `dayu.fins.storage`。
+- 读取现有 `tool_snapshot_*`：`get_document_sections`、`read_section`、`list_tables`、`get_table`、`get_page_content`、`get_financial_statement`、`search_document`、`query_xbrl_facts`。CN/HK Docling 首版评分主要依赖 section/table/page/search 快照，不把 XBRL 可用性作为 hard gate。
+- 输出 JSON/MD 报告时可复用 SEC scorer 的报告形态，但 profile、扣分项、hard gate 必须独立。
+
+### Report Kind
+
+CN/HK 不按 SEC form 评分，首版按 report kind 分层：
+
+| report kind | 适用文档 | 结构预期 |
+|-------------|----------|----------|
+| 年报 | A 股年度报告、港股年报 | 完整经营讨论、公司治理、股东信息、审计意见、三大报表、附注 |
+| 半年报 | A 股半年度报告、港股中期报告 | 经营讨论、主要财务数据、三大报表、附注或简明附注、重大事项 |
+| 季报 | A 股一季报、三季报、港股季度业绩或季度报告 | 主要财务数据、经营简述、三大报表或核心财务表、风险/重大事项提示 |
+| 材料 | 公告、通函、业绩快报、业绩预告、投资者材料等 | 主题标题、事件正文、影响说明、风险提示或董事会/监管声明 |
+
+report kind 由 source meta 中的现有字段与 pipeline 已推导的文档类型共同确定。scorer 只能把它作为 profile 选择信号，不能把 CN/HK 文档强行映射成 `10-K/10-Q/8-K`。
+
+### 结构可导航性指标
+
+| 指标 | 年报 | 半年报 | 季报 | 材料 |
+|------|------|--------|------|------|
+| section_count 合理区间 | 20–220 | 12–140 | 6–90 | 1–50 |
+| 标题可辨识度 | 中文/繁中文一级、二级标题可读，非目录行堆叠 | 同年报 | 允许更短，但标题需能定位财务与经营内容 | 标题需体现公告或材料主题 |
+| 目录层级 | 目录页可存在，但正文 section 不应被目录替代 | 同年报 | 记录目录污染，首版不强制 gate | 通常不要求目录 |
+| 关键章节召回 | 公司简介、主营业务、管理层讨论与分析或董事会报告、主要会计数据和财务指标、公司治理、股东信息、重大事项/风险提示、审计意见 | 主营业务或经营情况、管理层讨论、主要财务数据、重大事项/风险提示 | 主要财务数据、经营情况或管理层讨论、风险/重大事项提示 | 事件主题、正文、影响、风险提示 |
+| 财务结构召回 | 资产负债表、利润表、现金流量表、合并/母公司报表、附注 | 三大报表、合并/母公司或简明报表、附注或简明附注 | 三大报表或核心财务表 | 仅对业绩类材料要求财务摘要 |
+| 父子层级 | 子章节 parent_ref 应反映目录层级 | 同年报 | 记录为主 | 记录为主 |
+
+关键章节采用中文/繁中文同义词匹配与标题层级共同判定，例如“管理层讨论与分析”“管理层讨论及分析”“董事会报告”“主要会计数据和财务指标”“主要財務資料”“綜合損益表”“合併資產負債表”。禁止把这些信号包装成 SEC Item 变体。
+
+### 文本可读性指标
+
+| 指标 | 定义 | 首版判定 |
+|------|------|----------|
+| CJK 文本完整性 | 中文/繁中文正文不应被 OCR 空格、逐字断行、乱码切碎 | 年报/半年报 gate；季报/材料记录并扣分 |
+| 编码清洁度 | 无 mojibake、异常替换字符、HTML 实体残留 | 进入 hard gate 候选 |
+| 页眉页脚噪声 | 公司简称、页码、报告名不应在正文高频重复并干扰段落 | 首版记录并扣分，不 gate |
+| 目录污染 | 关键章节 `read_section` 只返回目录页或目录片段 | 年报/半年报 gate |
+| 空/近空 section | 非法定短声明章节不应为空或近空 | 全 report kind 扣分；材料类按篇幅放宽 |
+| 中繁混合可读性 | 港股繁中文、A 股简中文可混排，但不能出现编码污染 | 记录语言分布，编码污染扣分 |
+
+### 表格可消费性指标
+
+| 指标 | 定义 | 首版判定 |
+|------|------|----------|
+| 财务表召回 | `list_tables` 能识别三大报表和主要财务指标表 | 年报/半年报 gate；季报对核心财务表 gate |
+| 表格标题与上下文 | snapshot 暴露的 caption、within_section/section_ref、page_no、headers 至少一项能说明表格含义；`context_before` 当前仅作为 processor 内部信号，不作为首版 snapshot 必填字段 | 扣分；低填充率进入问题簇 |
+| 合并/母公司维度 | 年报、半年报应区分合并报表与母公司报表标题或上下文 | 首版记录并扣分，不 gate |
+| 表头可读性 | 列名不是默认数字、空列、`Unnamed`、不可解释碎片 | 扣分 |
+| 数值可读性 | 金额单位、期间列、本期/上期、同比等列能保留 | 扣分 |
+| 空表/微型表 | 行数或列数过低的表格占比不应过高 | 记录并扣分，不 gate |
+| NaN/null 清洁度 | `get_table` 返回不应含大量 NaN/null 或结构化空洞 | 扣分 |
+
+CN/HK 财务表首版关键词至少覆盖：资产负债表、利润表、现金流量表、合并资产负债表、母公司资产负债表、合并利润表、母公司利润表、合并现金流量表、母公司现金流量表、綜合財務狀況表、綜合損益表、綜合現金流量表、主要会计数据和财务指标、主要財務資料。
+
+### 搜索可用性指标
+
+| 指标 | 定义 | 首版判定 |
+|------|------|----------|
+| query pack 覆盖率 | CN/HK `annual_quarter_core40`、event/governance/ownership pack 的加权命中率 | 按 market/report kind 分层阈值 |
+| 证据质量 | `evidence.context` 非空、长度适中、带有效 `section_ref` | gate 候选；低于阈值扣分 |
+| 搜索效率 | exact/title/section 命中占比，不应主要依赖低质量全文兜底 | 扣分 |
+| 简繁适配 | HK profile 应命中繁中文关键词，CN profile 应命中简中文关键词；同义词可辅助 | 记录无结果 query 与语言分布 |
+| 关键主题召回 | 主营业务、营业收入、净利润、现金流、主要股东、关联交易、风险提示、审计意见等可搜索 | 年报/半年报扣分重点 |
+
+首版阈值建议：
+
+| report kind | C1 覆盖率 t5 | C1 覆盖率 t7 | C1 覆盖率 t9 |
+|-------------|--------------|--------------|--------------|
+| 年报/半年报 | 0.55 | 0.70 | 0.85 |
+| 季报 | 0.45 | 0.60 | 0.75 |
+| 材料 | 0.25 | 0.40 | 0.55 |
+
+### 一致性与可追溯性指标
+
+| 指标 | 定义 | 首版判定 |
+|------|------|----------|
+| section ref 一致 | `get_document_sections` 返回 refs 与 `read_section` 可读 refs 一致 | hard gate |
+| table ref 可追溯 | `read_section.content` 中的 `[[t_xxxx]]` 占位符、`list_tables.table_ref`、`get_table` 可互相解引用 | hard gate |
+| section/table 归属 | 财务表应有有效 `within_section`/`section_ref`、页码或标题上下文 | 扣分 |
+| snapshot 元信息一致 | `tool_snapshot_meta` 的 `market`、`source_kind`、`document_type`、`search_query_pack_name`、`search_query_pack_version`、`search_query_count`、`search_queries` 与样本一致 | hard gate |
+| 同源读取 | scorer 发现和读取文档、snapshot 不绕过仓储 | 实现验收项 |
+
+### Docling 页面定位指标
+
+| 指标 | 定义 | 首版判定 |
+|------|------|----------|
+| section page_range | 关键章节应有 page_range，且页码为正整数 | 年报/半年报扣分重点 |
+| table page_no | 财务表应有 page_no | 财务表缺失 page_no 扣分 |
+| page_content 可复核 | `get_page_content(page_no)` 能返回对应 section/table 或文本预览 | hard gate 候选 |
+| 页码边界 | page_range 不应倒置、越界或全部为空 | hard gate 候选 |
+
+Docling 页面定位是 CN/HK profile 的独立维度，因为 PDF 转 Docling 后，人工复核和后续归因高度依赖页码。SEC HTML/XBRL profile 不应照搬此维度的权重。
+
+### 初步 Hard Gate 建议
+
+| 规则 | 年报 | 半年报 | 季报 | 材料 |
+|------|------|--------|------|------|
+| 关键章节完全缺失 | 缺三大报表任一、缺管理层讨论/董事会报告、缺附注或审计意见 | 缺三大报表任一、缺经营讨论、缺附注/简明附注 | 缺核心财务表或主要财务数据 | 缺标题或正文 |
+| 目录污染 | 关键章节正文疑似仅目录 | 关键章节正文疑似仅目录 | 记录并扣分 | 不适用 |
+| 超大 section | 单 section > 300K chars | 同年报 | 同年报 | 同年报 |
+| 悬挂 refs | 任何悬挂 section/table ref | 同年报 | 同年报 | 同年报 |
+| 页面定位不可复核 | 关键章节和财务表均无有效页码 | 同年报 | 财务表无有效页码 | 记录并扣分 |
+| snapshot 元信息不一致 | `market`、`source_kind`、`document_type`、`search_query_pack_name`、`search_query_pack_version`、`search_query_count`、`search_queries` 缺失或冲突 | 同年报 | 同年报 | 同年报 |
+
+首版不建议 gate 的指标：
+
+- 合并/母公司报表区分不完整：先记录并扣分，避免把标题表达差异误判成不可用。
+- 页眉页脚高频噪声：先记录噪声模式，形成问题簇后再决定阈值。
+- 空表/微型表比例：先观察 Docling 对不同 PDF 的分布，避免惩罚真实披露中的小表。
+- 简繁同义词互召回：先记录 no-hit query 与 market 语言分布，避免用错误语言假设惩罚港股双语文档。
+- 材料类文档的财务表覆盖：只有业绩类材料进入财务表要求，普通公告不 gate。
+
+### 架构边界
+
+- `dayu.engine.processors.docling_processor.DoclingProcessor` 只放通用 Docling 抽取能力：线性 items、sections、tables、`read_section`、`read_table`、search、page_content。
+- `dayu.fins.processors.fins_docling_processor.FinsDoclingProcessor` 与 fins 处理层放 CN/HK 财报语义增强，例如金融表格识别、中文/繁中文章节语义、三大报表定位。
+- scorer/profile 放评分规则、阈值、hard gate、report kind 选择；CN/HK scorer 不反向污染 engine，也不改 SEC scorer 的法定 Item 规则。
+- pipeline/snapshot 只负责同源快照导出，继续复用 `process --ci` 与 `tool_snapshot_*`，不在导出阶段内嵌评分规则。
+- 所有文档、processed、blob、snapshot 读取必须走 `dayu.fins.storage`，禁止手拼 `workspace/portfolio/...` 路径。
