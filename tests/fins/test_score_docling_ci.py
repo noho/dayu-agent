@@ -281,9 +281,32 @@ def test_quarterly_financial_profile_matches_operating_statement_headings() -> N
     """
 
     profile = PROFILES[REPORT_KIND_QUARTERLY]
-    text = "未經審計中期簡明合併經營狀況表\n淨利息收入\n手續費及佣金收入"
+    text = "未經審計中期簡明合併經營狀況表"
 
     assert "income_statement" in _matched_group_labels(text, profile.financial_groups)
+
+
+@pytest.mark.unit
+def test_financial_profile_does_not_match_statement_from_line_items_only() -> None:
+    """financial profile 不应仅凭财报行项目判定三大报表存在。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    profile = PROFILES[REPORT_KIND_QUARTERLY]
+    text = "淨利息收入\n手續費及佣金收入\n一、营业收入\n一、经营活动产生的现金流量"
+
+    labels = _matched_group_labels(text, profile.financial_groups)
+
+    assert "income_statement" not in labels
+    assert "cash_flow" not in labels
 
 
 @pytest.mark.unit

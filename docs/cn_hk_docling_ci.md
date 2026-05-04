@@ -42,7 +42,7 @@
 ## 必须遵守
 1. 遵循 `AGENTS.md`。
 2. 不修改财报工具 schema。
-3. 不修改 `dayu.fins.score_sec_ci` 来刷出 CN/HK 分数。
+3. 除非`dayu.fins.score_docling_ci` 本身有问题，不修改 `dayu.fins.score_docling_ci` 来刷出 CN/HK 分数。
 4. 不使用 SEC Item / Part / form 覆盖率判断 CN/HK。
 5. CI 扣分后必须核查同源证据，区分“原文如此”“Docling 抽取问题”“fins 增强问题”“snapshot 导出问题”“scorer/profile 问题”。
 6. 禁止硬编码公司特例；中文/繁中文同义词、report kind profile 与结构规则允许。
@@ -63,6 +63,7 @@
 - **JSON 优先**：机器分析只读 `score_docling_ci` JSON 报告。
 - **最小增量 process**：
   - 优先使用 `process --document-id ...` 精确重跑受影响文档。
+  - 只要进入 ticker 级批量 process，**必须并发 27 个任务**，以减少总耗时。
   - 直接使用 `utils/llm_ci_process.py`：
     - 支持 `--base`、`--tickers`、`--documents-json`、`--tag`、`--max-documents-per-job`
     - `--documents-json` 为数组，每项至少包含：`ticker`、`document_id`
