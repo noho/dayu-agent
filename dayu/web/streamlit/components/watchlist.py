@@ -2,6 +2,10 @@
 
 在表格内完成自选股的添加、删除、编辑，保存后写入本地 JSON。
 存储路径：workspace/.dayu/streamlit/watchlist.json。
+
+支持从工作区 ``portfolio/`` 目录扫描公司文件夹，经 ``dayu.fins.storage``
+盘点元数据后合并进自选股列表（仅新增缺失条目，并可在存在有效
+``meta.json`` 时更新公司名称）。
 """
 
 from __future__ import annotations
@@ -14,6 +18,26 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from dayu.fins.domain.document_models import CompanyMetaInventoryEntry
+from dayu.fins.storage.fs_company_meta_repository import FsCompanyMetaRepository
+from dayu.fins.ticker_normalization import try_normalize_ticker
+
+_PORTFOLIO_SYNC_INVALID_META_NAME_SUFFIX = "（公司元数据无效）"
+
+
+@dataclass(frozen=True)
+class _PortfolioWatchlistCandidate:
+    """从 portfolio 盘点得到的单条自选股候选。
+
+    属性:
+        ticker: 写入自选股的股票代码（优先取公司 meta 中的规范 ticker）。
+        company_name: 展示用公司名称。
+        official: 是否来自有效 ``meta.json``（为 True 时可覆盖已有条目的名称）。
+    """
+
+    ticker: str
+    company_name: str
+    official: bool
 
 
 @dataclass(frozen=True)
@@ -111,6 +135,210 @@ def save_watchlist_items(workspace_root: Path, items: list[WatchlistItem]) -> No
     with open(storage_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
+
+def _merge_key_for_watchlist(ticker: str) -> str:
+    """将 ticker 转为自选股合并用键（归一化后大写，便于跨写法去重）。
+
+    参数:
+        ticker: 原始股票代码或目录名。
+
+    返回值:
+        非空合并键；输入全空白时返回空串。
+
+    异常:
+        无。
+    """
+
+    cleaned = ticker.strip()
+    if not cleaned:
+        return ""
+    normalized = try_normalize_ticker(cleaned)
+    if normalized is not None:
+        return normalized.canonical.upper()
+    return cleaned.upper()
+
+
+def _apply_inventory_entry_to_discovery(
+    discovery: dict[str, _PortfolioWatchlistCandidate],
+    entry: CompanyMetaInventoryEntry,
+) -> None:
+    """将单条盘点结果写入 discovery 映射（官方 meta 优先于缺失/无效目录）。
+
+    参数:
+        discovery: 合并键到候选条目的可变映射。
+        entry: 仓储返回的单条盘点记录。
+
+    返回值:
+        无。
+
+    异常:
+        无。
+    """
+
+    if entry.status == "hidden_directory":
+        return
+    if entry.status == "available" and entry.company_meta is not None:
+        meta = entry.company_meta
+        ticker = meta.ticker.strip()
+        if not ticker:
+            return
+        merge_key = _merge_key_for_watchlist(ticker)
+        if not merge_key:
+            return
+        name = meta.company_name.strip()
+        discovery[merge_key] = _PortfolioWatchlistCandidate(
+            ticker=ticker,
+            company_name=name or ticker,
+            official=True,
+        )
+        return
+
+    raw_dir = entry.directory_name.strip()
+    if not raw_dir:
+        return
+    normalized = try_normalize_ticker(raw_dir)
+    ticker_raw = normalized.canonical if normalized is not None else raw_dir.strip()
+    merge_key = _merge_key_for_watchlist(ticker_raw)
+    if not merge_key:
+        return
+    existing = discovery.get(merge_key)
+    if existing is not None and existing.official:
+        return
+    if entry.status == "missing_meta":
+        discovery[merge_key] = _PortfolioWatchlistCandidate(
+            ticker=ticker_raw,
+            company_name=raw_dir,
+            official=False,
+        )
+        return
+    if entry.status == "invalid_meta":
+        discovery[merge_key] = _PortfolioWatchlistCandidate(
+            ticker=ticker_raw,
+            company_name=f"{raw_dir}{_PORTFOLIO_SYNC_INVALID_META_NAME_SUFFIX}",
+            official=False,
+        )
+
+
+def merge_watchlist_from_portfolio(workspace_root: Path) -> tuple[bool, str]:
+    """从 ``workspace/portfolio`` 扫描公司目录并合并写入自选股 JSON。
+
+    使用 ``FsCompanyMetaRepository.scan_company_meta_inventory()`` 枚举目录与
+    公司级 ``meta.json``，不直接拼接路径盲读文件。
+
+    合并规则:
+    - 保留原自选股顺序；若盘点到有效 meta 且规范 ticker 或公司名称变化，则更新该条并刷新 ``updated_at``。
+    - 盘点中存在而当前列表无相同合并键的条目，在末尾按合并键字典序追加。
+    - 无有效 meta 的目录仍可按文件夹名加入列表（名称可能为目录名或带无效后缀）。
+
+    参数:
+        workspace_root: 工作区根目录。
+
+    返回值:
+        ``(True, 说明文案)``；当前实现不因业务条件返回 ``False``，预留与 UI 一致接口。
+
+    异常:
+        OSError: 仓储初始化或扫描失败时抛出。
+        json.JSONDecodeError: 自选股 JSON 损坏时由 ``load_watchlist_items`` 抛出。
+    """
+
+    workspace = workspace_root.resolve()
+    repo = FsCompanyMetaRepository(workspace)
+    discovery: dict[str, _PortfolioWatchlistCandidate] = {}
+    for inv_entry in repo.scan_company_meta_inventory():
+        _apply_inventory_entry_to_discovery(discovery, inv_entry)
+
+    previous = load_watchlist_items(workspace)
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+    prev_by_key: dict[str, WatchlistItem] = {}
+    key_order: list[str] = []
+    for item in previous:
+        merge_key = _merge_key_for_watchlist(item.ticker)
+        if not merge_key:
+            continue
+        if merge_key not in prev_by_key:
+            key_order.append(merge_key)
+        prev_by_key[merge_key] = item
+
+    merged: list[WatchlistItem] = []
+    meta_synced = 0
+    for merge_key in key_order:
+        item = prev_by_key[merge_key]
+        cand = discovery.get(merge_key)
+        if cand is None:
+            merged.append(item)
+            continue
+        if cand.official:
+            if cand.ticker != item.ticker or cand.company_name != item.company_name:
+                meta_synced += 1
+                merged.append(
+                    WatchlistItem(
+                        ticker=cand.ticker,
+                        company_name=cand.company_name,
+                        created_at=item.created_at,
+                        updated_at=now,
+                    )
+                )
+            else:
+                merged.append(item)
+        else:
+            merged.append(item)
+
+    existing_keys = {_merge_key_for_watchlist(w.ticker) for w in merged if _merge_key_for_watchlist(w.ticker)}
+    added = 0
+    for merge_key in sorted(discovery.keys()):
+        if merge_key in existing_keys:
+            continue
+        cand = discovery[merge_key]
+        merged.append(
+            WatchlistItem(
+                ticker=cand.ticker,
+                company_name=cand.company_name,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        existing_keys.add(merge_key)
+        added += 1
+
+    save_watchlist_items(workspace, merged)
+    parts: list[str] = [f"已写入 {len(merged)} 条自选股。"]
+    if added:
+        parts.append(f"从 portfolio 新增 {added} 条。")
+    if meta_synced:
+        parts.append(f"按有效 meta 同步 {meta_synced} 条（代码或名称）。")
+    if not added and not meta_synced:
+        parts.append("与 portfolio 比对：无新增条目，且无待同步的有效 meta 变更。")
+    return True, " ".join(parts)
+
+
+def reconcile_streamlit_selected_ticker_after_watchlist_change(workspace_root: Path) -> None:
+    """在自选股文件变更后，将 ``selected_ticker`` 对齐到同合并键下的规范 ticker。
+
+    参数:
+        workspace_root: 工作区根目录。
+
+    返回值:
+        无。
+
+    异常:
+        无：读盘失败时静默跳过。
+    """
+
+    raw = st.session_state.get("selected_ticker")
+    if not isinstance(raw, str) or not raw.strip():
+        return
+    try:
+        items = load_watchlist_items(workspace_root)
+    except Exception:
+        return
+    sel_key = _merge_key_for_watchlist(raw)
+    if not sel_key:
+        return
+    for it in items:
+        if _merge_key_for_watchlist(it.ticker) == sel_key:
+            st.session_state["selected_ticker"] = it.ticker
+            return
 
 
 def _is_cell_empty(val: object) -> bool:
@@ -336,6 +564,24 @@ def render_watchlist_manager(workspace_root: Path) -> None:
             del st.session_state[editor_key]
 
     st.markdown("在表格中编辑；底部可新增行；删除行即移除该自选股。编辑后检查代码与名称是否正确，然后点击 **保存**。")
+
+    sync_col, _sync_spacer = st.columns([1, 3])
+    with sync_col:
+        if st.button(
+            "从 portfolio 同步",
+            key="watchlist_sync_portfolio_btn",
+            help="扫描 workspace/portfolio 下公司目录，合并到自选股（保留已有顺序，可写入新代码并同步有效 meta 中的名称）",
+        ):
+            try:
+                _, sync_msg = merge_watchlist_from_portfolio(workspace_root)
+                st.session_state["watchlist_last_sync_message"] = sync_msg
+                reconcile_streamlit_selected_ticker_after_watchlist_change(workspace_root)
+                if editor_key in st.session_state:
+                    del st.session_state[editor_key]
+                st.session_state["watchlist_needs_refresh"] = True
+                st.rerun()
+            except Exception as exc:
+                st.error(f"从 portfolio 同步失败: {exc}")
 
     try:
         previous = load_watchlist_items(workspace_root)

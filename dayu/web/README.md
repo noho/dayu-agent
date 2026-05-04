@@ -25,9 +25,10 @@
 
 `dayu/web/streamlit/` 当前按“组件 + 页面”拆分：
 
-- `components/`：边栏与通用组件（如自选股列表）。
+- `components/`：边栏与通用组件（如自选股列表）；自选股支持从 `workspace/portfolio` 经 `FsCompanyMetaRepository.scan_company_meta_inventory()` 一键合并写入 `watchlist.json`（侧边栏同步图标与自选股管理对话框内按钮）。
 - `pages/main_page.py`：主功能区入口，组合三大 Tab（财报管理、交互式分析、分析报告）。
 - `pages/filing_tab.py`：财报下载与处理页面。
+- `pages/filing/download_form_profile.py`：按 ticker 市场（`try_normalize_ticker`）切换 Web 下载多选为 SEC 表单或 A 股/港股财期（`FY`/`H1`/`Q1`–`Q4`），`download_panel` 消费其选项与默认勾选。
 - `pages/chat_tab.py`：交互式分析页面编排（渲染、输入、历史加载、清空会话、流式轮询）。
 - `pages/report_tab.py`：分析报告页面。
 

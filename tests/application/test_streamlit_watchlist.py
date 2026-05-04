@@ -21,6 +21,7 @@ from dayu.web.streamlit.components.watchlist import (  # noqa: E402
     _apply_table_to_storage,
     _build_final_dataframe,
     load_watchlist_items,
+    merge_watchlist_from_portfolio,
     save_watchlist_items,
 )
 
@@ -212,3 +213,129 @@ def test_apply_table_to_storage_preserves_created_at(tmp_path: Path) -> None:
     assert loaded[0].company_name == "Apple Inc."
     assert loaded[0].created_at == "2025-01-01T00:00:00+00:00"
     assert loaded[0].updated_at != "2025-06-01T00:00:00+00:00"
+
+
+@pytest.mark.unit
+def test_merge_watchlist_from_portfolio_adds_missing_meta_directory(tmp_path: Path) -> None:
+    """验证仅有 portfolio 子目录且无 meta 时仍会追加自选股。"""
+
+    ticker_dir = tmp_path / "portfolio" / "002738"
+    ticker_dir.mkdir(parents=True)
+
+    ok, msg = merge_watchlist_from_portfolio(tmp_path)
+    assert ok is True
+    assert "新增" in msg
+
+    loaded = load_watchlist_items(tmp_path)
+    assert len(loaded) == 1
+    assert loaded[0].ticker == "002738"
+    assert loaded[0].company_name == "002738"
+
+
+@pytest.mark.unit
+def test_merge_watchlist_from_portfolio_updates_company_name_from_meta(tmp_path: Path) -> None:
+    """验证有效 meta.json 存在时同步公司名称与规范 ticker。"""
+
+    meta_payload = {
+        "company_id": "us-test",
+        "company_name": "Example Listed Inc.",
+        "ticker": "EXAM",
+        "market": "US",
+        "resolver_version": "test",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "ticker_aliases": [],
+    }
+    ticker_dir = tmp_path / "portfolio" / "exam"
+    ticker_dir.mkdir(parents=True)
+    (ticker_dir / "meta.json").write_text(
+        __import__("json").dumps(meta_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    save_watchlist_items(
+        tmp_path,
+        [
+            WatchlistItem(
+                ticker="exam",
+                company_name="Old Name",
+                created_at="2025-01-01T00:00:00+00:00",
+                updated_at="2025-01-01T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    ok, msg = merge_watchlist_from_portfolio(tmp_path)
+    assert ok is True
+    assert "同步" in msg
+
+    loaded = load_watchlist_items(tmp_path)
+    assert len(loaded) == 1
+    assert loaded[0].ticker == "EXAM"
+    assert loaded[0].company_name == "Example Listed Inc."
+    assert loaded[0].created_at == "2025-01-01T00:00:00+00:00"
+
+
+@pytest.mark.unit
+def test_merge_watchlist_from_portfolio_appends_new_after_existing(tmp_path: Path) -> None:
+    """验证合并时保留原顺序并在末尾追加 portfolio 中新增的代码。"""
+
+    save_watchlist_items(
+        tmp_path,
+        [
+            WatchlistItem(
+                ticker="MSFT",
+                company_name="Microsoft",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-01T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    meta_payload = {
+        "company_id": "us-aapl",
+        "company_name": "Apple Inc.",
+        "ticker": "AAPL",
+        "market": "US",
+        "resolver_version": "test",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "ticker_aliases": [],
+    }
+    ticker_dir = tmp_path / "portfolio" / "AAPL"
+    ticker_dir.mkdir(parents=True)
+    (ticker_dir / "meta.json").write_text(
+        __import__("json").dumps(meta_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    ok, msg = merge_watchlist_from_portfolio(tmp_path)
+    assert ok is True
+    assert "新增" in msg
+
+    loaded = load_watchlist_items(tmp_path)
+    assert [i.ticker for i in loaded] == ["MSFT", "AAPL"]
+    assert loaded[1].company_name == "Apple Inc."
+
+
+@pytest.mark.unit
+def test_merge_watchlist_from_portfolio_noop_when_aligned(tmp_path: Path) -> None:
+    """portfolio 无额外公司目录时提示对齐且无新增。"""
+
+    (tmp_path / "portfolio").mkdir(parents=True)
+    save_watchlist_items(
+        tmp_path,
+        [
+            WatchlistItem(
+                ticker="MSFT",
+                company_name="Microsoft",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-01T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    ok, msg = merge_watchlist_from_portfolio(tmp_path)
+    assert ok is True
+    assert "无新增" in msg
+
+    loaded = load_watchlist_items(tmp_path)
+    assert len(loaded) == 1

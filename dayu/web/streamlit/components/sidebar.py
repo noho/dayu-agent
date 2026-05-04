@@ -11,7 +11,13 @@ from typing import Callable
 
 import streamlit as st
 
-from dayu.web.streamlit.components.watchlist import WatchlistItem, load_watchlist_items, render_watchlist_manager
+from dayu.web.streamlit.components.watchlist import (
+    WatchlistItem,
+    load_watchlist_items,
+    merge_watchlist_from_portfolio,
+    reconcile_streamlit_selected_ticker_after_watchlist_change,
+    render_watchlist_manager,
+)
 
 
 def render_sidebar(
@@ -29,6 +35,12 @@ def render_sidebar(
     """
 
     st.sidebar.title("大禹 Agent")
+
+    sync_msg_key = "watchlist_last_sync_message"
+    if sync_msg_key in st.session_state:
+        popped = st.session_state.pop(sync_msg_key)
+        if isinstance(popped, str) and popped.strip():
+            st.sidebar.success(popped)
 
     # 工作区信息展示（优化样式）
     workspace_resolved = workspace_root.resolve()
@@ -79,15 +91,32 @@ def render_sidebar(
         if selected_ticker is not None and not any(item.ticker == selected_ticker for item in watchlist):
             st.session_state["selected_ticker"] = None
 
-    # 自选股标题行：左侧标题，右侧管理按钮（icon 按钮，更小）
-    col1, col2 = st.sidebar.columns([5, 1], vertical_alignment="center")
+    # 自选股标题行：左侧标题，右侧管理 / 从 portfolio 同步
+    col1, col2, col3 = st.sidebar.columns([4, 1, 1], vertical_alignment="center")
     with col1:
         st.markdown("**❤️ 自选股**")
-   
+
     with col2:
         if st.button("", key="manage_watchlist_btn", icon=":material/list_alt_add:", type="tertiary", help="管理自选股"):
             # 调用对话框函数（装饰器会自动处理）
             render_watchlist_manager(workspace_root)
+
+    with col3:
+        if st.button(
+            "",
+            key="sync_watchlist_from_portfolio_btn",
+            icon=":material/sync:",
+            type="tertiary",
+            help="从 workspace/portfolio 合并公司目录到自选股",
+        ):
+            try:
+                _, sync_msg = merge_watchlist_from_portfolio(workspace_root)
+                st.session_state["watchlist_last_sync_message"] = sync_msg
+                reconcile_streamlit_selected_ticker_after_watchlist_change(workspace_root)
+                st.session_state["watchlist_needs_refresh"] = True
+                st.rerun()
+            except Exception as exc:
+                st.sidebar.error(f"从 portfolio 同步失败: {exc}")
 
     # 展示自选股列表
     selected_item = None

@@ -134,6 +134,7 @@ pip install -r requirements.txt
 - `test_web_routes.py` 还要守住 Web 的客户端错误语义：像 `PromptService.submit()`、`ChatService.resume_pending_turn()` 这类已经在 Service 边界同步抛出的 `ValueError/KeyError`，router 必须映射成对应 `4xx`，且 `/api/chat/resume` 只能在 resume 成功后才创建后台消费任务，不能漏成 `500` 或先受理后失败。
 - `test_web_routes.py` 还要守住 `/api/write` 的未支持语义：当 Web 当前不支持在线写作时，route 必须显式返回 `501`，不能再用 `202` / `accepted=true` 伪装成已受理。
 - `test_streamlit_watchlist.py` 负责守住 Streamlit 自选股组件的本地持久化与表格合并边界：`workspace/.dayu/streamlit/watchlist.json` 读写、删除/编辑/新增合并、必填校验与 ticker 去重语义不能漂移。
+- `test_download_form_profile.py` 负责守住 Web 财报下载表单市场分流：`classify_fins_download_form_market` 对沪深/港股与美股返回 `cn_hk` / `sec`，且两套选项与默认勾选与 `cn_form_utils` / `FORM_PROFILES` 一致。
 - `test_streamlit_chat_utils.py` 负责守住 `chat/utils.py` 的 session/trace 标识生成、流式文本提取与 Markdown 归一、事件折叠与副作用判定等纯函数语义。
 - `test_streamlit_chat_stream_runtime.py` 负责守住 `chat/stream_runtime.py` 的首 chunk 超时、chunk 间超时、取消传播、worker 退出后 trailing event 消费与 error 事件收口语义。
 - `test_streamlit_chat_tab.py` 负责守住 `chat_tab.py` 中 `ChatMessage` 稳定语义、`load_history_for_ticker` 的历史轮次映射与 fail-soft（空结果/异常）语义，以及 `perform_clear_session_history` 对 `KeyError / Rejected / Stale(含静默重试) / PartiallyApplied / 重试失败` 的 UI 分支语义。

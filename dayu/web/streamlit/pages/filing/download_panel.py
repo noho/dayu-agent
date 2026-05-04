@@ -18,10 +18,15 @@ from dayu.contracts.fins import (
     FinsCommand,
     FinsCommandName,
 )
-from dayu.fins.score_sec_ci import FORM_PROFILES
 from dayu.services.contracts import FinsSubmission, FinsSubmitRequest
 from dayu.services.protocols import FinsServiceProtocol
 from dayu.web.streamlit.components.watchlist import WatchlistItem
+from dayu.web.streamlit.pages.filing.download_form_profile import (
+    classify_fins_download_form_market,
+    fins_download_default_form_selection,
+    fins_download_form_help_text,
+    fins_download_form_options,
+)
 from dayu.web.streamlit.pages.filing.download_progress import (
     DownloadQueueEvent,
     DownloadStatus,
@@ -33,7 +38,6 @@ from dayu.web.streamlit.pages.filing.download_progress import (
     run_download_stream_worker,
 )
 
-_DOWNLOAD_DEFAULT_FORM_TYPES: tuple[str, ...] = ("10-K", "10-Q")
 _DOWNLOAD_DEFAULT_LOOKBACK_YEARS = 3
 _DOWNLOAD_RUNTIME_STATE_KEY = "download_runtime_handles"
 _DOWNLOAD_EVENT_BATCH_LIMIT = 128
@@ -449,12 +453,20 @@ def _render_download_settings(
 def _render_download_form_fields(ticker: str) -> _DownloadFormValues:
     """渲染下载设置表单字段并返回用户输入。"""
 
+    market = classify_fins_download_form_market(ticker)
+    form_options = fins_download_form_options(market)
+    default_forms = fins_download_default_form_selection(market)
+    label = (
+        "选择要下载的财报表单类型（SEC）"
+        if market == "sec"
+        else "选择要下载的报告期间（A 股 / 港股）"
+    )
     selected_form_types = st.multiselect(
-        "选择要下载的财报表单类型",
-        options=FORM_PROFILES.keys(),
-        default=list(_DOWNLOAD_DEFAULT_FORM_TYPES),
-        help="选择需要下载的 SEC 表单类型",
-        key=f"download_form_types_{ticker}",
+        label,
+        options=list(form_options),
+        default=list(default_forms),
+        help=fins_download_form_help_text(market),
+        key=f"download_form_types_{ticker}_{market}",
     )
 
     today = datetime.date.today()
