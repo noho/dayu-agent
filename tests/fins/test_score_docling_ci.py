@@ -201,7 +201,7 @@ def test_quarterly_key_financials_profile_matches_hk_headings() -> None:
     """
 
     profile = PROFILES[REPORT_KIND_QUARTERLY]
-    text = "主要財務衡量指標\n財務表現摘要\n關鍵數據摘要"
+    text = "主要財務衡量指標\n財務表現摘要\n財務摘要\n主要財務業績\n經營業績概要\n關鍵數據摘要"
 
     assert "key_financials" in _matched_group_labels(text, profile.key_groups)
 
@@ -242,6 +242,66 @@ def test_semiannual_mda_profile_matches_hk_review_headings() -> None:
 
     profile = PROFILES[REPORT_KIND_SEMIANNUAL]
     text = "財務表現\n業務表現\n集團回顧\n財務及營運回顧\n業績綜述"
+
+    assert "mda" in _matched_group_labels(text, profile.key_groups)
+
+
+@pytest.mark.unit
+def test_annual_mda_profile_matches_cn_hk_discussion_analysis_headings() -> None:
+    """年报 profile 应识别 CN/HK 常见“讨论与分析”类章节标题。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    profile = PROFILES[REPORT_KIND_ANNUAL]
+    text = "總體經營情況分析\n经营情况讨论与分析\n討論與分析"
+
+    assert "mda" in _matched_group_labels(text, profile.key_groups)
+
+
+@pytest.mark.unit
+def test_semiannual_mda_profile_matches_cn_hk_discussion_analysis_headings() -> None:
+    """中报 profile 应识别 CN/HK 常见“讨论与分析”类章节标题。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    profile = PROFILES[REPORT_KIND_SEMIANNUAL]
+    text = "討論與分析\n管理層 討論與分析 1\n經營情況分析"
+
+    assert "mda" in _matched_group_labels(text, profile.key_groups)
+
+
+@pytest.mark.unit
+def test_semiannual_mda_profile_matches_hk_financial_result_headings() -> None:
+    """中报 profile 应识别港股财务业绩与业务亮点类章节标题。
+
+    Args:
+        无。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    profile = PROFILES[REPORT_KIND_SEMIANNUAL]
+    text = "整體財務業績\n2025 上半年業績表現\n業務亮點"
 
     assert "mda" in _matched_group_labels(text, profile.key_groups)
 
@@ -536,6 +596,7 @@ def _meta_payload(
     source_kind: SourceKind,
     form_type: str,
     document_type: str,
+    market: str = "CN",
 ) -> JsonObject:
     """构造 tool_snapshot_meta payload。"""
 
@@ -548,7 +609,7 @@ def _meta_payload(
         "ticker": ticker,
         "document_id": document_id,
         "source_kind": source_kind.value,
-        "market": "CN",
+        "market": market,
         "form_type": form_type,
         "document_type": document_type,
         "search_queries": list(search_queries),
@@ -641,6 +702,98 @@ def _write_material_snapshot(
         "tool_snapshot_search_document.json": {"calls": _search_calls()},
         "tool_snapshot_list_tables.json": {"calls": [{"response": {"tables": [], "total": 0, "financial_count": 0}}]},
         "tool_snapshot_get_table.json": {"calls": []},
+        "tool_snapshot_get_page_content.json": _page_payload(),
+    }
+    for file_name, payload in payloads.items():
+        _write_snapshot_json(context, handle=handle, file_name=file_name, payload=payload)
+
+
+def _write_hk_quarterly_snapshot_without_full_statements(
+    context: FsStorageTestContext,
+    *,
+    ticker: str,
+    document_id: str,
+    handle: ProcessedHandle,
+) -> None:
+    """写入港股季度业绩公告快照，不包含完整三大财务表。
+
+    Args:
+        context: 测试仓储上下文。
+        ticker: 股票代码。
+        document_id: 文档 ID。
+        handle: processed 句柄。
+
+    Returns:
+        无。
+
+    Raises:
+        OSError: 写入失败时抛出。
+    """
+
+    sections: list[JsonObject] = [
+        {"ref": "s_0001", "title": "截至三個月之季度業績公佈", "level": 1, "parent_ref": None, "page_range": [1, 1]},
+        {"ref": "s_0002", "title": "財務摘要", "level": 1, "parent_ref": None, "page_range": [2, 2]},
+        {"ref": "s_0003", "title": "業務回顧", "level": 1, "parent_ref": None, "page_range": [3, 3]},
+    ]
+    table_payload: JsonObject = {
+        "calls": [
+            {
+                "response": {
+                    "tables": [
+                        {
+                            "table_ref": "t_0001",
+                            "caption": "財務摘要",
+                            "row_count": 4,
+                            "col_count": 3,
+                            "headers": ["項目", "本季度", "去年同期"],
+                            "within_section": {"ref": "s_0002", "title": "財務摘要"},
+                            "page_no": 2,
+                            "is_financial": True,
+                            "table_type": "financial",
+                        }
+                    ],
+                    "total": 1,
+                    "financial_count": 1,
+                }
+            }
+        ]
+    }
+    get_table_payload: JsonObject = {
+        "calls": [
+            {
+                "request": {"table_ref": "t_0001"},
+                "response": {
+                    "table_ref": "t_0001",
+                    "caption": "財務摘要",
+                    "row_count": 4,
+                    "col_count": 3,
+                    "headers": ["項目", "本季度", "去年同期"],
+                    "within_section": {"ref": "s_0002", "title": "財務摘要"},
+                    "page_no": 2,
+                    "is_financial": True,
+                    "table_type": "financial",
+                    "data": {
+                        "kind": "markdown",
+                        "markdown": "| 項目 | 本季度 | 去年同期 |\n|---|---:|---:|\n| 收入 | 100 | 90 |",
+                    },
+                },
+            }
+        ]
+    }
+    payloads: dict[str, JsonObject] = {
+        "tool_snapshot_meta.json": _meta_payload(
+            ticker=ticker,
+            document_id=document_id,
+            source_kind=SourceKind.FILING,
+            form_type="Q1",
+            document_type="quarterly_report",
+            market="HK",
+        ),
+        "tool_snapshot_get_document_sections.json": {"calls": [{"response": {"sections": sections}}]},
+        "tool_snapshot_read_section.json": {"calls": _read_section_calls(sections)},
+        "tool_snapshot_search_document.json": {"calls": _search_calls()},
+        "tool_snapshot_list_tables.json": table_payload,
+        "tool_snapshot_get_table.json": get_table_payload,
         "tool_snapshot_get_page_content.json": _page_payload(),
     }
     for file_name, payload in payloads.items():
@@ -755,6 +908,49 @@ def test_discover_docling_snapshots_resolves_report_kind_filters(tmp_path: Path)
         "material",
     }
     assert [snapshot.document_id for snapshot in quarterly_result.snapshots] == ["fil_quarter"]
+
+
+@pytest.mark.unit
+def test_hk_quarterly_profile_does_not_require_full_financial_statements(tmp_path: Path) -> None:
+    """港股季度公告不应因缺完整三大财务表触发财务表 hard gate。
+
+    Args:
+        tmp_path: pytest 临时目录。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 断言失败时抛出。
+    """
+
+    context = build_fs_storage_test_context(tmp_path)
+    handle = _prepare_source_and_processed(
+        context,
+        ticker="0388",
+        document_id="fil_hk_q1",
+        source_kind=SourceKind.FILING,
+        form_type="Q1",
+    )
+    _write_hk_quarterly_snapshot_without_full_statements(
+        context,
+        ticker="0388",
+        document_id="fil_hk_q1",
+        handle=handle,
+    )
+    snapshot = _discover_docling_snapshots(
+        base=str(tmp_path),
+        tickers=["0388"],
+        report_kind_filter="quarterly",
+        source_kind_filter="filing",
+    ).snapshots[0]
+
+    doc = score_document(snapshot, context.blob_repository, ScoreConfig())
+
+    assert doc.market == "HK"
+    assert doc.hard_gate.passed is True
+    assert not any("缺少关键财务表" in reason for reason in doc.hard_gate.reasons)
+    assert doc.dimensions["A_structure"].details["financial_table_requirement"] == "not_applicable"
 
 
 @pytest.mark.unit

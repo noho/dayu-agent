@@ -247,7 +247,7 @@ class DiscoveryResult:
 ANNUAL_KEY_GROUPS = (
     KeywordGroup("company_profile", ("公司简介", "公司資料", "公司资料")),
     KeywordGroup("main_business", ("主营业务", "主營業務", "业务概要", "業務概覽")),
-    KeywordGroup("mda", ("管理层讨论", "管理層討論", "董事会报告", "董事會報告", "业务回顾", "業務回顧", "业务表现", "業務表現", "主营业务分析", "主營業務分析", "财务回顾", "財務回顧", "财务表现", "財務表現", "财务及营运回顾", "財務及營運回顧", "集团回顾", "集團回顧", "经营亮点", "經營亮點", "业绩综述", "業績綜述", "主席报告书", "主席報告書", "行政总裁报告书", "行政總裁報告書", "行政總裁之回顧", "首席财务总监回顾", "首席財務總監回顧"), True),
+    KeywordGroup("mda", ("管理层讨论", "管理層討論", "讨论与分析", "討論與分析", "经营情况分析", "經營情況分析", "经营情况讨论与分析", "經營情況討論與分析", "董事会报告", "董事會報告", "业务回顾", "業務回顧", "业务表现", "業務表現", "主营业务分析", "主營業務分析", "财务回顾", "財務回顧", "财务表现", "財務表現", "财务及营运回顾", "財務及營運回顧", "集团回顾", "集團回顧", "经营亮点", "經營亮點", "业绩综述", "業績綜述", "主席报告书", "主席報告書", "行政总裁报告书", "行政總裁報告書", "行政總裁之回顧", "首席财务总监回顾", "首席財務總監回顧"), True),
     KeywordGroup("key_financials", ("主要会计数据", "主要財務資料", "财务指标", "財務指標")),
     KeywordGroup("governance", ("公司治理", "企業管治")),
     KeywordGroup("shareholders", ("股东信息", "股東資料", "主要股东", "主要股東")),
@@ -257,13 +257,13 @@ ANNUAL_KEY_GROUPS = (
 )
 SEMIANNUAL_KEY_GROUPS = (
     KeywordGroup("main_business", ("主营业务", "主營業務", "业务概要", "業務概覽")),
-    KeywordGroup("mda", ("管理层讨论", "管理層討論", "董事会报告", "董事會報告", "业务回顾", "業務回顧", "业务表现", "業務表現", "主营业务分析", "主營業務分析", "财务回顾", "財務回顧", "财务表现", "財務表現", "财务及营运回顾", "財務及營運回顧", "集团回顾", "集團回顧", "经营亮点", "經營亮點", "业绩综述", "業績綜述", "主席报告书", "主席報告書", "行政总裁报告书", "行政總裁報告書", "行政總裁之回顧", "首席财务总监回顾", "首席財務總監回顧"), True),
+    KeywordGroup("mda", ("管理层讨论", "管理層討論", "讨论与分析", "討論與分析", "经营情况分析", "經營情況分析", "经营情况讨论与分析", "經營情況討論與分析", "董事会报告", "董事會報告", "业务回顾", "業務回顧", "业务表现", "業務表現", "主营业务分析", "主營業務分析", "财务回顾", "財務回顧", "财务表现", "財務表現", "财务业绩", "財務業績", "整体财务业绩", "整體財務業績", "业绩表现", "業績表現", "业务亮点", "業務亮點", "财务及营运回顾", "財務及營運回顧", "集团回顾", "集團回顧", "经营亮点", "經營亮點", "业绩综述", "業績綜述", "主席报告书", "主席報告書", "行政总裁报告书", "行政總裁報告書", "行政總裁之回顧", "首席财务总监回顾", "首席財務總監回顧"), True),
     KeywordGroup("key_financials", ("主要会计数据", "主要會計數據", "主要財務資料", "主要财务数据", "主要財務數據", "财务指标", "財務指標", "财务资料", "財務資料", "财务摘要", "財務摘要", "财务概要", "財務概要", "财务概览", "財務概覽", "财务撮要", "財務撮要", "财务要点", "財務要點", "财务表现", "財務表現", "财务表现摘要", "財務表現摘要", "财务表现指标", "財務表現指標", "业绩摘要", "業績摘要", "业绩概览", "業績概覽", "经营亮点", "經營亮點", "中期业绩", "中期業績", "HIGHLIGHTS"), True),
     KeywordGroup("risk", ("重大事项", "重大事項", "风险提示", "風險提示")),
     KeywordGroup("notes", ("附注", "附註", "簡明附註", "简明附注", "綜合財務報表附註", "综合财务报表附注", "财务报表注释", "財務報表註釋", "财务报表项目注释", "合并财务报表项目注释", "合并财务报表主要项目注释", "母公司财务报表主要项目注释", "綜合財務報表說明", "综合财务报表说明"), True),
 )
 QUARTERLY_KEY_GROUPS = (
-    KeywordGroup("key_financials", ("主要会计数据", "主要會計數據", "主要財務資料", "主要财务数据", "主要財務數據", "财务指标", "財務指標", "财务资料", "財務資料", "财务概要", "財務概要", "财务表现", "財務表現", "财务表现摘要", "財務表現摘要", "主要财务衡量指标", "主要財務衡量指標", "关键数据摘要", "關鍵數據摘要", "主要经营业绩", "主要經營業績"), True),
+    KeywordGroup("key_financials", ("主要会计数据", "主要會計數據", "主要財務資料", "主要财务数据", "主要財務數據", "财务指标", "財務指標", "财务资料", "財務資料", "财务摘要", "財務摘要", "财务概要", "財務概要", "财务表现", "財務表現", "财务表现摘要", "財務表現摘要", "主要财务衡量指标", "主要財務衡量指標", "主要财务业绩", "主要財務業績", "财务业绩", "財務業績", "经营业绩概要", "經營業績概要", "关键数据摘要", "關鍵數據摘要", "主要经营业绩", "主要經營業績"), True),
     KeywordGroup("operations", ("经营情况", "經營情況", "管理层讨论", "管理層討論", "业务回顾", "業務回顧", "主营业务分析", "主營業務分析", "财务回顾", "財務回顧")),
     KeywordGroup("risk", ("重大事项", "重大事項", "风险提示", "風險提示")),
 )
@@ -277,9 +277,10 @@ FINANCIAL_GROUPS_FULL = (
     KeywordGroup("cash_flow", ("现金流量表", "現金流量表", "現金流動表", "现金流动表", "綜合現金流動表", "综合现金流动表"), True),
 )
 FINANCIAL_GROUPS_QUARTERLY = (
-    KeywordGroup("financial_data", ("主要财务数据", "主要会计数据", "主要財務資料"), True),
+    KeywordGroup("financial_data", ("主要财务数据", "主要会计数据", "主要財務資料", "财务摘要", "財務摘要", "财务概要", "財務概要", "财务表现摘要", "財務表現摘要", "主要財務業績", "主要财务业绩", "财务业绩", "財務業績", "经营业绩概要", "經營業績概要", "业绩摘要", "業績摘要"), True),
     *FINANCIAL_GROUPS_FULL,
 )
+FINANCIAL_GROUPS_QUARTERLY_HK: tuple[KeywordGroup, ...] = ()
 FINANCIAL_GROUPS_MATERIAL = (
     KeywordGroup("financial_summary", ("业绩快报", "業績快報", "业绩预告", "盈利預警", "财务摘要", "財務摘要")),
 )
@@ -1154,12 +1155,14 @@ def _material_requires_financial_tables(
 def _effective_financial_groups(
     *,
     profile: DoclingProfile,
+    market: str,
     material_requires_financial_tables: bool,
 ) -> tuple[KeywordGroup, ...]:
     """按文档类型返回实际参与评分的财务关键词组。
 
     Args:
         profile: report kind profile。
+        market: 文档市场。
         material_requires_financial_tables: material 是否属于业绩类材料。
 
     Returns:
@@ -1169,6 +1172,8 @@ def _effective_financial_groups(
         无。
     """
 
+    if profile.report_kind == REPORT_KIND_QUARTERLY and market == "HK":
+        return FINANCIAL_GROUPS_QUARTERLY_HK
     if profile.report_kind == REPORT_KIND_MATERIAL and not material_requires_financial_tables:
         return ()
     return profile.financial_groups
@@ -2028,6 +2033,7 @@ def _score_page(
 def _evaluate_hard_gate(
     *,
     profile: DoclingProfile,
+    financial_groups: tuple[KeywordGroup, ...],
     read_map: dict[str, JsonObject],
     dim_a: DimensionScore,
     dim_b: DimensionScore,
@@ -2040,6 +2046,7 @@ def _evaluate_hard_gate(
 
     Args:
         profile: report kind profile。
+        financial_groups: 实际参与评分的财务关键词组。
         read_map: ``read_section`` 映射。
         dim_a: A 维评分。
         dim_b: B 维评分。
@@ -2064,7 +2071,7 @@ def _evaluate_hard_gate(
     if missing_key_groups:
         reasons.append("缺少关键章节: " + ", ".join(_json_text(label) for label in missing_key_groups))
 
-    required_financial_labels = [group.label for group in profile.financial_groups if group.required]
+    required_financial_labels = [group.label for group in financial_groups if group.required]
     missing_financial_groups = [
         label for label in _as_json_list(dim_d.details.get("missing_financial_groups", []))
         if _json_text(label) in required_financial_labels
@@ -2186,6 +2193,7 @@ def score_document(
     )
     financial_groups = _effective_financial_groups(
         profile=profile,
+        market=_string_value(meta, "market").upper(),
         material_requires_financial_tables=material_requires_financial_tables,
     )
 
@@ -2241,6 +2249,7 @@ def score_document(
     total_score = round(sum(dimension.points for dimension in dimensions.values()), 2)
     hard_gate = _evaluate_hard_gate(
         profile=profile,
+        financial_groups=financial_groups,
         read_map=read_map,
         dim_a=dim_a,
         dim_b=dim_b,
