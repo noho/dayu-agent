@@ -972,6 +972,68 @@ class TestRelabelTables:
         assert table.table_type == "financial"
         assert table.caption == "现金流量表"
 
+    def test_relabel_tables_derives_caption_from_hk_cash_net_activity_body(self) -> None:
+        """验证港股現金淨額活动表体会提升为现金流量表 caption。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            AssertionError: 断言失败时抛出。
+        """
+
+        table_item = MagicMock()
+        table_item.export_to_markdown.return_value = (
+            "| 項目 | 本年度 |\n"
+            "| --- | --- |\n"
+            "| 來自經營業務之現金淨額 | 1717 |\n"
+            "| 來自投資活動之現金淨額 | 14868 |\n"
+            "| 融資活動前之現金淨額 | 16585 |\n"
+            "| ⽤於融資活動之現金淨額 | (8435) |"
+        )
+        table = MagicMock(caption=None, headers=["項目", "本年度"], context_before="")
+        table.table_item = table_item
+
+        relabel_tables([table], docling_document=object())
+
+        assert table.is_financial is True
+        assert table.table_type == "financial"
+        assert table.caption == "现金流量表"
+
+    def test_relabel_tables_derives_caption_from_hk_business_cash_flow_body(self) -> None:
+        """验证港股业务所得现金流表体会提升为现金流量表 caption。
+
+        Args:
+            无。
+
+        Returns:
+            无。
+
+        Raises:
+            AssertionError: 断言失败时抛出。
+        """
+
+        table_item = MagicMock()
+        table_item.export_to_markdown.return_value = (
+            "| 經營業務所得現金流量 經營業務所得現金流量淨額 | 本期 |\n"
+            "| --- | --- |\n"
+            "| 投資業務所得現金流量 | |\n"
+            "| 投資業務所用現金流量淨額 | (851421) |\n"
+            "| 融資業務所得現金流量 | |\n"
+            "| 融資業務所得╱ （所用） 現金流量淨額 | 226833 |"
+        )
+        table = MagicMock(caption=None, headers=["項目", "本期"], context_before="")
+        table.table_item = table_item
+
+        relabel_tables([table], docling_document=object())
+
+        assert table.is_financial is True
+        assert table.table_type == "financial"
+        assert table.caption == "现金流量表"
+
     def test_relabel_tables_derives_caption_from_quarterly_key_metrics_body(self) -> None:
         """验证季报关键财务指标表体会提升为主要财务数据 caption。
 
