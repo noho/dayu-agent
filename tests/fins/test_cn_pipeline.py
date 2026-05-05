@@ -399,10 +399,9 @@ async def test_upload_filing_stream_uploads_files_with_docling(tmp_path: Path) -
         workspace_root=tmp_path,
         processor_registry=build_fins_processor_registry(),
     )
-    pipeline._upload_service._convert_with_docling = lambda raw_data, stream_name: {  # type: ignore[attr-defined]
-        "name": stream_name,
-        "format": "docling",
-    }
+    pipeline._upload_service._convert_with_docling = lambda raw_data, stream_name: (  # type: ignore[attr-defined]
+        {"name": stream_name, "format": "docling"}, "_docling.json",
+    )
     sample_file = tmp_path / "sample.pdf"
     sample_file.write_text("demo", encoding="utf-8")
 
@@ -427,7 +426,7 @@ async def test_upload_filing_stream_uploads_files_with_docling(tmp_path: Path) -
     assert events[0].event_type == UploadFilingEventType.UPLOAD_STARTED
     assert events[1].event_type == UploadFilingEventType.CONVERSION_STARTED
     assert events[1].payload["name"] == "sample.pdf"
-    assert events[1].payload["message"] == "正在 convert"
+    assert "正在 convert" in events[1].payload["message"]
     assert events[2].event_type == UploadFilingEventType.FILE_UPLOADED
     assert events[2].payload["name"] == "sample.pdf"
     assert events[2].payload["source"] == "original"
@@ -458,8 +457,8 @@ async def test_upload_filing_failed_result_uses_normalized_period_and_aliases(
         processor_registry=build_fins_processor_registry(),
     )
 
-    def fail_convert(raw_data: bytes, stream_name: str) -> dict[str, str]:
-        """模拟 Docling 转换失败。"""
+    def fail_convert(raw_data: bytes, stream_name: str) -> tuple[dict[str, str], str]:
+        """模拟 Docling 和 MinerU 都转换失败。"""
 
         del raw_data, stream_name
         raise RuntimeError("convert failed")
@@ -508,10 +507,9 @@ async def test_upload_material_stream_uploads_files_with_docling(tmp_path: Path)
         workspace_root=tmp_path,
         processor_registry=build_fins_processor_registry(),
     )
-    pipeline._upload_service._convert_with_docling = lambda raw_data, stream_name: {  # type: ignore[attr-defined]
-        "name": stream_name,
-        "format": "docling",
-    }
+    pipeline._upload_service._convert_with_docling = lambda raw_data, stream_name: (  # type: ignore[attr-defined]
+        {"name": stream_name, "format": "docling"}, "_docling.json",
+    )
     sample_file = tmp_path / "material.pdf"
     sample_file.write_text("demo", encoding="utf-8")
 
@@ -535,7 +533,7 @@ async def test_upload_material_stream_uploads_files_with_docling(tmp_path: Path)
     assert events[0].event_type == UploadMaterialEventType.UPLOAD_STARTED
     assert events[1].event_type == UploadMaterialEventType.CONVERSION_STARTED
     assert events[1].payload["name"] == "material.pdf"
-    assert events[1].payload["message"] == "正在 convert"
+    assert "正在 convert" in events[1].payload["message"]
     assert events[2].event_type == UploadMaterialEventType.FILE_UPLOADED
     assert events[2].payload["name"] == "material.pdf"
     assert events[2].payload["source"] == "original"
@@ -561,10 +559,9 @@ async def test_upload_filing_stream_auto_resolves_create_update_skip(tmp_path: P
         workspace_root=tmp_path,
         processor_registry=build_fins_processor_registry(),
     )
-    pipeline._upload_service._convert_with_docling = lambda raw_data, stream_name: {  # type: ignore[attr-defined]
-        "name": stream_name,
-        "format": "docling",
-    }
+    pipeline._upload_service._convert_with_docling = lambda raw_data, stream_name: (  # type: ignore[attr-defined]
+        {"name": stream_name, "format": "docling"}, "_docling.json",
+    )
     sample_file = tmp_path / "sample.pdf"
     sample_file.write_text("demo-v1", encoding="utf-8")
 
@@ -636,10 +633,9 @@ async def test_upload_material_stream_overwrite_resets_single_document(tmp_path:
         workspace_root=tmp_path,
         processor_registry=build_fins_processor_registry(),
     )
-    pipeline._upload_service._convert_with_docling = lambda raw_data, stream_name: {  # type: ignore[attr-defined]
-        "name": stream_name,
-        "format": "docling",
-    }
+    pipeline._upload_service._convert_with_docling = lambda raw_data, stream_name: (  # type: ignore[attr-defined]
+        {"name": stream_name, "format": "docling"}, "_docling.json",
+    )
     old_file = tmp_path / "deck_old.pdf"
     new_file = tmp_path / "deck_new.pdf"
     old_file.write_text("old", encoding="utf-8")

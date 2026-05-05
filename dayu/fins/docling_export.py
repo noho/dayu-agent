@@ -14,17 +14,31 @@
 两个函数共用 :func:`dayu.docling_runtime.convert_pdf_bytes_with_docling` 调用；
 任何参数策略调整集中在本模块完成，避免 docling-runtime 调用点散落到 upload /
 download 双链路造成漂移。
+
+v4.1 新增：
+
+- :func:`convert_pdf_bytes_with_fallback`：Docling 优先，失败回退 MinerU。
+  返回 ``(payload_dict, suffix)`` 元组，suffix 标识实际使用的后端。
+- :func:`converted_document_to_mineru_dict`：将 MinerU 的 ``ConvertedDocument``
+  序列化为可 JSON 化的 dict。
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+import logging
+from typing import TYPE_CHECKING, Any, Callable
 
 from dayu.docling_runtime import (
     DoclingRuntimeInitializationError,
     convert_pdf_bytes_with_docling,
 )
+
+if TYPE_CHECKING:
+    from dayu.document_protocol import ConvertedDocument
+
+_MODULE = __name__
+_logger = logging.getLogger(_MODULE)
 
 # 下载链路注入点的稳定签名：``(raw_bytes, stream_name) -> json_bytes``。
 # 显式以位置参数风格暴露，避免 keyword-only 与 ``Callable[[bytes, str], bytes]``
@@ -35,6 +49,8 @@ __all__ = [
     "PdfToDoclingJsonBytes",
     "convert_pdf_bytes_to_docling_payload",
     "convert_pdf_bytes_to_docling_json_bytes",
+    "convert_pdf_bytes_with_fallback",
+    "converted_document_to_mineru_dict",
 ]
 
 
@@ -99,3 +115,104 @@ def convert_pdf_bytes_to_docling_json_bytes(
 
     payload = convert_pdf_bytes_to_docling_payload(raw_data, stream_name=stream_name)
     return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# v4.1: Docling + MinerU fallback
+# ---------------------------------------------------------------------------
+
+
+def converted_document_to_mineru_dict(
+    doc: "ConvertedDocument",
+) -> dict[str, Any]:
+    """将 MinerU 的 ``ConvertedDocument`` 序列化为可 JSON 化的 dict。
+
+    输出结构包含所有原始信息，供下游 MineruProcessor 消费。
+
+    Args:
+        doc: MinerU 解析结果（来自 :mod:`dayu.document_protocol`）。
+
+    Returns:
+        可 JSON 化的字典。
+    """
+    return {
+        "backend": doc.backend.value,
+        "raw_markdown": doc.raw_markdown,
+        "sections": [
+            {
+                "title": s.title,
+                "level": s.level,
+                "content": s.content,
+                "page_idx": s.page_idx,
+            }
+            for s in doc.sections
+        ],
+        "tables": [
+            {
+                "caption": t.caption,
+                "html": t.html,
+                "page_idx": t.page_idx,
+            }
+            for t in doc.tables
+        ],
+        "images": [
+            {
+                "path": i.path,
+                "caption": i.caption,
+                "page_idx": i.page_idx,
+            }
+            for i in doc.images
+        ],
+        "metadata": doc.metadata,
+    }
+
+
+def convert_pdf_bytes_with_fallback(
+    raw_data: bytes,
+    *,
+    stream_name: str,
+) -> tuple[dict[str, Any], str]:
+    """先试 Docling，失败则 fallback 到 MinerU。
+
+    Docling 失败时自动调用 MinerU 云 API 解析，返回 MinerU 格式的 dict。
+    两者通过 suffix 区分：``_docling.json`` 或 ``_mineru.json``。
+
+    Args:
+        raw_data: PDF 原始字节内容。
+        stream_name: 流名称，建议直接传文件名以保留扩展名。
+
+    Returns:
+        ``(payload_dict, suffix)`` 元组。
+        - Docling 成功时 suffix 为 ``"_docling.json"``
+        - MinerU fallback 成功时 suffix 为 ``"_mineru.json"``
+
+    Raises:
+        RuntimeError: Docling 和 MinerU 都失败时抛出。
+    """
+    # --- 优先 Docling ---
+    try:
+        payload = convert_pdf_bytes_to_docling_payload(
+            raw_data, stream_name=stream_name
+        )
+        _logger.info("Docling 解析成功: %s", stream_name)
+        return payload, "_docling.json"
+    except Exception as docling_exc:
+        _logger.warning(
+            "Docling 解析失败 (%s)，fallback 到 MinerU: %s",
+            stream_name,
+            docling_exc,
+        )
+
+    # --- Fallback: MinerU ---
+    try:
+        from dayu.mineru_runtime import parse_pdf_bytes_with_mineru
+
+        doc = parse_pdf_bytes_with_mineru(raw_data, filename=stream_name)
+        payload = converted_document_to_mineru_dict(doc)
+        _logger.info("MinerU 解析成功: %s", stream_name)
+        return payload, "_mineru.json"
+    except Exception as mineru_exc:
+        _logger.error("MinerU 也失败 (%s): %s", stream_name, mineru_exc)
+        raise RuntimeError(
+            f"Docling 和 MinerU 都解析失败: {stream_name}"
+        ) from mineru_exc

@@ -36,6 +36,8 @@ classifiers = [
 dependencies = [
     "requests>=2.32.2",
     "httpx>=0.28.0",
+    "pikepdf>=9.0.0",
+    "cos-python-sdk-v5>=1.9.30",
     "beautifulsoup4>=4.12.3",
     "PyYAML>=6.0.2",
     # `trafilatura>=1.12.0` 已要求 `charset-normalizer>=3.2.0`；

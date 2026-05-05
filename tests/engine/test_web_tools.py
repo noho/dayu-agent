@@ -3616,6 +3616,16 @@ def test_fetch_and_convert_with_playwright_accepts_cloudflare_served_article(
 
     import dayu.engine.tools.web_tools as web_tools_mod
 
+    fake_playwright_module = ModuleType("playwright")
+    fake_sync_api_module = ModuleType("playwright.sync_api")
+
+    class _FakePlaywrightTimeoutError(Exception):
+        pass
+
+    cast(Any, fake_sync_api_module).TimeoutError = _FakePlaywrightTimeoutError
+    monkeypatch.setitem(sys.modules, "playwright", fake_playwright_module)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api_module)
+
     monkeypatch.setattr(
         "dayu.engine.tools.web_tools._playwright_sync_worker",
         lambda *, url, timeout_seconds, headers=None, playwright_channel=None, playwright_storage_state_path="": {
@@ -3674,6 +3684,16 @@ def test_playwright_fallback_non_html_content_type(monkeypatch: pytest.MonkeyPat
     """验证 Playwright 返回非 text/html 内容类型时，返回 availability=unprocessable。"""
 
     import dayu.engine.tools.web_tools as web_tools_mod
+
+    fake_playwright_module = ModuleType("playwright")
+    fake_sync_api_module = ModuleType("playwright.sync_api")
+
+    class _FakePlaywrightTimeoutError(Exception):
+        pass
+
+    cast(Any, fake_sync_api_module).TimeoutError = _FakePlaywrightTimeoutError
+    monkeypatch.setitem(sys.modules, "playwright", fake_playwright_module)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api_module)
 
     monkeypatch.setattr(
         "dayu.engine.tools.web_tools._playwright_sync_worker",
@@ -3805,6 +3825,16 @@ def test_playwright_sync_worker_uses_storage_state_when_provided(
 
     import dayu.engine.tools.web_tools as web_tools_mod
 
+    fake_playwright_module = ModuleType("playwright")
+    fake_sync_api_module = ModuleType("playwright.sync_api")
+
+    class _FakePlaywrightTimeoutError(Exception):
+        pass
+
+    cast(Any, fake_sync_api_module).TimeoutError = _FakePlaywrightTimeoutError
+    monkeypatch.setitem(sys.modules, "playwright", fake_playwright_module)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api_module)
+
     storage_state_path = tmp_path / "storage-state.json"
     storage_state_path.write_text("{}", encoding="utf-8")
 
@@ -3901,6 +3931,16 @@ def test_playwright_sync_worker_uses_single_deadline_budget(monkeypatch: pytest.
     """验证 Playwright worker 的 warmup/goto/settle 共享同一个总 deadline。"""
 
     import dayu.engine.tools.web_tools as web_tools_mod
+
+    fake_playwright_module = ModuleType("playwright")
+    fake_sync_api_module = ModuleType("playwright.sync_api")
+
+    class _FakePlaywrightTimeoutError(Exception):
+        pass
+
+    cast(Any, fake_sync_api_module).TimeoutError = _FakePlaywrightTimeoutError
+    monkeypatch.setitem(sys.modules, "playwright", fake_playwright_module)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api_module)
 
     fake_stealth_module = ModuleType("playwright_stealth")
 
@@ -4217,6 +4257,16 @@ def test_fetch_and_convert_with_playwright_rejects_challenge_page(monkeypatch: p
     """验证浏览器回退若拿到挑战页，不会被误判为正文成功。"""
 
     import dayu.engine.tools.web_tools as web_tools_mod
+
+    fake_playwright_module = ModuleType("playwright")
+    fake_sync_api_module = ModuleType("playwright.sync_api")
+
+    class _FakePlaywrightTimeoutError(Exception):
+        pass
+
+    cast(Any, fake_sync_api_module).TimeoutError = _FakePlaywrightTimeoutError
+    monkeypatch.setitem(sys.modules, "playwright", fake_playwright_module)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api_module)
 
     monkeypatch.setattr(
         "dayu.engine.tools.web_tools._playwright_sync_worker",
