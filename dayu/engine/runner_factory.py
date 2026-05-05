@@ -64,6 +64,7 @@ def create_runner(
             supports_stream_usage=bool(runner_params.get("supports_stream_usage", False)),
             running_config=_build_openai_runner_running_config(agent_create_args),
             cancellation_token=cancellation_token,
+            verify_ssl=bool(runner_params.get("verify_ssl", True)),
         )
     raise ValueError(f"不支持的 runner_type: {runner_type}")
 

@@ -125,6 +125,7 @@ class OpenAICompatibleModelConfig(BaseModelConfig, total=False):
     supports_stream_usage: bool
     extra_payloads: dict[str, ModelConfigJsonValue]
     max_retries: int
+    verify_ssl: bool
 
 
 class CliModelConfig(BaseModelConfig, total=False):
@@ -155,6 +156,7 @@ class OpenAICompatibleRunnerParams(TypedDict, total=False):
     supports_stream: bool
     supports_tool_calling: bool
     supports_stream_usage: bool
+    verify_ssl: bool
 
 
 class CliRunnerParams(TypedDict, total=False):
