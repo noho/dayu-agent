@@ -172,6 +172,7 @@ def _build_runner_params(
             "supports_stream": bool(openai_model_config.get("supports_stream", True)),
             "supports_tool_calling": bool(openai_model_config.get("supports_tool_calling", True)),
             "supports_stream_usage": bool(openai_model_config.get("supports_stream_usage", False)),
+            "verify_ssl": bool(openai_model_config.get("verify_ssl", True)),
         }
         return openai_runner_params
     raise ValueError(f"不支持的 runner_type: {runner_type}")

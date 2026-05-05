@@ -273,26 +273,21 @@ class ConfigLoader:
             FileNotFoundError: 配置文件不存在
             json.JSONDecodeError: JSON 格式错误
         """
-        if self._llm_models_cache is None:
-            loaded_models = _require_structured_config_object(
-                self._resolver.read_json("llm_models.json", required=True),
-                filename="llm_models.json",
-            )
-            normalized_models: dict[str, ModelConfig] = {}
-            for raw_model_name, raw_model_config in loaded_models.items():
-                model_name = str(raw_model_name or "").strip()
-                if not model_name:
-                    raise TypeError("llm_models.json 的 key 必须是非空字符串")
-                if model_name.startswith("_"):
-                    continue
-                if not isinstance(raw_model_config, dict):
-                    raise TypeError(f"llm_models.json.{model_name} 必须是对象")
-                normalized_models[model_name] = cast(ModelConfig, raw_model_config)
-            self._llm_models_cache = normalized_models
-        llm_models = self._llm_models_cache
-        if llm_models is None:
-            raise RuntimeError("llm_models.json 缓存为空")
-        return cast(dict[str, ModelConfig], deepcopy(llm_models))
+        loaded_models = _require_structured_config_object(
+            self._resolver.read_json("llm_models.json", required=True),
+            filename="llm_models.json",
+        )
+        normalized_models: dict[str, ModelConfig] = {}
+        for raw_model_name, raw_model_config in loaded_models.items():
+            model_name = str(raw_model_name or "").strip()
+            if not model_name:
+                raise TypeError("llm_models.json 的 key 必须是非空字符串")
+            if model_name.startswith("_"):
+                continue
+            if not isinstance(raw_model_config, dict):
+                raise TypeError(f"llm_models.json.{model_name} 必须是对象")
+            normalized_models[model_name] = cast(ModelConfig, raw_model_config)
+        return cast(dict[str, ModelConfig], deepcopy(normalized_models))
     
     def load_llm_model(self, model_name: str) -> ModelConfig:
         """加载指定 LLM 模型的配置（包含环境变量替换）
@@ -323,9 +318,10 @@ class ConfigLoader:
             Log.error(error_msg, module=MODULE)
             raise KeyError(error_msg)
 
+        raw_config = models[model_name]
         model_config = cast(
             ModelConfig,
-            _replace_model_config_env_vars(cast(ModelConfigJsonValue, models[model_name])),
+            _replace_model_config_env_vars(cast(ModelConfigJsonValue, raw_config)),
         )
         ensure_runner_type_enabled(model_config.get("runner_type"))
         return cast(ModelConfig, model_config)

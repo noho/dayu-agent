@@ -517,6 +517,7 @@ class AsyncOpenAIRunner:
         supports_stream_usage: bool = False,
         running_config: Optional[AsyncOpenAIRunnerRunningConfig] = None,
         cancellation_token: CancellationToken | None = None,
+        verify_ssl: bool = True,
     ):
         """
         初始化 OpenAI 兼容 Runner。
@@ -583,6 +584,7 @@ class AsyncOpenAIRunner:
         self.supports_tool_calling = supports_tool_calling
         self.supports_stream_usage = supports_stream_usage
         self.cancellation_token = cancellation_token
+        self._verify_ssl = verify_ssl
         self._session: Optional[Any] = None
         self._tool_executor: Optional[ToolExecutor] = None
 
@@ -626,7 +628,11 @@ class AsyncOpenAIRunner:
         if session is not None and not bool(getattr(session, "closed", False)):
             return session
         aiohttp_module = _require_aiohttp_module()
-        new_session = aiohttp_module.ClientSession()
+        if self._verify_ssl:
+            new_session = aiohttp_module.ClientSession()
+        else:
+            connector = aiohttp_module.TCPConnector(verify_ssl=False)
+            new_session = aiohttp_module.ClientSession(connector=connector)
         self._session = new_session
         return new_session
 
