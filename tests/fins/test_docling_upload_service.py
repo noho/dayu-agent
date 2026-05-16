@@ -15,7 +15,7 @@ from dayu.fins.pipelines.docling_upload_service import (
     _PendingFileAsset,
     _build_upload_source_fingerprint,
     _can_skip_upload,
-    _convert_bytes_with_docling,
+    _convert_bytes_with_fallback,
     _increment_document_version,
     _normalize_ticker,
     _pick_primary_docling_file,
@@ -33,7 +33,7 @@ from dayu.fins.pipelines.docling_upload_service import (
 from tests.fins.storage_testkit import FsStorageTestContext, build_fs_storage_test_context
 
 
-def _convert_docling_stub(raw_data: bytes, stream_name: str) -> dict[str, str]:
+def _convert_docling_stub(raw_data: bytes, stream_name: str) -> tuple[dict[str, str], str]:
     """返回固定 Docling 转换结果。
 
     Args:
@@ -48,10 +48,10 @@ def _convert_docling_stub(raw_data: bytes, stream_name: str) -> dict[str, str]:
     """
 
     _ = raw_data
-    return {"name": stream_name, "source": "docling"}
+    return {"name": stream_name, "source": "docling"}, "_docling.json"
 
 
-def _convert_docling_error(_: bytes, __: str) -> dict[str, object]:
+def _convert_docling_error(_: bytes, __: str) -> tuple[dict[str, object], str]:
     """抛出转换错误。
 
     Args:
@@ -188,7 +188,7 @@ def test_execute_upload_skip_does_not_run_docling_again_for_same_source_file(tmp
 
     convert_calls: list[str] = []
 
-    def _counting_convert(raw_data: bytes, stream_name: str) -> dict[str, str]:
+    def _counting_convert(raw_data: bytes, stream_name: str) -> tuple[dict[str, str], str]:
         """记录 Docling convert 调用次数。
 
         Args:
@@ -204,7 +204,7 @@ def test_execute_upload_skip_does_not_run_docling_again_for_same_source_file(tmp
 
         _ = raw_data
         convert_calls.append(stream_name)
-        return {"name": stream_name, "source": "docling"}
+        return {"name": stream_name, "source": "docling"}, "_docling.json"
 
     context = build_fs_storage_test_context(tmp_path)
     service = DoclingUploadService(
@@ -708,8 +708,8 @@ def test_build_upload_source_fingerprint_is_stable_for_order() -> None:
     assert fp1 == fp2
 
 
-def test_convert_bytes_with_docling_import_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """验证 Docling 未安装时抛出明确异常。
+def test_convert_bytes_with_fallback_import_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 Docling 和 MinerU 都不可用时抛出明确异常。
 
     Args:
         tmp_path: 临时目录（占位，本用例不使用）。
@@ -726,7 +726,7 @@ def test_convert_bytes_with_docling_import_error(tmp_path: Path, monkeypatch: py
     original_import = builtins.__import__
 
     def _fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
-        """对 docling import 注入 ImportError。
+        """对 docling 和 mineru import 注入 ImportError。
 
         Args:
             name: 模块名。
@@ -737,25 +737,23 @@ def test_convert_bytes_with_docling_import_error(tmp_path: Path, monkeypatch: py
             原始 import 结果。
 
         Raises:
-            ImportError: 模拟 docling 缺失。
+            ImportError: 模拟模块缺失。
         """
 
-        if name.startswith("docling"):
-            raise ImportError("docling missing")
+        if name.startswith("docling") or name.startswith("mineru"):
+            raise ImportError(f"{name} missing")
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", _fake_import)
 
-    from dayu.docling_runtime import DoclingRuntimeInitializationError
-
-    with pytest.raises(DoclingRuntimeInitializationError, match="Docling 未安装"):
-        _convert_bytes_with_docling(b"x", "sample.pdf")
+    with pytest.raises(RuntimeError, match="Docling 和 MinerU 都解析失败"):
+        _convert_bytes_with_fallback(b"x", "sample.pdf")
 
 
-def test_convert_bytes_with_docling_conversion_failed(
+def test_convert_bytes_with_fallback_conversion_failed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """验证 Docling convert 抛错会被包装为 RuntimeError。
+    """验证 Docling 和 MinerU 都转换失败时会抛出明确异常。
 
     Args:
         tmp_path: 临时目录（占位，本用例不使用）。
@@ -771,7 +769,7 @@ def test_convert_bytes_with_docling_conversion_failed(
     _ = tmp_path
 
     def _raise_convert_failure(*args: Any, **kwargs: Any) -> Any:
-        """模拟统一 Docling 运行时在转换阶段抛错。
+        """模拟转换抛错。
 
         Args:
             *args: 位置参数。
@@ -788,9 +786,18 @@ def test_convert_bytes_with_docling_conversion_failed(
         raise RuntimeError("convert boom")
 
     monkeypatch.setattr(
-        "dayu.fins.docling_export.convert_pdf_bytes_with_docling",
+        "dayu.fins.docling_export.convert_pdf_bytes_to_docling_payload",
         _raise_convert_failure,
     )
+    # 同时阻断 MinerU import，确保 Docling 失败后 MinerU fallback 也失败
+    original_import = builtins.__import__
 
-    with pytest.raises(RuntimeError, match="Docling 转换失败"):
-        _convert_bytes_with_docling(b"x", "sample.pdf")
+    def _block_mineru_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name.startswith("mineru"):
+            raise ImportError(f"{name} missing")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _block_mineru_import)
+
+    with pytest.raises(RuntimeError, match="Docling 和 MinerU 都解析失败"):
+        _convert_bytes_with_fallback(b"x", "sample.pdf")

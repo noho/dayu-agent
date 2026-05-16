@@ -21,7 +21,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
-from dayu.fins.docling_export import convert_pdf_bytes_to_docling_payload
+from dayu.fins.docling_export import convert_pdf_bytes_with_fallback
 from dayu.fins.domain.document_models import (
     SourceHandle,
     SourceDocumentStateChangeRequest,
@@ -100,14 +100,16 @@ class DoclingUploadService:
         source_repository: SourceDocumentRepositoryProtocol,
         blob_repository: DocumentBlobRepositoryProtocol,
         *,
-        convert_with_docling: Optional[Callable[[bytes, str], dict[str, Any]]] = None,
+        convert_with_docling: Optional[Callable[[bytes, str], tuple[dict[str, Any], str]]] = None,
     ) -> None:
         """初始化服务。
 
         Args:
             source_repository: 源文档仓储实现。
             blob_repository: 文档文件对象仓储实现。
-            convert_with_docling: 可选 Docling 转换函数（测试可注入）。
+            convert_with_docling: 可选 PDF 转换函数（测试可注入）。
+                签名 ``(raw_bytes, stream_name) -> (payload_dict, suffix)``。
+                默认使用 Docling 优先、MinerU fallback 的实现。
 
         Returns:
             无。
@@ -122,7 +124,7 @@ class DoclingUploadService:
             raise ValueError("blob_repository 不能为空")
         self._source_repository = source_repository
         self._blob_repository = blob_repository
-        self._convert_with_docling = convert_with_docling or _convert_bytes_with_docling
+        self._convert_with_docling = convert_with_docling or _convert_bytes_with_fallback
 
     def execute_upload(
         self,
@@ -452,14 +454,14 @@ class DoclingUploadService:
                     event_type="conversion_started",
                     name=file_path.name,
                     payload={
-                        "source": "docling",
-                        "message": "正在 convert",
+                        "source": "docling_or_mineru",
+                        "message": "正在 convert（Docling 优先，MinerU fallback）",
                     },
                 )
             )
-            docling_payload = self._convert_with_docling(original_asset.data, file_path.name)
+            docling_payload, file_suffix = self._convert_with_docling(original_asset.data, file_path.name)
             docling_data = json.dumps(docling_payload, ensure_ascii=False, indent=2).encode("utf-8")
-            docling_name = f"{file_path.stem}{DOCLING_FILE_SUFFIX}"
+            docling_name = f"{file_path.stem}{file_suffix}"
             docling_sha256 = hashlib.sha256(docling_data).hexdigest()
             assets.append(
                 _PendingFileAsset(
@@ -564,26 +566,27 @@ class DoclingUploadService:
         )
 
 
-def _convert_bytes_with_docling(raw_data: bytes, stream_name: str) -> dict[str, Any]:
-    """使用 Docling 将字节流转换为结构化 JSON。
+def _convert_bytes_with_fallback(raw_data: bytes, stream_name: str) -> tuple[dict[str, Any], str]:
+    """使用 Docling 转换 PDF，失败时 fallback 到 MinerU。
 
     本函数作为兼容入口保留，对外签名保持向后兼容；实际实现 delegate 到
-    :func:`dayu.fins.docling_export.convert_pdf_bytes_to_docling_payload`，让
-    docling-runtime 调用点收敛到 ``dayu.fins.docling_export`` 单一真源。
+    :func:`dayu.fins.docling_export.convert_pdf_bytes_with_fallback`，
+    让 docling-runtime 调用点收敛到 ``dayu.fins.docling_export`` 单一真源。
 
     Args:
         raw_data: 文件原始字节内容。
         stream_name: 流名称（建议直接使用文件名，保留扩展名）。
 
     Returns:
-        Docling 导出的结构化字典。
+        ``(payload_dict, suffix)`` 元组。
+        - Docling 成功时 suffix 为 ``"_docling.json"``
+        - MinerU fallback 成功时 suffix 为 ``"_mineru.json"``
 
     Raises:
-        DoclingRuntimeInitializationError: Docling 装配失败时抛出。
-        RuntimeError: Docling 转换失败时抛出。
+        RuntimeError: Docling 和 MinerU 都失败时抛出。
     """
 
-    return convert_pdf_bytes_to_docling_payload(raw_data, stream_name=stream_name)
+    return convert_pdf_bytes_with_fallback(raw_data, stream_name=stream_name)
 
 
 def _validate_source_files(files: list[Path]) -> list[Path]:
@@ -613,14 +616,17 @@ def _validate_source_files(files: list[Path]) -> list[Path]:
     return normalized
 
 
+_PARSED_FILE_SUFFIXES = ("_docling.json", "_mineru.json")
+
+
 def _pick_primary_docling_file(file_entries: list[dict[str, Any]]) -> Optional[str]:
-    """从文件条目中选择主 docling 文件。
+    """从文件条目中选择主解析结果文件（docling 或 mineru）。
 
     Args:
         file_entries: 文件条目列表。
 
     Returns:
-        主文件名；不存在返回 `None`。
+        主文件名；不存在返回 ``None``。
 
     Raises:
         无。
@@ -628,7 +634,7 @@ def _pick_primary_docling_file(file_entries: list[dict[str, Any]]) -> Optional[s
 
     for entry in file_entries:
         name = str(entry.get("name", "")).strip()
-        if name.endswith(DOCLING_FILE_SUFFIX):
+        if name.endswith(_PARSED_FILE_SUFFIXES):
             return name
     return None
 

@@ -443,6 +443,7 @@ def test_fetch_and_convert_with_playwright_timeout_on_budget(monkeypatch: pytest
     def _raise_timeout(_timeout: float, **_kw: float | str | None) -> float:
         raise Timeout()
 
+    monkeypatch.setitem(sys.modules, "playwright", SimpleNamespace())
     monkeypatch.setitem(sys.modules, "playwright.sync_api", SimpleNamespace(sync_playwright=lambda: None))
     result = backend_mod._fetch_and_convert_with_playwright(
         url="https://example.com",
@@ -466,6 +467,7 @@ def test_fetch_and_convert_with_playwright_nonpicklable_worker(monkeypatch: pyte
     """worker 不可 pickle 时走内联执行路径（非子进程）。"""
 
     fake_result = {"ok": True, "content": "hello", "http_status": 200, "response_headers": {}}
+    monkeypatch.setitem(sys.modules, "playwright", SimpleNamespace())
     monkeypatch.setitem(sys.modules, "playwright.sync_api", SimpleNamespace(sync_playwright=lambda: None))
 
     result = backend_mod._fetch_and_convert_with_playwright(
