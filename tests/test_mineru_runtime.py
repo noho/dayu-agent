@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
+import subprocess
 import zipfile
 from unittest.mock import MagicMock, patch
 
@@ -402,6 +404,7 @@ class TestParsePdfBytesFallback:
         with (
             patch("dayu.mineru_runtime._MINERU_API_TOKEN", ""),
             patch("dayu.mineru_runtime._parse_with_docling", return_value=mock_docling),
+            patch("dayu.mineru_runtime._try_parse_with_mineru_cli", return_value=None),
         ):
             doc = parse_pdf_bytes_with_mineru(b"fake pdf", total_pages=10)
         assert doc.backend == DocumentBackend.DOCLING
@@ -419,6 +422,7 @@ class TestParsePdfBytesFallback:
             patch("dayu.mineru_runtime._MINERU_API_TOKEN", "tk"),
             patch("dayu.mineru_runtime._get_quota_tracker", return_value=tracker),
             patch("dayu.mineru_runtime._parse_with_docling", return_value=mock_docling),
+            patch("dayu.mineru_runtime._try_parse_with_mineru_cli", return_value=None),
         ):
             doc = parse_pdf_bytes_with_mineru(b"fake pdf", total_pages=10)
         assert doc.backend == DocumentBackend.DOCLING
@@ -436,6 +440,7 @@ class TestParsePdfBytesFallback:
             patch("dayu.mineru_runtime._get_quota_tracker", return_value=tracker),
             patch("dayu.mineru_runtime._parse_with_cloud_api", side_effect=MinerUAPIError("fail")),
             patch("dayu.mineru_runtime._parse_with_docling", return_value=mock_docling),
+            patch("dayu.mineru_runtime._try_parse_with_mineru_cli", return_value=None),
         ):
             doc = parse_pdf_bytes_with_mineru(b"fake pdf", total_pages=10)
         assert doc.backend == DocumentBackend.DOCLING
@@ -456,3 +461,313 @@ class TestParsePdfBytesFallback:
             doc = parse_pdf_bytes_with_mineru(b"fake pdf", total_pages=10)
         assert doc.backend == DocumentBackend.MINERU_CLOUD
         assert doc.raw_markdown == "cloud result"
+
+
+# ---------------------------------------------------------------------------
+# 层3 CLI 解析测试
+# ---------------------------------------------------------------------------
+
+
+class TestLayer3CLI:
+    """层3 CLI 解析测试。"""
+
+    def test_cli_not_found_returns_none(self) -> None:
+        """mock shutil.which 返回 None → return None。"""
+        from dayu.mineru_runtime import _try_parse_with_mineru_cli
+
+        with patch("dayu.mineru_runtime.shutil.which", return_value=None):
+            result = _try_parse_with_mineru_cli(b"fake pdf")
+        assert result is None
+
+    def test_cli_subprocess_error_returns_none(self) -> None:
+        """mock subprocess.run 抛 CalledProcessError → return None。"""
+        from dayu.mineru_runtime import _try_parse_with_mineru_cli
+
+        with (
+            patch(
+                "dayu.mineru_runtime.shutil.which", return_value="/usr/bin/magic-pdf"
+            ),
+            patch(
+                "subprocess.run",
+                side_effect=subprocess.CalledProcessError(1, ["magic-pdf"]),
+            ),
+            patch("tempfile.NamedTemporaryFile") as mock_tmp,
+            patch("tempfile.mkdtemp", return_value="/tmp/mineru_cli_test"),
+        ):
+            mock_f = MagicMock()
+            mock_f.name = "/tmp/test.pdf"
+            mock_tmp.return_value.__enter__.return_value = mock_f
+
+            result = _try_parse_with_mineru_cli(b"fake pdf")
+        assert result is None
+
+    def test_cli_timeout_returns_none(self) -> None:
+        """mock subprocess.run 抛 TimeoutExpired → return None。"""
+        from dayu.mineru_runtime import _try_parse_with_mineru_cli
+
+        with (
+            patch(
+                "dayu.mineru_runtime.shutil.which", return_value="/usr/bin/magic-pdf"
+            ),
+            patch(
+                "subprocess.run",
+                side_effect=subprocess.TimeoutExpired(
+                    cmd=["magic-pdf"], timeout=300
+                ),
+            ),
+            patch("tempfile.NamedTemporaryFile") as mock_tmp,
+            patch("tempfile.mkdtemp", return_value="/tmp/mineru_cli_test"),
+        ):
+            mock_f = MagicMock()
+            mock_f.name = "/tmp/test.pdf"
+            mock_tmp.return_value.__enter__.return_value = mock_f
+
+            result = _try_parse_with_mineru_cli(b"fake pdf")
+        assert result is None
+
+    def test_cli_parse_success(self) -> None:
+        """mock subprocess + mock 输出文件 → ConvertedDocument(MINERU_LOCAL)。"""
+        from dayu.mineru_runtime import _try_parse_with_mineru_cli
+
+        mock_md_path = MagicMock()
+        mock_md_path.exists.return_value = True
+        mock_md_path.read_text.return_value = "# Valid markdown"
+
+        mock_cl_path = MagicMock()
+        mock_cl_path.exists.return_value = True
+        mock_cl_path.read_text.return_value = "[]"
+
+        with (
+            patch(
+                "dayu.mineru_runtime.shutil.which", return_value="/usr/bin/magic-pdf"
+            ),
+            patch("subprocess.run"),
+            patch("tempfile.NamedTemporaryFile") as mock_tmp,
+            patch("tempfile.mkdtemp", return_value="/tmp/mineru_cli_test"),
+        ):
+            mock_f = MagicMock()
+            mock_f.name = "/tmp/test.pdf"
+            mock_tmp.return_value.__enter__.return_value = mock_f
+
+            # Mock Path so that Path(output_dir)/pdf_filename/"auto" returns our mock dir
+            mock_result_dir = MagicMock()
+            mock_result_dir.__truediv__.side_effect = lambda x: {
+                "input.pdf.md": mock_md_path,
+                "input.pdf_content_list.json": mock_cl_path,
+            }.get(x, MagicMock())
+
+            mock_pdf_dir = MagicMock()
+            mock_pdf_dir.__truediv__.return_value = mock_result_dir
+
+            mock_root = MagicMock()
+            mock_root.__truediv__.return_value = mock_pdf_dir
+
+            with patch("pathlib.Path", return_value=mock_root):
+                result = _try_parse_with_mineru_cli(b"fake pdf")
+
+        assert result is not None
+        assert result.backend == DocumentBackend.MINERU_LOCAL
+        assert result.raw_markdown == "# Valid markdown"
+        assert len(result.sections) == 0
+
+    def test_cli_parse_with_content_list(self) -> None:
+        """mock 返回 table/image blocks → sections/tables/images 正确。"""
+        from dayu.mineru_runtime import _try_parse_with_mineru_cli
+
+        content_list = [
+            [
+                {"type": "text", "content": "Some paragraph text"},
+                {"type": "title", "content": "Section 1", "level": 2},
+                {
+                    "type": "table",
+                    "caption": "Table 1",
+                    "html": "<table><tr><td>data</td></tr></table>",
+                },
+                {
+                    "type": "figure",
+                    "image_path": "/img/test.png",
+                    "caption": "Figure 1",
+                },
+            ]
+        ]
+
+        mock_md_path = MagicMock()
+        mock_md_path.exists.return_value = True
+        mock_md_path.read_text.return_value = "# Document with content list"
+
+        mock_cl_path = MagicMock()
+        mock_cl_path.exists.return_value = True
+        mock_cl_path.read_text.return_value = json.dumps(content_list)
+
+        with (
+            patch(
+                "dayu.mineru_runtime.shutil.which", return_value="/usr/bin/magic-pdf"
+            ),
+            patch("subprocess.run"),
+            patch("tempfile.NamedTemporaryFile") as mock_tmp,
+            patch("tempfile.mkdtemp", return_value="/tmp/mineru_cli_test"),
+        ):
+            mock_f = MagicMock()
+            mock_f.name = "/tmp/test.pdf"
+            mock_tmp.return_value.__enter__.return_value = mock_f
+
+            mock_result_dir = MagicMock()
+            mock_result_dir.__truediv__.side_effect = lambda x: {
+                "input.pdf.md": mock_md_path,
+                "input.pdf_content_list.json": mock_cl_path,
+            }.get(x, MagicMock())
+
+            mock_pdf_dir = MagicMock()
+            mock_pdf_dir.__truediv__.return_value = mock_result_dir
+
+            mock_root = MagicMock()
+            mock_root.__truediv__.return_value = mock_pdf_dir
+
+            with patch("pathlib.Path", return_value=mock_root):
+                result = _try_parse_with_mineru_cli(b"fake pdf")
+
+        assert result is not None
+        assert result.backend == DocumentBackend.MINERU_LOCAL
+        # 1 paragraph + 1 title
+        assert len(result.sections) == 2
+        assert result.sections[0].title == ""
+        assert result.sections[0].content == "Some paragraph text"
+        assert result.sections[1].title == "Section 1"
+        assert result.sections[1].level == 2
+        # 1 table
+        assert len(result.tables) == 1
+        assert result.tables[0].caption == "Table 1"
+        # 1 figure
+        assert len(result.images) == 1
+        assert result.images[0].path == "/img/test.png"
+        assert result.images[0].caption == "Figure 1"
+
+    def test_cli_parse_no_content_list(self) -> None:
+        """mock 只有 .md → raw_markdown 有值。"""
+        from dayu.mineru_runtime import _try_parse_with_mineru_cli
+
+        mock_md_path = MagicMock()
+        mock_md_path.exists.return_value = True
+        mock_md_path.read_text.return_value = "# Just markdown\nNo content list."
+
+        mock_cl_path = MagicMock()
+        mock_cl_path.exists.return_value = False
+
+        with (
+            patch(
+                "dayu.mineru_runtime.shutil.which", return_value="/usr/bin/magic-pdf"
+            ),
+            patch("subprocess.run"),
+            patch("tempfile.NamedTemporaryFile") as mock_tmp,
+            patch("tempfile.mkdtemp", return_value="/tmp/mineru_cli_test"),
+        ):
+            mock_f = MagicMock()
+            mock_f.name = "/tmp/test.pdf"
+            mock_tmp.return_value.__enter__.return_value = mock_f
+
+            mock_result_dir = MagicMock()
+            mock_result_dir.__truediv__.side_effect = lambda x: {
+                "input.pdf.md": mock_md_path,
+                "input.pdf_content_list.json": mock_cl_path,
+            }.get(x, MagicMock())
+
+            mock_pdf_dir = MagicMock()
+            mock_pdf_dir.__truediv__.return_value = mock_result_dir
+
+            mock_root = MagicMock()
+            mock_root.__truediv__.return_value = mock_pdf_dir
+
+            with patch("pathlib.Path", return_value=mock_root):
+                result = _try_parse_with_mineru_cli(b"fake pdf")
+
+        assert result is not None
+        assert result.backend == DocumentBackend.MINERU_LOCAL
+        assert result.raw_markdown == "# Just markdown\nNo content list."
+        assert len(result.sections) == 0
+        assert len(result.tables) == 0
+        assert len(result.images) == 0
+
+    def test_cli_cleanup_temp_files(self) -> None:
+        """验证 os.unlink 和 shutil.rmtree 被调用。"""
+        from dayu.mineru_runtime import _try_parse_with_mineru_cli
+
+        with (
+            patch(
+                "dayu.mineru_runtime.shutil.which", return_value="/usr/bin/magic-pdf"
+            ),
+            patch("subprocess.run"),
+            patch("tempfile.NamedTemporaryFile") as mock_tmp,
+            patch("tempfile.mkdtemp", return_value="/tmp/mineru_cli_test"),
+            patch("os.unlink") as mock_unlink,
+            patch("shutil.rmtree") as mock_rmtree,
+            patch("os.path.exists", return_value=True),
+            patch("os.path.isdir", return_value=True),
+        ):
+            mock_f = MagicMock()
+            mock_f.name = "/tmp/test.pdf"
+            mock_tmp.return_value.__enter__.return_value = mock_f
+
+            mock_md_path = MagicMock()
+            mock_md_path.exists.return_value = True
+            mock_md_path.read_text.return_value = "# test"
+            mock_cl_path = MagicMock()
+            mock_cl_path.exists.return_value = True
+            mock_cl_path.read_text.return_value = "[]"
+
+            mock_result_dir = MagicMock()
+            mock_result_dir.__truediv__.side_effect = lambda x: {
+                "input.pdf.md": mock_md_path,
+                "input.pdf_content_list.json": mock_cl_path,
+            }.get(x, MagicMock())
+
+            mock_pdf_dir = MagicMock()
+            mock_pdf_dir.__truediv__.return_value = mock_result_dir
+
+            mock_root = MagicMock()
+            mock_root.__truediv__.return_value = mock_pdf_dir
+
+            with patch("pathlib.Path", return_value=mock_root):
+                result = _try_parse_with_mineru_cli(b"fake pdf")
+
+        assert result is not None
+        mock_unlink.assert_called_once_with("/tmp/test.pdf")
+        mock_rmtree.assert_called_once_with("/tmp/mineru_cli_test", ignore_errors=True)
+
+    def test_cli_exception_does_not_propagate(self) -> None:
+        """任何异常 → return None。"""
+        from dayu.mineru_runtime import _try_parse_with_mineru_cli
+
+        with (
+            patch(
+                "dayu.mineru_runtime.shutil.which", return_value="/usr/bin/magic-pdf"
+            ),
+            patch(
+                "subprocess.run",
+                side_effect=RuntimeError("unexpected error"),
+            ),
+            patch("tempfile.NamedTemporaryFile") as mock_tmp,
+            patch("tempfile.mkdtemp", return_value="/tmp/mineru_cli_test"),
+            patch("os.path.exists", return_value=True),
+            patch("os.unlink"),
+            patch("shutil.rmtree"),
+        ):
+            mock_f = MagicMock()
+            mock_f.name = "/tmp/test.pdf"
+            mock_tmp.return_value.__enter__.return_value = mock_f
+
+            result = _try_parse_with_mineru_cli(b"fake pdf")
+        assert result is None
+
+    @pytest.mark.skipif(
+        not shutil.which("magic-pdf"),
+        reason="magic-pdf CLI 未安装，跳过集成测试",
+    )
+    def test_cli_integration_smoke(self) -> None:
+        """集成冒烟测试（需要 magic-pdf 已安装）。"""
+        from dayu.mineru_runtime import _try_parse_with_mineru_cli
+
+        # TXT-based PDF（纯文本）
+        pdf_content = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n4 0 obj<</Length 44>>stream\nBT /F1 12 Tf 100 700 Td (Hello World) Tj ET\nendstream\nendobj\n5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000260 00000 n \n0000000360 00000 n \ntrailer<</Size 6/Root 1 0 R>>\nstartxref\n437\n%%EOF"
+        result = _try_parse_with_mineru_cli(pdf_content)
+        assert result is not None
+        assert result.backend == DocumentBackend.MINERU_LOCAL

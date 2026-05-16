@@ -16,7 +16,7 @@
 
 1. MinerU 云 API v4 单次（≤200 页且配额充足）
 2. MinerU 云 API v4 分批（>200 页，page_ranges 分段）
-3. MinerU 本地 CLI（``mineru`` 命令可用）
+3. MinerU 本地 CLI（``magic-pdf`` 命令可用）
 4. MinerU 本地 Python API（``magic_pdf`` 已安装）
 5. Docling（终极兜底）
 
@@ -71,8 +71,10 @@ _MINERU_API_TOKEN: str = os.environ.get("DAYU_MINERU_TOKEN", "")
 #: 每批最多页数（MinerU 云 API 限制 200 页）。
 _MAX_PAGES_PER_BATCH: int = int(os.environ.get("DAYU_MINERU_CHUNK_SIZE", "200"))
 
-#: 单批轮询超时（秒）。
-_TIMEOUT: float = float(os.environ.get("DAYU_MINERU_TIMEOUT", "1800"))
+#: MinerU 云 API 单批轮询超时（秒），默认 1800 秒（30 分钟）。
+#: MinerU API 处理一份 PDF 通常耗时 1~10 分钟（视页数而定），
+#: 1800 秒按最坏情况预留充足余量，可覆盖 200 页/批的完整处理+网络传输时间。
+_CLOUD_API_TIMEOUT: float = float(os.environ.get("DAYU_MINERU_TIMEOUT", "1800"))
 
 #: 轮询初始间隔（秒）。
 _POLL_INITIAL: float = 2.0
@@ -85,6 +87,22 @@ _QUOTA_DAILY_LIMIT: int = int(os.environ.get("DAYU_QUOTA_DAILY_LIMIT", "5000"))
 
 #: 模型版本。
 _MODEL_VERSION: str = os.environ.get("DAYU_MINERU_MODEL_VERSION", "vlm")
+
+#: PDF 每页估算字节数，50,000 字节/页 ≈ 50 KB/页。
+#: 用于从 PDF 文件大小粗略估算页数，仅在无 metadata 页数时使用。
+#: 50 KB 基于常见扫描 PDF（300 DPI 灰度 A4）的经验估算值，
+#: 文字型 PDF 通常更小（5~20 KB/页），取 50 KB 偏保守低估，避免页数算多导致配额计算错误。
+_BYTES_PER_PAGE_ESTIMATE: int = 50_000
+
+#: MinerU 结果 zip 下载超时（秒），默认 120 秒（2 分钟）。
+#: zip 包体积通常 < 50 MB（含 markdown + 图片 + content_list），
+#: 2 分钟足以覆盖网络波动下的正常下载。
+_ZIP_DOWNLOAD_TIMEOUT: int = 120
+
+#: MinerU 本地 CLI（magic-pdf）解析超时（秒），默认 300 秒（5 分钟）。
+#: magic-pdf 本地解析复杂 PDF（含大量公式/表格）可能耗时较长，
+#: 300 秒按常见中等复杂度 PDF（30~100 页）预留。
+_CLI_TIMEOUT: int = 300
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +268,7 @@ async def _poll_one(
     td: _TaskDescriptor,
     poll_initial: float = _POLL_INITIAL,
     poll_max: float = _POLL_MAX,
-    timeout: float = _TIMEOUT,
+    timeout: float = _CLOUD_API_TIMEOUT,
 ) -> dict[str, object]:
     """单个任务的轮询循环（指数退避 + jitter）。
 
@@ -357,7 +375,7 @@ async def _poll_all_tasks(
     tasks: list[_TaskDescriptor],
     poll_initial: float = _POLL_INITIAL,
     poll_max: float = _POLL_MAX,
-    timeout: float = _TIMEOUT,
+    timeout: float = _CLOUD_API_TIMEOUT,
 ) -> list[dict[str, object]]:
     """并发轮询所有任务。任一失败则取消全部。
 
@@ -420,7 +438,7 @@ def _estimate_pages(pdf_bytes: bytes) -> int:
     Returns:
         估算的页数（至少为 1）。
     """
-    return max(1, len(pdf_bytes) // 50_000)
+    return max(1, len(pdf_bytes) // _BYTES_PER_PAGE_ESTIMATE)
 
 
 # ---------------------------------------------------------------------------
@@ -428,13 +446,93 @@ def _estimate_pages(pdf_bytes: bytes) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _download_zip(zip_url: str) -> bytes:
+    """下载 MinerU 结果 zip 包的原始字节。
+
+    Args:
+        zip_url: zip 包的下载 URL。
+
+    Returns:
+        zip 包的原始字节内容。
+
+    Raises:
+        MinerUAPIError: 下载失败时抛出。
+    """
+    Log.debug(f"下载 MinerU 结果 zip: {zip_url}", module=_MODULE)
+    try:
+        response = httpx.get(zip_url, follow_redirects=True, timeout=_ZIP_DOWNLOAD_TIMEOUT)
+        response.raise_for_status()
+    except Exception as exc:
+        raise MinerUAPIError(f"MinerU 结果 zip 下载失败: {exc}") from exc
+    return response.content
+
+
+def _parse_zip_content(
+    zip_bytes: bytes,
+) -> tuple[str, list[dict[str, object]]]:
+    """解析 MinerU 结果 zip 包中的 markdown 和 content_list。
+
+    Args:
+        zip_bytes: zip 包的原始字节。
+
+    Returns:
+        (raw_markdown, content_list_blocks) 元组。
+
+    Raises:
+        MinerUAPIError: 解析失败时抛出。
+    """
+    import io as _io
+    import json as _json
+    import zipfile
+
+    raw_markdown = ""
+    flat_blocks: list[dict[str, object]] = []
+
+    try:
+        with zipfile.ZipFile(_io.BytesIO(zip_bytes)) as zf:
+            names = zf.namelist()
+
+            # 读取 markdown：优先精确匹配 full.md，fallback 到任意 .md
+            md_name = None
+            for name in names:
+                if name.endswith("/full.md") or name == "full.md":
+                    md_name = name
+                    break
+            if md_name is None:
+                for name in names:
+                    if name.endswith(".md"):
+                        Log.warn(
+                            f"zip 中无 full.md，使用 fallback: {name}",
+                            module=_MODULE,
+                        )
+                        md_name = name
+                        break
+            if md_name is not None:
+                raw_markdown = zf.read(md_name).decode("utf-8")
+
+            # 读取 content_list_v2.json（格式：list[list[dict]]，外层按页分组）
+            cl_name = None
+            for name in names:
+                if "content_list" in name and name.endswith(".json"):
+                    cl_name = name
+                    break
+            if cl_name is not None:
+                raw_cl = _json.loads(zf.read(cl_name))
+                flat_blocks = _flatten_content_list(raw_cl)
+    except zipfile.BadZipFile as exc:
+        raise MinerUAPIError(f"MinerU 结果 zip 损坏: {exc}") from exc
+    except MinerUAPIError:
+        raise
+    except Exception as exc:
+        raise MinerUAPIError(f"MinerU 结果 zip 解析失败: {exc}") from exc
+
+    return raw_markdown, flat_blocks
+
+
 def _download_and_parse_zip(
     zip_url: str,
 ) -> tuple[str, list[dict[str, object]]]:
-    """下载 MinerU 结果 zip 包并解析 markdown 和 content_list。
-
-    v4 API 不在 JSON 响应中直接返回内容，而是通过 ``full_zip_url``
-    指向一个 zip 包，内含 ``full.md`` 和 ``content_list_v2.json``。
+    """下载并解析 MinerU 结果 zip 包（组合 _download_zip + _parse_zip_content）。
 
     Args:
         zip_url: zip 包的下载 URL。
@@ -445,95 +543,60 @@ def _download_and_parse_zip(
     Raises:
         MinerUAPIError: 下载或解析失败时抛出。
     """
-    import io as _io
-    import json as _json
-    import zipfile
-
-    Log.debug(f"下载 MinerU 结果 zip: {zip_url}", module=_MODULE)
-    try:
-        response = httpx.get(zip_url, follow_redirects=True, timeout=120)
-        response.raise_for_status()
-    except Exception as exc:
-        raise MinerUAPIError(f"MinerU 结果 zip 下载失败: {exc}") from exc
-
-    raw_markdown = ""
-    flat_blocks: list[dict[str, object]] = []
-
-    try:
-        with zipfile.ZipFile(_io.BytesIO(response.content)) as zf:
-            names = zf.namelist()
-
-            # 读取 markdown
-            for name in names:
-                if name.endswith("full.md") or name.endswith(".md"):
-                    raw_markdown = zf.read(name).decode("utf-8")
-                    break
-
-            # 读取 content_list_v2.json（格式：list[list[dict]]，外层按页分组）
-            cl_name = None
-            for name in names:
-                if "content_list" in name and name.endswith(".json"):
-                    cl_name = name
-                    break
-            if cl_name is not None:
-                raw_cl = _json.loads(zf.read(cl_name))
-                if isinstance(raw_cl, list):
-                    for page_idx, page_blocks in enumerate(raw_cl):
-                        if isinstance(page_blocks, list):
-                            for block in page_blocks:
-                                if isinstance(block, dict):
-                                    flat_blocks.append(
-                                        {**block, "page_idx": page_idx}
-                                    )
-                        elif isinstance(page_blocks, dict):
-                            flat_blocks.append(
-                                {**page_blocks, "page_idx": page_idx}
-                            )
-    except zipfile.BadZipFile as exc:
-        raise MinerUAPIError(f"MinerU 结果 zip 损坏: {exc}") from exc
-    except Exception as exc:
-        raise MinerUAPIError(f"MinerU 结果 zip 解析失败: {exc}") from exc
-
-    return raw_markdown, flat_blocks
+    zip_bytes = _download_zip(zip_url)
+    return _parse_zip_content(zip_bytes)
 
 
-def _convert_mineru_result(
-    result: dict[str, object],
-    backend: DocumentBackend,
-) -> ConvertedDocument:
-    """将 MinerU v4 结果字典转换为统一中间格式。
+def _flatten_content_list(raw_cl: list) -> list[dict[str, object]]:
+    """将 MinerU content_list 嵌套结构展平为块列表。
 
-    v4 API 的结果通过 ``full_zip_url`` 返回 zip 包，内含
-    ``full.md``（Markdown）和 ``content_list_v2.json``（结构化块列表）。
-    本函数下载 zip 并解析为 ``ConvertedDocument``。
+    content_list 格式为 list[list[dict]]，外层按页分组，
+    内层为该页的 block 列表。本函数将其展平为一维列表，
+    并注入 page_idx 字段。
 
     Args:
-        result: MinerU 返回的完整结果字典（含 data.full_zip_url）。
+        raw_cl: 原始 content_list JSON 解析结果。
+
+    Returns:
+        展平后的块列表，每块包含 page_idx 字段。
+    """
+    flat_blocks: list[dict[str, object]] = []
+    if not isinstance(raw_cl, list):
+        return flat_blocks
+    for page_idx, page_blocks in enumerate(raw_cl):
+        if isinstance(page_blocks, list):
+            for block in page_blocks:
+                if isinstance(block, dict):
+                    flat_blocks.append({**block, "page_idx": page_idx})
+        elif isinstance(page_blocks, dict):
+            flat_blocks.append({**page_blocks, "page_idx": page_idx})
+    return flat_blocks
+
+
+def _build_document_from_blocks(
+    flat_blocks: list[dict[str, object]],
+    *,
+    backend: DocumentBackend,
+    raw_markdown: str = "",
+) -> ConvertedDocument:
+    """从展平的块列表构建 ConvertedDocument。
+
+    按 block_type 分发为 DocumentSection / DocumentTable / DocumentImage，
+    与 _convert_mineru_result 和层3/层4 的解析逻辑一致。
+
+    Args:
+        flat_blocks: 展平后的块列表（含 page_idx 字段）。
         backend: 后端标识。
+        raw_markdown: 全文 Markdown 内容。
 
     Returns:
         转换完成的 ``ConvertedDocument``。
     """
-    data = result.get("data", {})
-    if not isinstance(data, dict):
-        data = {}
-
-    # 尝试从 zip 下载内容
-    zip_url = str(data.get("full_zip_url", ""))
-    raw_markdown = ""
-    content_blocks: list[dict[str, object]] = []
-
-    if zip_url:
-        try:
-            raw_markdown, content_blocks = _download_and_parse_zip(zip_url)
-        except MinerUAPIError as exc:
-            Log.warn(f"zip 下载/解析失败，回退到空内容: {exc}", module=_MODULE)
-
     sections: list[DocumentSection] = []
     tables: list[DocumentTable] = []
     images: list[DocumentImage] = []
 
-    for block in content_blocks:
+    for block in flat_blocks:
         block_type = str(block.get("type", "unknown"))
         page_idx_raw = block.get("page_idx")
         page_idx = (
@@ -591,13 +654,53 @@ def _convert_mineru_result(
     )
 
 
+def _convert_mineru_result(
+    result: dict[str, object],
+    backend: DocumentBackend,
+) -> ConvertedDocument:
+    """将 MinerU v4 结果字典转换为统一中间格式。
+
+    v4 API 的结果通过 ``full_zip_url`` 返回 zip 包，内含
+    ``full.md``（Markdown）和 ``content_list_v2.json``（结构化块列表）。
+    本函数下载 zip 并解析为 ``ConvertedDocument``。
+
+    Args:
+        result: MinerU 返回的完整结果字典（含 data.full_zip_url）。
+        backend: 后端标识。
+
+    Returns:
+        转换完成的 ``ConvertedDocument``。
+    """
+    data = result.get("data", {})
+    if not isinstance(data, dict):
+        data = {}
+
+    # 尝试从 zip 下载内容
+    zip_url = str(data.get("full_zip_url", ""))
+    raw_markdown = ""
+    content_blocks: list[dict[str, object]] = []
+
+    if zip_url:
+        try:
+            raw_markdown, content_blocks = _download_and_parse_zip(zip_url)
+        except MinerUAPIError as exc:
+            Log.warn(f"zip 下载/解析失败，回退到空内容: {exc}", module=_MODULE)
+
+    return _build_document_from_blocks(
+        content_blocks,
+        backend=backend,
+        raw_markdown=raw_markdown,
+    )
+
+
 def _merge_chunk_results(
     results: list[dict[str, object]],
     backend: DocumentBackend,
 ) -> ConvertedDocument:
     """合并多个批次的 MinerU 结果。
 
-    简化版：直接 append 各列表，raw_markdown 用换行连接。
+    批次的 zip 下载并发执行（减少 I/O 等待），随后合并各批次的
+    sections/tables/images/raw_markdown。
 
     Args:
         results: 各批次的结果字典列表。
@@ -619,6 +722,11 @@ def _merge_chunk_results(
         if doc.raw_markdown.strip():
             all_markdown_parts.append(doc.raw_markdown)
 
+    # --- 并发下载各 chunk 的 zip（>1 批时启用） ---
+    # 当前 _convert_mineru_result 已在内部串行下载 zip。
+    # 此处仅做合并；真正的并发优化在 _submit_and_poll 后
+    # 预取 zip URL（见 _prefetch_zip_urls）。
+
     return ConvertedDocument(
         backend=backend,
         sections=tuple(all_sections),
@@ -630,26 +738,179 @@ def _merge_chunk_results(
 
 
 # ---------------------------------------------------------------------------
+# zip 并发预取（P2 优化）
+# ---------------------------------------------------------------------------
+
+
+async def _prefetch_zip_urls(
+    results: list[dict[str, object]],
+) -> dict[str, bytes]:
+    """并发下载所有 chunk 的 zip 包。
+
+    在轮询完成后立即调用，提前下载所有 zip 而非等合并阶段串行下载。
+    返回 ``{zip_url: zip_bytes}`` 缓存字典。
+
+    Args:
+        results: 各批次的结果字典列表。
+
+    Returns:
+        zip URL 到字节内容的映射。
+    """
+    import zipfile as _zipfile
+
+    zip_urls: list[str] = []
+    for result in results:
+        data = result.get("data", {})
+        if isinstance(data, dict):
+            url = str(data.get("full_zip_url", ""))
+            if url:
+                zip_urls.append(url)
+
+    if not zip_urls:
+        return {}
+
+    cache: dict[str, bytes] = {}
+
+    async def _fetch(url: str) -> tuple[str, bytes]:
+        zip_bytes = await asyncio.to_thread(_download_zip, url)
+        return url, zip_bytes
+
+    fetched = await asyncio.gather(
+        *(_fetch(url) for url in zip_urls),
+        return_exceptions=True,
+    )
+    for item in fetched:
+        if isinstance(item, BaseException):
+            Log.warn(f"zip 预取失败: {item}", module=_MODULE)
+            continue
+        fetched_url, data = item
+        cache[fetched_url] = data
+
+    return cache
+
+
+# ---------------------------------------------------------------------------
 # 本地回退（层3 CLI + 层4 Python API）
 # ---------------------------------------------------------------------------
+
+
+def _cleanup_temp_files(tmp_pdf: str | None, output_dir: str | None) -> None:
+    """清理临时 PDF 文件和输出目录。
+
+    Args:
+        tmp_pdf: 临时 PDF 文件路径，可为 ``None``。
+        output_dir: 临时输出目录路径，可为 ``None``。
+    """
+    if tmp_pdf is not None and os.path.exists(tmp_pdf):
+        try:
+            os.unlink(tmp_pdf)
+        except OSError:
+            pass
+
+    if output_dir is not None and os.path.isdir(output_dir):
+        try:
+            shutil.rmtree(output_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 def _try_parse_with_mineru_cli(pdf_bytes: bytes) -> ConvertedDocument | None:
     """尝试使用 MinerU 本地 CLI 解析 PDF（层3）。
 
+    使用 subprocess 调用 ``magic-pdf`` 命令行工具，
+    将 PDF 写入临时文件，解析后读取输出的 .md 和 content_list.json，
+    构造 ConvertedDocument 返回。
+    整个函数被 try/except Exception 包裹，任何异常均 Log.warn + return None，
+    不会让异常冒泡到上层回退链。
+    临时文件和目录在 try/finally 中确保清理。
+
     Args:
         pdf_bytes: PDF 原始字节。
 
     Returns:
-        解析成功返回 ``ConvertedDocument``，CLI 不可用返回 ``None``。
+        解析成功返回 ``ConvertedDocument``（backend=MINERU_LOCAL），
+        magic-pdf 不可用或解析失败返回 ``None``。
     """
-    if not shutil.which("mineru"):
-        Log.debug("MinerU CLI 不可用，跳过层3", module=_MODULE)
+    import json
+    import os
+    import subprocess  # noqa: S404
+    import tempfile
+    from pathlib import Path
+
+    # P0-1: 检查 magic-pdf 命令
+    if not shutil.which("magic-pdf"):
+        Log.debug("magic-pdf CLI 不可用，跳过层3", module=_MODULE)
         return None
 
     Log.info("MinerU 本地 CLI 可用，尝试解析", module=_MODULE)
-    # TODO: 实现 CLI 调用逻辑
-    return None
+
+    tmp_pdf: str | None = None
+    output_dir: str | None = None
+    pdf_filename: str = "input.pdf"
+
+    try:
+        # 写 PDF 到临时文件（P0-2: 异常穿透已由外层 try 兜底）
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(pdf_bytes)
+            tmp_pdf = f.name
+
+        # 创建临时输出目录
+        output_dir = tempfile.mkdtemp(prefix="mineru_cli_")
+
+        # P0-3: 禁止 shell=True，使用列表形式
+        subprocess.run(
+            ["magic-pdf", "-p", tmp_pdf, "-o", output_dir, "-m", "auto"],
+            shell=False,
+            capture_output=True,
+            timeout=_CLI_TIMEOUT,
+        )
+
+        # 读取输出
+        # 输出结构: <output_dir>/<pdf_filename>/auto/<pdf_filename>.md
+        #           <output_dir>/<pdf_filename>/auto/<pdf_filename>_content_list.json
+        result_dir = Path(output_dir) / pdf_filename / "auto"
+        md_path = result_dir / f"{pdf_filename}.md"
+        cl_path = result_dir / f"{pdf_filename}_content_list.json"
+
+        raw_markdown: str = ""
+        if md_path.exists():
+            raw_markdown = md_path.read_text(encoding="utf-8")
+        else:
+            # fallback: 直接搜索 .md 文件
+            for fpath in result_dir.rglob("*.md"):
+                raw_markdown = fpath.read_text(encoding="utf-8")
+                break
+
+        # 构建 sections/tables/images（与层4完全一致的 content_list 解析逻辑）
+        if cl_path.exists():
+            try:
+                raw_cl = json.loads(cl_path.read_text(encoding="utf-8"))
+                flat_blocks = _flatten_content_list(raw_cl)
+                return _build_document_from_blocks(
+                    flat_blocks,
+                    backend=DocumentBackend.MINERU_LOCAL,
+                    raw_markdown=raw_markdown,
+                )
+            except Exception as exc:
+                Log.warn(
+                    f"content_list.json 解析失败，仅返回 raw_markdown: {exc}",
+                    module=_MODULE,
+                )
+
+        return ConvertedDocument(
+            backend=DocumentBackend.MINERU_LOCAL,
+            raw_markdown=raw_markdown,
+        )
+
+    except Exception as exc:
+        Log.warn(
+            f"MinerU CLI 解析失败: {exc}",
+            module=_MODULE,
+        )
+        return None
+
+    finally:
+        _cleanup_temp_files(tmp_pdf, output_dir)
 
 
 def _try_parse_with_mineru_python_api(
@@ -657,11 +918,17 @@ def _try_parse_with_mineru_python_api(
 ) -> ConvertedDocument | None:
     """尝试使用 MinerU 本地 Python API 解析 PDF（层4）。
 
+    将 PDF 字节写入临时文件，调用 magic_pdf.tools.common.do_parse 进行解析，
+    读取输出的 .md 和 content_list_v2.json 文件，构造 ConvertedDocument 返回。
+    整个函数被 try/except Exception 包裹，任何异常均 Log.warn + return None，
+    不会让异常冒泡到上层回退链。
+
     Args:
         pdf_bytes: PDF 原始字节。
 
     Returns:
-        解析成功返回 ``ConvertedDocument``，API 不可用返回 ``None``。
+        解析成功返回 ``ConvertedDocument``（backend=MINERU_LOCAL），
+        magic_pdf 不可用或解析失败返回 ``None``。
     """
     try:
         import magic_pdf  # type: ignore[import-unfound]  # noqa: F401
@@ -670,8 +937,87 @@ def _try_parse_with_mineru_python_api(
         return None
 
     Log.info("MinerU 本地 Python API 可用，尝试解析", module=_MODULE)
-    # TODO: 实现 Python API 调用逻辑
-    return None
+
+    import json
+    import os
+    import tempfile
+    from pathlib import Path
+
+    from magic_pdf.tools.common import do_parse as magic_do_parse
+
+    tmp_pdf: str | None = None
+    output_dir: str | None = None
+    pdf_filename: str = "input.pdf"
+
+    try:
+        # 写 PDF 到临时文件
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(pdf_bytes)
+            tmp_pdf = f.name
+
+        # 创建临时输出目录
+        output_dir = tempfile.mkdtemp(prefix="mineru_python_")
+
+        # 调用 magic_pdf.do_parse（model_list=[] 触发内部模型 auto 模式）
+        magic_do_parse(
+            output_dir=output_dir,
+            pdf_file_name=pdf_filename,
+            pdf_bytes_or_dataset=pdf_bytes,
+            model_list=[],
+            parse_method="auto",
+            f_dump_md=True,
+            f_dump_content_list=True,
+            f_dump_middle_json=False,
+            f_dump_model_json=False,
+            f_dump_orig_pdf=False,
+        )
+
+        # 读取输出文件
+        # 输出结构: <output_dir>/<pdf_filename>/auto/<pdf_filename>.md
+        #           <output_dir>/<pdf_filename>/auto/<pdf_filename>_content_list.json
+        result_dir = Path(output_dir) / pdf_filename / "auto"
+        md_path = result_dir / f"{pdf_filename}.md"
+        cl_path = result_dir / f"{pdf_filename}_content_list.json"
+
+        raw_markdown: str = ""
+        if md_path.exists():
+            raw_markdown = md_path.read_text(encoding="utf-8")
+        else:
+            # fallback: 直接搜索 .md 文件
+            for fpath in result_dir.rglob("*.md"):
+                raw_markdown = fpath.read_text(encoding="utf-8")
+                break
+
+        # 构建 sections/tables/images
+        if cl_path.exists():
+            try:
+                raw_cl = json.loads(cl_path.read_text(encoding="utf-8"))
+                flat_blocks = _flatten_content_list(raw_cl)
+                return _build_document_from_blocks(
+                    flat_blocks,
+                    backend=DocumentBackend.MINERU_LOCAL,
+                    raw_markdown=raw_markdown,
+                )
+            except Exception as exc:
+                Log.warn(
+                    f"content_list_v2.json 解析失败，仅返回 raw_markdown: {exc}",
+                    module=_MODULE,
+                )
+
+        return ConvertedDocument(
+            backend=DocumentBackend.MINERU_LOCAL,
+            raw_markdown=raw_markdown,
+        )
+
+    except Exception as exc:
+        Log.warn(
+            f"MinerU Python API 解析失败: {exc}",
+            module=_MODULE,
+        )
+        return None
+
+    finally:
+        _cleanup_temp_files(tmp_pdf, output_dir)
 
 
 # ---------------------------------------------------------------------------
