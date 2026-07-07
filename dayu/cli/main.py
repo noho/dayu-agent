@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from dayu.cli.command_names import FINS_COMMANDS, HOST_COMMANDS
+from dayu.cli.command_names import FINS_COMMANDS, HOST_COMMANDS, RESEARCH_TEMPLATE_COMMANDS
 from dayu.cli.arg_parsing import parse_arguments
 from dayu.console_output import configure_standard_streams_for_console_output
 from dayu.process_lifecycle.exit_codes import EXIT_CODE_SIGINT
@@ -47,6 +47,10 @@ def main() -> int:
             from dayu.cli.commands.host import run_host_command
 
             return run_host_command(args)
+        if args.command in RESEARCH_TEMPLATE_COMMANDS:
+            from dayu.cli.commands.research_template import run_research_template_command
+
+            return run_research_template_command(args)
         if args.command == "interactive":
             # interactive 会拉起完整 CLI 运行时，延迟到命中命令时导入。
             from dayu.cli.commands.interactive import run_interactive_command

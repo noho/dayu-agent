@@ -7,6 +7,7 @@ import threading
 import time
 from collections.abc import Iterable
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -770,6 +771,9 @@ def test_log_write_pipeline_config_uses_resolved_agent_iterations(
         chapter_filter="公司做的是什么生意",
         fast=True,
         force=True,
+        research_template_requested_name="auto",
+        research_template_resolved_name="technology",
+        research_template_selection_mode="auto",
     )
     resolved_options = ResolvedExecutionOptions(
         model_name="deepseek-v4-flash",
@@ -795,6 +799,7 @@ def test_log_write_pipeline_config_uses_resolved_agent_iterations(
         "chapter=公司做的是什么生意, resume=True, write_max_retries=2, fast=True, force=True" in item
         for item in logs
     )
+    assert any("research_template=requested:auto, resolved:technology, mode:auto" in item for item in logs)
 
 
 class _FakePromptAssetStore:
@@ -3932,6 +3937,38 @@ def test_run_manifest_from_dict_rejects_legacy_model_fields() -> None:
 
 
 @pytest.mark.unit
+def test_run_manifest_from_dict_defaults_missing_research_template_provenance() -> None:
+    manifest = RunManifest.from_dict(
+        {
+            "version": "write_manifest_v1",
+            "signature": "sig",
+            "config": {
+                "ticker": "AAPL",
+                "company": "Apple Inc.",
+                "template_path": "/tmp/template.md",
+                "output_dir": "/tmp/out",
+                "write_max_retries": 2,
+                "web_provider": "auto",
+                "resume": True,
+            },
+            "chapter_results": {},
+        }
+    )
+
+    assert manifest.config.research_template_requested_name == ""
+    assert manifest.config.research_template_resolved_name == ""
+    assert manifest.config.research_template_selection_mode == ""
+
+    manifest.config.research_template_requested_name = "auto"
+    manifest.config.research_template_resolved_name = "technology"
+    manifest.config.research_template_selection_mode = "auto"
+    restored = RunManifest.from_dict(manifest.to_dict())
+    assert restored.config.research_template_requested_name == "auto"
+    assert restored.config.research_template_resolved_name == "technology"
+    assert restored.config.research_template_selection_mode == "auto"
+
+
+@pytest.mark.unit
 def test_create_decision_agent_uses_decision_scene_with_tools(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -5087,6 +5124,39 @@ def test_persist_manifest_merges_existing_results(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+def test_load_or_create_manifest_refreshes_config_when_signature_matches(tmp_path: Path) -> None:
+    runner = _build_runner(tmp_path)
+    runner._write_config.resume = True
+    old_config = replace(
+        runner._write_config,
+        research_template_requested_name="technology",
+        research_template_resolved_name="technology",
+        research_template_selection_mode="named",
+    )
+    existing_manifest = RunManifest(
+        version="write_manifest_v1",
+        signature="same-sig",
+        config=old_config,
+        chapter_results={
+            "A": ChapterResult(index=2, title="A", status="passed", content="## A\nold", audit_passed=True)
+        },
+        company_facets=CompanyFacetProfile(primary_facets=["半导体设计"]),
+    )
+    _write_manifest(runner._manifest_path, existing_manifest)
+    runner._write_config.research_template_requested_name = "auto"
+    runner._write_config.research_template_resolved_name = "technology"
+    runner._write_config.research_template_selection_mode = "auto"
+
+    resumed_manifest = runner._store._load_or_create_manifest("same-sig")
+
+    assert resumed_manifest.config.research_template_requested_name == "auto"
+    assert resumed_manifest.config.research_template_resolved_name == "technology"
+    assert resumed_manifest.config.research_template_selection_mode == "auto"
+    assert resumed_manifest.chapter_results == existing_manifest.chapter_results
+    assert resumed_manifest.company_facets == existing_manifest.company_facets
+
+
+@pytest.mark.unit
 def test_load_or_create_manifest_purges_stale_artifacts_when_signature_changes(
     tmp_path: Path,
 ) -> None:
@@ -5112,14 +5182,19 @@ def test_load_or_create_manifest_purges_stale_artifacts_when_signature_changes(
         signature="old-sig",
         config=runner._write_config,
         chapter_results={},
+        company_facets=CompanyFacetProfile(
+            primary_facets=["半导体设计"],
+            cross_cutting_facets=["高研发驱动"],
+        ),
     )
     _write_manifest(runner._manifest_path, existing_manifest)
 
-    runner._store._load_or_create_manifest("new-sig")
+    migrated_manifest = runner._store._load_or_create_manifest("new-sig")
 
     assert not stale_chapter_md.exists()
     assert not stale_phase_dir.exists()
     assert not sources_path.exists()
+    assert migrated_manifest.company_facets == existing_manifest.company_facets
 
 
 @pytest.mark.unit

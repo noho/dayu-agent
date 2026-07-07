@@ -19,6 +19,7 @@ from dayu.cli.interactive_state import (
     build_interactive_key,
     resolve_interactive_session_id as resolve_interactive_state_session_id,
 )
+from dayu.cli.research_template_assets import resolve_research_template_selection
 from dayu.process_lifecycle import (
     ProcessShutdownCoordinator,
     register_process_shutdown_hook,
@@ -39,7 +40,7 @@ from dayu.execution.options import (
 )
 from dayu.execution.runtime_config import AgentRuntimeConfig, RunnerRuntimeConfig
 from dayu.fins.domain.enums import SourceKind
-from dayu.fins.service_runtime import DefaultFinsRuntime, FinsRuntimeProtocol
+from dayu.fins.service_runtime import FinsRuntimeProtocol
 from dayu.fins.storage import FsSourceDocumentRepository
 from dayu.host import Host, purge_sessions_from_host_db
 from dayu.log import Log, set_level_from_flags
@@ -200,6 +201,9 @@ class WriteCliConfig:
     fast: bool = False
     force: bool = False
     infer: bool = False
+    research_template_requested_name: str = ""
+    research_template_resolved_name: str = ""
+    research_template_selection_mode: str = ""
 
 
 def _build_execution_options(args: argparse.Namespace) -> ExecutionOptions:
@@ -719,6 +723,7 @@ def setup_write_config(args: argparse.Namespace, paths_config: WorkspaceConfig, 
 
     raw_output = getattr(args, "output", None)
     raw_template = getattr(args, "template", None)
+    raw_research_template = getattr(args, "research_template", None)
     raw_write_max_retries = int(getattr(args, "write_max_retries", 2))
     raw_resume = bool(getattr(args, "resume", True))
     raw_web_provider = getattr(args, "web_provider", None)
@@ -734,8 +739,28 @@ def setup_write_config(args: argparse.Namespace, paths_config: WorkspaceConfig, 
         raw_output=raw_output,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
+    research_template_requested_name = ""
+    research_template_resolved_name = ""
+    research_template_selection_mode = ""
 
-    if raw_template is not None:
+    if raw_template is not None and raw_research_template is not None:
+        Log.error("--template 与 --research-template 不能同时使用", module=MODULE)
+        raise SystemExit(2)
+    if raw_research_template is not None:
+        try:
+            selection = resolve_research_template_selection(
+                str(raw_research_template),
+                workspace_root=paths_config.workspace_dir,
+                manifest_path=output_dir / "manifest.json",
+            )
+            template_path = selection.path
+            research_template_requested_name = selection.requested_name
+            research_template_resolved_name = selection.resolved_name
+            research_template_selection_mode = selection.selection_mode
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            Log.error(f"研究模板解析失败: {exc}", module=MODULE)
+            raise SystemExit(2) from exc
+    elif raw_template is not None:
         template_path = Path(raw_template).expanduser()
         if not template_path.is_absolute():
             template_path = (Path.cwd() / template_path).resolve()
@@ -761,6 +786,9 @@ def setup_write_config(args: argparse.Namespace, paths_config: WorkspaceConfig, 
         fast=raw_fast,
         force=raw_force,
         infer=raw_infer,
+        research_template_requested_name=research_template_requested_name,
+        research_template_resolved_name=research_template_resolved_name,
+        research_template_selection_mode=research_template_selection_mode,
     )
 
 

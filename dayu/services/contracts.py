@@ -49,6 +49,9 @@ class WriteRunConfig:
         fast: 是否仅执行写作，不进入 audit/confirm/repair。
         force: 是否强制放宽第0章/第10章的 audit 前置门禁。
         infer: 是否仅执行一次公司级 facet 归因并写回 manifest。
+        research_template_requested_name: CLI 请求的研究模板名。
+        research_template_resolved_name: 最终解析到的研究模板名。
+        research_template_selection_mode: 模板选择模式（named/auto 或空）。
     """
 
     ticker: str
@@ -65,6 +68,9 @@ class WriteRunConfig:
     fast: bool = False
     force: bool = False
     infer: bool = False
+    research_template_requested_name: str = ""
+    research_template_resolved_name: str = ""
+    research_template_selection_mode: str = ""
 
 
 class SessionResolutionPolicy(str, Enum):

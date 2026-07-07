@@ -20,7 +20,7 @@ from dayu.cli.conversation_labels import FileConversationLabelRegistry
 from dayu.cli.commands import prompt as prompt_command_module
 from dayu.cli.commands.interactive import run_interactive_command
 from dayu.cli.commands.prompt import run_prompt_command
-from dayu.cli.commands.write import run_write_command
+from dayu.cli.commands.write import _validate_research_materialization_args, run_write_command
 from dayu.cli.dependency_setup import (
     ModelName,
     RunningConfig,
@@ -83,6 +83,8 @@ from dayu.startup.config_loader import ConfigLoader
 from dayu.startup.prompt_assets import FilePromptAssetStore
 from dayu.fins.toolset_registrars import register_fins_read_toolset as _register_fins_read_toolset
 from dayu.services.startup_preparation import PreparedHostRuntimeDependencies
+
+
 class _CallCollector:
     """测试调用记录器。"""
 
@@ -516,12 +518,12 @@ class _FinsReadToolsRegistrationRecorder:
         payload = context.toolset_config.payload if context.toolset_config is not None else {}
         self.calls.append(
             {
-            "processor_cache_max_entries": payload.get("processor_cache_max_entries"),
-            "list_documents_max_items": payload.get("list_documents_max_items"),
-            "get_document_sections_max_items": payload.get("get_document_sections_max_items"),
-            "search_document_max_items": payload.get("search_document_max_items"),
-            "read_section_max_chars": payload.get("read_section_max_chars"),
-            "get_page_content_max_chars": payload.get("get_page_content_max_chars"),
+                "processor_cache_max_entries": payload.get("processor_cache_max_entries"),
+                "list_documents_max_items": payload.get("list_documents_max_items"),
+                "get_document_sections_max_items": payload.get("get_document_sections_max_items"),
+                "search_document_max_items": payload.get("search_document_max_items"),
+                "read_section_max_chars": payload.get("read_section_max_chars"),
+                "get_page_content_max_chars": payload.get("get_page_content_max_chars"),
                 "timeout_budget": context.tool_timeout_seconds,
                 "has_service": True,
                 "has_repository": False,
@@ -1257,6 +1259,100 @@ def test_parse_arguments_supports_write_flags(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.unit
+def test_parse_arguments_supports_named_research_template(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["cli.py", "write", "--ticker", "aapl", "--research-template", "technology"],
+    )
+
+    parsed = parse_arguments()
+
+    assert parsed.template is None
+    assert parsed.research_template == "technology"
+
+
+@pytest.mark.unit
+def test_parse_arguments_supports_write_research_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cli.py",
+            "write",
+            "--ticker",
+            "aapl",
+            "--research-template",
+            "auto",
+            "--materialize-research",
+            "--research-base",
+            "./research",
+            "--overwrite-research",
+        ],
+    )
+
+    parsed = parse_arguments()
+
+    assert parsed.materialize_research is True
+    assert parsed.research_base == "./research"
+    assert parsed.overwrite_research is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("values", "expected_fragment"),
+    [
+        ({"materialize_research": True}, "--research-template"),
+        (
+            {"materialize_research": True, "research_template": "auto", "infer": True},
+            "--infer",
+        ),
+        (
+            {"materialize_research": True, "research_template": "auto", "summary": True},
+            "--summary",
+        ),
+        ({"research_base": "./research"}, "--materialize-research"),
+        ({"overwrite_research": True}, "--materialize-research"),
+    ],
+)
+def test_validate_research_materialization_rejects_invalid_combinations(
+    values: dict[str, object],
+    expected_fragment: str,
+) -> None:
+    error = _validate_research_materialization_args(Namespace(**values))
+
+    assert error is not None
+    assert expected_fragment in error
+
+
+@pytest.mark.unit
+def test_parse_arguments_rejects_template_and_research_template_together(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cli.py",
+            "write",
+            "--ticker",
+            "aapl",
+            "--template",
+            "custom.md",
+            "--research-template",
+            "technology",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        parse_arguments()
+
+    assert exc_info.value.code == 2
+
+
+@pytest.mark.unit
 def test_parse_arguments_supports_write_summary_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     """验证写作命令支持 `--summary` 退化入口。
 
@@ -1601,7 +1697,6 @@ def test_resolve_interactive_session_id_rotates_after_new_session(tmp_path: Path
     assert session_id == build_interactive_session_id(reloaded.interactive_key)
 
 
-
 @pytest.mark.unit
 def test_parse_arguments_rejects_removed_processor_hint(monkeypatch: pytest.MonkeyPatch) -> None:
     """验证财报 process CLI 不再接受 `--processor-hint`。
@@ -1928,6 +2023,108 @@ def test_setup_write_config_uses_workspace_draft_ticker_by_default(tmp_path: Pat
     assert write_config.fast is True
     assert write_config.force is True
     assert write_config.infer is True
+
+
+@pytest.mark.unit
+def test_setup_write_config_resolves_named_research_template(tmp_path: Path) -> None:
+    workspace_dir = tmp_path / "workspace"
+    (workspace_dir / "config").mkdir(parents=True, exist_ok=True)
+    paths_config = WorkspaceConfig(
+        workspace_dir=workspace_dir,
+        output_dir=workspace_dir / "output",
+        config_loader=ConfigLoader(ConfigFileResolver(workspace_dir / "config")),
+        prompt_asset_store=FilePromptAssetStore(ConfigFileResolver(workspace_dir / "config")),
+        ticker="AAPL",
+        has_local_filings=False,
+    )
+    args = Namespace(
+        command="write",
+        output=None,
+        template=None,
+        research_template="technology",
+        write_max_retries=2,
+        resume=True,
+        web_provider=None,
+        audit_model_name=None,
+        chapter=None,
+        fast=False,
+        force=False,
+        infer=False,
+    )
+    running_config = RunningConfig(
+        runner_running_config=AsyncOpenAIRunnerRunningConfig(),
+        agent_running_config=AgentRunningConfig(),
+        doc_tool_limits=DocToolLimits(),
+        fins_tool_limits=FinsToolLimits(),
+        web_tools_config=WebToolsConfig(provider="auto"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
+    )
+
+    write_config = setup_write_config(args, paths_config, running_config)
+
+    expected_path = workspace_dir / "assets" / "research_templates" / "common-plus-technology.md"
+    assert write_config.template_path == expected_path.resolve()
+    assert write_config.research_template_requested_name == "technology"
+    assert write_config.research_template_resolved_name == "technology"
+    assert write_config.research_template_selection_mode == "named"
+    assert "DAYU_RESEARCH_TEMPLATE" in write_config.template_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.unit
+def test_setup_write_config_auto_routes_from_existing_write_manifest(tmp_path: Path) -> None:
+    workspace_dir = tmp_path / "workspace"
+    (workspace_dir / "config").mkdir(parents=True, exist_ok=True)
+    manifest_dir = workspace_dir / "draft" / "AAPL"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    (manifest_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "company_facets": {
+                    "primary_facets": ["半导体设计"],
+                    "cross_cutting_facets": ["高研发驱动"],
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    paths_config = WorkspaceConfig(
+        workspace_dir=workspace_dir,
+        output_dir=workspace_dir / "output",
+        config_loader=ConfigLoader(ConfigFileResolver(workspace_dir / "config")),
+        prompt_asset_store=FilePromptAssetStore(ConfigFileResolver(workspace_dir / "config")),
+        ticker="AAPL",
+        has_local_filings=False,
+    )
+    args = Namespace(
+        command="write",
+        output=None,
+        template=None,
+        research_template="auto",
+        write_max_retries=2,
+        resume=True,
+        web_provider=None,
+        audit_model_name=None,
+        chapter=None,
+        fast=False,
+        force=False,
+        infer=False,
+    )
+    running_config = RunningConfig(
+        runner_running_config=AsyncOpenAIRunnerRunningConfig(),
+        agent_running_config=AgentRunningConfig(),
+        doc_tool_limits=DocToolLimits(),
+        fins_tool_limits=FinsToolLimits(),
+        web_tools_config=WebToolsConfig(provider="auto"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
+    )
+
+    write_config = setup_write_config(args, paths_config, running_config)
+
+    assert write_config.template_path.name == "common-plus-technology.md"
+    assert write_config.research_template_requested_name == "auto"
+    assert write_config.research_template_resolved_name == "technology"
+    assert write_config.research_template_selection_mode == "auto"
 
 
 @pytest.mark.unit
@@ -2421,7 +2618,9 @@ def test_main_interactive_path_returns_zero(monkeypatch: pytest.MonkeyPatch, tmp
     assert interactive_kwargs["scene_name"] == "interactive"
     assert interactive_kwargs["show_thinking"] is True
     assert interactive_execution_options.model_name == "deepseek-v4-flash-thinking"
-    assert any('使用模型: {"name": "scene-interactive-model", "temperature": 0.0}' in item for item in collector.info_logs)
+    assert any(
+        '使用模型: {"name": "scene-interactive-model", "temperature": 0.0}' in item for item in collector.info_logs
+    )
 
 
 @pytest.mark.unit
@@ -2474,8 +2673,12 @@ def test_main_interactive_path_rejects_second_instance(monkeypatch: pytest.Monke
         "dayu.cli.commands.interactive.StateDirSingleInstanceLock.acquire",
         lambda self: (_ for _ in ()).throw(RuntimeError("同一个 state_dir 已有运行中的 interactive 单实例锁")),
     )
-    monkeypatch.setattr("dayu.cli.commands.interactive.Log.error", lambda message, **_kwargs: error_logs.append(str(message)))
-    monkeypatch.setattr("dayu.cli.commands.interactive.interactive", lambda *_args, **_kwargs: pytest.fail("不应进入 interactive"))
+    monkeypatch.setattr(
+        "dayu.cli.commands.interactive.Log.error", lambda message, **_kwargs: error_logs.append(str(message))
+    )
+    monkeypatch.setattr(
+        "dayu.cli.commands.interactive.interactive", lambda *_args, **_kwargs: pytest.fail("不应进入 interactive")
+    )
 
     assert run_interactive_command(args) == 1
     assert any("当前已有 interactive 在运行" in message for message in error_logs)
@@ -2520,8 +2723,12 @@ def test_main_interactive_label_path_rejects_second_instance_with_label_specific
         "dayu.cli.commands.interactive.StateDirSingleInstanceLock.acquire",
         lambda self: (_ for _ in ()).throw(RuntimeError("同一个 state_dir 已有运行中的 interactive 单实例锁")),
     )
-    monkeypatch.setattr("dayu.cli.commands.interactive.Log.error", lambda message, **_kwargs: error_logs.append(str(message)))
-    monkeypatch.setattr("dayu.cli.commands.interactive.interactive", lambda *_args, **_kwargs: pytest.fail("不应进入 interactive"))
+    monkeypatch.setattr(
+        "dayu.cli.commands.interactive.Log.error", lambda message, **_kwargs: error_logs.append(str(message))
+    )
+    monkeypatch.setattr(
+        "dayu.cli.commands.interactive.interactive", lambda *_args, **_kwargs: pytest.fail("不应进入 interactive")
+    )
 
     assert run_interactive_command(args) == 1
     assert any("当前已有 interactive 在运行" in message for message in error_logs)
@@ -3003,10 +3210,14 @@ def test_run_prompt_command_labeled_prompt_prunes_missing_record_before_recreati
         config_loader=ConfigLoader(ConfigFileResolver(tmp_path / "config")),
         prompt_asset_store=FilePromptAssetStore(ConfigFileResolver(tmp_path / "config")),
     )
-    stale_record = FileConversationLabelRegistry(tmp_path).get_or_create_record(
-        label="apple",
-        scene_name="interactive",
-    ).record
+    stale_record = (
+        FileConversationLabelRegistry(tmp_path)
+        .get_or_create_record(
+            label="apple",
+            scene_name="interactive",
+        )
+        .record
+    )
     args = Namespace(
         command="prompt",
         prompt="请总结风险",
@@ -3083,10 +3294,14 @@ def test_run_prompt_command_labeled_prompt_recreates_closed_label_with_warning(
         config_loader=ConfigLoader(ConfigFileResolver(tmp_path / "config")),
         prompt_asset_store=FilePromptAssetStore(ConfigFileResolver(tmp_path / "config")),
     )
-    closed_record = FileConversationLabelRegistry(tmp_path).get_or_create_record(
-        label="apple",
-        scene_name="interactive",
-    ).record
+    closed_record = (
+        FileConversationLabelRegistry(tmp_path)
+        .get_or_create_record(
+            label="apple",
+            scene_name="interactive",
+        )
+        .record
+    )
     args = Namespace(
         command="prompt",
         prompt="请总结风险",
@@ -3197,7 +3412,9 @@ def test_run_prompt_command_labeled_prompt_rejects_busy_label(
             "dayu.cli.commands.prompt._prepare_cli_host_dependencies",
             lambda **_kwargs: pytest.fail("busy label 时不应继续装配 Host 依赖"),
         )
-        monkeypatch.setattr("dayu.cli.commands.prompt.Log.error", lambda message, **_kwargs: error_logs.append(str(message)))
+        monkeypatch.setattr(
+            "dayu.cli.commands.prompt.Log.error", lambda message, **_kwargs: error_logs.append(str(message))
+        )
 
         assert run_prompt_command(args) == 2
     finally:
@@ -3754,9 +3971,9 @@ def test_main_prompt_path_propagates_run_json_defaults_to_host_and_agent(
     assert recorder.agent_create_args.agent_running_config["max_duplicate_tool_calls"] == 8
     assert recorder.agent_create_args.agent_running_config["duplicate_tool_hint_prompt"] == "dup hint by run"
     assert recorder.tool_trace_recorder_factory is not None
-    assert recorder.tool_trace_recorder_factory._store._output_dir == (
-        workspace_dir / "output" / "custom_trace"
-    ).resolve()
+    assert (
+        recorder.tool_trace_recorder_factory._store._output_dir == (workspace_dir / "output" / "custom_trace").resolve()
+    )
     assert recorder.tool_trace_recorder_factory._store._partition_by_session is False
     assert doc_tools_recorder.calls == []
     assert fins_read_tools_recorder.calls == [
@@ -3840,16 +4057,9 @@ def test_main_prompt_path_propagates_scene_manifest_prompt_assets_and_llm_model_
             "model": {
                 "default_name": "custom-prompt-model",
                 "allowed_names": ["custom-prompt-model"],
-                "temperature_profile": "prompt_e2e"
+                "temperature_profile": "prompt_e2e",
             },
-            "runtime": {
-                "agent": {
-                    "max_iterations": 11
-                },
-                "runner": {
-                    "tool_timeout_seconds": 90.0
-                }
-            },
+            "runtime": {"agent": {"max_iterations": 11}, "runner": {"tool_timeout_seconds": 90.0}},
             "version": "v1",
             "description": "自定义单轮问答场景",
             "extends": [],
@@ -4171,7 +4381,9 @@ def test_main_write_summary_mode_calls_print_report(monkeypatch: pytest.MonkeyPa
         lambda _args: SimpleNamespace(model_name="deepseek-v4-flash-thinking"),
     )
     monkeypatch.setattr("dayu.cli.commands.write.WriteService.print_report", _FakeWriteService.print_report)
-    monkeypatch.setattr("dayu.cli.commands.write.run_write_pipeline", lambda **_kwargs: pytest.fail("summary 分支不应进入写作流水线"))
+    monkeypatch.setattr(
+        "dayu.cli.commands.write.run_write_pipeline", lambda **_kwargs: pytest.fail("summary 分支不应进入写作流水线")
+    )
 
     assert run_write_command(args) == 6
     assert captured_output_dir["value"] == (tmp_path / "draft" / "AAPL").resolve()
@@ -4247,6 +4459,309 @@ def test_main_write_mode_calls_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert run_write_command(args) == 4
     assert any("写作流水线启动" in item for item in collector.info_logs)
     assert any("写作流水线结束但返回非零" in item for item in collector.warn_logs)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("pipeline_exit", "expected_exit"), [(0, 0), (4, 4)])
+def test_write_materializes_research_only_after_successful_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    pipeline_exit: int,
+    expected_exit: int,
+) -> None:
+    workspace_config = WorkspaceConfig(
+        workspace_dir=tmp_path,
+        output_dir=tmp_path / "output",
+        config_loader=ConfigLoader(ConfigFileResolver(tmp_path / "config")),
+        prompt_asset_store=FilePromptAssetStore(ConfigFileResolver(tmp_path / "config")),
+        ticker="AAPL",
+        has_local_filings=True,
+    )
+    running_config = RunningConfig(
+        runner_running_config=AsyncOpenAIRunnerRunningConfig(),
+        agent_running_config=AgentRunningConfig(),
+        doc_tool_limits=DocToolLimits(),
+        fins_tool_limits=FinsToolLimits(),
+        web_tools_config=WebToolsConfig(provider="auto"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
+    )
+    research_base = tmp_path / "research"
+    args = Namespace(
+        command="write",
+        summary=False,
+        output=str(tmp_path / "draft"),
+        template=None,
+        research_template="technology",
+        materialize_research=True,
+        research_base=str(research_base),
+        overwrite_research=True,
+        write_max_retries=2,
+        resume=True,
+        web_provider="auto",
+        audit_model_name=None,
+        model_name=None,
+        chapter=None,
+        fast=False,
+        force=False,
+        infer=False,
+    )
+    calls: list[dict[str, object]] = []
+    fake_dependencies = _FakeCliHostDependencies(running_config=running_config)
+    fake_dependencies.fins_runtime = SimpleNamespace(get_company_name=lambda _ticker: "Apple Inc.")
+
+    monkeypatch.setattr("dayu.cli.commands.write.setup_loglevel", lambda _args: None)
+    monkeypatch.setattr("dayu.cli.commands.write.setup_paths", partial(_return_value, workspace_config))
+    monkeypatch.setattr("dayu.cli.commands.write.setup_model_name", partial(_return_value, ModelName(model_name="")))
+    monkeypatch.setattr(
+        "dayu.cli.commands.write._build_execution_options", lambda _args: SimpleNamespace(model_name=None)
+    )
+    monkeypatch.setattr(
+        "dayu.cli.commands.write._prepare_cli_host_dependencies",
+        lambda **_kwargs: fake_dependencies.as_tuple(),
+    )
+    monkeypatch.setattr("dayu.cli.commands.write._build_write_service", lambda **_kwargs: object())
+    monkeypatch.setattr("dayu.cli.commands.write.run_write_pipeline", lambda **_kwargs: pipeline_exit)
+    monkeypatch.setattr("dayu.cli.commands.write.Log.info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("dayu.cli.commands.write.Log.warn", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "dayu.cli.commands.write._materialize_research_after_write",
+        lambda call_args, **kwargs: (
+            calls.append({"args": call_args, **kwargs})
+            or {"bundle_file": "bundle.json", "workbook_file": "workbook.json"}
+        ),
+    )
+
+    assert run_write_command(args) == expected_exit
+    assert len(calls) == (1 if pipeline_exit == 0 else 0)
+    if calls:
+        assert calls[0]["workspace_dir"] == tmp_path
+        assert calls[0]["ticker"] == "AAPL"
+        assert calls[0]["write_output_dir"] == (tmp_path / "draft").resolve()
+
+
+@pytest.mark.unit
+def test_write_returns_two_when_post_write_research_materialization_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_config = WorkspaceConfig(
+        workspace_dir=tmp_path,
+        output_dir=tmp_path / "output",
+        config_loader=ConfigLoader(ConfigFileResolver(tmp_path / "config")),
+        prompt_asset_store=FilePromptAssetStore(ConfigFileResolver(tmp_path / "config")),
+        ticker="AAPL",
+        has_local_filings=True,
+    )
+    running_config = RunningConfig(
+        runner_running_config=AsyncOpenAIRunnerRunningConfig(),
+        agent_running_config=AgentRunningConfig(),
+        doc_tool_limits=DocToolLimits(),
+        fins_tool_limits=FinsToolLimits(),
+        web_tools_config=WebToolsConfig(provider="auto"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
+    )
+    args = Namespace(
+        command="write",
+        summary=False,
+        output=str(tmp_path / "draft"),
+        template=None,
+        research_template="technology",
+        materialize_research=True,
+        research_base=None,
+        overwrite_research=False,
+        write_max_retries=2,
+        resume=True,
+        web_provider="auto",
+        audit_model_name=None,
+        model_name=None,
+        chapter=None,
+        fast=False,
+        force=False,
+        infer=False,
+    )
+    fake_dependencies = _FakeCliHostDependencies(running_config=running_config)
+    fake_dependencies.fins_runtime = SimpleNamespace(get_company_name=lambda _ticker: "Apple Inc.")
+
+    monkeypatch.setattr("dayu.cli.commands.write.setup_loglevel", lambda _args: None)
+    monkeypatch.setattr("dayu.cli.commands.write.setup_paths", partial(_return_value, workspace_config))
+    monkeypatch.setattr("dayu.cli.commands.write.setup_model_name", partial(_return_value, ModelName(model_name="")))
+    monkeypatch.setattr(
+        "dayu.cli.commands.write._build_execution_options", lambda _args: SimpleNamespace(model_name=None)
+    )
+    monkeypatch.setattr(
+        "dayu.cli.commands.write._prepare_cli_host_dependencies",
+        lambda **_kwargs: fake_dependencies.as_tuple(),
+    )
+    monkeypatch.setattr("dayu.cli.commands.write._build_write_service", lambda **_kwargs: object())
+    monkeypatch.setattr("dayu.cli.commands.write.run_write_pipeline", lambda **_kwargs: 0)
+    monkeypatch.setattr("dayu.cli.commands.write.Log.info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("dayu.cli.commands.write.Log.warn", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("dayu.cli.commands.write.Log.error", lambda *_args, **_kwargs: None)
+
+    def _raise_conflict(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise FileExistsError("research output exists")
+
+    monkeypatch.setattr("dayu.cli.commands.write._materialize_research_after_write", _raise_conflict)
+
+    assert run_write_command(args) == 2
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("explicit_infer", "expected_call_count"), [(False, 2), (True, 1)])
+def test_write_auto_bootstraps_missing_manifest_before_optional_writing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    explicit_infer: bool,
+    expected_call_count: int,
+) -> None:
+    workspace_config = WorkspaceConfig(
+        workspace_dir=tmp_path,
+        output_dir=tmp_path / "output",
+        config_loader=ConfigLoader(ConfigFileResolver(tmp_path / "config")),
+        prompt_asset_store=FilePromptAssetStore(ConfigFileResolver(tmp_path / "config")),
+        ticker="AAPL",
+        has_local_filings=True,
+    )
+    running_config = RunningConfig(
+        runner_running_config=AsyncOpenAIRunnerRunningConfig(),
+        agent_running_config=AgentRunningConfig(),
+        doc_tool_limits=DocToolLimits(),
+        fins_tool_limits=FinsToolLimits(),
+        web_tools_config=WebToolsConfig(provider="auto"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
+    )
+    args = Namespace(
+        command="write",
+        summary=False,
+        log_level=None,
+        debug=False,
+        verbose=False,
+        info=False,
+        quiet=False,
+        output=None,
+        template=None,
+        research_template="auto",
+        write_max_retries=2,
+        resume=True,
+        web_provider="auto",
+        audit_model_name=None,
+        model_name=None,
+        chapter=None,
+        fast=False,
+        force=False,
+        infer=explicit_infer,
+    )
+    fake_dependencies = _FakeCliHostDependencies(running_config=running_config)
+    fake_dependencies.fins_runtime = SimpleNamespace(get_company_name=lambda _ticker: "Apple Inc.")
+    calls: list[WriteRunConfig] = []
+
+    def _run_stage(*, write_config: WriteRunConfig, **_kwargs: object) -> int:
+        calls.append(write_config)
+        if write_config.infer:
+            manifest_path = Path(write_config.output_dir) / "manifest.json"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "company_facets": {
+                            "primary_facets": ["半导体设计"],
+                            "cross_cutting_facets": ["高研发驱动"],
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        return 0
+
+    monkeypatch.setattr("dayu.cli.commands.write.setup_loglevel", lambda _args: None)
+    monkeypatch.setattr("dayu.cli.commands.write.setup_paths", partial(_return_value, workspace_config))
+    monkeypatch.setattr("dayu.cli.commands.write.setup_model_name", partial(_return_value, ModelName(model_name="")))
+    monkeypatch.setattr(
+        "dayu.cli.commands.write._build_execution_options",
+        lambda _args: SimpleNamespace(model_name=None),
+    )
+    monkeypatch.setattr(
+        "dayu.cli.commands.write._prepare_cli_host_dependencies",
+        lambda **_kwargs: fake_dependencies.as_tuple(),
+    )
+    monkeypatch.setattr("dayu.cli.commands.write._build_write_service", lambda **_kwargs: object())
+    monkeypatch.setattr("dayu.cli.commands.write.run_write_pipeline", _run_stage)
+    monkeypatch.setattr("dayu.cli.commands.write.Log.info", lambda *_args, **_kwargs: None)
+
+    assert run_write_command(args) == 0
+    assert len(calls) == expected_call_count
+    assert calls[0].infer is True
+    if not explicit_infer:
+        assert calls[1].infer is False
+        assert Path(calls[1].template_path).name == "common-plus-technology.md"
+        assert calls[1].research_template_requested_name == "auto"
+        assert calls[1].research_template_resolved_name == "technology"
+        assert calls[1].research_template_selection_mode == "auto"
+
+
+@pytest.mark.unit
+def test_write_auto_stops_when_bootstrap_inference_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_config = WorkspaceConfig(
+        workspace_dir=tmp_path,
+        output_dir=tmp_path / "output",
+        config_loader=ConfigLoader(ConfigFileResolver(tmp_path / "config")),
+        prompt_asset_store=FilePromptAssetStore(ConfigFileResolver(tmp_path / "config")),
+        ticker="AAPL",
+        has_local_filings=True,
+    )
+    running_config = RunningConfig(
+        runner_running_config=AsyncOpenAIRunnerRunningConfig(),
+        agent_running_config=AgentRunningConfig(),
+        doc_tool_limits=DocToolLimits(),
+        fins_tool_limits=FinsToolLimits(),
+        web_tools_config=WebToolsConfig(provider="auto"),
+        tool_trace_config=TraceSettings(enabled=False, output_dir=tmp_path / "trace"),
+    )
+    args = Namespace(
+        command="write",
+        summary=False,
+        output=None,
+        template=None,
+        research_template="auto",
+        write_max_retries=2,
+        resume=True,
+        web_provider="auto",
+        audit_model_name=None,
+        chapter=None,
+        fast=False,
+        force=False,
+        infer=False,
+    )
+    fake_dependencies = _FakeCliHostDependencies(running_config=running_config)
+    fake_dependencies.fins_runtime = SimpleNamespace(get_company_name=lambda _ticker: "Apple Inc.")
+    call_count = 0
+
+    def _fail_bootstrap(**_kwargs: object) -> int:
+        nonlocal call_count
+        call_count += 1
+        return 7
+
+    monkeypatch.setattr("dayu.cli.commands.write.setup_loglevel", lambda _args: None)
+    monkeypatch.setattr("dayu.cli.commands.write.setup_paths", partial(_return_value, workspace_config))
+    monkeypatch.setattr("dayu.cli.commands.write.setup_model_name", partial(_return_value, ModelName(model_name="")))
+    monkeypatch.setattr(
+        "dayu.cli.commands.write._build_execution_options", lambda _args: SimpleNamespace(model_name=None)
+    )
+    monkeypatch.setattr(
+        "dayu.cli.commands.write._prepare_cli_host_dependencies",
+        lambda **_kwargs: fake_dependencies.as_tuple(),
+    )
+    monkeypatch.setattr("dayu.cli.commands.write._build_write_service", lambda **_kwargs: object())
+    monkeypatch.setattr("dayu.cli.commands.write.run_write_pipeline", _fail_bootstrap)
+    monkeypatch.setattr("dayu.cli.commands.write.Log.info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("dayu.cli.commands.write.Log.warn", lambda *_args, **_kwargs: None)
+
+    assert run_write_command(args) == 7
+    assert call_count == 1
 
 
 @pytest.mark.unit
@@ -4398,9 +4913,7 @@ def test_main_write_mode_logs_success_when_pipeline_returns_zero(
 
 
 @pytest.mark.unit
-def test_main_write_mode_logs_elapsed_when_pipeline_raises(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_main_write_mode_logs_elapsed_when_pipeline_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """验证写作模式异常时输出带耗时的错误日志并返回 2。
 
     Args:
@@ -4768,7 +5281,9 @@ def test_build_fins_command_allows_upload_material_delete_without_files(tmp_path
 
 
 @pytest.mark.unit
-def test_run_fins_command_stream_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_run_fins_command_stream_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """验证 `run_fins_command` 可消费流式结果并输出最终摘要。"""
 
     class _FakeService:
@@ -4801,7 +5316,9 @@ def test_run_fins_command_stream_path(monkeypatch: pytest.MonkeyPatch, tmp_path:
             return FinsSubmission(session_id="test-session", execution=_stream())
 
     monkeypatch.setattr("dayu.cli.commands.fins._build_fins_ops_service", lambda _args: _FakeService())
-    monkeypatch.setattr("dayu.cli.commands.fins.format_fins_cli_result", lambda command, result: f"{command.value}:{result.status}")
+    monkeypatch.setattr(
+        "dayu.cli.commands.fins.format_fins_cli_result", lambda command, result: f"{command.value}:{result.status}"
+    )
 
     args = Namespace(
         command="download",
@@ -4882,7 +5399,9 @@ def test_run_fins_command_upload_stream_logs_progress_at_info(
         verbose_lines.append(message)
 
     monkeypatch.setattr("dayu.cli.commands.fins._build_fins_ops_service", lambda _args: _FakeService())
-    monkeypatch.setattr("dayu.cli.commands.fins.format_fins_cli_result", lambda command, result: f"{command.value}:{result.status}")
+    monkeypatch.setattr(
+        "dayu.cli.commands.fins.format_fins_cli_result", lambda command, result: f"{command.value}:{result.status}"
+    )
     monkeypatch.setattr("dayu.cli.commands.fins.Log.info", _capture_info)
     monkeypatch.setattr("dayu.cli.commands.fins.Log.verbose", _capture_verbose)
 
@@ -4968,7 +5487,9 @@ def test_run_fins_command_download_allows_missing_filings_dir(
             return FinsSubmission(session_id="test-session", execution=_stream())
 
     monkeypatch.setattr("dayu.cli.commands.fins._build_fins_ops_service", lambda _args: _FakeService())
-    monkeypatch.setattr("dayu.cli.commands.fins.format_fins_cli_result", lambda command, result: f"{command.value}:{result.status}")
+    monkeypatch.setattr(
+        "dayu.cli.commands.fins.format_fins_cli_result", lambda command, result: f"{command.value}:{result.status}"
+    )
 
     args = Namespace(
         command="download",

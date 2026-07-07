@@ -690,6 +690,10 @@ dayu-wechat service uninstall
 | `--output` | 可选，输出目录，默认 `workspace/draft/{ticker}` |
 | `--model-name` | 可选，主写作模型配置 |
 | `--audit-model-name` | 可选，审计模型配置 |
+| `--research-template` | 可选，按名称或 `auto` 使用研究模板；行业模板会在官方写作合同中注入 `common` + 行业深化章节，与 `--template` 互斥 |
+| `--materialize-research` | 可选，写作成功后从最终 manifest 生成一致的 research bundle 与 workbook；需要 `--research-template` |
+| `--research-base` | 可选，指定 research 工件根目录；默认 `workspace/{ticker}`，需要 `--materialize-research` |
+| `--overwrite-research` | 可选，允许覆盖已存在的 research 生成工件；需要 `--materialize-research` |
 | `--debug` / `--verbose` | 可选，仅调整日志级别，不改变会话行为 |
 
 命令示例：
@@ -703,13 +707,220 @@ dayu-cli write --ticker AAPL
 ```bash
 dayu-cli write --ticker AAPL --chapter "公司做的是什么生意"
 dayu-cli write --ticker AAPL --chapter "经营表现与核心驱动" --fast
-dayu-cli write --ticker AAPL --infer
+dayu-cli write --ticker AAPL --research-template technology
+dayu-cli write --ticker AAPL --research-template auto
+dayu-cli write --ticker AAPL --research-template auto --infer
+dayu-cli write --ticker AAPL --research-template auto --materialize-research
+dayu-cli write --ticker AAPL --research-template technology --materialize-research \
+  --research-base ./workspace/AAPL --overwrite-research
 dayu-cli write --ticker AAPL --summary
 dayu-cli write --ticker AAPL \
   --template ./workspace/assets/定性分析模板.md \
   --output ./workspace/draft/AAPL \
   --enable-tool-trace
 ```
+
+研究模板库：
+
+```bash
+dayu-cli research-template list
+dayu-cli research-template show consumer
+dayu-cli write --ticker 600519 --research-template consumer
+dayu-cli research-template recommend \
+  --business-model-tag "消费品牌" \
+  --constraint-tag "高营销费用驱动"
+dayu-cli research-template compose consumer --base ./workspace
+dayu-cli research-template monitoring-rules consumer --write --base ./workspace
+dayu-cli research-template research-workbook consumer \
+  --ticker 600519 \
+  --company "贵州茅台" \
+  --write \
+  --base ./workspace/600519
+dayu-cli research-template validate-research-workbook \
+  --workbook ./workspace/600519/assets/research_templates/consumer.research-workbook.json
+dayu-cli research-template update-research-workbook \
+  --workbook ./workspace/600519/assets/research_templates/consumer.research-workbook.json \
+  --item-id item-<stable-id> \
+  --status answered \
+  --response "需求增长由同店销售改善驱动" \
+  --evidence-file ./evidence.json \
+  --write
+dayu-cli research-template rollback-research-workbook \
+  --workbook ./workspace/600519/assets/research_templates/consumer.research-workbook.json \
+  --backup ./workspace/600519/assets/research_templates/consumer.research-workbook.before-update.<sha256-prefix>.json \
+  --write
+dayu-cli research-template workbook-status \
+  --base ./workspace \
+  --recursive \
+  --write
+dayu-cli research-template workbook-report \
+  --workbook ./workspace/600519/assets/research_templates/consumer.research-workbook.json \
+  --write
+dayu-cli research-template validate-workbook-report \
+  --report ./workspace/600519/assets/research_templates/consumer.research-progress.md \
+  --workbook ./workspace/600519/assets/research_templates/consumer.research-workbook.json
+dayu-cli research-template workbook-report-status \
+  --base ./workspace \
+  --recursive \
+  --write
+dayu-cli research-template source-map consumer --write --base ./workspace
+dayu-cli research-template validate-source-map \
+  --rules ./workspace/assets/research_templates/consumer.monitoring-rules.json \
+  --source-map ./workspace/assets/research_templates/consumer.source-map.json
+dayu-cli research-template package-manifest --write --base ./workspace
+dayu-cli research-template materialize consumer --base ./workspace
+dayu-cli research-template materialize --manifest ./workspace/AAPL/write-manifest.json --base ./workspace/AAPL
+dayu-cli research-template materialize technology --ticker 0700.HK --company "Tencent Holdings" --base ./workspace/0700.HK
+dayu-cli research-template list-bundles --base ./workspace --json
+dayu-cli research-template validate-bundle \
+  --bundle ./workspace/assets/research_templates/consumer.bundle.json
+dayu-cli research-template refresh-workspace \
+  --bundle ./workspace/assets/research_templates/consumer.bundle.json
+dayu-cli research-template refresh-workspace \
+  --bundle ./workspace/assets/research_templates/consumer.bundle.json --write
+dayu-cli research-template rebind-bundle \
+  --bundle ./workspace/assets/research_templates/consumer.bundle.json
+dayu-cli research-template rebind-bundle \
+  --bundle ./workspace/assets/research_templates/consumer.bundle.json \
+  --write
+dayu-cli research-template rollback-bundle-rebind \
+  --bundle ./workspace/assets/research_templates/consumer.bundle.json \
+  --backup ./workspace/assets/research_templates/consumer.bundle.before-rebind.<sha256-prefix>.json \
+  --write
+dayu-cli research-template monitoring-plan \
+  --bundle ./workspace/assets/research_templates/consumer.bundle.json \
+  --write
+dayu-cli research-template validate-monitoring-plan \
+  --plan ./workspace/assets/research_templates/consumer.monitoring-plan.json
+dayu-cli research-template list-monitoring-plans --base ./workspace --json
+dayu-cli research-template monitoring-status --base ./workspace --write
+dayu-cli research-template list-monitoring-plans --base ./workspace --recursive --json
+dayu-cli research-template monitoring-status --base ./workspace --recursive --write
+dayu-cli research-template materialize-portfolio \
+  --portfolio ./portfolio.json \
+  --base ./workspace
+dayu-cli research-template preview-portfolio \
+  --portfolio ./portfolio.json \
+  --base ./workspace
+dayu-cli research-template scheduler-manifest \
+  --base ./workspace \
+  --recursive \
+  --timezone Asia/Shanghai \
+  --write
+dayu-cli research-template validate-scheduler-manifest \
+  --manifest ./workspace/assets/research_templates/monitoring-scheduler.json
+dayu-cli research-template source-bindings \
+  --source-map ./workspace/600519/assets/research_templates/consumer.source-map.json \
+  --approval ./consumer-bindings.approval.json
+dayu-cli research-template source-bindings \
+  --source-map ./workspace/600519/assets/research_templates/consumer.source-map.json \
+  --approval ./consumer-bindings.approval.json \
+  --write
+dayu-cli research-template rollback-source-bindings \
+  --source-map ./workspace/600519/assets/research_templates/consumer.source-map.json \
+  --backup ./workspace/600519/assets/research_templates/consumer.source-map.before-bindings.<sha256-prefix>.json
+dayu-cli research-template rollback-source-bindings \
+  --source-map ./workspace/600519/assets/research_templates/consumer.source-map.json \
+  --backup ./workspace/600519/assets/research_templates/consumer.source-map.before-bindings.<sha256-prefix>.json \
+  --write
+dayu-cli research-template rollback-source-bindings \
+  --source-map ./workspace/600519/assets/research_templates/consumer.source-map.json \
+  --backup ./workspace/600519/assets/research_templates/consumer.source-map.before-rollback.<sha256-prefix>.json \
+  --write
+dayu-cli research-template source-binding-history \
+  --source-map ./workspace/600519/assets/research_templates/consumer.source-map.json
+dayu-cli research-template copy consumer --base ./workspace
+dayu-cli write --ticker AAPL \
+  --template ./workspace/assets/research_templates/common-plus-consumer.md
+```
+
+`research-template` 会把包内行业模板复制到 `workspace/assets/research_templates/`，当前内置 `common`、`consumer`、`cyclical`、`technology`、`financial`。`recommend` 可根据手动传入的 facet 标签或包含 `company_facets` 的 write manifest 推荐模板；`compose` 会把通用深挖模板与行业模板合成为 `common-plus-*.md`，可直接作为 `write --template` 输入；`monitoring-rules` 会从模板的“监控变量”小节生成本地规则草案 JSON，并附带模板级数据源候选与 `binding_status=unbound`；`source-map` 会把这些候选源映射到 Dayu fins tools 或外部 provider 占位字段，仍不执行真实 provider 调用；`validate-source-map` 用于校验规则草案和 source-map 是否一致；`package-manifest` 会生成全部模板的索引、监控变量数量、数据源数量和 validation 摘要；`materialize` 会一键落盘指定模板或根据 write manifest 选择模板的合成模板、research workbook、初始 progress report、rules、source-map、package manifest、本地 research guide、`{template}.bundle.json`、已校验的 dry-run monitoring plan，以及 monitoring/workbook/report 三类状态快照。新 manifest 若包含完整 research-template provenance，materialize 会复用写作时已经确认的 resolved template；只有旧 manifest 缺少 provenance 时才回退到 facet 推荐，部分或非法 provenance 会直接失败。它会从 `manifest.config.ticker/company` 继承研究对象，也可由 `--ticker/--company` 显式覆盖；身份会继续进入 guide、bundle、monitoring-plan 和状态快照。其中 research guide 面向人工使用，bundle JSON 面向未来 Web UI、调度器和持仓监控读取，并保留 `automation_status=manual_review`，不会提前启用自动告警。`list-bundles` 会发现标准 workspace 目录中的 bundle 并汇总健康状态；`validate-bundle` 会重新检查 schema、workbook、progress report 指纹与所有本地工件，失效时返回非零退出码；自动生成的 monitoring plan 仍固定为 dry-run，未绑定源会阻止任务进入复核就绪状态，并且始终禁止自动执行；`monitoring-plan` 可在 bundle 或 source-map 变化后显式重建计划。`validate-monitoring-plan` 会核对计划结构、任务计数和输入文件 SHA-256，输入变化后会把旧计划标记为失效；初始化状态通常为 monitoring=`blocked`、workbook=`not_started`、report=`current`，三个 JSON 可直接作为 Web UI/看板入口。显式 `--recursive` 可扫描 `workspace/<ticker>/assets/research_templates/`，并在状态快照中生成逐 ticker 的组合级 rollup；默认仍只扫描当前 workspace。
+
+使用 `write --research-template` 后，最终 `manifest.json` 的 `config` 会记录 `research_template_requested_name`、`research_template_resolved_name` 和 `research_template_selection_mode`。因此 auto 请求、实际行业路由和显式 named 选择均可审计；旧 manifest 缺少这些字段时仍按空值兼容读取。
+
+`write --materialize-research` 是显式的写后动作：只有写作流水线成功后才读取最终 manifest，并生成 bundle、workbook、progress report、dry-run monitoring plan 与三类状态快照，默认写入 `workspace/{ticker}`。已有工件会失败关闭，除非同时传入 `--overwrite-research`；若报告已成功但 materialize 失败，命令返回 `2` 并保留已完成的报告，不会把部分成功伪装成整体成功。该选项不能与 infer-only 的 `--infer` 或 `--summary` 同时使用。
+
+单目标 research materialize 采用进程内异常回滚：写入前会保存全部受保护工件的原始字节，任一生成步骤或最终 bundle 校验失败时，删除本次新建文件并逐字节恢复被覆盖文件。因此普通异常不会留下半套 bundle，也不会因 `--overwrite-research` 损坏已有研究进度；该保证不等同于操作系统断电级事务。
+
+通过 `research-template materialize --manifest` 创建的 bundle 会额外保存源 write manifest 的绝对路径、整文件 SHA-256、研究语义 SHA-256 和当时的模板选择。研究对象、company facets 或模板 provenance 变化时，`validate-bundle` 会将旧 bundle 标记为 unhealthy；仅章节进度、审计备注等无关字段变化时保持 healthy，并产生文件已变化的 warning。`--ticker/--company` 的显式研究对象覆盖仍然有效，不会被源 manifest 强制改回。
+
+`rebind-bundle` 用于确认并刷新同一模板的 source binding：默认只预览，`--write` 只更新 bundle descriptor，保留 `before-rebind.<sha>.json` 不可变备份，不会重写 workbook、模板、规则或 source-map。若当前 manifest 已路由到另一个模板，命令会拒绝执行，要求重新 materialize 新模板。
+
+`rollback-bundle-rebind` 可预览或精确恢复同目录的内容寻址备份，并在写入前保存当前 descriptor 作为 redo 备份。恢复结果会报告当下 validation；即使旧绑定因当前源状态而 unhealthy，也不会隐瞒。生成的 redo 备份可再次传入同一命令恢复前进状态。
+
+Portfolio manifest 示例：
+
+```json
+{
+  "schema_version": 1,
+  "portfolio_type": "research_monitoring_portfolio",
+  "targets": [
+    {"ticker": "AAPL", "company": "Apple Inc.", "template": "technology"},
+    {"write_manifest": "workspace/0005.HK/manifest.json"}
+  ]
+}
+```
+
+`preview-portfolio` 会无写入解析全部目标，列出将创建或覆盖的工件，并在现有生成物需要 `--overwrite` 时返回非零。`materialize-portfolio` 会复用同一冲突门，再为每个 ticker 写入隔离目录、bundle 与 dry-run plan，最后生成 `research-portfolio.materialization.json` 和递归 `monitoring-status.json`。单个目标运行失败会记录在报告中并令命令返回非零，但不会抹掉其他成功目标；使用 `--overwrite` 可重建生成物。
+
+`scheduler-manifest` 把 monitoring-plan 导出为平台无关任务清单，记录 cadence、timezone、计划指纹和验证命令 argv。所有 job 固定 `enabled=false`，trigger 仍为 `binding_status=unbound`；只有 `ready_for_review` 任务会标记为人工启用候选，本命令不会创建 cron、Windows 计划任务或调用数据 provider。`validate-scheduler-manifest` 会重新检查 disabled/unbound 安全约束、summary、argv、实时计划状态和 SHA-256；清单被改为启用或计划变化后返回非零。
+
+Source binding approval 示例：
+
+```json
+{
+  "schema_version": 1,
+  "approval_type": "research_monitoring_source_binding",
+  "template": "consumer",
+  "approved_by": "research-owner",
+  "approval_reference": "review-2026-001",
+  "bindings": [
+    {
+      "source": "financial_statements",
+      "selected_tool": "get_financial_statement",
+      "selected_fields": ["revenue", "gross_profit"]
+    }
+  ]
+}
+```
+
+`source-bindings` 默认只预览。`--write` 仅允许绑定 source-map 已声明的 `dayu_fins_tool`、候选 tool 和字段子集，修改前会创建带原内容 SHA-256 前缀的不可变备份。外部 placeholder 会被拒绝；source-map 更新后旧 monitoring-plan 会因输入指纹变化失效，需要重新生成并复核。
+
+`rollback-source-bindings` 同样默认只预览，只接受与 source-map 同目录、模板和 source 集一致、文件名 SHA-256 前缀与内容吻合的 `before-bindings` 或 `before-rollback` 快照。`--write` 在每次恢复前都会先创建新的 `before-rollback` 内容寻址快照，再逐字节恢复目标 source-map；因此既能撤销绑定，也能恢复撤销前的绑定态。每次状态切换都会令旧 monitoring-plan 变为 stale，必须重新生成并复核。
+
+`source-binding-history` 只读发现 source-map 同目录下的 `before-bindings` 与 `before-rollback` 快照，输出当前绑定态、快照类型、指纹、已绑定 source 和逐项诊断。内容损坏、文件名指纹伪造、模板或 source 集漂移不会被静默跳过，而会令 validation 失败并返回非零。
+
+`research-workbook` 把模板中的买方问题、经营拆解、必查证据、监控变量、否决项和结论写法转换为机器可读 JSON。每项带稳定 ID、`status=open`、回答槽、证据槽和分析师备注，并保留 ticker/company 与源模板指纹；默认只预览，`--write` 才落盘，重复写入需显式 `--overwrite`。该工件仍为 `manual_review`，不会自动填写结论或调用外部数据源。
+
+`materialize` 和 `materialize-portfolio` 会把 research workbook 作为标准 bundle 工件一并生成，guide 与 bundle descriptor 都会引用它，bundle capability 标记为 `track_research_evidence=true`。Portfolio 预览会把 workbook 纳入目标级冲突门，因此已有工作簿不会在缺少 `--overwrite` 时被重建。
+
+`validate-research-workbook` 检查 schema、目标身份、模板指纹、section/item ID 唯一性、状态、回答和证据记录。`answered` 项必须有非空回答；当 `evidence_required=true` 时还必须至少包含一条带 `source`、`reference`、`finding` 的证据。命令会根据项目实时推导 `live_summary` 与完成态；工作簿内缓存的 summary/完成态过期只产生 warning，结构损坏、无证据结论或模板漂移则返回非零。
+
+`validate-bundle` 会继续深检 bundle 引用的 research workbook，并核对 workbook 与 bundle 的 template、ticker、company 是否一致。合法研究进度中的缓存统计过期只作为 bundle warning；工作簿损坏、身份错配或证据完整性失败会令整个 bundle 不健康，并传播到 bundle discovery 与后续状态入口。
+
+`update-research-workbook` 按稳定 item ID 更新状态、回答、分析师备注，并可从 `--evidence-file` 追加一条证据对象或对象数组。命令默认只预览；`--write` 会先创建 `before-update.<sha256>.json` 不可变备份，再自动刷新 summary 与 completion status，并且只有最终工作簿通过完整校验才会写入。证据对象最少包含 `{"source":"annual_report","reference":"2025 annual report p.42","finding":"同店销售同比增长 8%"}`。
+
+`rollback-research-workbook` 默认预览，只接受同目录、文件名 SHA-256 与内容吻合、template/target 一致且通过完整校验的 `before-update` 快照。`--write` 在恢复前会把当前工作簿也保存成新的 `before-update` 快照，因此同一命令既能 rollback，也能用生成的 redo backup 恢复更新后的状态。
+
+`workbook-status` 汇总 workspace 中工作簿的健康度、派生完成态和 item 状态计数；`--recursive` 可扫描 `workspace/<ticker>/assets/research_templates/` 并保留每个 ticker/company 的逐文件诊断。聚合只采信通过校验的 workbook，损坏文件仍会显示并令总体状态为 `unhealthy`；`--write` 可生成 `research-workbook-status.json` 供 Web UI 或组合看板读取。
+
+`materialize-portfolio` 会在每个 ticker workspace 写入本地三类快照，并在批量结束后额外写入递归 monitoring、workbook 和 report status，把路径和完整状态嵌入 `research-portfolio.materialization.json`。若部分目标失败，组合快照只统计实际成功生成且通过校验的工件，失败目标仍保留在 materialization results 中。
+
+通用与四个行业研究模板均包含独立的“估值与预期差”和“催化剂与时间轴”章节。工作簿将其提取为 `valuation` 与 `catalyst` 类别，要求研究者显式写出市场隐含假设、情景区间、下行保护、可交易预期差、验证日期和正反催化，而不是只给一个静态估值倍数或模糊事件清单。
+
+所有模板还包含“管理层、治理与资本配置”，工作簿类别为 `management_governance`。通用问题检查指引兑现、激励、资本配置回报和少数股东风险；行业模板进一步检查渠道压货、周期高位扩产、股权激励稀释、金融风险文化等特有问题，避免用管理层访谈印象替代可追溯决策记录。
+
+模板的“组合决策与风险预算”会生成 `portfolio_decision` 项，要求把研究边际、证据强度、下行/尾部损失、流动性、相关性和机会成本映射到初始/最大仓位，并预先写明加仓、减仓和退出条件。行业模板分别约束渠道与品牌尾部风险、商品 beta 与经营杠杆、高久期/技术替代、金融资产负债表杠杆，防止“看好”等同于无上限重仓。
+
+`workbook-report` 把通过校验的 research workbook 忠实渲染为 Markdown 进度报告，展示实时完成态、逐项状态、回答、证据、分析师备注和所有开放研究缺口。默认只在终端预览；`--write` 写入同目录 `{template}.research-progress.md`，已有报告需 `--overwrite`。它不会调用模型、补写空白答案或把未完成草稿包装成投资结论。
+
+标准 `materialize` 已自动生成第一版 progress report 并把它纳入 bundle。后续用 `update-research-workbook` 修改研究内容后，旧报告会被识别为 stale，bundle 也会暂时 unhealthy；运行 `workbook-report --write --overwrite` 刷新报告后恢复健康。旧版不含报告字段的 bundle 仍按原 schema 兼容校验。
+
+`refresh-workspace` 把后续维护收束为一条安全命令：默认只预览，将 stale/缺失的 progress report、monitoring plan、三类 status 和 research guide 列为 create/refresh；`--write` 才在同一回滚边界内重建。它只处理可派生工件，workbook 损坏、核心 bundle 文件缺失、源 write manifest 语义漂移等问题会阻断刷新，必须先修复数据或使用对应的 rebind/rollback 流程。
+
+报告首行包含机器可读双指纹：workbook 使用 canonical JSON 语义 SHA-256，Markdown body 使用独立 SHA-256。`validate-workbook-report` 会重新校验 workbook、来源指纹和正文完整性；只调整 JSON 缩进/键顺序不会误报，但研究内容更新会标记 `stale=true`，手工改报告正文会标记 `report_tampered=true`，两者都返回非零并要求重新生成或调查。
+
+`workbook-report-status` 自动发现标准 `{template}.research-progress.md`，配对同目录 research workbook，并汇总 current、stale、tampered、missing-workbook 状态；`--recursive` 支持组合目录，`--write` 生成 `research-workbook-report-status.json`。只有双指纹与来源校验全部通过的报告计入 current，任何失效项都会保留逐文件诊断并令总体状态为 `unhealthy`。
 
 命令说明：
 - 写任何章节前，系统都会先检查当前 `ticker` 的写作 manifest 是否已有“公司级 facets”结果；若缺失，会自动先推理一次，再继续写作。
