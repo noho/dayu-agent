@@ -263,3 +263,109 @@
 - Built-wheel audit found all six packaged Markdown assets; an isolated target installation discovered `common`, `consumer`, `cyclical`, `financial`, and `technology` and loaded template content successfully.
 - Final affected-source Ruff and Pyright checks report zero errors. Full repository runtime verification reports 5,397 passed and 83 skipped after installing the declared `web` and `browser` extras into the local test environment.
 - Repository-wide Pyright remains nonzero on pre-existing optional UI typings and unrelated test typing debt; the affected research/write source set is clean, and this limitation is recorded rather than presented as a green global static check.
+
+## Opus 4.8 Post-Merge Review (commit 7579e0d)
+
+Independent read-only review of the merged feature by Claude Opus 4.8. No P0.
+Findings verified against source, then fixed in three follow-up commits with
+regression tests and real-CLI smokes. Fixes are backward compatible: no existing
+test required changing, and the full repository suite passes (5407 passed, 83
+skipped).
+
+### P1 — `validate-bundle` trusted a tampered source-map (commit 5715f96)
+
+- Bundle health trusted the descriptor's embedded `monitoring_validation.ok` and
+  checked `monitoring_rules` / `source_map` / `write_template` / `package_manifest`
+  / `usage_guide` for existence only. A hand-flipped `unbound` -> `bound`
+  source-map kept reporting the bundle healthy, and the flipped source then
+  produced `ready_for_review` tasks.
+- Fix: `validate_research_template_bundle_descriptor` now recomputes monitoring
+  integrity from the current rules/source-map files and requires a
+  `binding_approval` provenance block on any `bound` source (which the sanctioned
+  approval flow always writes). The intentionally-mutable source-map is not
+  fingerprinted, so the `source-bindings` approval flow and `refresh-workspace`
+  stay healthy.
+
+### P2 — `write --research-template auto` hard-failed on null facets (commit 5715f96)
+
+- The infer bootstrap gate keyed off `manifest.json` existence only. A prior
+  write that persisted `company_facets: null` (transient infer failure) made the
+  next `auto` run skip the bootstrap and then raise `SystemExit(2)` at template
+  resolution.
+- Fix: the gate now keys off company-facet presence via
+  `_manifest_has_usable_company_facets`, so a null-facets manifest re-infers as
+  documented.
+
+### P2 — Portfolio batch aborted on degenerate target failures (commit e3d9b5c)
+
+- `materialize_research_portfolio` caught only `(OSError, ValueError)` per target,
+  but `materialize_research_workspace` can raise `RuntimeError`
+  (rollback-also-failed) or `AssertionError`. Those escaped the loop, aborting the
+  whole batch with an uncaught traceback and skipping the report/status snapshots.
+- Fix: widen the per-target catch to `Exception` (still excludes
+  `KeyboardInterrupt`/`SystemExit`) so a single failure is recorded and the batch
+  report is still written. The same widening applies to `write --materialize-research`,
+  which now returns the documented exit `2` for those degenerate failures instead
+  of a traceback-exit-1.
+
+### P3 (x4) — research_workbook hardening (commit 31dd9d6)
+
+- ID uniqueness: section/item positions are now indexed into the ID hash, so a
+  template that repeats a heading or bullet no longer collides and fails the
+  freshly-built workbook's own validation.
+- BOM tolerance: templates and progress reports are read with `utf-8-sig`
+  (`str.strip()` does not remove a BOM, which previously dropped the first section
+  or made a report look malformed).
+- Counts: `live_summary` counts only well-formed dict items, so a malformed item
+  no longer inflates `item_count` / `category_counts`.
+- Corrupt-file rollback: workbook rollback authenticates against the backup, not
+  the file being recovered, so it runs even when the current workbook is corrupt
+  (unreadable JSON / blanked template). Filename<->content fingerprint and
+  same-directory checks remain the safety guarantees; the redo backup is skipped
+  when no current file exists.
+
+### Verification
+
+- Full repository suite: 5407 passed, 83 skipped (baseline 7579e0d was 5397).
+- Affected-source Ruff and Pyright: zero errors.
+- Real-CLI / single-process smokes confirmed: tampered bundle rejected while a
+  legitimately approved bundle stays healthy; null-facets manifest re-infers;
+  portfolio partial failure writes an honest batch report; corrupt-current-file
+  workbook rollback restores exact original bytes.
+
+### P2 follow-ups from self-review (commits 399e350, 48d3658)
+
+Skeptical re-review of the fix commits surfaced two more real defects:
+
+- `write_research_workbook_rollback` saved the current bytes as a redo backup
+  even when the current workbook was corrupt -- a junk file that could never be
+  rolled back to, and whose later use raised a raw parse traceback. Fixed by
+  only creating a redo backup when the current file is a valid restorable
+  workbook (new `current_restorable` preview flag) and wrapping the backup read
+  to raise a clean `ValueError` (399e350).
+
+- `write_research_workspace_refresh` wrote the three status snapshots to
+  `bundle.parent.parent.parent/assets/research_templates`, while the snapshot
+  rollback boundary covered `bundle.parent`-derived paths. For a bundle at a
+  non-canonical depth these diverge, orphaning status files outside the boundary
+  on failure. Fixed by writing each status snapshot to the preview-computed
+  output path inside the boundary; the scan root is unchanged (48d3658).
+
+Both remaining agent-flagged items are now resolved. The other reported items
+(scheduler `enabled=false` invariant, backup directory confinement, fingerprint
+drift, byte-snapshot rollback core) were verified correct and required no change.
+
+### P2 — plan validation trusted self-reported task binding (commit 3861ca6)
+
+Correction to an earlier "bounded" assessment: this was a real, reachable gap.
+`validate_monitoring_execution_plan` checked each task only against itself
+(`status in {ready, blocked}`, `ready => non-empty bound list`) and never
+cross-checked `bound_data_sources` against the source-map. A plan file with
+authentic input fingerprints but hand-edited `ready_for_review` tasks claiming an
+unbindable external placeholder (`market_data`) is bound validated as `ok`.
+`build_monitoring_execution_plan` gates on bundle health, but that does not
+protect a plan already on disk, which is exactly what `validate-monitoring-plan`
+inspects. Fixed by recomputing the genuinely-bound source names from the
+fingerprint-matched source-map and rejecting any task that claims bound sources
+the source-map does not bind. Verified: a forged plan is rejected while a
+legitimately approved-then-regenerated plan still validates.
