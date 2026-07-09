@@ -15,6 +15,7 @@ from dayu.fins.domain.document_models import (
 from ._fs_storage_infra import _FsStorageInfra
 from ._fs_storage_utils import (
     _file_object_meta_from_dict,
+    _normalize_entry_name,
     _normalize_ticker,
 )
 
@@ -134,12 +135,11 @@ class _FsBlobMixin(_FsStorageInfra):
 
         Raises:
             FileNotFoundError: 句柄对应文档不存在时抛出。
+            ValueError: filename 为空、为 ``.`` / ``..``、或包含路径分隔符时抛出。
             OSError: 写入失败时抛出。
         """
 
-        normalized_filename = str(filename).strip()
-        if not normalized_filename:
-            raise ValueError("filename 不能为空")
+        normalized_filename = _normalize_entry_name(filename)
         normalized_ticker = _normalize_ticker(handle.ticker)
         key = self._build_store_key(handle, normalized_filename)
         file_store = self._build_file_store(normalized_ticker)

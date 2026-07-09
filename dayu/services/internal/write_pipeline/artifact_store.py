@@ -27,6 +27,7 @@ from dayu.services.internal.write_pipeline.models import (
     AuditDecision,
     ChapterResult,
     ChapterTask,
+    CompanyFacetProfile,
     EvidenceConfirmationResult,
     RunManifest,
     SourceEntry,
@@ -643,9 +644,18 @@ class ArtifactStore:
 
         with _manifest_file_lock(self._output_dir):
             current = self._read_manifest_from_disk_unlocked()
+        preserved_company_facets: CompanyFacetProfile | None = None
         if self._write_config.resume and current is not None:
             if current.signature == signature:
-                return current
+                return RunManifest(
+                    version=current.version,
+                    signature=current.signature,
+                    config=self._write_config,
+                    chapter_results=dict(current.chapter_results),
+                    company_facets=current.company_facets,
+                )
+            if current.config.ticker == self._write_config.ticker:
+                preserved_company_facets = current.company_facets
             Log.warn("检测到 manifest 签名变更，将重新开始从头写作", module=MODULE)
             self._purge_stale_run_artifacts()
 
@@ -654,7 +664,7 @@ class ArtifactStore:
             signature=signature,
             config=self._write_config,
             chapter_results={},
-            company_facets=None,
+            company_facets=preserved_company_facets,
         )
 
     def _purge_stale_run_artifacts(self) -> None:

@@ -13,7 +13,7 @@ from __future__ import annotations
 import concurrent.futures
 import hashlib
 import json
-import time
+import time  # noqa: F401 - compatibility seam for tests patching pipeline.time.sleep
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -38,18 +38,15 @@ from dayu.services.internal.write_pipeline.chapter_audit_coordinator import (
 )
 from dayu.services.internal.write_pipeline.chapter_execution_coordinator import (
     ChapterExecutionCoordinator,
-    ChapterExecutionState,
+    ChapterExecutionState,  # noqa: F401 - compatibility re-export
     build_process_state_template,
 )
 from dayu.services.internal.write_pipeline.models import (
-    AuditDecision,
     ChapterResult,
     ChapterTask,
     CompanyFacetProfile,
-    EvidenceConfirmationResult,
     RunManifest,
     serialize_scene_models,
-    SourceEntry,
     WriteRunConfig,
 )
 from dayu.services.internal.write_pipeline.source_list_builder import (
@@ -356,9 +353,6 @@ def _log_write_pipeline_config(
     chapter_scope = write_config.chapter_filter if write_config.chapter_filter else "ALL"
     tool_trace_config = resolved_options.trace_settings
     tool_trace_state = "ON" if tool_trace_config.enabled else "OFF"
-    runner_running_config = resolved_options.runner_running_config
-    agent_running_config = resolved_options.agent_running_config
-
     Log.info("写作流水线参数摘要:", module=MODULE)
     Log.info(
         f"- ticker={write_config.ticker}, chapter={chapter_scope}, resume={write_config.resume}, "
@@ -374,6 +368,14 @@ def _log_write_pipeline_config(
         f"- template={write_config.template_path}, output={write_config.output_dir}",
         module=MODULE,
     )
+    if write_config.research_template_selection_mode:
+        Log.info(
+            "- research_template="
+            f"requested:{write_config.research_template_requested_name}, "
+            f"resolved:{write_config.research_template_resolved_name}, "
+            f"mode:{write_config.research_template_selection_mode}",
+            module=MODULE,
+        )
     Log.info(
         f"- web_provider={write_config.web_provider}, "
         f"tool_trace={tool_trace_state}, tool_trace_dir={tool_trace_config.output_dir}",
