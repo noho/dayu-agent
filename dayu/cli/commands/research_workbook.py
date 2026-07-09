@@ -50,13 +50,18 @@ def build_research_workbook_payload(
     def append_current_section() -> None:
         if not current_category or not current_items:
             return
+        # Index the section and item positions into the ID hash so a template
+        # that repeats a heading or a bullet still yields unique, stable IDs.
+        # Without this a duplicate line collides and the freshly-built workbook
+        # fails its own validation (duplicate item_id / section_id).
+        section_index = len(sections)
         section_key = hashlib.sha256(
-            f"{normalized}\0{current_category}\0{current_title}".encode()
+            f"{normalized}\0{section_index}\0{current_category}\0{current_title}".encode()
         ).hexdigest()[:10]
         items = []
-        for prompt in current_items:
+        for item_index, prompt in enumerate(current_items):
             item_key = hashlib.sha256(
-                f"{normalized}\0{current_category}\0{current_title}\0{prompt}".encode()
+                f"{normalized}\0{section_index}\0{item_index}\0{current_category}\0{current_title}\0{prompt}".encode()
             ).hexdigest()[:12]
             items.append(
                 {
@@ -78,7 +83,7 @@ def build_research_workbook_payload(
             }
         )
 
-    for line in template_path.read_text(encoding="utf-8").splitlines():
+    for line in template_path.read_text(encoding="utf-8-sig").splitlines():
         stripped = line.strip()
         if stripped.startswith("## "):
             append_current_section()
@@ -202,13 +207,15 @@ def validate_research_workbook_payload(payload: dict[str, object]) -> dict[str, 
                 errors.append(f"sections[{section_index}].items must be a non-empty list")
                 continue
             for item_index, item in enumerate(items):
-                item_count += 1
-                if category in _WORKBOOK_CATEGORIES:
-                    category_counts[category] = category_counts.get(category, 0) + 1
                 item_label = f"sections[{section_index}].items[{item_index}]"
                 if not isinstance(item, dict):
                     errors.append(f"{item_label} must be an object")
                     continue
+                # Count only well-formed items so live_summary stays accurate
+                # even when a malformed (non-dict) entry is present.
+                item_count += 1
+                if category in _WORKBOOK_CATEGORIES:
+                    category_counts[category] = category_counts.get(category, 0) + 1
                 item_id = str(item.get("item_id", "") or "").strip()
                 if not item_id:
                     errors.append(f"{item_label}.item_id is required")
@@ -427,7 +434,7 @@ def inspect_research_workbook_report(
     stale = False
     report_tampered = False
     try:
-        report_text = resolved_report.read_text(encoding="utf-8")
+        report_text = resolved_report.read_text(encoding="utf-8-sig")
         metadata_line, separator, body = report_text.partition("\n\n")
         if not separator:
             errors.append("report metadata separator is missing")
@@ -740,16 +747,18 @@ def build_research_workbook_rollback_preview(
         raise ValueError("workbook and backup must be different files")
     if resolved_workbook.parent != resolved_backup.parent:
         raise ValueError("workbook backup must be in the same directory as workbook")
-    current_payload = _load_json_object(resolved_workbook)
-    backup_payload = _load_json_object(resolved_backup)
-    current_template = str(current_payload.get("template", "") or "")
+    # Authenticate the BACKUP, not the file being recovered. Rollback is the
+    # recovery path, so it must succeed even when the current workbook is corrupt
+    # (unreadable JSON, blanked template). The filename<->content fingerprint and
+    # same-directory checks remain the real safety guarantees; a valid backup is
+    # sufficient to restore.
+    try:
+        backup_payload = _load_json_object(resolved_backup)
+    except ValueError as exc:
+        raise ValueError(f"workbook rollback backup is not readable JSON: {exc}") from exc
     backup_template = str(backup_payload.get("template", "") or "")
-    if not current_template or current_template != backup_template:
-        raise ValueError(
-            f"workbook rollback template mismatch: workbook={current_template!r} backup={backup_template!r}"
-        )
-    if current_payload.get("research_target") != backup_payload.get("research_target"):
-        raise ValueError("workbook rollback research_target mismatch")
+    if not backup_template:
+        raise ValueError("workbook rollback backup has no template")
     backup_fingerprint = _sha256_file(resolved_backup)
     expected_name = f"{resolved_workbook.stem}.before-update.{backup_fingerprint[:12]}.json"
     if resolved_backup.name != expected_name:
@@ -760,16 +769,39 @@ def build_research_workbook_rollback_preview(
     backup_validation = validate_research_workbook_payload(backup_payload)
     if backup_validation.get("ok") is not True:
         raise ValueError("workbook rollback backup is not a valid research workbook")
-    current_validation = validate_research_workbook_payload(current_payload)
+    # The current file is best-effort: capture its state for the report, but a
+    # damaged current workbook (bad JSON, template/target drift) must not block
+    # restoring a good backup.
+    current_template = ""
+    current_completion_status = ""
+    current_validation: dict[str, object]
+    current_fingerprint_before = ""
+    current_restorable = False
+    try:
+        current_payload = _load_json_object(resolved_workbook)
+    except (OSError, ValueError) as exc:
+        current_validation = {"ok": False, "errors": [f"current workbook could not be read: {exc}"], "warnings": []}
+    else:
+        current_template = str(current_payload.get("template", "") or "")
+        current_completion_status = str(current_payload.get("completion_status", "") or "")
+        current_validation = validate_research_workbook_payload(current_payload)
+        # A redo backup is only useful if the current bytes are themselves a
+        # valid, restorable workbook; corrupt current bytes must not be saved as
+        # a redo target that could never be rolled back to.
+        current_restorable = current_validation.get("ok") is True
+    if resolved_workbook.is_file():
+        current_fingerprint_before = _sha256_file(resolved_workbook)
     return {
         "schema_version": 1,
         "preview_type": "research_workbook_rollback",
-        "template": current_template,
+        "template": backup_template,
+        "current_template": current_template,
         "workbook_file": str(resolved_workbook),
         "backup_file": str(resolved_backup),
-        "workbook_fingerprint_before": _sha256_file(resolved_workbook),
+        "workbook_fingerprint_before": current_fingerprint_before,
         "workbook_fingerprint_after": backup_fingerprint,
-        "completion_status_before": str(current_payload.get("completion_status", "") or ""),
+        "current_restorable": current_restorable,
+        "completion_status_before": current_completion_status,
         "completion_status_after": str(backup_payload.get("completion_status", "") or ""),
         "current_validation": current_validation,
         "backup_validation": backup_validation,
@@ -787,14 +819,22 @@ def write_research_workbook_rollback(
     resolved_workbook = Path(str(preview["workbook_file"]))
     resolved_backup = Path(str(preview["backup_file"]))
     current_fingerprint = str(preview["workbook_fingerprint_before"])
-    redo_backup_path = resolved_workbook.with_name(
-        f"{resolved_workbook.stem}.before-update.{current_fingerprint[:12]}.json"
-    )
-    if redo_backup_path.exists():
-        if not redo_backup_path.is_file() or _sha256_file(redo_backup_path) != current_fingerprint:
-            raise FileExistsError(f"workbook redo backup path is occupied by different content: {redo_backup_path}")
-    else:
-        redo_backup_path.write_bytes(resolved_workbook.read_bytes())
+    # Preserve the current bytes for redo only when a current file exists AND is
+    # itself a valid, restorable workbook. Saving corrupt current bytes as a redo
+    # target would just create a junk backup that can never be rolled back to.
+    redo_backup_file: str | None = None
+    if current_fingerprint and resolved_workbook.is_file() and bool(preview.get("current_restorable")):
+        redo_backup_path = resolved_workbook.with_name(
+            f"{resolved_workbook.stem}.before-update.{current_fingerprint[:12]}.json"
+        )
+        if redo_backup_path.exists():
+            if not redo_backup_path.is_file() or _sha256_file(redo_backup_path) != current_fingerprint:
+                raise FileExistsError(
+                    f"workbook redo backup path is occupied by different content: {redo_backup_path}"
+                )
+        else:
+            redo_backup_path.write_bytes(resolved_workbook.read_bytes())
+        redo_backup_file = str(redo_backup_path)
     resolved_workbook.write_bytes(resolved_backup.read_bytes())
     restored_fingerprint = _sha256_file(resolved_workbook)
     expected_fingerprint = str(preview["workbook_fingerprint_after"])
@@ -803,7 +843,7 @@ def write_research_workbook_rollback(
     return {
         "workbook_file": str(resolved_workbook),
         "restored_backup_file": str(resolved_backup),
-        "redo_backup_file": str(redo_backup_path),
+        "redo_backup_file": redo_backup_file,
         "workbook_fingerprint_before": current_fingerprint,
         "workbook_fingerprint_after": restored_fingerprint,
         "preview": preview,

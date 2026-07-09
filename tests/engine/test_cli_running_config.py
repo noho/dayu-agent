@@ -20,7 +20,11 @@ from dayu.cli.conversation_labels import FileConversationLabelRegistry
 from dayu.cli.commands import prompt as prompt_command_module
 from dayu.cli.commands.interactive import run_interactive_command
 from dayu.cli.commands.prompt import run_prompt_command
-from dayu.cli.commands.write import _validate_research_materialization_args, run_write_command
+from dayu.cli.commands.write import (
+    _needs_auto_research_bootstrap,
+    _validate_research_materialization_args,
+    run_write_command,
+)
 from dayu.cli.dependency_setup import (
     ModelName,
     RunningConfig,
@@ -4540,9 +4544,18 @@ def test_write_materializes_research_only_after_successful_pipeline(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "raised_exc",
+    [
+        FileExistsError("research output exists"),
+        RuntimeError("materialization failed; rollback also failed"),
+        AssertionError("degenerate materialize state"),
+    ],
+)
 def test_write_returns_two_when_post_write_research_materialization_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    raised_exc: Exception,
 ) -> None:
     workspace_config = WorkspaceConfig(
         workspace_dir=tmp_path,
@@ -4599,11 +4612,40 @@ def test_write_returns_two_when_post_write_research_materialization_fails(
     monkeypatch.setattr("dayu.cli.commands.write.Log.error", lambda *_args, **_kwargs: None)
 
     def _raise_conflict(*_args: object, **_kwargs: object) -> dict[str, object]:
-        raise FileExistsError("research output exists")
+        raise raised_exc
 
     monkeypatch.setattr("dayu.cli.commands.write._materialize_research_after_write", _raise_conflict)
 
     assert run_write_command(args) == 2
+
+
+@pytest.mark.unit
+def test_needs_auto_research_bootstrap_keys_off_facet_presence(tmp_path: Path) -> None:
+    args = Namespace(research_template="auto")
+    manifest_path = tmp_path / "manifest.json"
+
+    # Absent manifest -> bootstrap needed.
+    assert _needs_auto_research_bootstrap(args, output_dir=tmp_path) is True
+
+    # Manifest exists but facet inference previously fell back to null.
+    manifest_path.write_text(
+        json.dumps({"signature": "abc", "company_facets": None}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assert _needs_auto_research_bootstrap(args, output_dir=tmp_path) is True
+
+    # Manifest carries usable facets -> no re-inference.
+    manifest_path.write_text(
+        json.dumps(
+            {"company_facets": {"primary_facets": ["银行"], "cross_cutting_facets": ["利率敏感"]}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    assert _needs_auto_research_bootstrap(args, output_dir=tmp_path) is False
+
+    # Non-auto request is never a bootstrap candidate.
+    assert _needs_auto_research_bootstrap(Namespace(research_template="consumer"), output_dir=tmp_path) is False
 
 
 @pytest.mark.unit

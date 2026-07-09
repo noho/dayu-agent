@@ -333,6 +333,76 @@ def test_build_research_workbook_payload_uses_stable_ids() -> None:
 
 
 @pytest.mark.unit
+def test_build_research_workbook_payload_keeps_ids_unique_for_duplicate_lines(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from dayu.cli.commands import research_workbook as research_workbook_module
+
+    template = tmp_path / "dup.md"
+    # Repeat a heading and a bullet: without positional indexing these collide.
+    template.write_text(
+        "## 买方问题\n- 同样的问题\n- 同样的问题\n\n## 买方问题\n- 同样的问题\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        research_workbook_module,
+        "_resolve_template_path",
+        lambda _name: template,
+    )
+
+    payload = build_research_workbook_payload("consumer")
+
+    sections = payload["sections"]
+    assert isinstance(sections, list)
+    section_ids = [section["section_id"] for section in sections]
+    item_ids = [item["item_id"] for section in sections for item in section["items"]]
+    assert len(section_ids) == len(set(section_ids))
+    assert len(item_ids) == len(set(item_ids))
+    # The freshly-built workbook must validate against its own contract.
+    assert validate_research_workbook_payload(payload)["ok"] is True
+
+
+@pytest.mark.unit
+def test_build_research_workbook_payload_tolerates_template_bom(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from dayu.cli.commands import research_workbook as research_workbook_module
+
+    template = tmp_path / "bom.md"
+    # A BOM-prefixed template must not silently drop its first section.
+    template.write_bytes("﻿## 买方问题\n- 这家公司是做什么生意的？\n".encode("utf-8"))
+    monkeypatch.setattr(
+        research_workbook_module,
+        "_resolve_template_path",
+        lambda _name: template,
+    )
+
+    payload = build_research_workbook_payload("consumer")
+
+    sections = payload["sections"]
+    assert isinstance(sections, list)
+    assert [section["category"] for section in sections] == ["research_question"]
+    assert sections[0]["items"][0]["prompt"] == "这家公司是做什么生意的？"
+
+
+@pytest.mark.unit
+def test_validate_research_workbook_payload_excludes_non_dict_items_from_counts() -> None:
+    payload = build_research_workbook_payload("common")
+    sections = payload["sections"]
+    assert isinstance(sections, list)
+    baseline = validate_research_workbook_payload(payload)["live_summary"]["item_count"]
+    # Inject a malformed (non-dict) item; it must not inflate live_summary.
+    sections[0]["items"].append("not-an-object")
+
+    result = validate_research_workbook_payload(payload)
+
+    assert result["ok"] is False
+    assert result["live_summary"]["item_count"] == baseline
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("template", ["common", "consumer", "cyclical", "technology", "financial"])
 def test_research_workbook_includes_decision_and_governance_questions(template: str) -> None:
     payload = build_research_workbook_payload(template)
@@ -547,6 +617,46 @@ def test_research_workbook_rollback_rejects_forged_backup_filename(tmp_path: Pat
 
     with pytest.raises(ValueError, match="filename does not match"):
         build_research_workbook_rollback_preview(workbook_path, forged)
+
+
+@pytest.mark.unit
+def test_research_workbook_rollback_recovers_when_current_file_is_corrupt(tmp_path: Path) -> None:
+    workbook_path = write_research_workbook_payload("financial", workspace_root=tmp_path)
+    original = workbook_path.read_bytes()
+    item_id = json.loads(original)["sections"][0]["items"][0]["item_id"]
+    update_result = write_research_workbook_update(
+        workbook_path,
+        item_id=item_id,
+        status="in_progress",
+        analyst_notes="等待披露。",
+    )
+    backup_path = Path(str(update_result["backup_file"]))
+
+    # Corrupt the current workbook: rollback (the recovery path) must still run.
+    workbook_path.write_text("{ this is not valid json", encoding="utf-8")
+
+    preview = build_research_workbook_rollback_preview(workbook_path, backup_path)
+    assert preview["backup_validation"]["ok"] is True
+    assert preview["current_validation"]["ok"] is False
+    assert preview["current_restorable"] is False
+
+    rollback_result = write_research_workbook_rollback(workbook_path, backup_path)
+    assert workbook_path.read_bytes() == original
+    # A corrupt current file must not be saved as a junk redo backup that could
+    # never be rolled back to.
+    assert rollback_result["redo_backup_file"] is None
+
+
+@pytest.mark.unit
+def test_research_workbook_rollback_rejects_unreadable_backup_cleanly(tmp_path: Path) -> None:
+    workbook_path = write_research_workbook_payload("consumer", workspace_root=tmp_path)
+    corrupt_bytes = b"{ not valid json"
+    fingerprint = hashlib.sha256(corrupt_bytes).hexdigest()[:12]
+    backup = workbook_path.with_name(f"{workbook_path.stem}.before-update.{fingerprint}.json")
+    backup.write_bytes(corrupt_bytes)
+
+    with pytest.raises(ValueError, match="not readable JSON"):
+        build_research_workbook_rollback_preview(workbook_path, backup)
 
 
 @pytest.mark.unit
@@ -1261,6 +1371,14 @@ def test_build_and_validate_research_template_bundle_descriptor(tmp_path: Path) 
         json.dumps(build_research_workbook_payload("consumer"), ensure_ascii=False),
         encoding="utf-8",
     )
+    artifacts["rules"].write_text(
+        json.dumps(build_monitoring_rules_payload("consumer"), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    artifacts["source-map"].write_text(
+        json.dumps(build_monitoring_source_map_payload("consumer"), ensure_ascii=False),
+        encoding="utf-8",
+    )
     monitoring_validation: dict[str, object] = {"ok": True, "errors": [], "warnings": []}
 
     payload = build_research_template_bundle_descriptor(
@@ -1380,6 +1498,45 @@ def test_bundle_validation_requires_progress_report_refresh_after_workbook_updat
     warnings = validation["warnings"]
     assert isinstance(warnings, list)
     assert any("summary.open_item_count is stale" in warning for warning in warnings)
+
+
+@pytest.mark.unit
+def test_bundle_validation_detects_unauthorized_source_binding_flip(tmp_path: Path) -> None:
+    materialized = materialize_research_template_bundle("financial", workspace_root=tmp_path)
+    source_map_path = Path(str(materialized["source_map_file"]))
+    source_map = json.loads(source_map_path.read_text(encoding="utf-8"))
+    # Flip an unbound source to bound WITHOUT the approval provenance the
+    # sanctioned binding flow writes; keep the embedded monitoring_validation
+    # snapshot untouched (a tamper would not rewrite the bundle descriptor).
+    source_map["data_sources"][0]["binding_status"] = "bound"
+    source_map_path.write_text(json.dumps(source_map, ensure_ascii=False), encoding="utf-8")
+
+    inspected = inspect_research_template_bundle(Path(str(materialized["bundle_file"])))
+
+    validation = inspected["validation"]
+    assert isinstance(validation, dict)
+    assert validation["ok"] is False
+    errors = validation["errors"]
+    assert isinstance(errors, list)
+    assert any("bound source lacks binding_approval provenance" in error for error in errors)
+
+
+@pytest.mark.unit
+def test_bundle_validation_detects_source_map_template_tamper(tmp_path: Path) -> None:
+    materialized = materialize_research_template_bundle("financial", workspace_root=tmp_path)
+    source_map_path = Path(str(materialized["source_map_file"]))
+    source_map = json.loads(source_map_path.read_text(encoding="utf-8"))
+    source_map["template"] = "consumer"
+    source_map_path.write_text(json.dumps(source_map, ensure_ascii=False), encoding="utf-8")
+
+    inspected = inspect_research_template_bundle(Path(str(materialized["bundle_file"])))
+
+    validation = inspected["validation"]
+    assert isinstance(validation, dict)
+    assert validation["ok"] is False
+    errors = validation["errors"]
+    assert isinstance(errors, list)
+    assert any("monitoring integrity" in error for error in errors)
 
 
 @pytest.mark.unit
@@ -1704,6 +1861,53 @@ def test_materialize_research_portfolio_records_partial_failure_and_can_overwrit
 
 
 @pytest.mark.unit
+def test_materialize_research_portfolio_records_runtime_error_without_aborting_batch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from dayu.cli.commands import research_template as research_template_module
+
+    portfolio_path = tmp_path / "portfolio.json"
+    portfolio_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "portfolio_type": "research_monitoring_portfolio",
+                "targets": [
+                    {"ticker": "AAPL", "template": "technology"},
+                    {"ticker": "MSFT", "template": "technology"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "workspace"
+    real_materialize = research_template_module.materialize_research_workspace
+
+    def _fake_materialize(name: str, **kwargs: object) -> dict[str, object]:
+        # Simulate a degenerate per-target failure (e.g. rollback-also-failed)
+        # that raises outside the old (OSError, ValueError) catch tuple.
+        if str(kwargs.get("ticker")) == "AAPL":
+            raise RuntimeError("materialization failed; rollback also failed")
+        return real_materialize(name, **kwargs)
+
+    monkeypatch.setattr(research_template_module, "materialize_research_workspace", _fake_materialize)
+
+    report = materialize_research_portfolio(portfolio_path, workspace_root=workspace)
+
+    assert report["ok"] is False
+    assert report["success_count"] == 1
+    assert report["failure_count"] == 1
+    assert Path(str(report["report_file"])).exists()
+    results = report["results"]
+    assert isinstance(results, list)
+    by_ticker = {result["ticker"]: result for result in results}
+    assert by_ticker["AAPL"]["status"] == "failed"
+    assert "RuntimeError" in str(by_ticker["AAPL"]["error"])
+    assert by_ticker["MSFT"]["status"] == "success"
+
+
+@pytest.mark.unit
 def test_inspect_research_template_bundle_detects_deleted_artifact(tmp_path: Path) -> None:
     materialized = materialize_research_template_bundle("consumer", workspace_root=tmp_path)
     Path(str(materialized["source_map_file"])).unlink()
@@ -1754,14 +1958,56 @@ def test_build_monitoring_execution_plan_blocks_unbound_sources(tmp_path: Path) 
     assert all(task["status"] == "blocked_unbound_sources" for task in tasks)
 
 
+def _approve_all_internal_source_bindings(
+    materialized: dict[str, object],
+    *,
+    template: str,
+    tmp_path: Path,
+) -> None:
+    """Bind every internal dayu_fins_tool source through the sanctioned approval flow.
+
+    Hand-flipping ``binding_status`` to ``bound`` in the source-map is exactly the
+    unauthorized tamper that bundle validation now rejects (a real binding also
+    writes a ``binding_approval`` provenance block). Tests that need a genuinely
+    bound, healthy workspace must go through ``write_monitoring_source_binding_approval``.
+    """
+
+    source_map_path = Path(str(materialized["source_map_file"]))
+    source_map = json.loads(source_map_path.read_text(encoding="utf-8"))
+    bindings = []
+    for source in source_map["data_sources"]:
+        if source.get("provider_type") != "dayu_fins_tool":
+            continue
+        candidate_tools = source.get("candidate_tools") or []
+        candidate_fields = source.get("candidate_fields") or []
+        bindings.append(
+            {
+                "source": source["source"],
+                "selected_tool": candidate_tools[0],
+                "selected_fields": list(candidate_fields[:2]) or list(candidate_fields),
+            }
+        )
+    approval_path = tmp_path / f"{template}.approval.json"
+    approval_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "approval_type": "research_monitoring_source_binding",
+                "template": template,
+                "approved_by": "research-owner",
+                "approval_reference": "review-2026-approval",
+                "bindings": bindings,
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_monitoring_source_binding_approval(source_map_path, approval_path)
+
+
 @pytest.mark.unit
 def test_build_monitoring_execution_plan_marks_bound_sources_ready_for_review(tmp_path: Path) -> None:
     materialized = materialize_research_template_bundle("financial", workspace_root=tmp_path)
-    source_map_path = Path(str(materialized["source_map_file"]))
-    source_map = json.loads(source_map_path.read_text(encoding="utf-8"))
-    for source in source_map["data_sources"]:
-        source["binding_status"] = "bound"
-    source_map_path.write_text(json.dumps(source_map, ensure_ascii=False), encoding="utf-8")
+    _approve_all_internal_source_bindings(materialized, template="financial", tmp_path=tmp_path)
 
     plan = build_monitoring_execution_plan(Path(str(materialized["bundle_file"])))
 
@@ -1806,6 +2052,34 @@ def test_validate_monitoring_execution_plan_accepts_blocked_dry_run_plan(tmp_pat
     fingerprints = plan["input_fingerprints"]
     assert isinstance(fingerprints, dict)
     assert len(str(fingerprints["monitoring_rules"])) == 64
+
+
+@pytest.mark.unit
+def test_validate_monitoring_execution_plan_rejects_forged_ready_task(tmp_path: Path) -> None:
+    materialized = materialize_research_template_bundle("financial", workspace_root=tmp_path)
+    plan_path = write_monitoring_execution_plan(Path(str(materialized["bundle_file"])))
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+
+    # Forge ready_for_review with a bound source the source-map does not actually
+    # bind (market_data is an unbindable external placeholder). Inputs are left
+    # authentic so the fingerprint check passes.
+    for task in plan["tasks"]:
+        task["status"] = "ready_for_review"
+        task["bound_data_sources"] = ["market_data"]
+        task["blocking_reasons"] = []
+    plan["readiness"]["status"] = "ready_for_review"
+    plan["readiness"]["blocked_task_count"] = 0
+    plan["readiness"]["ready_task_count"] = len(plan["tasks"])
+    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    inspected = inspect_monitoring_execution_plan(plan_path)
+
+    validation = inspected["validation"]
+    assert isinstance(validation, dict)
+    assert validation["ok"] is False
+    errors = validation["errors"]
+    assert isinstance(errors, list)
+    assert any("not bound in the source-map" in str(error) for error in errors)
 
 
 @pytest.mark.unit
@@ -1875,11 +2149,7 @@ def test_build_monitoring_status_snapshot_prioritizes_unhealthy_plans(tmp_path: 
 @pytest.mark.unit
 def test_build_monitoring_status_snapshot_reports_ready_for_review(tmp_path: Path) -> None:
     materialized = materialize_research_template_bundle("financial", workspace_root=tmp_path)
-    source_map_path = Path(str(materialized["source_map_file"]))
-    source_map = json.loads(source_map_path.read_text(encoding="utf-8"))
-    for source in source_map["data_sources"]:
-        source["binding_status"] = "bound"
-    source_map_path.write_text(json.dumps(source_map, ensure_ascii=False), encoding="utf-8")
+    _approve_all_internal_source_bindings(materialized, template="financial", tmp_path=tmp_path)
     write_monitoring_execution_plan(Path(str(materialized["bundle_file"])))
 
     snapshot = build_monitoring_status_snapshot(tmp_path)
@@ -1949,11 +2219,7 @@ def test_build_monitoring_scheduler_manifest_marks_ready_job_as_manual_candidate
         workspace_root=tmp_path,
         ticker="0005.HK",
     )
-    source_map_path = Path(str(materialized["source_map_file"]))
-    source_map = json.loads(source_map_path.read_text(encoding="utf-8"))
-    for source in source_map["data_sources"]:
-        source["binding_status"] = "bound"
-    source_map_path.write_text(json.dumps(source_map, ensure_ascii=False), encoding="utf-8")
+    _approve_all_internal_source_bindings(materialized, template="financial", tmp_path=tmp_path)
     write_monitoring_execution_plan(Path(str(materialized["bundle_file"])))
 
     manifest = build_monitoring_scheduler_manifest(tmp_path)
@@ -3014,6 +3280,53 @@ def test_refresh_workspace_previews_then_refreshes_all_derived_artifacts(tmp_pat
     assert refreshed["workbook_status"]["overall_status"] == "in_progress"
     assert refreshed["report_status"]["overall_status"] == "current"
     assert report_path.read_bytes() != old_report
+
+
+@pytest.mark.unit
+def test_refresh_workspace_writes_status_inside_snapshot_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from dayu.cli.commands import research_template as research_template_module
+
+    materialized = materialize_research_workspace("consumer", workspace_root=tmp_path)
+    bundle_path = Path(str(materialized["bundle_file"]))
+    bundle_dir = bundle_path.parent
+
+    captured: dict[str, Path | None] = {}
+
+    def _spy(name: str, real):
+        def _wrapper(_workspace_root: Path, *, output_path: Path | None = None, **kwargs: object) -> Path:
+            captured[name] = output_path
+            return real(_workspace_root, output_path=output_path, **kwargs)
+
+        return _wrapper
+
+    monkeypatch.setattr(
+        research_template_module,
+        "write_monitoring_status_snapshot",
+        _spy("monitoring", research_template_module.write_monitoring_status_snapshot),
+    )
+    monkeypatch.setattr(
+        research_template_module,
+        "write_research_workbook_status_snapshot",
+        _spy("workbook", research_template_module.write_research_workbook_status_snapshot),
+    )
+    monkeypatch.setattr(
+        research_template_module,
+        "write_research_workbook_report_status_snapshot",
+        _spy("report", research_template_module.write_research_workbook_report_status_snapshot),
+    )
+
+    write_research_workspace_refresh(bundle_path)
+
+    # Every status snapshot must be written to an explicit path inside the bundle
+    # directory (the snapshot rollback boundary), not re-derived from a hardcoded
+    # parent.parent.parent that can diverge for non-canonical bundle depths.
+    assert set(captured) == {"monitoring", "workbook", "report"}
+    for name, output_path in captured.items():
+        assert output_path is not None, name
+        assert output_path.resolve().parent == bundle_dir.resolve(), name
 
 
 @pytest.mark.unit

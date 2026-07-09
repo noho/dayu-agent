@@ -142,9 +142,32 @@ def _run_write_stage(*, write_config: WriteRunConfig, write_service: WriteServic
         return 2
 
 
+def _manifest_has_usable_company_facets(manifest_path: Path) -> bool:
+    """Return True only when the manifest carries a loadable company facet object.
+
+    A prior write whose facet inference hit a transient error persists
+    ``company_facets: null``. Treating that file as "already inferred" would make
+    ``--research-template auto`` fail hard at template resolution instead of
+    re-inferring, so the auto bootstrap must key off facet presence, not mere
+    file existence.
+    """
+
+    from dayu.cli.research_template_routing import load_company_facets_from_manifest
+
+    if not manifest_path.is_file():
+        return False
+    try:
+        load_company_facets_from_manifest(manifest_path)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def _needs_auto_research_bootstrap(args: argparse.Namespace, *, output_dir: Path) -> bool:
     requested = str(getattr(args, "research_template", "") or "").strip().lower()
-    return requested == "auto" and not (output_dir / "manifest.json").is_file()
+    if requested != "auto":
+        return False
+    return not _manifest_has_usable_company_facets(output_dir / "manifest.json")
 
 
 def _build_auto_bootstrap_args(args: argparse.Namespace) -> argparse.Namespace:
@@ -296,8 +319,13 @@ def run_write_command(args: argparse.Namespace) -> int:
             ticker=paths_config.ticker,
             write_output_dir=Path(write_config.output_dir),
         )
-    except (FileExistsError, FileNotFoundError, OSError, ValueError) as exc:
-        Log.error(f"研究工件 materialize 失败: {exc}", module=MODULE)
+    except Exception as exc:  # noqa: BLE001 - report already written; surface materialize failure as partial success
+        # materialize_research_workspace raises OSError/ValueError on normal
+        # failures but RuntimeError (rollback-also-failed) / AssertionError on
+        # degenerate paths. The write report is already on disk, so any
+        # materialize failure is a documented partial success (exit 2), not an
+        # uncaught traceback (exit 1).
+        Log.error(f"研究工件 materialize 失败: {type(exc).__name__}: {exc}", module=MODULE)
         return 2
     Log.info(
         f"研究工件 materialize 完成: bundle={materialized['bundle_file']}, workbook={materialized['workbook_file']}",

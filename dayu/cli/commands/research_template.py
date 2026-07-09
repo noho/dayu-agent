@@ -1066,6 +1066,69 @@ def build_research_template_bundle_descriptor(
     return payload
 
 
+def _recompute_bundle_monitoring_integrity(
+    template: str,
+    rules_path_raw: object,
+    source_map_path_raw: object,
+) -> list[str]:
+    """Recompute monitoring rules/source-map integrity from the referenced files.
+
+    The descriptor embeds a ``monitoring_validation`` snapshot captured at
+    materialize time, but trusting it lets a tampered ``source-map.json`` (for
+    example an ``unbound`` source hand-flipped to ``bound``) keep reporting the
+    bundle healthy. This recomputes consistency from the current file contents
+    and additionally requires that any ``bound`` source carry the approval
+    provenance the sanctioned binding flow writes, so an unauthorized flip is
+    detected without touching the intentionally-mutable source-map itself.
+    """
+
+    errors: list[str] = []
+    if not isinstance(rules_path_raw, str) or not rules_path_raw.strip():
+        return errors
+    if not isinstance(source_map_path_raw, str) or not source_map_path_raw.strip():
+        return errors
+    rules_path = Path(rules_path_raw)
+    source_map_path = Path(source_map_path_raw)
+    if not rules_path.is_file() or not source_map_path.is_file():
+        return errors
+    try:
+        rules_payload = _load_json_object(rules_path)
+        source_map_payload = _load_json_object(source_map_path)
+    except (OSError, ValueError) as exc:
+        errors.append(f"monitoring integrity could not be recomputed: {exc}")
+        return errors
+    recomputed = validate_monitoring_source_map_payload(rules_payload, source_map_payload)
+    recomputed_errors = recomputed.get("errors")
+    if isinstance(recomputed_errors, list):
+        errors.extend(f"monitoring integrity: {error}" for error in recomputed_errors)
+    recomputed_template = str(recomputed.get("template", "") or "")
+    if template and recomputed_template and recomputed_template != template:
+        errors.append(
+            "monitoring integrity: source-map template mismatch: "
+            f"bundle={template!r} source_map={recomputed_template!r}"
+        )
+    data_sources = source_map_payload.get("data_sources")
+    if isinstance(data_sources, list):
+        for index, source in enumerate(data_sources):
+            if not isinstance(source, dict):
+                continue
+            if str(source.get("binding_status", "") or "") != "bound":
+                continue
+            source_name = str(source.get("source", "") or "") or f"index {index}"
+            approval = source.get("binding_approval")
+            approved_by = ""
+            approval_reference = ""
+            if isinstance(approval, dict):
+                approved_by = str(approval.get("approved_by", "") or "").strip()
+                approval_reference = str(approval.get("approval_reference", "") or "").strip()
+            if not approved_by or not approval_reference:
+                errors.append(
+                    "monitoring integrity: bound source lacks binding_approval provenance: "
+                    f"{source_name}"
+                )
+    return errors
+
+
 def validate_research_template_bundle_descriptor(payload: dict[str, object]) -> dict[str, object]:
     """Validate bundle schema shape and referenced local artifacts."""
 
@@ -1141,6 +1204,13 @@ def validate_research_template_bundle_descriptor(payload: dict[str, object]) -> 
         extra_keys = sorted(str(key) for key in artifacts if key not in _BUNDLE_ARTIFACT_KEYS)
         if extra_keys:
             warnings.append(f"unknown artifact entries: {', '.join(extra_keys)}")
+        errors.extend(
+            _recompute_bundle_monitoring_integrity(
+                template,
+                artifacts.get("monitoring_rules"),
+                artifacts.get("source_map"),
+            )
+        )
         workbook_raw = artifacts.get("research_workbook")
         if isinstance(workbook_raw, str) and workbook_raw.strip() and Path(workbook_raw).is_file():
             try:
@@ -1567,6 +1637,39 @@ def validate_monitoring_execution_plan(payload: dict[str, object]) -> dict[str, 
         elif _sha256_file(path) != fingerprint_raw:
             errors.append(f"input_files.{key} changed after plan generation")
 
+    # Recompute the genuinely-bound source names from the authentic source-map so
+    # a plan cannot claim a task is ready_for_review (or that an unbindable
+    # external placeholder is bound) that the source-map does not actually
+    # support. Only enforced when the source-map is present and its fingerprint
+    # matches (i.e. the plan's declared inputs are authentic); a
+    # missing/changed source-map is already reported above.
+    genuinely_bound_sources: set[str] | None = None
+    source_map_raw = input_files.get("source_map")
+    source_map_fp = fingerprints.get("source_map")
+    if (
+        isinstance(source_map_raw, str)
+        and source_map_raw.strip()
+        and Path(source_map_raw).is_file()
+        and isinstance(source_map_fp, str)
+        and len(source_map_fp) == 64
+        and _sha256_file(Path(source_map_raw)) == source_map_fp
+    ):
+        try:
+            source_map_payload = _load_json_object(Path(source_map_raw))
+        except (OSError, ValueError):
+            source_map_payload = {}
+        genuinely_bound_sources = set()
+        data_sources = source_map_payload.get("data_sources")
+        if isinstance(data_sources, list):
+            for source in data_sources:
+                if not isinstance(source, dict):
+                    continue
+                if str(source.get("binding_status", "") or "") != "bound":
+                    continue
+                source_name = str(source.get("source", "") or "")
+                if source_name:
+                    genuinely_bound_sources.add(source_name)
+
     task_statuses: list[str] = []
     task_ids: set[str] = set()
     tasks = payload.get("tasks")
@@ -1592,6 +1695,19 @@ def validate_monitoring_execution_plan(payload: dict[str, object]) -> dict[str, 
             errors.append(f"tasks[{index}] is ready_for_review without a bound data source")
         if status == "blocked_unbound_sources" and bound_sources:
             errors.append(f"tasks[{index}] is blocked despite having a bound data source")
+        if genuinely_bound_sources is not None:
+            forged = [source for source in bound_sources if source not in genuinely_bound_sources]
+            if forged:
+                errors.append(
+                    f"tasks[{index}] claims bound data sources not bound in the source-map: "
+                    f"{', '.join(sorted(forged))}"
+                )
+            candidates = _as_str_list(task.get("data_source_candidates"))
+            expected_bound = sorted(source for source in candidates if source in genuinely_bound_sources)
+            if status == "ready_for_review" and not expected_bound:
+                errors.append(
+                    f"tasks[{index}] is ready_for_review but no candidate data source is bound in the source-map"
+                )
 
     ready_count = sum(status == "ready_for_review" for status in task_statuses)
     blocked_count = sum(status == "blocked_unbound_sources" for status in task_statuses)
@@ -2491,9 +2607,25 @@ def write_research_workspace_refresh(bundle_path: Path) -> dict[str, object]:
         if not isinstance(plan_validation, dict) or plan_validation.get("ok") is not True:
             raise ValueError(f"refreshed monitoring plan failed validation: {plan_validation}")
         workspace_root = resolved_bundle.parent.parent.parent
-        monitoring_status_path = write_monitoring_status_snapshot(workspace_root, overwrite=True)
-        workbook_status_path = write_research_workbook_status_snapshot(workspace_root, overwrite=True)
-        report_status_path = write_research_workbook_report_status_snapshot(workspace_root, overwrite=True)
+        # Write the status snapshots to the exact paths the preview computed
+        # (derived from resolved_bundle.parent), so they stay inside the snapshot
+        # rollback boundary even when the bundle sits at a non-canonical depth.
+        # workspace_root still drives the scan for aggregation.
+        monitoring_status_path = write_monitoring_status_snapshot(
+            workspace_root,
+            output_path=output_paths["monitoring_status"],
+            overwrite=True,
+        )
+        workbook_status_path = write_research_workbook_status_snapshot(
+            workspace_root,
+            output_path=output_paths["workbook_status"],
+            overwrite=True,
+        )
+        report_status_path = write_research_workbook_report_status_snapshot(
+            workspace_root,
+            output_path=output_paths["report_status"],
+            overwrite=True,
+        )
         monitoring_status = _load_json_object(monitoring_status_path)
         workbook_status = _load_json_object(workbook_status_path)
         report_status = _load_json_object(report_status_path)
@@ -2648,8 +2780,12 @@ def materialize_research_portfolio(
                     "report_status_file": bundle["report_status_file"],
                 }
             )
-        except (OSError, ValueError) as exc:
-            result.update({"status": "failed", "error": str(exc)})
+        except Exception as exc:  # noqa: BLE001 - isolate one target's failure into the batch report
+            # materialize_research_workspace raises OSError/ValueError on normal
+            # failures but RuntimeError (rollback-also-failed) or AssertionError
+            # on degenerate paths. Recording any of them keeps the batch report
+            # honest instead of aborting the whole portfolio with a traceback.
+            result.update({"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
         results.append(result)
 
     status_path = write_monitoring_status_snapshot(
