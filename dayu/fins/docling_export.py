@@ -4,21 +4,25 @@
 两种稳定签名：
 
 - :func:`convert_pdf_bytes_to_docling_payload`：返回 Docling SDK 导出的结构化字典。
-  这是与第三方 docling SDK 交互**不可避免**的 ``dict[str, Any]`` 边界，仅在本
-  模块内部允许出现。上层（upload service）若历史上以字典形态使用，可继续使用
-  这个出口。
 - :func:`convert_pdf_bytes_to_docling_json_bytes`：返回已 JSON 序列化的 ``bytes``。
-  下载链路按 ``Callable[[bytes, str], bytes]`` 的强类型协议注入此函数，避免把
-  ``Any`` 透传到上层 workflow。
 
-两个函数共用 :func:`dayu.docling_runtime.convert_pdf_bytes_with_docling` 调用；
-任何参数策略调整集中在本模块完成，避免 docling-runtime 调用点散落到 upload /
-download 双链路造成漂移。
+== 降级机制 ==
+
+当 ``DAYU_DOCLING_DISABLE=true``（或环境内存不足导致 Docling 挂起）时，
+自动降级为 pypdf 轻量级 PDF 文本提取，无需 PyTorch/transformers 依赖。
+
+判断逻辑：
+1. 若 ``DAYU_DOCLING_DISABLE=true`` → 直接使用 pypdf 降级
+2. 否则尝试 Docling → 若 DoclingRuntimeInitializationError → 使用 pypdf 降级
+3. 若低内存环境（< 2GB 可用 RAM）且之前 Docling 初始化失败 → 自动禁用
+
+设置任意环境变量为 ``1`` / ``true`` 开启，``0`` / ``false`` 关闭（不区分大小写）。
 """
 
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Callable
 
 from dayu.docling_runtime import (
@@ -26,16 +30,51 @@ from dayu.docling_runtime import (
     convert_pdf_bytes_with_docling,
 )
 
+from dayu.docling_fallback import (
+    convert_pdf_bytes_to_docling_payload,
+    convert_pdf_bytes_to_docling_json_bytes,
+)
+
+# 旧别名：带 _fallback 后缀的导入路径兼容
+from dayu.docling_fallback import (
+    convert_pdf_bytes_to_docling_payload as convert_pdf_bytes_to_docling_payload_fallback,
+    convert_pdf_bytes_to_docling_json_bytes as convert_pdf_bytes_to_docling_json_bytes_fallback,
+)
+from dayu.log import Log
+
+_MODULE = "FINS.DOCLING_EXPORT"
+
 # 下载链路注入点的稳定签名：``(raw_bytes, stream_name) -> json_bytes``。
-# 显式以位置参数风格暴露，避免 keyword-only 与 ``Callable[[bytes, str], bytes]``
-# 协议不兼容。download workflow 与 filing workflow 应直接引用此别名。
 PdfToDoclingJsonBytes = Callable[[bytes, str], bytes]
 
-__all__ = [
-    "PdfToDoclingJsonBytes",
-    "convert_pdf_bytes_to_docling_payload",
-    "convert_pdf_bytes_to_docling_json_bytes",
-]
+
+def _env_bool(name: str, default: bool) -> bool:
+    """从环境变量读取布尔值。"""
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes")
+
+
+def _is_docling_disabled() -> bool:
+    """检查是否强制禁用 Docling。"""
+    return _env_bool("DAYU_DOCLING_DISABLE", False)
+
+
+def _check_low_memory() -> bool:
+    """检查是否为低内存环境（< 2GB 可用 RAM）。"""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        kb = int(parts[1])
+                        mb = kb / 1024
+                        return mb < 2048  # < 2GB
+    except (OSError, ValueError):
+        pass
+    return False
 
 
 def convert_pdf_bytes_to_docling_payload(
@@ -43,59 +82,87 @@ def convert_pdf_bytes_to_docling_payload(
     *,
     stream_name: str,
 ) -> dict[str, Any]:
-    """将 PDF 字节流转换为 Docling 导出字典。
+    """将 PDF 字节流转换为结构化字典。
+
+    转换参数优先从环境变量读取，其次使用保守的资源友好默认值。
 
     Args:
         raw_data: PDF 原始字节内容。
         stream_name: 流名称，建议直接传文件名以保留扩展名。
 
     Returns:
-        Docling 导出的结构化字典（``result.document.export_to_dict()``）。
-
-    Raises:
-        DoclingRuntimeInitializationError: Docling 依赖缺失或装配失败时抛出。
-        RuntimeError: Docling 转换失败时抛出。
+        结构化字典（docling 导出格式或简化降级格式）。
     """
+    # 强制禁用检查
+    if _is_docling_disabled():
+        Log.info(
+            f"DAYU_DOCLING_DISABLE=true，使用 pypdf 降级: {stream_name}",
+            module=_MODULE,
+        )
+        return convert_pdf_bytes_to_docling_payload_fallback(
+            raw_data, stream_name=stream_name
+        )
+
+    # 低内存环境检测
+    if _check_low_memory():
+        Log.warning(
+            f"低内存环境（<2GB 可用），自动降级为 pypdf: {stream_name}",
+            module=_MODULE,
+        )
+        return convert_pdf_bytes_to_docling_payload_fallback(
+            raw_data, stream_name=stream_name
+        )
+
+    # 尝试 Docling 正常路径
+    do_ocr = _env_bool("DAYU_DOCLING_DO_OCR", False)
+    do_table_structure = _env_bool("DAYU_DOCLING_DO_TABLE_STRUCTURE", True)
+    table_mode = os.environ.get("DAYU_DOCLING_TABLE_MODE", "fast").strip().lower()
+    if table_mode not in ("fast", "accurate"):
+        table_mode = "fast"
+    do_cell_matching = _env_bool("DAYU_DOCLING_DO_CELL_MATCHING", False)
 
     try:
         result = convert_pdf_bytes_with_docling(
             raw_data,
             stream_name=stream_name,
-            do_ocr=True,
-            do_table_structure=True,
-            table_mode="accurate",
-            do_cell_matching=True,
+            do_ocr=do_ocr,
+            do_table_structure=do_table_structure,
+            table_mode=table_mode,
+            do_cell_matching=do_cell_matching,
         )
+        return result.document.export_to_dict()
     except DoclingRuntimeInitializationError:
-        raise
-    except Exception as exc:  # pragma: no cover - 第三方异常兜底
-        raise RuntimeError(f"Docling 转换失败: {stream_name}") from exc
-    return result.document.export_to_dict()
+        # Docling 不可用，降级
+        Log.warning(
+            f"Docling 初始化失败，降级为 pypdf: {stream_name}",
+            module=_MODULE,
+        )
+        return convert_pdf_bytes_to_docling_payload_fallback(
+            raw_data, stream_name=stream_name
+        )
+    except Exception as exc:
+        # 其他异常也尝试降级
+        Log.warning(
+            f"Docling 转换失败 ({type(exc).__name__})，降级为 pypdf: {stream_name}",
+            module=_MODULE,
+        )
+        return convert_pdf_bytes_to_docling_payload_fallback(
+            raw_data, stream_name=stream_name
+        )
 
 
 def convert_pdf_bytes_to_docling_json_bytes(
     raw_data: bytes,
     stream_name: str,
 ) -> bytes:
-    """将 PDF 字节流转换为序列化后的 Docling JSON 字节内容。
-
-    用于下载链路：下游 workflow 注入签名 ``Callable[[bytes, str], bytes]``，
-    本函数即该协议的默认实现，因此两个参数均为位置参数，调用方既可以
-    ``convert_pdf_bytes_to_docling_json_bytes(raw, name)`` 也可以使用关键字。
-    序列化策略与 SEC 下载链路保持一致：UTF-8 编码、``ensure_ascii=False``
-    保留中文字符、两空格缩进便于诊断。
+    """将 PDF 字节流转换为序列化后的 JSON 字节内容。
 
     Args:
         raw_data: PDF 原始字节内容。
-        stream_name: 流名称，建议直接传文件名以保留扩展名。
+        stream_name: 流名称。
 
     Returns:
-        已编码为 UTF-8 的 Docling JSON 字节内容。
-
-    Raises:
-        DoclingRuntimeInitializationError: Docling 依赖缺失或装配失败时抛出。
-        RuntimeError: Docling 转换失败时抛出。
+        已编码为 UTF-8 的 JSON 字节内容。
     """
-
     payload = convert_pdf_bytes_to_docling_payload(raw_data, stream_name=stream_name)
     return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
